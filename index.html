@@ -1970,6 +1970,230 @@
                 scroll-snap-align: start;
             }
         }
+
+        /* ============================================================
+           TOUCH-OPTIMIZED INTERACTIONS (ARB-155)
+           ============================================================ */
+
+        /* Tap feedback: brief scale bounce */
+        .tap-bounce {
+            transition: transform 0.12s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+        }
+        .tap-bounce:active {
+            transform: scale(0.96);
+        }
+
+        /* Quick-action sheet (long-press on opportunity) */
+        .quick-action-sheet {
+            display: none;
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: var(--bg-1);
+            border-radius: 16px 16px 0 0;
+            z-index: 1000;
+            transform: translateY(100%);
+            transition: transform 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+            padding: 0 16px 16px;
+            padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+            pointer-events: none;
+        }
+        .quick-action-sheet.open {
+            transform: translateY(0);
+            pointer-events: auto;
+        }
+        .quick-action-sheet-handle {
+            width: 36px;
+            height: 5px;
+            background: var(--border);
+            border-radius: 3px;
+            margin: 10px auto 12px;
+        }
+        .quick-action-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-2);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 12px;
+            padding: 0 4px;
+        }
+        .quick-action-btn {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            width: 100%;
+            padding: 14px 12px;
+            border: none;
+            background: none;
+            color: var(--text-0);
+            font-size: 15px;
+            font-family: inherit;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: background 0.15s ease;
+        }
+        .quick-action-btn:active {
+            background: var(--bg-2);
+        }
+        .quick-action-icon {
+            font-size: 18px;
+            width: 24px;
+            text-align: center;
+        }
+
+        /* Pull-to-refresh spinner */
+        .pull-refresh-indicator {
+            display: none;
+            position: fixed;
+            top: 80px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 800;
+        }
+        .pull-refresh-spinner {
+            width: 28px;
+            height: 28px;
+            border: 3px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: ptr-spin 0.7s linear infinite;
+        }
+        @keyframes ptr-spin {
+            to { transform: rotate(360deg); }
+        }
+        .pull-refresh-indicator.active {
+            display: block;
+        }
+
+        /* ============================================================
+           MOBILE-FIRST TABLE → CARD TRANSFORM (ARB-153)
+           ============================================================ */
+        @media (max-width: 768px) {
+            /* Table → card-list on phone */
+            .table-container {
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+            }
+
+            .table-container table thead {
+                display: none;
+            }
+
+            .table-container table,
+            .table-container table tbody,
+            .table-container table tr,
+            .table-container table td {
+                display: block;
+                width: 100%;
+            }
+
+            .table-container table tr {
+                background: var(--bg-2);
+                border: 1px solid var(--border);
+                border-radius: 10px;
+                padding: 12px;
+                margin-bottom: 8px;
+            }
+
+            .table-container table td {
+                border: none;
+                padding: 3px 0;
+                font-size: 14px;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            }
+
+            .table-container table td::before {
+                content: attr(data-label);
+                font-weight: 600;
+                font-size: 11px;
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+                color: var(--text-2);
+                flex-shrink: 0;
+                margin-right: 12px;
+            }
+
+            .table-search input {
+                width: 100%;
+            }
+
+            /* Chart aspect ratio preservation */
+            .chart-container {
+                position: relative;
+                height: 0;
+                padding-bottom: 56.25%;
+            }
+            .chart-container canvas {
+                position: absolute;
+                inset: 0;
+                width: 100% !important;
+                height: 100% !important;
+            }
+
+            /* Min touch targets 48px (ARB-155) */
+            .nav-item,
+            .mobile-tab,
+            .btn,
+            .icon-button,
+            .time-tab,
+            .opportunity-item,
+            .trade-row,
+            .bottom-sheet-item,
+            .quick-action-btn {
+                min-height: 48px;
+            }
+
+            .icon-button {
+                min-width: 44px;
+                min-height: 44px;
+            }
+
+            /* Trade row: single column on mobile */
+            .trade-row {
+                grid-template-columns: 1fr;
+                gap: 8px;
+            }
+
+            /* Rubber-band overscroll */
+            .content-area {
+                overscroll-behavior-y: auto;
+                -webkit-overflow-scrolling: touch;
+            }
+
+            /* Active tab: filled background indicator */
+            .mobile-tab.active {
+                color: var(--accent);
+                background: var(--accent-bg);
+                border-radius: 12px;
+            }
+            .mobile-tab.active .tab-icon {
+                transform: scale(1.1);
+            }
+
+            /* Quick action sheet visible on mobile */
+            .quick-action-sheet {
+                display: block;
+            }
+
+            /* Opportunity items: tap-bounce */
+            .opportunity-item,
+            .opportunity-card,
+            .stat-card,
+            .trade-row {
+                transition: transform 0.12s cubic-bezier(0.25, 0.46, 0.45, 0.94), border-color 0.2s ease;
+                -webkit-tap-highlight-color: transparent;
+            }
+            .opportunity-item:active,
+            .opportunity-card:active,
+            .stat-card:active,
+            .trade-row:active {
+                transform: scale(0.97);
+            }
+        }
     </style>
 </head>
 <body class="dark">
@@ -2099,6 +2323,29 @@
                     <span>Sign Out</span>
                 </button>
             </div>
+        </div>
+
+        <!-- PULL-TO-REFRESH INDICATOR (ARB-154) -->
+        <div class="pull-refresh-indicator" id="pull-refresh-indicator">
+            <div class="pull-refresh-spinner"></div>
+        </div>
+
+        <!-- QUICK-ACTION SHEET (ARB-155) -->
+        <div class="quick-action-sheet" id="quick-action-sheet">
+            <div class="quick-action-sheet-handle"></div>
+            <div class="quick-action-title" id="quick-action-title">Actions</div>
+            <button class="quick-action-btn" onclick="APP.quickAction('details')">
+                <span class="quick-action-icon">📋</span> View Details
+            </button>
+            <button class="quick-action-btn" onclick="APP.quickAction('execute')">
+                <span class="quick-action-icon">⚡</span> Execute Trade
+            </button>
+            <button class="quick-action-btn" onclick="APP.quickAction('watch')">
+                <span class="quick-action-icon">👁</span> Add to Watchlist
+            </button>
+            <button class="quick-action-btn" onclick="APP.quickAction('dismiss')">
+                <span class="quick-action-icon">✕</span> Dismiss
+            </button>
         </div>
 
         <!-- MAIN CONTENT -->
@@ -2735,12 +2982,12 @@
                     const spreadColor = m.spread > 2 ? 'green' : m.spread > 1 ? 'yellow' : 'gray';
                     return `
                         <tr>
-                            <td>${m.market}</td>
-                            <td class="text-right number">${m.kalshiYes.toFixed(0)}c</td>
-                            <td class="text-right number">${m.polymarketYes.toFixed(0)}c</td>
-                            <td class="text-right number">${m.predictitYes.toFixed(0)}c</td>
-                            <td class="text-right number spread-${spreadColor}">${m.spread.toFixed(2)}c</td>
-                            <td class="text-right number">$${(m.volume24h / 1000).toFixed(1)}k</td>
+                            <td data-label="Market">${m.market}</td>
+                            <td data-label="Kalshi" class="text-right number">${m.kalshiYes.toFixed(0)}c</td>
+                            <td data-label="Polymarket" class="text-right number">${m.polymarketYes.toFixed(0)}c</td>
+                            <td data-label="PredictIt" class="text-right number">${m.predictitYes.toFixed(0)}c</td>
+                            <td data-label="Spread" class="text-right number spread-${spreadColor}">${m.spread.toFixed(2)}c</td>
+                            <td data-label="Volume" class="text-right number">$${(m.volume24h / 1000).toFixed(1)}k</td>
                         </tr>
                     `;
                 }).join('');
@@ -2971,10 +3218,12 @@
                 if (window.innerWidth > 768) return;
 
                 const contentArea = document.getElementById('content-area');
+                const self = this;
                 let touchStartX = 0;
                 let touchStartY = 0;
                 const pages = ['dashboard', 'scanner', 'markets', 'trades'];
 
+                // Swipe between pages
                 contentArea.addEventListener('touchstart', (e) => {
                     touchStartX = e.touches[0].clientX;
                     touchStartY = e.touches[0].clientY;
@@ -3005,7 +3254,8 @@
                     if (dy > 60) this.closeBottomSheet();
                 }, { passive: true });
 
-                // Pull-to-refresh on data pages
+                // Pull-to-refresh with spinner animation
+                const ptrIndicator = document.getElementById('pull-refresh-indicator');
                 let pullStartY = 0;
                 let isPulling = false;
                 contentArea.addEventListener('touchstart', (e) => {
@@ -3019,11 +3269,100 @@
                     const dy = e.touches[0].clientY - pullStartY;
                     if (dy > 80 && contentArea.scrollTop === 0) {
                         isPulling = false;
-                        this.fetchAllData();
+                        ptrIndicator.classList.add('active');
                         if (navigator.vibrate) navigator.vibrate(15);
+                        this.fetchAllData();
+                        setTimeout(() => ptrIndicator.classList.remove('active'), 1200);
                     }
                 }, { passive: true });
                 contentArea.addEventListener('touchend', () => { isPulling = false; }, { passive: true });
+
+                // Long-press on opportunity items → quick-action sheet
+                let longPressTimer = null;
+                contentArea.addEventListener('touchstart', (e) => {
+                    const item = e.target.closest('.opportunity-item, .opportunity-card');
+                    if (!item) return;
+                    longPressTimer = setTimeout(() => {
+                        if (navigator.vibrate) navigator.vibrate(20);
+                        const title = item.querySelector('.opp-market, .card-market-title');
+                        self.openQuickActions(title ? title.textContent : 'Opportunity');
+                    }, 500);
+                }, { passive: true });
+                contentArea.addEventListener('touchmove', () => {
+                    if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+                }, { passive: true });
+                contentArea.addEventListener('touchend', () => {
+                    if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+                }, { passive: true });
+
+                // Double-tap on chart to reset zoom
+                let lastTapTime = 0;
+                contentArea.addEventListener('touchend', (e) => {
+                    const canvas = e.target.closest('canvas');
+                    if (!canvas) return;
+                    const now = Date.now();
+                    if (now - lastTapTime < 300) {
+                        // Double-tap detected: reset chart zoom
+                        canvas.style.transform = 'scale(1)';
+                        canvas.style.transformOrigin = 'center center';
+                        if (navigator.vibrate) navigator.vibrate(10);
+                    }
+                    lastTapTime = now;
+                }, { passive: true });
+
+                // Pinch-to-zoom on charts
+                let initialPinchDist = 0;
+                let currentScale = 1;
+                contentArea.addEventListener('touchstart', (e) => {
+                    if (e.touches.length === 2) {
+                        const canvas = e.target.closest('canvas, .chart-container');
+                        if (!canvas) return;
+                        initialPinchDist = Math.hypot(
+                            e.touches[1].clientX - e.touches[0].clientX,
+                            e.touches[1].clientY - e.touches[0].clientY
+                        );
+                    }
+                }, { passive: true });
+                contentArea.addEventListener('touchmove', (e) => {
+                    if (e.touches.length === 2 && initialPinchDist > 0) {
+                        const canvas = document.querySelector('.chart-container canvas');
+                        if (!canvas) return;
+                        const dist = Math.hypot(
+                            e.touches[1].clientX - e.touches[0].clientX,
+                            e.touches[1].clientY - e.touches[0].clientY
+                        );
+                        currentScale = Math.min(3, Math.max(0.5, dist / initialPinchDist));
+                        canvas.style.transform = `scale(${currentScale})`;
+                        canvas.style.transformOrigin = 'center center';
+                    }
+                }, { passive: true });
+                contentArea.addEventListener('touchend', (e) => {
+                    if (e.touches.length < 2) initialPinchDist = 0;
+                }, { passive: true });
+
+                // Quick-action sheet swipe-to-dismiss
+                const qaSheet = document.getElementById('quick-action-sheet');
+                let qaStartY = 0;
+                qaSheet.addEventListener('touchstart', (e) => {
+                    qaStartY = e.touches[0].clientY;
+                }, { passive: true });
+                qaSheet.addEventListener('touchend', (e) => {
+                    if (e.changedTouches[0].clientY - qaStartY > 50) self.closeQuickActions();
+                }, { passive: true });
+            },
+
+            openQuickActions(title) {
+                document.getElementById('quick-action-title').textContent = title || 'Actions';
+                document.getElementById('quick-action-sheet').classList.add('open');
+            },
+
+            closeQuickActions() {
+                document.getElementById('quick-action-sheet').classList.remove('open');
+            },
+
+            quickAction(action) {
+                this.closeQuickActions();
+                if (navigator.vibrate) navigator.vibrate(10);
             },
 
             toggleTheme() {
