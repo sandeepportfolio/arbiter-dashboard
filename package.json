@@ -1,0 +1,20 @@
+{
+  "name": "arbiter",
+  "version": "0.1.0",
+  "description": "Cross-platform prediction market arbitrage system",
+  "type": "module",
+  "main": "dist/cli.js",
+  "scripts": {
+    "start": "node dist/cli.js",
+    "start:dev": "npx tsx src/cli.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "typescript": "^5.4.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.7.0",
+    "@types/node": "^20.11.0"
+  }
+}
