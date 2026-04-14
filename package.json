@@ -8,13 +8,15 @@
     "start": "node dist/cli.js",
     "start:dev": "npx tsx src/cli.ts",
     "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "typescript": "^5.4.0"
   },
   "devDependencies": {
+    "@types/node": "^20.11.0",
     "tsx": "^4.7.0",
-    "@types/node": "^20.11.0"
+    "vitest": "^4.1.4"
   }
 }

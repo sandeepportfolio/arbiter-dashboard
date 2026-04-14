@@ -62,6 +62,14 @@ export interface RiskCheckResult {
   adjustedQuantity?: number;
 }
 
+export interface ArbitrageTradeResult {
+  opportunity: ArbitrageOpportunity;
+  buyLeg: TradeResult;
+  sellLeg: TradeResult | null; // null if sell platform not yet supported
+  dryRun: boolean;
+  timestamp: Date;
+}
+
 export interface PipelineConfig {
   kalshiApiKey?: string;
   kalshiPrivateKeyPath?: string;

@@ -155,12 +155,14 @@ async function main(): Promise<void> {
     minSpread: config.minSpread,
   });
   const executor = new ArbitrageExecutor(riskGate, logger, config.dryRun);
-  const results = await executor.executeBatch(opportunities);
+  const arbResults = await executor.executeBatch(opportunities);
 
-  const executed = results.filter((r) => r.status === "executed");
-  const skipped = results.filter((r) => r.status === "skipped");
+  const executed = arbResults.filter((r) => r.buyLeg.status === "executed");
+  const skipped = arbResults.filter((r) => r.buyLeg.status === "skipped");
   console.log(`  Executed: ${executed.length}`);
   console.log(`  Skipped (risk gate): ${skipped.length}`);
+  const withSellLeg = executed.filter((r) => r.sellLeg !== null);
+  console.log(`  With sell leg: ${withSellLeg.length}`);
   console.log();
 
   // Step 6: Write trade log
@@ -177,7 +179,7 @@ async function main(): Promise<void> {
   console.log(`  Events matched:     ${matchedEvents.length}`);
   console.log(`  Cross-platform:     ${matcher.crossPlatformMatchCount}`);
   console.log(`  Opportunities:      ${opportunities.length}`);
-  console.log(`  Dry-run trades:     ${executed.length}`);
+  console.log(`  Dry-run trades:     ${executed.length} (${withSellLeg.length} with both legs)`);
   console.log(`  Trade log:          ${logPath}`);
   if (opportunities.length === 0) {
     console.log();
