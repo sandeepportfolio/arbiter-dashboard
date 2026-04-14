@@ -167,6 +167,19 @@ class ArbiterAPI:
                 allow_auto_trade=False,
                 note=note or "Returned to review from the operator desk.",
             )
+        elif action == "enable_auto_trade":
+            mapping = update_market_mapping(
+                canonical_id,
+                status="confirmed",
+                allow_auto_trade=True,
+                note=note or "Auto-trade enabled from the operator desk.",
+            )
+        elif action == "disable_auto_trade":
+            mapping = update_market_mapping(
+                canonical_id,
+                allow_auto_trade=False,
+                note=note or "Auto-trade held from the operator desk.",
+            )
         else:
             return web.json_response({"error": f"Unsupported mapping action: {action or 'unknown'}"}, status=400)
 

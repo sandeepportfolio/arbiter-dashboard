@@ -113,22 +113,33 @@ echo "[ui-smoke] exercising mapping buttons"
 MAPPING_ACTION_STATE="$("${PWCLI[@]}" eval "(async () => {
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const statusText = () => document.querySelector('[data-mapping-id=\"DEM_HOUSE_2026\"] [data-mapping-status]')?.textContent?.trim().toLowerCase() || '';
+  const autoTradeText = () => document.querySelector('[data-mapping-id=\"DEM_HOUSE_2026\"] .operator-meta-row span')?.textContent?.trim().toLowerCase() || '';
   document.querySelector('[data-mapping-id=\"DEM_HOUSE_2026\"] [data-mapping-action=\"confirm\"]')?.click();
   for (let attempt = 0; attempt < 40; attempt += 1) {
     if (statusText() === 'confirmed') break;
     await sleep(120);
   }
   const confirmStatus = statusText();
+  document.querySelector('[data-mapping-id=\"DEM_HOUSE_2026\"] [data-mapping-action=\"enable_auto_trade\"]')?.click();
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    if (autoTradeText().includes('auto-trade allowed')) break;
+    await sleep(120);
+  }
+  const enabledAutoTrade = autoTradeText();
   document.querySelector('[data-mapping-id=\"DEM_HOUSE_2026\"] [data-mapping-action=\"review\"]')?.click();
   for (let attempt = 0; attempt < 40; attempt += 1) {
     if (statusText() === 'review') break;
     await sleep(120);
   }
-  return { confirmStatus, reviewStatus: statusText() };
+  return { confirmStatus, enabledAutoTrade, reviewStatus: statusText() };
 })()")"
 echo "$MAPPING_ACTION_STATE"
 if ! grep -q '"confirmStatus": "confirmed"' <<<"$MAPPING_ACTION_STATE"; then
   echo "[ui-smoke] mapping confirm button failed" >&2
+  exit 1
+fi
+if ! grep -q '"enabledAutoTrade": "auto-trade allowed"' <<<"$MAPPING_ACTION_STATE"; then
+  echo "[ui-smoke] mapping auto-trade button failed" >&2
   exit 1
 fi
 if ! grep -q '"reviewStatus": "review"' <<<"$MAPPING_ACTION_STATE"; then

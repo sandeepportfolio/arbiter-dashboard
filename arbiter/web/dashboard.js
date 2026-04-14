@@ -934,6 +934,7 @@ function renderMappings() {
       </div>
       <div class="action-row">
         ${mappingStatus(mapping) !== "confirmed" ? renderActionButton("Confirm match", "confirm", "mapping", mapping.canonical_id, mapping.canonical_id) : ""}
+        ${mapping.allow_auto_trade ? renderActionButton("Hold auto-trade", "disable_auto_trade", "mapping", mapping.canonical_id, mapping.canonical_id, true) : renderActionButton("Enable auto-trade", "enable_auto_trade", "mapping", mapping.canonical_id, mapping.canonical_id)}
         ${mappingStatus(mapping) !== "review" ? renderActionButton("Mark review", "review", "mapping", mapping.canonical_id, mapping.canonical_id, true) : ""}
       </div>
     </article>

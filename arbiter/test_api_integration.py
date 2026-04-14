@@ -95,6 +95,9 @@ def test_api_and_dashboard_contracts():
 
         mapping_update = post_json("/api/market-mappings/DEM_HOUSE_2026", {"action": "confirm"})
         assert mapping_update["status"] == "confirmed"
+        auto_trade_enabled = post_json("/api/market-mappings/DEM_HOUSE_2026", {"action": "enable_auto_trade"})
+        assert auto_trade_enabled["status"] == "confirmed"
+        assert auto_trade_enabled["allow_auto_trade"] is True
 
         async def check_ws():
             async with aiohttp.ClientSession() as session:
