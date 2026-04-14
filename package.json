@@ -8,8 +8,15 @@
     "start": "node dist/cli.js",
     "start:dev": "npx tsx src/cli.ts",
     "build": "tsc",
+    "dashboard:api": "./scripts/run-dashboard-api.sh",
+    "dashboard:demo": "./scripts/run-dashboard-demo.sh",
+    "dashboard:dry": "./scripts/run-dashboard-dry.sh",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:python": "python3 -m pytest -q arbiter",
+    "verify:quick": "./scripts/quick-check.sh",
+    "verify:ui": "./scripts/ui-smoke.sh",
+    "verify:full": "./scripts/quick-check.sh && ./scripts/ui-smoke.sh"
   },
   "dependencies": {
     "typescript": "^5.4.0"

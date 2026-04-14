@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ARBITER</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="aurora aurora-a"></div>
+  <div class="aurora aurora-b"></div>
+  <main class="shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">ARBITER LIVE</p>
+        <h1>Prediction market arbitrage with live edge, fee truth, and failure-aware execution.</h1>
+        <p class="subtitle">One canonical dashboard for scanner health, fee-aware opportunities, trade legs, manual PredictIt workflows, and execution incidents.</p>
+      </div>
+      <div class="hero-status">
+        <div class="pill"><span class="label">Mode</span><span id="modePill" class="value">Loading</span></div>
+        <div class="pill"><span class="label">WebSocket</span><span id="wsStatus" class="value value-muted">Connecting</span></div>
+      </div>
+    </header>
+
+    <section id="metricGrid" class="metric-grid"></section>
+
+    <section class="panel-grid">
+      <article class="panel chart-panel">
+        <div class="panel-header">
+          <div>
+            <p class="panel-kicker">Live Edge</p>
+            <h2>Scanner edge curve</h2>
+          </div>
+          <span id="bestEdgeLabel" class="panel-badge">0.0¢</span>
+        </div>
+        <div id="edgeChart" class="chart-surface"></div>
+      </article>
+
+      <article class="panel chart-panel">
+        <div class="panel-header">
+          <div>
+            <p class="panel-kicker">P&amp;L</p>
+            <h2>Execution equity</h2>
+          </div>
+          <span id="equityLabel" class="panel-badge">$0.00</span>
+        </div>
+        <div id="equityChart" class="chart-surface"></div>
+      </article>
+    </section>
+
+    <section class="panel-grid panel-grid-tight panel-grid-single">
+      <article class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="panel-kicker">Opportunities</p>
+            <h2>Live trade candidates</h2>
+          </div>
+          <span id="opportunityCount" class="panel-badge">0</span>
+        </div>
+        <div id="opportunityList" class="opportunity-list"></div>
+      </article>
+    </section>
+
+    <section class="panel-grid panel-grid-tight">
+      <article class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="panel-kicker">Manual Desk</p>
+            <h2>PredictIt operator queue</h2>
+          </div>
+          <span id="manualCount" class="panel-badge">0</span>
+        </div>
+        <p class="panel-copy">Manual venues stay visible here with exact entry and unwind steps, plus explicit confirmation controls for the operator.</p>
+        <div id="manualQueue" class="stack-list"></div>
+      </article>
+
+      <article class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="panel-kicker">Recovery</p>
+            <h2>Incident queue</h2>
+          </div>
+          <span id="incidentCount" class="panel-badge">0</span>
+        </div>
+        <p class="panel-copy">Failures and one-leg risks are tracked separately so resolution is obvious, timestamped, and easy to verify.</p>
+        <div id="incidentList" class="stack-list"></div>
+      </article>
+    </section>
+
+    <section class="log-stage">
+      <div class="log-stage-header">
+        <div>
+          <p class="panel-kicker">Log Atlas</p>
+          <h2>Every action, one elegant reading surface</h2>
+          <p class="log-stage-copy">Arbiter publishes live stream events for system state, quotes, opportunities, executions, incidents, and heartbeats. We also track a richer operating ledger across opportunities, trades, manual queue items, incidents, balances, collectors, and market mappings.</p>
+        </div>
+        <div class="log-stage-status">
+          <div class="log-status-pill">
+            <span class="label">Visible events</span>
+            <span id="logVisibleCount" class="value">0</span>
+          </div>
+          <div class="log-status-pill">
+            <span class="label">Last pulse</span>
+            <span id="logFreshnessLabel" class="value value-muted">Waiting</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="log-stage-layout">
+        <aside class="log-atlas">
+          <article class="log-brief">
+            <div class="log-brief-row">
+              <div>
+                <p class="log-brief-label">Published live</p>
+                <div id="publishedTypes" class="log-token-cloud"></div>
+              </div>
+              <div>
+                <p class="log-brief-label">Tracked ledger</p>
+                <div id="trackedTypes" class="log-token-cloud"></div>
+              </div>
+            </div>
+          </article>
+
+          <div class="log-section-heading">
+            <span>Categories</span>
+            <span id="logCategoryCount" class="panel-badge">0</span>
+          </div>
+          <div id="logCategoryAtlas" class="log-category-atlas"></div>
+        </aside>
+
+        <section class="log-console">
+          <div class="log-console-header">
+            <div id="logFilterBar" class="log-filter-bar"></div>
+            <p class="log-console-copy">Filter the timeline by category to understand what changed, why it matters, and whether the operator needs to act.</p>
+          </div>
+          <div id="logTimeline" class="log-timeline"></div>
+        </section>
+      </div>
+    </section>
+
+    <section class="panel-grid panel-grid-tight">
+      <article class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="panel-kicker">Mapping</p>
+            <h2>Canonical market map</h2>
+          </div>
+          <span id="mappingCount" class="panel-badge">0</span>
+        </div>
+        <div id="mappingList" class="stack-list mapping-list"></div>
+      </article>
+
+      <article class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="panel-kicker">Collectors</p>
+            <h2>Platform health</h2>
+          </div>
+          <span id="collectorCount" class="panel-badge">0</span>
+        </div>
+        <div id="collectorList" class="stack-list"></div>
+      </article>
+    </section>
+  </main>
+  <script type="module" src="/static/dashboard.js"></script>
+</body>
+</html>

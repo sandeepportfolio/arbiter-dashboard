@@ -1,16 +1,20 @@
 """
-ARBITER — Prediction Market Arbitrage System
-Central configuration for all collectors, scanners, and execution agents.
+ARBITER configuration, fee math, and canonical market mappings.
 """
-import os
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Dict, Optional
+from __future__ import annotations
 
-# Load .env file from arbiter root directory
+import math
+import os
+import re
+import time
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Dict, Iterable, Tuple
+
+# Load .env file from arbiter root directory.
 try:
     from dotenv import load_dotenv
-    # Search upward from this file to find .env
+
     _config_dir = Path(__file__).resolve().parent
     _arbiter_dir = _config_dir.parent
     _env_file = _arbiter_dir / ".env"
@@ -20,34 +24,287 @@ except ImportError:
     pass
 
 
-# ─── Platform Fee Models ───────────────────────────────────────────────
-def kalshi_fee(price: float) -> float:
-    """Kalshi charges 7% of price × (1 - price), capped at contract value."""
-    return 0.07 * price * (1.0 - price)
+KALSHI_TAKER_FEE_RATE = 0.07
+POLYMAKET_DEFAULT_TAKER_FEE_RATE = 0.02
+POLYMARKET_DEFAULT_MAKER_FEE_RATE = 0.0
+PREDICTIT_PROFIT_FEE_RATE = 0.10
+PREDICTIT_WITHDRAWAL_FEE_RATE = 0.05
 
 
-def polymarket_fee(price: float, category: str = "politics") -> float:
-    """Polymarket dynamic fees by category. Politics = 1%."""
-    rates = {"politics": 0.01, "sports": 0.02, "crypto": 0.015, "default": 0.02}
-    rate = rates.get(category, rates["default"])
-    return rate * price
+def _clamp_probability(price: float) -> float:
+    return max(0.0, min(1.0, float(price)))
+
+
+def kalshi_order_fee(price: float, quantity: float = 1.0, fee_rate: float = KALSHI_TAKER_FEE_RATE) -> float:
+    """
+    Kalshi fees are quadratic and rounded up to the nearest cent per order.
+    """
+    quantity = max(float(quantity), 0.0)
+    price = _clamp_probability(price)
+    if quantity <= 0 or price <= 0:
+        return 0.0
+    raw_fee = fee_rate * quantity * price * (1.0 - price)
+    return math.ceil((raw_fee * 100.0) - 1e-9) / 100.0
+
+
+def kalshi_fee(price: float, quantity: float = 1.0) -> float:
+    """
+    Return the effective per-contract Kalshi fee after order-level rounding.
+    """
+    quantity = max(float(quantity), 1.0)
+    return kalshi_order_fee(price, quantity=quantity) / quantity
+
+
+def polymarket_order_fee(
+    price: float,
+    quantity: float = 1.0,
+    fee_rate: float | None = None,
+    category: str = "default",
+) -> float:
+    """
+    Polymarket uses market-specific fee schedules. When a market-specific rate
+    is unavailable, fall back to a conservative taker rate.
+    """
+    quantity = max(float(quantity), 0.0)
+    price = _clamp_probability(price)
+    if quantity <= 0 or price <= 0:
+        return 0.0
+
+    fallback_rates = {
+        "politics": POLYMAKET_DEFAULT_TAKER_FEE_RATE,
+        "sports": 0.02,
+        "crypto": 0.015,
+        "default": POLYMAKET_DEFAULT_TAKER_FEE_RATE,
+    }
+    resolved_rate = fee_rate if fee_rate is not None else fallback_rates.get(category, fallback_rates["default"])
+    return price * quantity * max(float(resolved_rate), 0.0)
+
+
+def polymarket_fee(
+    price: float,
+    category: str = "default",
+    quantity: float = 1.0,
+    fee_rate: float | None = None,
+) -> float:
+    quantity = max(float(quantity), 1.0)
+    return polymarket_order_fee(price, quantity=quantity, fee_rate=fee_rate, category=category) / quantity
+
+
+def predictit_order_fee(
+    buy_price: float,
+    quantity: float = 1.0,
+    settle_price: float = 1.0,
+) -> float:
+    """
+    PredictIt charges 10% of profit plus a 5% withdrawal haircut on proceeds.
+    """
+    quantity = max(float(quantity), 0.0)
+    buy_price = _clamp_probability(buy_price)
+    settle_price = max(float(settle_price), 0.0)
+    if quantity <= 0:
+        return 0.0
+    profit = max(settle_price - buy_price, 0.0)
+    return quantity * ((profit * PREDICTIT_PROFIT_FEE_RATE) + (settle_price * PREDICTIT_WITHDRAWAL_FEE_RATE))
 
 
 def predictit_fee(profit: float) -> float:
-    """PredictIt: 10% profit fee + 5% withdrawal fee on profit."""
     if profit <= 0:
         return 0.0
-    return profit * 0.10 + profit * 0.05  # 15% effective on profit
+    return profit * (PREDICTIT_PROFIT_FEE_RATE + PREDICTIT_WITHDRAWAL_FEE_RATE)
 
 
-# ─── API Endpoints ─────────────────────────────────────────────────────
+_TEXT_NORMALIZER = re.compile(r"[^a-z0-9]+")
+
+
+def normalize_market_text(text: str) -> str:
+    return _TEXT_NORMALIZER.sub(" ", text.lower()).strip()
+
+
+def similarity_score(*texts: str) -> float:
+    """
+    Tiny token-overlap heuristic for mapping candidates and UI confidence hints.
+    """
+    normalized_sets = [{token for token in normalize_market_text(text).split() if token} for text in texts if text]
+    if len(normalized_sets) < 2:
+        return 0.0
+    intersection = set.intersection(*normalized_sets)
+    union = set.union(*normalized_sets)
+    if not union:
+        return 0.0
+    return round(len(intersection) / len(union), 4)
+
+
+@dataclass(frozen=True)
+class MarketMappingRecord:
+    canonical_id: str
+    description: str
+    status: str = "confirmed"
+    allow_auto_trade: bool = True
+    aliases: Tuple[str, ...] = ()
+    tags: Tuple[str, ...] = ()
+    kalshi: str = ""
+    polymarket: str = ""
+    polymarket_question: str = ""
+    predictit: str = ""
+    predictit_contract_keywords: Tuple[str, ...] = ()
+    notes: str = ""
+
+    def to_dict(self) -> dict:
+        payload = asdict(self)
+        payload["mapping_score"] = similarity_score(self.description, " ".join(self.aliases))
+        return payload
+
+
+MARKET_SEEDS: Tuple[MarketMappingRecord, ...] = (
+    MarketMappingRecord(
+        canonical_id="DEM_HOUSE_2026",
+        description="Democrats win House 2026 midterms",
+        status="candidate",
+        allow_auto_trade=False,
+        aliases=("democrats house 2026", "house control 2026 democrats"),
+        tags=("politics", "midterms", "house"),
+        kalshi="KXPRESPARTY-2028",
+        polymarket="which-party-will-win-the-house-in-2026",
+        polymarket_question="Democratic Party",
+        predictit="8157",
+        predictit_contract_keywords=("democratic", "democrat"),
+        notes="Kalshi lacks a true confirmed 2026 House mapping, so this stays review-only.",
+    ),
+    MarketMappingRecord(
+        canonical_id="DEM_SENATE_2026",
+        description="Democrats win Senate 2026 midterms",
+        status="confirmed",
+        allow_auto_trade=False,
+        aliases=("democrats senate 2026", "senate control 2026 democrats"),
+        tags=("politics", "midterms", "senate"),
+        polymarket="which-party-will-win-the-senate-in-2026",
+        polymarket_question="Democratic Party",
+        predictit="8155",
+        predictit_contract_keywords=("democratic", "democrat"),
+        notes="PredictIt only, so keep manual-only until a confirmed Kalshi leg exists.",
+    ),
+    MarketMappingRecord(
+        canonical_id="GOP_SENATE_2026",
+        description="Republicans win Senate 2026 midterms",
+        status="confirmed",
+        allow_auto_trade=False,
+        aliases=("republicans senate 2026", "gop senate 2026"),
+        tags=("politics", "midterms", "senate"),
+        polymarket="which-party-will-win-the-senate-in-2026",
+        polymarket_question="Republican Party",
+        predictit="8155",
+        predictit_contract_keywords=("republican", "gop"),
+    ),
+    MarketMappingRecord(
+        canonical_id="VANCE_NOM_2028",
+        description="JD Vance wins 2028 GOP presidential nomination",
+        status="confirmed",
+        allow_auto_trade=False,
+        aliases=("vance nominee 2028", "jd vance republican nominee"),
+        tags=("politics", "president", "nomination"),
+        polymarket="republican-presidential-nominee-2028",
+        polymarket_question="J.D. Vance",
+        predictit="8152",
+        predictit_contract_keywords=("vance",),
+    ),
+    MarketMappingRecord(
+        canonical_id="RUBIO_NOM_2028",
+        description="Marco Rubio wins 2028 GOP presidential nomination",
+        status="confirmed",
+        allow_auto_trade=False,
+        aliases=("rubio nominee 2028", "marco rubio republican nominee"),
+        tags=("politics", "president", "nomination"),
+        polymarket="republican-presidential-nominee-2028",
+        polymarket_question="Marco Rubio",
+        predictit="8152",
+        predictit_contract_keywords=("rubio",),
+    ),
+    MarketMappingRecord(
+        canonical_id="NEWSOM_NOM_2028",
+        description="Gavin Newsom wins 2028 Democratic presidential nomination",
+        status="confirmed",
+        allow_auto_trade=False,
+        aliases=("newsom nominee 2028", "gavin newsom democratic nominee"),
+        tags=("politics", "president", "nomination"),
+        polymarket="democratic-presidential-nominee-2028",
+        polymarket_question="Gavin Newsom",
+        predictit="8153",
+        predictit_contract_keywords=("newsom",),
+    ),
+    MarketMappingRecord(
+        canonical_id="GA_SEN_2026",
+        description="Georgia Senate 2026 Democratic win",
+        status="confirmed",
+        allow_auto_trade=False,
+        aliases=("georgia senate 2026 democrats", "ga senate 2026"),
+        tags=("politics", "senate", "georgia"),
+        polymarket="georgia-senate-election-winner",
+        polymarket_question="Democrats win",
+        predictit="8156",
+        predictit_contract_keywords=("democratic", "democrat"),
+    ),
+    MarketMappingRecord(
+        canonical_id="MI_SEN_2026",
+        description="Michigan Senate 2026 Democratic win",
+        status="confirmed",
+        allow_auto_trade=False,
+        aliases=("michigan senate 2026 democrats", "mi senate 2026"),
+        tags=("politics", "senate", "michigan"),
+        polymarket="michigan-senate-election-winner",
+        polymarket_question="Democrats win",
+        predictit="8158",
+        predictit_contract_keywords=("democratic", "democrat"),
+    ),
+)
+
+MARKET_MAP: Dict[str, Dict[str, object]] = {
+    record.canonical_id: record.to_dict()
+    for record in MARKET_SEEDS
+}
+
+
+def get_market_mapping(canonical_id: str) -> dict | None:
+    return MARKET_MAP.get(canonical_id)
+
+
+def update_market_mapping(
+    canonical_id: str,
+    *,
+    status: str | None = None,
+    note: str | None = None,
+    allow_auto_trade: bool | None = None,
+) -> dict | None:
+    mapping = MARKET_MAP.get(canonical_id)
+    if not mapping:
+        return None
+
+    if status is not None:
+        mapping["status"] = status
+    if allow_auto_trade is not None:
+        mapping["allow_auto_trade"] = bool(allow_auto_trade)
+    if note:
+        mapping["review_note"] = str(note).strip()
+    mapping["updated_at"] = time.time()
+    return mapping
+
+
+def iter_confirmed_market_mappings(require_auto_trade: bool = False) -> Iterable[tuple[str, dict]]:
+    for canonical_id, mapping in MARKET_MAP.items():
+        if mapping.get("status") != "confirmed":
+            continue
+        if require_auto_trade and not mapping.get("allow_auto_trade", False):
+            continue
+        yield canonical_id, mapping
+
+
 @dataclass
 class KalshiConfig:
     base_url: str = "https://api.elections.kalshi.com/trade-api/v2"
     ws_url: str = "wss://api.elections.kalshi.com/trade-api/ws/v2"
     api_key_id: str = field(default_factory=lambda: os.getenv("KALSHI_API_KEY_ID", ""))
     private_key_path: str = field(default_factory=lambda: os.getenv("KALSHI_PRIVATE_KEY_PATH", ""))
-    poll_interval: float = 1.0  # seconds between REST polls when WS unavailable
+    poll_interval: float = 1.5
+    ws_enabled: bool = True
 
 
 @dataclass
@@ -56,50 +313,50 @@ class PolymarketConfig:
     clob_url: str = "https://clob.polymarket.com"
     ws_url: str = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
     private_key: str = field(default_factory=lambda: os.getenv("POLY_PRIVATE_KEY", ""))
-    chain_id: int = 137  # Polygon mainnet
+    chain_id: int = 137
     poll_interval: float = 1.0
+    ws_enabled: bool = True
     fee_category: str = "politics"
 
 
 @dataclass
 class PredictItConfig:
     base_url: str = "https://www.predictit.org/api/marketdata/all/"
-    poll_interval: float = 5.0  # PredictIt updates ~every 60s, poll every 5s to catch changes
-    # No trade API — manual execution only
-    # No auth required for market data
+    poll_interval: float = 20.0
+    min_poll_interval: float = 15.0
+    max_poll_interval: float = 120.0
 
 
-# ─── Balance Thresholds & Alerts ───────────────────────────────────────
 @dataclass
 class AlertConfig:
     telegram_bot_token: str = field(default_factory=lambda: os.getenv("TELEGRAM_BOT_TOKEN", ""))
     telegram_chat_id: str = field(default_factory=lambda: os.getenv("TELEGRAM_CHAT_ID", ""))
-    # Low balance thresholds (USD)
     kalshi_low: float = 50.0
     polymarket_low: float = 25.0
     predictit_low: float = 100.0
-    # Alert cooldown (seconds) — don't spam
     cooldown: float = 300.0
 
 
-# ─── Arbitrage Scanner Config ──────────────────────────────────────────
 @dataclass
 class ScannerConfig:
-    min_edge_cents: float = 2.0        # minimum profit in cents after fees
-    max_position_usd: float = 100.0    # max position size per leg
-    predictit_cap: float = 850.0       # PredictIt $850 position limit
-    scan_interval: float = 1.0         # seconds between full scans
-    confidence_threshold: float = 0.8  # minimum confidence for auto-execution
-    dry_run: bool = True               # start in simulation mode
+    min_edge_cents: float = 2.5
+    max_position_usd: float = 100.0
+    predictit_cap: float = 850.0
+    scan_interval: float = 1.0
+    confidence_threshold: float = 0.8
+    persistence_scans: int = 3
+    max_quote_age_seconds: float = 15.0
+    min_liquidity: float = 25.0
+    slippage_tolerance: float = 0.01
+    dry_run: bool = True
 
 
-# ─── Redis & Postgres ──────────────────────────────────────────────────
 @dataclass
 class RedisConfig:
     host: str = field(default_factory=lambda: os.getenv("REDIS_HOST", "localhost"))
     port: int = 6379
     db: int = 0
-    price_ttl: int = 10  # seconds — prices expire fast
+    price_ttl: int = 20
 
 
 @dataclass
@@ -111,68 +368,6 @@ class PostgresConfig:
     password: str = field(default_factory=lambda: os.getenv("PG_PASSWORD", ""))
 
 
-# ─── Market Mapping ───────────────────────────────────────────────────
-# Maps canonical event names to platform-specific identifiers.
-# Each platform value is used differently:
-#   - kalshi: event_ticker (markets looked up via event_ticker param)
-#   - polymarket: event slug (looked up via Gamma API /events?slug=...)
-#   - predictit: market ID (integer, from /api/marketdata/all/)
-# polymarket_question: substring to match the specific market question within
-#   a multi-market Polymarket event (e.g. "Democratic Party" for the Dem market).
-MARKET_MAP: Dict[str, Dict[str, str]] = {
-    "DEM_HOUSE_2026": {
-        "kalshi": "KXPRESPARTY-2028",  # Kalshi has no 2026 House market; placeholder
-        "polymarket": "which-party-will-win-the-house-in-2026",
-        "polymarket_question": "Democratic Party",
-        "predictit": "8157",
-        "description": "Democrats win House 2026 midterms",
-    },
-    "DEM_SENATE_2026": {
-        "polymarket": "which-party-will-win-the-senate-in-2026",
-        "polymarket_question": "Democratic Party",
-        "predictit": "8155",
-        "description": "Democrats win Senate 2026 midterms",
-    },
-    "GOP_SENATE_2026": {
-        "polymarket": "which-party-will-win-the-senate-in-2026",
-        "polymarket_question": "Republican Party",
-        "predictit": "8155",  # same PI market, Republican contract
-        "description": "Republicans win Senate 2026 midterms",
-    },
-    "VANCE_NOM_2028": {
-        "polymarket": "republican-presidential-nominee-2028",
-        "polymarket_question": "J.D. Vance",
-        "predictit": "8152",
-        "description": "JD Vance wins 2028 GOP presidential nomination",
-    },
-    "RUBIO_NOM_2028": {
-        "polymarket": "republican-presidential-nominee-2028",
-        "polymarket_question": "Marco Rubio",
-        "predictit": "8152",  # same PI market, Rubio contract
-        "description": "Marco Rubio wins 2028 GOP presidential nomination",
-    },
-    "NEWSOM_NOM_2028": {
-        "polymarket": "democratic-presidential-nominee-2028",
-        "polymarket_question": "Gavin Newsom",
-        "predictit": "8153",
-        "description": "Gavin Newsom wins 2028 DEM presidential nomination",
-    },
-    "GA_SEN_2026": {
-        "polymarket": "georgia-senate-election-winner",
-        "polymarket_question": "Democrats win",
-        "predictit": "8156",
-        "description": "Georgia Senate 2026 — Democratic win",
-    },
-    "MI_SEN_2026": {
-        "polymarket": "michigan-senate-election-winner",
-        "polymarket_question": "Democrats win",
-        "predictit": "8158",
-        "description": "Michigan Senate 2026 — Democratic win",
-    },
-}
-
-
-# ─── Master Config ─────────────────────────────────────────────────────
 @dataclass
 class ArbiterConfig:
     kalshi: KalshiConfig = field(default_factory=KalshiConfig)
@@ -185,9 +380,7 @@ class ArbiterConfig:
 
 
 def load_config() -> ArbiterConfig:
-    """Load config with env var overrides."""
     cfg = ArbiterConfig()
-    # Resolve relative key paths against the arbiter directory
     if cfg.kalshi.private_key_path and not os.path.isabs(cfg.kalshi.private_key_path):
         arbiter_dir = Path(__file__).resolve().parent.parent
         cfg.kalshi.private_key_path = str(arbiter_dir / cfg.kalshi.private_key_path)

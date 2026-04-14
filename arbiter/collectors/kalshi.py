@@ -18,7 +18,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from typing import Dict, List
 
-from ..config.settings import KalshiConfig, MARKET_MAP, kalshi_fee
+from ..config.settings import KalshiConfig, MARKET_MAP, KALSHI_TAKER_FEE_RATE
 from ..utils.price_store import PricePoint, PriceStore
 from ..utils.retry import CircuitBreaker, RateLimiter, SessionManager, retry_with_backoff
 
@@ -94,8 +94,8 @@ class KalshiCollector:
         # Build reverse map: kalshi_event_ticker -> list of canonical_ids
         self._ticker_map: Dict[str, List[str]] = {}
         for canonical_id, mapping in MARKET_MAP.items():
-            if "kalshi" in mapping:
-                event_ticker = mapping["kalshi"]
+            event_ticker = str(mapping.get("kalshi", "") or "")
+            if event_ticker:
                 if event_ticker not in self._ticker_map:
                     self._ticker_map[event_ticker] = []
                 self._ticker_map[event_ticker].append(canonical_id)
@@ -112,6 +112,7 @@ class KalshiCollector:
 
         for event_ticker, canonical_ids in self._ticker_map.items():
             try:
+                await self.rate_limiter.acquire()
                 url = f"{self.config.base_url}/markets"
                 params = {"event_ticker": event_ticker, "limit": 50}
                 headers = {"Accept": "application/json"}
@@ -126,14 +127,21 @@ class KalshiCollector:
                         data = await resp.json()
                         markets = data.get("markets", [])
                         for m in markets:
-                            yes_price = m.get("yes_ask") or m.get("last_price") or 0.0
-                            no_price = m.get("no_ask") or (1.0 - yes_price) if yes_price else 0.0
+                            yes_bid = m.get("yes_bid") or m.get("bid") or 0.0
+                            yes_ask = m.get("yes_ask") or m.get("ask") or m.get("last_price") or 0.0
+                            no_bid = m.get("no_bid") or 0.0
+                            no_ask = m.get("no_ask") or (1.0 - yes_bid) if yes_bid else 0.0
+
+                            yes_price = yes_ask or yes_bid or m.get("last_price") or 0.0
+                            no_price = no_ask or no_bid or (1.0 - yes_price) if yes_price else 0.0
 
                             # Normalize to 0-1 range (Kalshi uses cents)
-                            if yes_price > 1:
-                                yes_price /= 100.0
-                            if no_price > 1:
-                                no_price /= 100.0
+                            yes_bid = yes_bid / 100.0 if yes_bid and yes_bid > 1 else yes_bid
+                            yes_ask = yes_ask / 100.0 if yes_ask and yes_ask > 1 else yes_ask
+                            no_bid = no_bid / 100.0 if no_bid and no_bid > 1 else no_bid
+                            no_ask = no_ask / 100.0 if no_ask and no_ask > 1 else no_ask
+                            yes_price = yes_price / 100.0 if yes_price and yes_price > 1 else yes_price
+                            no_price = no_price / 100.0 if no_price and no_price > 1 else no_price
 
                             # Skip markets with no price data
                             if yes_price == 0.0 and no_price == 0.0:
@@ -142,6 +150,7 @@ class KalshiCollector:
                             # Map to canonical IDs (use first one; Kalshi
                             # sub-markets would need ticker-level matching)
                             for canonical_id in canonical_ids:
+                                mapping = MARKET_MAP.get(canonical_id, {})
                                 price = PricePoint(
                                     platform="kalshi",
                                     canonical_id=canonical_id,
@@ -151,6 +160,19 @@ class KalshiCollector:
                                     no_volume=float(m.get("volume", 0) or 0),
                                     timestamp=time.time(),
                                     raw_market_id=m.get("ticker", event_ticker),
+                                    yes_market_id=m.get("ticker", event_ticker),
+                                    no_market_id=m.get("ticker", event_ticker),
+                                    yes_bid=float(yes_bid or 0),
+                                    yes_ask=float(yes_ask or yes_price or 0),
+                                    no_bid=float(no_bid or 0),
+                                    no_ask=float(no_ask or no_price or 0),
+                                    fee_rate=KALSHI_TAKER_FEE_RATE,
+                                    mapping_status=str(mapping.get("status", "candidate")),
+                                    mapping_score=float(mapping.get("mapping_score", 0.0)),
+                                    metadata={
+                                        "event_ticker": event_ticker,
+                                        "market_title": m.get("title", ""),
+                                    },
                                 )
                                 results.append(price)
                                 await self.store.put(price)
@@ -210,7 +232,6 @@ class KalshiCollector:
                     await asyncio.sleep(self.circuit.recovery_timeout / 2)
                     continue
 
-                await self.rate_limiter.acquire()
                 self.total_fetches += 1
 
                 async def _fetch():

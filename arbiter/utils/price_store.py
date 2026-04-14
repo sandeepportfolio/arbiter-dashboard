@@ -1,79 +1,100 @@
 """
-In-memory + Redis price store.
-Falls back to in-memory dict when Redis is unavailable.
-Each price entry: {platform, market_id, yes_price, no_price, yes_volume, no_volume, timestamp}
+In-memory price store with optional Redis backing and light chart history.
 """
+from __future__ import annotations
+
 import asyncio
 import json
-import time
 import logging
-from dataclasses import dataclass, asdict
-from typing import Dict, List, Optional, Tuple
+import time
+from collections import defaultdict, deque
+from dataclasses import asdict, dataclass, field
+from typing import Any, Deque, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("arbiter.price_store")
 
 
 @dataclass
 class PricePoint:
-    platform: str          # "kalshi" | "polymarket" | "predictit"
-    canonical_id: str      # from MARKET_MAP keys
-    yes_price: float       # 0.00 - 1.00
-    no_price: float        # 0.00 - 1.00
-    yes_volume: float      # contracts or USD
+    platform: str
+    canonical_id: str
+    yes_price: float
+    no_price: float
+    yes_volume: float
     no_volume: float
-    timestamp: float       # unix epoch
-    raw_market_id: str     # platform-specific ID
+    timestamp: float
+    raw_market_id: str
+    yes_market_id: str = ""
+    no_market_id: str = ""
+    yes_bid: float = 0.0
+    yes_ask: float = 0.0
+    no_bid: float = 0.0
+    no_ask: float = 0.0
+    fee_rate: float = 0.0
+    mapping_status: str = "candidate"
+    mapping_score: float = 0.0
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, d: dict) -> "PricePoint":
-        return cls(**d)
+    def from_dict(cls, payload: dict) -> "PricePoint":
+        return cls(**payload)
+
+    @property
+    def age_seconds(self) -> float:
+        return max(time.time() - self.timestamp, 0.0)
 
 
 class PriceStore:
     """
-    Thread-safe price store with optional Redis backing.
-    Key format: "price:{platform}:{canonical_id}"
+    Thread-safe price store keyed by platform and canonical market.
     """
 
-    def __init__(self, redis_client=None, ttl: int = 10):
+    def __init__(self, redis_client=None, ttl: int = 10, history_limit: int = 240):
         self._mem: Dict[str, PricePoint] = {}
         self._redis = redis_client
         self._ttl = ttl
+        self._history_limit = history_limit
         self._lock = asyncio.Lock()
         self._subscribers: List[asyncio.Queue] = []
+        self._history: Dict[str, Deque[dict]] = defaultdict(lambda: deque(maxlen=self._history_limit))
 
     async def put(self, price: PricePoint) -> None:
-        """Store a price point and notify subscribers."""
-        key = f"price:{price.platform}:{price.canonical_id}"
+        key = self._key(price.platform, price.canonical_id)
         async with self._lock:
             self._mem[key] = price
+            self._history[price.canonical_id].append(
+                {
+                    "timestamp": price.timestamp,
+                    "platform": price.platform,
+                    "yes_price": price.yes_price,
+                    "no_price": price.no_price,
+                    "mid_price": round((price.yes_price + (1.0 - price.no_price)) / 2.0, 4),
+                    "mapping_status": price.mapping_status,
+                }
+            )
 
-        # Redis backing (fire-and-forget)
         if self._redis:
             try:
                 await self._redis.setex(key, self._ttl, json.dumps(price.to_dict()))
-            except Exception as e:
-                logger.warning(f"Redis write failed: {e}")
+            except Exception as exc:
+                logger.warning("Redis write failed: %s", exc)
 
-        # Notify subscribers
-        for q in self._subscribers:
+        for subscriber in list(self._subscribers):
             try:
-                q.put_nowait(price)
+                subscriber.put_nowait(price)
             except asyncio.QueueFull:
-                pass  # subscriber is slow, skip
+                logger.debug("Skipping slow price subscriber")
 
     async def get(self, platform: str, canonical_id: str) -> Optional[PricePoint]:
-        """Get latest price for a specific platform+market."""
-        key = f"price:{platform}:{canonical_id}"
+        key = self._key(platform, canonical_id)
         async with self._lock:
-            p = self._mem.get(key)
-            if p and (time.time() - p.timestamp) < self._ttl:
-                return p
+            cached = self._mem.get(key)
+            if cached and cached.age_seconds < self._ttl:
+                return cached
 
-        # Try Redis
         if self._redis:
             try:
                 raw = await self._redis.get(key)
@@ -84,42 +105,43 @@ class PriceStore:
         return None
 
     async def get_all_for_market(self, canonical_id: str) -> Dict[str, PricePoint]:
-        """Get latest prices across all platforms for a canonical market."""
         result = {}
         for platform in ("kalshi", "polymarket", "predictit"):
-            p = await self.get(platform, canonical_id)
-            if p:
-                result[platform] = p
+            price = await self.get(platform, canonical_id)
+            if price:
+                result[platform] = price
         return result
 
     async def get_all_prices(self) -> Dict[str, PricePoint]:
-        """Get all currently stored prices."""
         async with self._lock:
             now = time.time()
             return {
-                k: v for k, v in self._mem.items()
-                if (now - v.timestamp) < self._ttl * 6  # wider window for snapshot
+                key: value
+                for key, value in self._mem.items()
+                if (now - value.timestamp) < self._ttl * 6
             }
 
-    def subscribe(self) -> asyncio.Queue:
-        """Subscribe to real-time price updates."""
-        q: asyncio.Queue = asyncio.Queue(maxsize=1000)
-        self._subscribers.append(q)
-        return q
+    async def get_market_history(self, canonical_id: str, limit: int = 180) -> List[dict]:
+        async with self._lock:
+            return list(self._history.get(canonical_id, []))[-limit:]
 
-    def unsubscribe(self, q: asyncio.Queue) -> None:
-        """Remove a subscriber."""
-        self._subscribers = [s for s in self._subscribers if s is not q]
+    def subscribe(self) -> asyncio.Queue:
+        queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
+        self._subscribers.append(queue)
+        return queue
+
+    def unsubscribe(self, queue: asyncio.Queue) -> None:
+        self._subscribers = [subscriber for subscriber in self._subscribers if subscriber is not queue]
 
     async def get_cross_platform_pairs(self, canonical_id: str) -> List[Tuple[PricePoint, PricePoint]]:
-        """
-        Get all cross-platform price pairs for arbitrage scanning.
-        Returns list of (platform_a_price, platform_b_price) tuples.
-        """
         prices = await self.get_all_for_market(canonical_id)
         pairs = []
         platforms = list(prices.keys())
-        for i in range(len(platforms)):
-            for j in range(i + 1, len(platforms)):
-                pairs.append((prices[platforms[i]], prices[platforms[j]]))
+        for index, left in enumerate(platforms):
+            for right in platforms[index + 1:]:
+                pairs.append((prices[left], prices[right]))
         return pairs
+
+    @staticmethod
+    def _key(platform: str, canonical_id: str) -> str:
+        return f"price:{platform}:{canonical_id}"

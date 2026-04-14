@@ -1,24 +1,24 @@
 """
-ARBITER — Execution Engine + Risk Manager
-Places orders on Kalshi and Polymarket when profitable arbs detected.
-PredictIt has no trade API — logs instructions for manual execution.
-
-SAFETY: Starts in dry_run mode. All trades are simulated until explicitly enabled.
+Execution engine with re-quote checks, concurrent legs, and recovery hooks.
 """
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
 import time
 import uuid
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from collections import deque
+from dataclasses import dataclass, field, replace
 from enum import Enum
+from typing import Any, Deque, Dict, List, Optional, Tuple
 
 import aiohttp
 
 from ..config.settings import ArbiterConfig, ScannerConfig
-from ..scanner.arbitrage import ArbitrageOpportunity
 from ..monitor.balance import BalanceMonitor
+from ..scanner.arbitrage import ArbitrageOpportunity, compute_fee
+from ..utils.price_store import PricePoint, PriceStore
 
 logger = logging.getLogger("arbiter.execution")
 
@@ -30,17 +30,17 @@ class OrderStatus(Enum):
     PARTIAL = "partial"
     CANCELLED = "cancelled"
     FAILED = "failed"
+    ABORTED = "aborted"
     SIMULATED = "simulated"
 
 
 @dataclass
 class Order:
-    """Represents a single order leg."""
     order_id: str
     platform: str
     market_id: str
     canonical_id: str
-    side: str          # "yes" or "no"
+    side: str
     price: float
     quantity: int
     status: OrderStatus
@@ -49,134 +49,423 @@ class Order:
     timestamp: float = 0.0
     error: str = ""
 
+    def to_dict(self) -> dict:
+        return {
+            "order_id": self.order_id,
+            "platform": self.platform,
+            "market_id": self.market_id,
+            "canonical_id": self.canonical_id,
+            "side": self.side,
+            "price": round(self.price, 4),
+            "quantity": self.quantity,
+            "status": self.status.value,
+            "fill_price": round(self.fill_price, 4),
+            "fill_qty": self.fill_qty,
+            "timestamp": self.timestamp,
+            "error": self.error,
+        }
+
+
+@dataclass
+class ExecutionIncident:
+    incident_id: str
+    arb_id: str
+    canonical_id: str
+    severity: str
+    message: str
+    timestamp: float
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    status: str = "open"
+    resolved_at: float = 0.0
+    resolution_note: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "incident_id": self.incident_id,
+            "arb_id": self.arb_id,
+            "canonical_id": self.canonical_id,
+            "severity": self.severity,
+            "message": self.message,
+            "timestamp": self.timestamp,
+            "metadata": self.metadata,
+            "status": self.status,
+            "resolved_at": self.resolved_at,
+            "resolution_note": self.resolution_note,
+        }
+
+
+@dataclass
+class ManualPosition:
+    position_id: str
+    canonical_id: str
+    description: str
+    instructions: str
+    yes_platform: str
+    no_platform: str
+    quantity: int
+    yes_price: float
+    no_price: float
+    status: str = "awaiting-entry"
+    timestamp: float = 0.0
+    updated_at: float = 0.0
+    entry_confirmed_at: float = 0.0
+    closed_at: float = 0.0
+    note: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "position_id": self.position_id,
+            "canonical_id": self.canonical_id,
+            "description": self.description,
+            "instructions": self.instructions,
+            "yes_platform": self.yes_platform,
+            "no_platform": self.no_platform,
+            "quantity": self.quantity,
+            "yes_price": round(self.yes_price, 4),
+            "no_price": round(self.no_price, 4),
+            "status": self.status,
+            "timestamp": self.timestamp,
+            "updated_at": self.updated_at,
+            "entry_confirmed_at": self.entry_confirmed_at,
+            "closed_at": self.closed_at,
+            "note": self.note,
+        }
+
 
 @dataclass
 class ArbExecution:
-    """Tracks a full arbitrage execution (2 legs)."""
     arb_id: str
     opportunity: ArbitrageOpportunity
     leg_yes: Order
     leg_no: Order
-    status: str = "pending"  # pending, partial, complete, failed
+    status: str = "pending"
     realized_pnl: float = 0.0
     timestamp: float = 0.0
+    notes: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "arb_id": self.arb_id,
+            "opportunity": self.opportunity.to_dict(),
+            "leg_yes": self.leg_yes.to_dict(),
+            "leg_no": self.leg_no.to_dict(),
+            "status": self.status,
+            "realized_pnl": round(self.realized_pnl, 4),
+            "timestamp": self.timestamp,
+            "notes": self.notes,
+        }
 
 
 class RiskManager:
-    """
-    Pre-trade risk checks.
-    Prevents excessive exposure and enforces position limits.
-    """
-
     def __init__(self, config: ScannerConfig):
         self.config = config
-        self._open_positions: Dict[str, float] = {}  # canonical_id -> USD exposure
+        self._open_positions: Dict[str, float] = {}
         self._daily_pnl: float = 0.0
         self._daily_trades: int = 0
         self._max_daily_trades: int = 100
-        self._max_daily_loss: float = -50.0  # stop at $50 loss
+        self._max_daily_loss: float = -50.0
         self._max_total_exposure: float = 500.0
 
     def check_trade(self, opp: ArbitrageOpportunity) -> Tuple[bool, str]:
-        """
-        Run pre-trade risk checks. Returns (approved, reason).
-        """
-        # Check confidence threshold
-        if opp.confidence < self.config.confidence_threshold:
-            return False, f"Low confidence: {opp.confidence:.2f} < {self.config.confidence_threshold}"
-
-        # Check minimum edge
+        if opp.status not in {"tradable", "manual"}:
+            return False, f"Opportunity not ready: {opp.status}"
+        if opp.confidence < self.config.confidence_threshold and not opp.requires_manual:
+            return False, f"Low confidence: {opp.confidence:.2f}"
         if opp.net_edge_cents < self.config.min_edge_cents:
-            return False, f"Edge too thin: {opp.net_edge_cents:.1f}¢ < {self.config.min_edge_cents}¢"
-
-        # Check daily trade limit
+            return False, f"Edge too thin: {opp.net_edge_cents:.2f}¢"
+        if opp.quote_age_seconds > self.config.max_quote_age_seconds:
+            return False, f"Stale quote: {opp.quote_age_seconds:.2f}s"
         if self._daily_trades >= self._max_daily_trades:
-            return False, f"Daily trade limit reached: {self._daily_trades}"
-
-        # Check daily PnL stop
+            return False, "Daily trade limit reached"
         if self._daily_pnl <= self._max_daily_loss:
-            return False, f"Daily loss limit: ${self._daily_pnl:.2f} <= ${self._max_daily_loss:.2f}"
+            return False, "Daily loss limit reached"
 
-        # Check position limits
+        exposure = opp.suggested_qty * (opp.yes_price + opp.no_price)
         existing = self._open_positions.get(opp.canonical_id, 0.0)
-        new_exposure = opp.suggested_qty * (opp.yes_price + opp.no_price)
-        if existing + new_exposure > self.config.max_position_usd:
-            return False, f"Position limit: ${existing + new_exposure:.2f} > ${self.config.max_position_usd:.2f}"
-
-        # Check total exposure
-        total = sum(self._open_positions.values()) + new_exposure
-        if total > self._max_total_exposure:
-            return False, f"Total exposure limit: ${total:.2f} > ${self._max_total_exposure:.2f}"
-
-        # PredictIt $850 cap
-        if opp.yes_platform == "predictit":
-            pi_exposure = opp.suggested_qty * opp.yes_price
-            if pi_exposure > 850:
-                return False, f"PredictIt cap: ${pi_exposure:.2f} > $850"
-        if opp.no_platform == "predictit":
-            pi_exposure = opp.suggested_qty * opp.no_price
-            if pi_exposure > 850:
-                return False, f"PredictIt cap: ${pi_exposure:.2f} > $850"
-
+        if existing + exposure > self.config.max_position_usd:
+            return False, "Per-market exposure limit exceeded"
+        total_exposure = sum(self._open_positions.values()) + exposure
+        if total_exposure > self._max_total_exposure:
+            return False, "Total exposure limit exceeded"
         return True, "approved"
 
     def record_trade(self, canonical_id: str, exposure: float, pnl: float = 0.0):
-        """Record a completed trade for risk tracking."""
         self._open_positions[canonical_id] = self._open_positions.get(canonical_id, 0.0) + exposure
         self._daily_pnl += pnl
         self._daily_trades += 1
 
-    def reset_daily(self):
-        """Reset daily counters (call at midnight)."""
-        self._daily_pnl = 0.0
-        self._daily_trades = 0
-        logger.info("Risk manager daily counters reset")
-
 
 class ExecutionEngine:
-    """
-    Executes arbitrage trades across platforms.
-    Supports dry-run simulation and live trading.
-    """
-
-    def __init__(self, config: ArbiterConfig, balance_monitor: BalanceMonitor,
-                 collectors: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        config: ArbiterConfig,
+        balance_monitor: BalanceMonitor,
+        price_store: Optional[PriceStore] = None,
+        collectors: Optional[Dict[str, Any]] = None,
+    ):
         self.config = config
         self.scanner_config = config.scanner
         self.balance_monitor = balance_monitor
+        self.price_store = price_store
         self.risk = RiskManager(config.scanner)
         self._running = False
         self._executions: List[ArbExecution] = []
         self._execution_count = 0
-        # Collectors for reusing auth + sessions
         self._collectors = collectors or {}
         self._own_session: Optional[aiohttp.ClientSession] = None
-        # Polymarket CLOB client (lazy init)
         self._poly_clob_client = None
+        self._subscribers: List[asyncio.Queue] = []
+        self._incident_subscribers: List[asyncio.Queue] = []
+        self._incidents: Deque[ExecutionIncident] = deque(maxlen=200)
+        self._manual_positions: Deque[ManualPosition] = deque(maxlen=200)
+        self._recent_signatures: Dict[str, float] = {}
+        self._aborted_count = 0
+        self._manual_count = 0
+        self._recovery_count = 0
+
+    def subscribe(self) -> asyncio.Queue:
+        queue: asyncio.Queue = asyncio.Queue(maxsize=100)
+        self._subscribers.append(queue)
+        return queue
+
+    def subscribe_incidents(self) -> asyncio.Queue:
+        queue: asyncio.Queue = asyncio.Queue(maxsize=100)
+        self._incident_subscribers.append(queue)
+        return queue
 
     async def execute_opportunity(self, opp: ArbitrageOpportunity) -> Optional[ArbExecution]:
-        """
-        Execute an arbitrage opportunity.
-        In dry_run mode, simulates the trade.
-        """
-        # Risk check
         approved, reason = self.risk.check_trade(opp)
         if not approved:
-            logger.debug(f"Trade rejected by risk manager: {reason}")
+            logger.debug("Trade rejected by risk manager: %s", reason)
             return None
+
+        signature = f"{opp.key()}:{opp.status}"
+        last_seen = self._recent_signatures.get(signature, 0.0)
+        if time.time() - last_seen < 30.0:
+            return None
+        self._recent_signatures[signature] = time.time()
 
         self._execution_count += 1
         arb_id = f"ARB-{self._execution_count:06d}"
 
+        if opp.requires_manual:
+            execution = await self._queue_manual_execution(arb_id, opp)
+            await self._publish_execution(execution)
+            return execution
+
+        requoted = await self._pre_trade_requote(arb_id, opp)
+        if not requoted:
+            self._aborted_count += 1
+            return None
+
         if self.scanner_config.dry_run:
-            return await self._simulate_execution(arb_id, opp)
+            execution = await self._simulate_execution(arb_id, requoted)
         else:
-            return await self._live_execution(arb_id, opp)
+            execution = await self._live_execution(arb_id, requoted)
+
+        await self._publish_execution(execution)
+        return execution
+
+    async def _queue_manual_execution(self, arb_id: str, opp: ArbitrageOpportunity) -> ArbExecution:
+        now = time.time()
+        instructions = (
+            f"Manual workflow required. Buy YES on {opp.yes_platform.upper()} at ${opp.yes_price:.2f} "
+            f"and buy NO on {opp.no_platform.upper()} at ${opp.no_price:.2f} for {opp.suggested_qty} contracts. "
+            "Confirm the PredictIt leg in the dashboard before hedging or unwinding."
+        )
+        manual_position = ManualPosition(
+            position_id=f"MANUAL-{arb_id}",
+            canonical_id=opp.canonical_id,
+            description=opp.description,
+            instructions=instructions,
+            yes_platform=opp.yes_platform,
+            no_platform=opp.no_platform,
+            quantity=opp.suggested_qty,
+            yes_price=opp.yes_price,
+            no_price=opp.no_price,
+            status="awaiting-entry",
+            timestamp=now,
+            updated_at=now,
+        )
+        self._manual_positions.appendleft(manual_position)
+        self._manual_count += 1
+        await self.balance_monitor.notifier.send(
+            f"<b>ARBITER manual trade</b>\n\n{instructions}",
+        )
+
+        leg_yes = Order(
+            order_id=f"{arb_id}-YES-MANUAL",
+            platform=opp.yes_platform,
+            market_id=opp.yes_market_id,
+            canonical_id=opp.canonical_id,
+            side="yes",
+            price=opp.yes_price,
+            quantity=opp.suggested_qty,
+            status=OrderStatus.PENDING,
+            timestamp=now,
+            error="Manual execution required",
+        )
+        leg_no = Order(
+            order_id=f"{arb_id}-NO-MANUAL",
+            platform=opp.no_platform,
+            market_id=opp.no_market_id,
+            canonical_id=opp.canonical_id,
+            side="no",
+            price=opp.no_price,
+            quantity=opp.suggested_qty,
+            status=OrderStatus.PENDING,
+            timestamp=now,
+            error="Manual execution required",
+        )
+        execution = ArbExecution(
+            arb_id=arb_id,
+            opportunity=opp,
+            leg_yes=leg_yes,
+            leg_no=leg_no,
+            status="manual_pending",
+            realized_pnl=0.0,
+            timestamp=now,
+            notes=["PredictIt/manual workflow queued"],
+        )
+        self._executions.append(execution)
+        return execution
+
+    async def update_manual_position(self, position_id: str, action: str, note: str = "") -> Optional[ManualPosition]:
+        action = str(action or "").strip().lower()
+        if action not in {"mark_entered", "mark_closed", "cancel"}:
+            raise ValueError(f"Unsupported manual position action: {action or 'unknown'}")
+
+        now = time.time()
+        for index, existing in enumerate(self._manual_positions):
+            if existing.position_id != position_id:
+                continue
+
+            if action == "mark_entered" and existing.status in {"closed", "cancelled"}:
+                raise ValueError(f"Cannot mark {existing.status} manual position as entered")
+            if action == "mark_closed" and existing.status == "cancelled":
+                raise ValueError("Cannot close a cancelled manual position")
+            if action == "cancel" and existing.status == "closed":
+                raise ValueError("Cannot cancel a closed manual position")
+
+            status = existing.status
+            entry_confirmed_at = existing.entry_confirmed_at
+            closed_at = existing.closed_at
+            if action == "mark_entered":
+                status = "entered"
+                entry_confirmed_at = existing.entry_confirmed_at or now
+            elif action == "mark_closed":
+                status = "closed"
+                entry_confirmed_at = existing.entry_confirmed_at or now
+                closed_at = now
+            elif action == "cancel":
+                status = "cancelled"
+                closed_at = existing.closed_at or now
+
+            updated = replace(
+                existing,
+                status=status,
+                updated_at=now,
+                entry_confirmed_at=entry_confirmed_at,
+                closed_at=closed_at,
+                note=self._merge_note(existing.note, note),
+            )
+            self._manual_positions[index] = updated
+
+            execution = self._update_manual_execution(updated, note)
+            if execution is not None:
+                await self._publish_execution(execution)
+            return updated
+        return None
+
+    async def resolve_incident(self, incident_id: str, note: str = "") -> Optional[ExecutionIncident]:
+        now = time.time()
+        for index, existing in enumerate(self._incidents):
+            if existing.incident_id != incident_id:
+                continue
+            updated = replace(
+                existing,
+                status="resolved",
+                resolved_at=existing.resolved_at or now,
+                resolution_note=self._merge_note(existing.resolution_note, note),
+            )
+            self._incidents[index] = updated
+            for subscriber in list(self._incident_subscribers):
+                try:
+                    subscriber.put_nowait(updated)
+                except asyncio.QueueFull:
+                    logger.debug("Skipping slow incident subscriber")
+            return updated
+        return None
+
+    async def _pre_trade_requote(self, arb_id: str, opp: ArbitrageOpportunity) -> Optional[ArbitrageOpportunity]:
+        if not self.price_store:
+            return opp
+
+        current_yes = await self.price_store.get(opp.yes_platform, opp.canonical_id)
+        current_no = await self.price_store.get(opp.no_platform, opp.canonical_id)
+        if not current_yes or not current_no:
+            await self._record_incident(arb_id, opp, "warning", "Missing fresh quotes during pre-trade re-quote")
+            return None
+
+        age = max(current_yes.age_seconds, current_no.age_seconds)
+        if age > self.scanner_config.max_quote_age_seconds:
+            await self._record_incident(
+                arb_id,
+                opp,
+                "warning",
+                f"Quotes became stale before execution ({age:.2f}s)",
+            )
+            return None
+
+        yes_price = current_yes.yes_price
+        no_price = current_no.no_price
+        if abs(yes_price - opp.yes_price) > self.scanner_config.slippage_tolerance or abs(no_price - opp.no_price) > self.scanner_config.slippage_tolerance:
+            await self._record_incident(
+                arb_id,
+                opp,
+                "warning",
+                "Slippage exceeded tolerance during re-quote",
+                metadata={
+                    "original_yes": opp.yes_price,
+                    "current_yes": yes_price,
+                    "original_no": opp.no_price,
+                    "current_no": no_price,
+                },
+            )
+            return None
+
+        gross_edge = 1.0 - yes_price - no_price
+        total_fees = (
+            compute_fee(opp.yes_platform, yes_price, opp.suggested_qty, current_yes.fee_rate)
+            + compute_fee(opp.no_platform, no_price, opp.suggested_qty, current_no.fee_rate)
+        ) / max(opp.suggested_qty, 1)
+        net_edge = gross_edge - total_fees
+        net_edge_cents = net_edge * 100.0
+        if net_edge_cents < self.scanner_config.min_edge_cents:
+            await self._record_incident(
+                arb_id,
+                opp,
+                "warning",
+                f"Edge collapsed below threshold after re-quote ({net_edge_cents:.2f}¢)",
+            )
+            return None
+
+        return replace(
+            opp,
+            yes_price=yes_price,
+            no_price=no_price,
+            yes_market_id=current_yes.yes_market_id or opp.yes_market_id,
+            no_market_id=current_no.no_market_id or opp.no_market_id,
+            gross_edge=gross_edge,
+            total_fees=total_fees,
+            net_edge=net_edge,
+            net_edge_cents=net_edge_cents,
+            quote_age_seconds=age,
+            timestamp=time.time(),
+        )
 
     async def _simulate_execution(self, arb_id: str, opp: ArbitrageOpportunity) -> ArbExecution:
-        """Simulate trade execution for testing."""
         now = time.time()
-
         leg_yes = Order(
             order_id=f"{arb_id}-YES",
             platform=opp.yes_platform,
@@ -190,7 +479,6 @@ class ExecutionEngine:
             fill_qty=opp.suggested_qty,
             timestamp=now,
         )
-
         leg_no = Order(
             order_id=f"{arb_id}-NO",
             platform=opp.no_platform,
@@ -204,7 +492,6 @@ class ExecutionEngine:
             fill_qty=opp.suggested_qty,
             timestamp=now,
         )
-
         execution = ArbExecution(
             arb_id=arb_id,
             opportunity=opp,
@@ -214,135 +501,213 @@ class ExecutionEngine:
             realized_pnl=opp.net_edge * opp.suggested_qty,
             timestamp=now,
         )
-
         self._executions.append(execution)
-        self.risk.record_trade(
-            opp.canonical_id,
-            opp.suggested_qty * (opp.yes_price + opp.no_price),
-        )
-
-        logger.info(
-            f"[DRY RUN] {arb_id}: {opp.canonical_id} "
-            f"YES@{opp.yes_platform}={opp.yes_price:.2f} × {opp.suggested_qty} + "
-            f"NO@{opp.no_platform}={opp.no_price:.2f} × {opp.suggested_qty} → "
-            f"simulated PnL=${execution.realized_pnl:.2f}"
-        )
-
+        self.risk.record_trade(opp.canonical_id, opp.suggested_qty * (opp.yes_price + opp.no_price), execution.realized_pnl)
         return execution
 
-    async def _live_execution(self, arb_id: str, opp: ArbitrageOpportunity) -> Optional[ArbExecution]:
-        """
-        Live trade execution.
-        Places orders on Kalshi and/or Polymarket.
-        Logs manual instructions for PredictIt.
-        """
+    async def _live_execution(self, arb_id: str, opp: ArbitrageOpportunity) -> ArbExecution:
         now = time.time()
-        legs = []
+        yes_task = asyncio.create_task(
+            self._place_order_for_leg(arb_id, opp.yes_platform, opp.yes_market_id, opp.canonical_id, "yes", opp.yes_price, opp.suggested_qty)
+        )
+        no_task = asyncio.create_task(
+            self._place_order_for_leg(arb_id, opp.no_platform, opp.no_market_id, opp.canonical_id, "no", opp.no_price, opp.suggested_qty)
+        )
+        leg_yes, leg_no = await asyncio.gather(yes_task, no_task)
 
-        for side, platform, price, market_id in [
-            ("yes", opp.yes_platform, opp.yes_price, opp.yes_market_id),
-            ("no", opp.no_platform, opp.no_price, opp.no_market_id),
-        ]:
-            if platform == "kalshi":
-                order = await self._place_kalshi_order(
-                    arb_id, market_id, opp.canonical_id, side, price, opp.suggested_qty
-                )
-            elif platform == "polymarket":
-                order = await self._place_polymarket_order(
-                    arb_id, market_id, opp.canonical_id, side, price, opp.suggested_qty
-                )
-            elif platform == "predictit":
-                order = self._log_predictit_instruction(
-                    arb_id, market_id, opp.canonical_id, side, price, opp.suggested_qty
-                )
+        status = "submitted"
+        notes: List[str] = []
+        if leg_yes.status in {OrderStatus.FAILED, OrderStatus.CANCELLED, OrderStatus.ABORTED} or leg_no.status in {
+            OrderStatus.FAILED,
+            OrderStatus.CANCELLED,
+            OrderStatus.ABORTED,
+        }:
+            if leg_yes.status in {OrderStatus.FILLED, OrderStatus.PARTIAL, OrderStatus.SUBMITTED} or leg_no.status in {
+                OrderStatus.FILLED,
+                OrderStatus.PARTIAL,
+                OrderStatus.SUBMITTED,
+            }:
+                status = "recovering"
+                notes.extend(await self._recover_one_leg_risk(arb_id, opp, leg_yes, leg_no))
             else:
-                order = Order(
-                    order_id=f"{arb_id}-{side.upper()}-UNKNOWN",
-                    platform=platform, market_id=market_id,
-                    canonical_id=opp.canonical_id, side=side,
-                    price=price, quantity=opp.suggested_qty,
-                    status=OrderStatus.FAILED, error=f"Unknown platform: {platform}",
-                    timestamp=now,
-                )
-            legs.append(order)
-
-        # Determine execution status from leg outcomes
-        yes_ok = legs[0].status not in (OrderStatus.FAILED, OrderStatus.CANCELLED)
-        no_ok = legs[1].status not in (OrderStatus.FAILED, OrderStatus.CANCELLED)
-
-        if yes_ok and no_ok:
-            exec_status = "submitted"
-        elif yes_ok or no_ok:
-            exec_status = "partial"
-            logger.warning(
-                f"[EXECUTION] {arb_id}: PARTIAL — "
-                f"YES={legs[0].status.value} NO={legs[1].status.value}"
-            )
-        else:
-            exec_status = "failed"
-            logger.error(
-                f"[EXECUTION] {arb_id}: FAILED — "
-                f"YES: {legs[0].error} | NO: {legs[1].error}"
-            )
+                status = "failed"
+        elif leg_yes.status == OrderStatus.PARTIAL or leg_no.status == OrderStatus.PARTIAL:
+            status = "recovering"
+            notes.extend(await self._recover_one_leg_risk(arb_id, opp, leg_yes, leg_no))
+        elif leg_yes.status == OrderStatus.FILLED and leg_no.status == OrderStatus.FILLED:
+            status = "filled"
 
         execution = ArbExecution(
             arb_id=arb_id,
             opportunity=opp,
-            leg_yes=legs[0],
-            leg_no=legs[1],
-            status=exec_status,
+            leg_yes=leg_yes,
+            leg_no=leg_no,
+            status=status,
+            realized_pnl=opp.net_edge * min(max(leg_yes.fill_qty, 0), max(leg_no.fill_qty, 0)) if status in {"filled", "submitted"} else 0.0,
             timestamp=now,
+            notes=notes,
         )
         self._executions.append(execution)
 
-        if exec_status == "submitted":
-            self.risk.record_trade(
-                opp.canonical_id,
-                opp.suggested_qty * (opp.yes_price + opp.no_price),
-            )
-            logger.info(
-                f"[EXECUTION] {arb_id}: {opp.canonical_id} LIVE — "
-                f"YES@{opp.yes_platform} + NO@{opp.no_platform}"
-            )
-
+        if status in {"submitted", "filled"}:
+            self.risk.record_trade(opp.canonical_id, opp.suggested_qty * (opp.yes_price + opp.no_price), execution.realized_pnl)
         return execution
 
+    async def _place_order_for_leg(
+        self,
+        arb_id: str,
+        platform: str,
+        market_id: str,
+        canonical_id: str,
+        side: str,
+        price: float,
+        qty: int,
+    ) -> Order:
+        if platform == "kalshi":
+            return await self._place_kalshi_order(arb_id, market_id, canonical_id, side, price, qty)
+        if platform == "polymarket":
+            return await self._place_polymarket_order(arb_id, market_id, canonical_id, side, price, qty)
+        return Order(
+            order_id=f"{arb_id}-{side.upper()}-UNSUPPORTED",
+            platform=platform,
+            market_id=market_id,
+            canonical_id=canonical_id,
+            side=side,
+            price=price,
+            quantity=qty,
+            status=OrderStatus.FAILED,
+            timestamp=time.time(),
+            error=f"Unsupported auto-trading platform: {platform}",
+        )
+
+    async def _recover_one_leg_risk(self, arb_id: str, opp: ArbitrageOpportunity, leg_yes: Order, leg_no: Order) -> List[str]:
+        self._recovery_count += 1
+        notes: List[str] = []
+        await self._record_incident(
+            arb_id,
+            opp,
+            "critical",
+            "Partial fill or one-leg risk detected, starting recovery",
+            metadata={"leg_yes": leg_yes.to_dict(), "leg_no": leg_no.to_dict()},
+        )
+
+        for leg in (leg_yes, leg_no):
+            if leg.status in {OrderStatus.SUBMITTED, OrderStatus.PENDING, OrderStatus.PARTIAL}:
+                cancelled = await self._cancel_order(leg)
+                notes.append(f"cancel-{leg.side}:{'ok' if cancelled else 'failed'}")
+        return notes
+
+    async def _cancel_order(self, order: Order) -> bool:
+        if order.platform == "kalshi":
+            return await self._cancel_kalshi_order(order)
+        if order.platform == "polymarket":
+            return await self._cancel_polymarket_order(order)
+        return False
+
+    async def _cancel_kalshi_order(self, order: Order) -> bool:
+        collector = self._collectors.get("kalshi")
+        if not collector or not collector.auth.is_authenticated:
+            return False
+        session = await self._get_session()
+        path = f"/trade-api/v2/portfolio/orders/{order.order_id}"
+        url = f"{self.config.kalshi.base_url}/portfolio/orders/{order.order_id}"
+        headers = collector.auth.get_headers("DELETE", path)
+        try:
+            async with session.delete(url, headers=headers) as response:
+                return response.status in (200, 204)
+        except Exception as exc:
+            logger.error("Kalshi cancel failed for %s: %s", order.order_id, exc)
+            return False
+
+    async def _cancel_polymarket_order(self, order: Order) -> bool:
+        client = self._get_poly_clob_client()
+        if client is None:
+            return False
+        loop = asyncio.get_event_loop()
+        try:
+            for attr in ("cancel", "cancel_order"):
+                if hasattr(client, attr):
+                    method = getattr(client, attr)
+                    await loop.run_in_executor(None, lambda: method(order.order_id))
+                    return True
+        except Exception as exc:
+            logger.error("Polymarket cancel failed for %s: %s", order.order_id, exc)
+        return False
+
+    async def _publish_execution(self, execution: ArbExecution):
+        for subscriber in list(self._subscribers):
+            try:
+                subscriber.put_nowait(execution)
+            except asyncio.QueueFull:
+                logger.debug("Skipping slow execution subscriber")
+
+    async def record_incident(
+        self,
+        *,
+        arb_id: str,
+        canonical_id: str,
+        severity: str,
+        message: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> ExecutionIncident:
+        incident = ExecutionIncident(
+            incident_id=f"INC-{uuid.uuid4().hex[:8]}",
+            arb_id=arb_id,
+            canonical_id=canonical_id,
+            severity=severity,
+            message=message,
+            timestamp=time.time(),
+            metadata=metadata or {},
+        )
+        self._incidents.appendleft(incident)
+        for subscriber in list(self._incident_subscribers):
+            try:
+                subscriber.put_nowait(incident)
+            except asyncio.QueueFull:
+                logger.debug("Skipping slow incident subscriber")
+        logger.warning("[%s] %s", severity.upper(), message)
+        return incident
+
+    async def _record_incident(
+        self,
+        arb_id: str,
+        opp: ArbitrageOpportunity,
+        severity: str,
+        message: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> ExecutionIncident:
+        return await self.record_incident(
+            arb_id=arb_id,
+            canonical_id=opp.canonical_id,
+            severity=severity,
+            message=message,
+            metadata=metadata,
+        )
+
     async def _get_session(self) -> aiohttp.ClientSession:
-        """Get or create an aiohttp session for API calls."""
         if self._own_session is None or self._own_session.closed:
             self._own_session = aiohttp.ClientSession()
         return self._own_session
 
-    async def _place_kalshi_order(self, arb_id: str, market_id: str,
-                                    canonical_id: str, side: str,
-                                    price: float, qty: int) -> Order:
-        """
-        Place order on Kalshi via REST API.
-        POST /trade-api/v2/portfolio/orders
-        Uses RSA-PSS signature authentication from KalshiCollector.
-        """
+    async def _place_kalshi_order(self, arb_id: str, market_id: str, canonical_id: str, side: str, price: float, qty: int) -> Order:
         now = time.time()
-        kalshi_col = self._collectors.get("kalshi")
-
-        if not kalshi_col or not kalshi_col.auth.is_authenticated:
-            logger.error(f"[KALSHI] Cannot place order — auth not configured")
+        collector = self._collectors.get("kalshi")
+        if not collector or not collector.auth.is_authenticated:
             return Order(
                 order_id=f"{arb_id}-{side.upper()}-KALSHI",
-                platform="kalshi", market_id=market_id,
-                canonical_id=canonical_id, side=side,
-                price=price, quantity=qty,
+                platform="kalshi",
+                market_id=market_id,
+                canonical_id=canonical_id,
+                side=side,
+                price=price,
+                quantity=qty,
                 status=OrderStatus.FAILED,
-                error="Kalshi auth not configured (missing API key or private key)",
                 timestamp=now,
+                error="Kalshi auth not configured",
             )
 
         session = await self._get_session()
-
-        # Kalshi order body
-        # price is in cents (integer 1-99), side is "yes"/"no"
-        price_cents = int(round(price * 100))
-        price_cents = max(1, min(99, price_cents))
-
+        price_cents = max(1, min(99, int(round(price * 100))))
         order_body = {
             "ticker": market_id,
             "client_order_id": f"{arb_id}-{side.upper()}-{uuid.uuid4().hex[:8]}",
@@ -351,7 +716,6 @@ class ExecutionEngine:
             "type": "limit",
             "count": qty,
         }
-        # Kalshi API: set yes_price or no_price based on side
         if side == "yes":
             order_body["yes_price"] = price_cents
         else:
@@ -359,264 +723,212 @@ class ExecutionEngine:
 
         path = "/trade-api/v2/portfolio/orders"
         url = f"{self.config.kalshi.base_url}/portfolio/orders"
-        headers = kalshi_col.auth.get_headers("POST", path)
-
-        logger.info(
-            f"[KALSHI LIVE] Placing {side.upper()} order: {market_id} "
-            f"@ {price_cents}¢ × {qty} contracts"
-        )
-
+        headers = collector.auth.get_headers("POST", path)
         try:
-            async with session.post(url, json=order_body, headers=headers) as resp:
-                resp_text = await resp.text()
-
-                if resp.status in (200, 201):
-                    data = json.loads(resp_text)
-                    order_data = data.get("order", data)
-                    kalshi_order_id = order_data.get("order_id", f"{arb_id}-{side.upper()}")
-                    status_str = order_data.get("status", "resting")
-
-                    # Map Kalshi status to our OrderStatus
-                    status_map = {
-                        "resting": OrderStatus.SUBMITTED,
-                        "pending": OrderStatus.PENDING,
-                        "executed": OrderStatus.FILLED,
-                        "canceled": OrderStatus.CANCELLED,
-                    }
-                    order_status = status_map.get(status_str, OrderStatus.SUBMITTED)
-
-                    fill_price = order_data.get("avg_price", price_cents) / 100.0
-                    fill_qty = order_data.get("count_filled", 0)
-
-                    logger.info(
-                        f"[KALSHI LIVE] Order placed: {kalshi_order_id} "
-                        f"status={status_str} filled={fill_qty}/{qty}"
-                    )
-
-                    return Order(
-                        order_id=kalshi_order_id,
-                        platform="kalshi", market_id=market_id,
-                        canonical_id=canonical_id, side=side,
-                        price=price, quantity=qty,
-                        status=order_status,
-                        fill_price=fill_price,
-                        fill_qty=fill_qty,
-                        timestamp=now,
-                    )
-                else:
-                    error_msg = f"Kalshi API {resp.status}: {resp_text[:300]}"
-                    logger.error(f"[KALSHI] Order failed — {error_msg}")
+            async with session.post(url, json=order_body, headers=headers) as response:
+                payload = await response.text()
+                if response.status not in (200, 201):
                     return Order(
                         order_id=f"{arb_id}-{side.upper()}-KALSHI",
-                        platform="kalshi", market_id=market_id,
-                        canonical_id=canonical_id, side=side,
-                        price=price, quantity=qty,
+                        platform="kalshi",
+                        market_id=market_id,
+                        canonical_id=canonical_id,
+                        side=side,
+                        price=price,
+                        quantity=qty,
                         status=OrderStatus.FAILED,
-                        error=error_msg,
                         timestamp=now,
+                        error=f"Kalshi API {response.status}: {payload[:200]}",
                     )
-        except Exception as e:
-            error_msg = f"Kalshi request exception: {str(e)}"
-            logger.error(f"[KALSHI] {error_msg}")
+                data = json.loads(payload)
+                order_data = data.get("order", data)
+                status_map = {
+                    "resting": OrderStatus.SUBMITTED,
+                    "pending": OrderStatus.PENDING,
+                    "executed": OrderStatus.FILLED,
+                    "canceled": OrderStatus.CANCELLED,
+                }
+                fill_qty = int(order_data.get("count_filled", 0) or 0)
+                return Order(
+                    order_id=str(order_data.get("order_id", f"{arb_id}-{side.upper()}")),
+                    platform="kalshi",
+                    market_id=market_id,
+                    canonical_id=canonical_id,
+                    side=side,
+                    price=price,
+                    quantity=qty,
+                    status=status_map.get(order_data.get("status", "resting"), OrderStatus.SUBMITTED),
+                    fill_price=float(order_data.get("avg_price", price_cents)) / 100.0,
+                    fill_qty=fill_qty,
+                    timestamp=now,
+                )
+        except Exception as exc:
             return Order(
                 order_id=f"{arb_id}-{side.upper()}-KALSHI",
-                platform="kalshi", market_id=market_id,
-                canonical_id=canonical_id, side=side,
-                price=price, quantity=qty,
+                platform="kalshi",
+                market_id=market_id,
+                canonical_id=canonical_id,
+                side=side,
+                price=price,
+                quantity=qty,
                 status=OrderStatus.FAILED,
-                error=error_msg,
                 timestamp=now,
+                error=f"Kalshi request exception: {exc}",
             )
 
     def _get_poly_clob_client(self):
-        """Lazy-init Polymarket CLOB client with wallet signing."""
         if self._poly_clob_client is not None:
             return self._poly_clob_client
-
-        private_key = self.config.polymarket.private_key
-        if not private_key:
+        if not self.config.polymarket.private_key:
             return None
-
         try:
             from py_clob_client.client import ClobClient
-            from py_clob_client.clob_types import OrderArgs, OrderType
 
             self._poly_clob_client = ClobClient(
                 host=self.config.polymarket.clob_url,
-                key=private_key,
+                key=self.config.polymarket.private_key,
                 chain_id=self.config.polymarket.chain_id,
             )
-            # Derive API credentials (creates/fetches API key from Polymarket)
-            self._poly_clob_client.set_api_creds(self._poly_clob_client.create_or_derive_api_creds())
-            logger.info("[POLYMARKET] CLOB client initialized with wallet signing")
+            if hasattr(self._poly_clob_client, "create_or_derive_api_creds"):
+                creds = self._poly_clob_client.create_or_derive_api_creds()
+                if hasattr(self._poly_clob_client, "set_api_creds"):
+                    self._poly_clob_client.set_api_creds(creds)
             return self._poly_clob_client
-        except Exception as e:
-            logger.error(f"[POLYMARKET] Failed to init CLOB client: {e}")
+        except Exception as exc:
+            logger.error("Failed to initialize Polymarket CLOB client: %s", exc)
             return None
 
-    async def _place_polymarket_order(self, arb_id: str, market_id: str,
-                                        canonical_id: str, side: str,
-                                        price: float, qty: int) -> Order:
-        """
-        Place order on Polymarket via CLOB API.
-        Uses py-clob-client for EIP-712 wallet signing.
-        market_id here is the condition_id (token_id).
-        """
+    async def _place_polymarket_order(self, arb_id: str, market_id: str, canonical_id: str, side: str, price: float, qty: int) -> Order:
         now = time.time()
-
         if not self.config.polymarket.private_key:
-            logger.error("[POLYMARKET] Cannot place order — POLY_PRIVATE_KEY not set in .env")
             return Order(
                 order_id=f"{arb_id}-{side.upper()}-POLY",
-                platform="polymarket", market_id=market_id,
-                canonical_id=canonical_id, side=side,
-                price=price, quantity=qty,
+                platform="polymarket",
+                market_id=market_id,
+                canonical_id=canonical_id,
+                side=side,
+                price=price,
+                quantity=qty,
                 status=OrderStatus.FAILED,
-                error="Polymarket wallet key not configured (set POLY_PRIVATE_KEY in .env)",
                 timestamp=now,
+                error="Polymarket wallet not configured",
             )
 
+        client = self._get_poly_clob_client()
+        if client is None:
+            return Order(
+                order_id=f"{arb_id}-{side.upper()}-POLY",
+                platform="polymarket",
+                market_id=market_id,
+                canonical_id=canonical_id,
+                side=side,
+                price=price,
+                quantity=qty,
+                status=OrderStatus.FAILED,
+                timestamp=now,
+                error="Unable to initialize Polymarket client",
+            )
         try:
-            # Run the blocking CLOB client call in a thread executor
-            clob = self._get_poly_clob_client()
-            if clob is None:
-                raise RuntimeError("CLOB client initialization failed")
+            from py_clob_client.clob_types import OrderArgs
 
-            from py_clob_client.clob_types import OrderArgs, OrderType
-
-            # Polymarket: BUY side maps to token_id
-            # "yes" = buy YES token, "no" = buy NO token
-            # The token_id (market_id) is the condition_id for the YES outcome
-            poly_side = "BUY"  # We always buy the side we want
-
-            order_args = OrderArgs(
-                price=round(price, 2),
-                size=float(qty),
-                side=poly_side,
-                token_id=market_id,
-            )
-
-            logger.info(
-                f"[POLYMARKET LIVE] Placing {side.upper()} order: "
-                f"token={market_id[:16]}... @ {price:.2f} × {qty}"
-            )
-
-            # Create and sign the order (blocking — run in executor)
+            order_args = OrderArgs(price=round(price, 2), size=float(qty), side="BUY", token_id=market_id)
             loop = asyncio.get_event_loop()
-            signed_order = await loop.run_in_executor(
-                None, lambda: clob.create_and_post_order(order_args)
-            )
-
-            # Parse response
-            if signed_order and isinstance(signed_order, dict):
-                poly_order_id = signed_order.get("orderID", signed_order.get("id", f"{arb_id}-{side.upper()}"))
-                status_str = signed_order.get("status", "live")
-                is_success = signed_order.get("success", True)
-
-                if not is_success:
-                    error_msg = signed_order.get("errorMsg", "Order rejected by Polymarket")
-                    logger.error(f"[POLYMARKET] Order rejected: {error_msg}")
-                    return Order(
-                        order_id=f"{arb_id}-{side.upper()}-POLY",
-                        platform="polymarket", market_id=market_id,
-                        canonical_id=canonical_id, side=side,
-                        price=price, quantity=qty,
-                        status=OrderStatus.FAILED,
-                        error=error_msg,
-                        timestamp=now,
-                    )
-
-                logger.info(
-                    f"[POLYMARKET LIVE] Order placed: {poly_order_id} "
-                    f"status={status_str}"
-                )
-
-                return Order(
-                    order_id=str(poly_order_id),
-                    platform="polymarket", market_id=market_id,
-                    canonical_id=canonical_id, side=side,
-                    price=price, quantity=qty,
-                    status=OrderStatus.SUBMITTED,
-                    timestamp=now,
-                )
-            else:
-                logger.warning(f"[POLYMARKET] Unexpected response: {signed_order}")
+            response = await loop.run_in_executor(None, lambda: client.create_and_post_order(order_args))
+            if isinstance(response, dict) and not response.get("success", True):
                 return Order(
                     order_id=f"{arb_id}-{side.upper()}-POLY",
-                    platform="polymarket", market_id=market_id,
-                    canonical_id=canonical_id, side=side,
-                    price=price, quantity=qty,
-                    status=OrderStatus.SUBMITTED,
+                    platform="polymarket",
+                    market_id=market_id,
+                    canonical_id=canonical_id,
+                    side=side,
+                    price=price,
+                    quantity=qty,
+                    status=OrderStatus.FAILED,
                     timestamp=now,
+                    error=str(response.get("errorMsg", "Order rejected")),
                 )
-
-        except Exception as e:
-            error_msg = f"Polymarket order exception: {str(e)}"
-            logger.error(f"[POLYMARKET] {error_msg}")
             return Order(
-                order_id=f"{arb_id}-{side.upper()}-POLY",
-                platform="polymarket", market_id=market_id,
-                canonical_id=canonical_id, side=side,
-                price=price, quantity=qty,
-                status=OrderStatus.FAILED,
-                error=error_msg,
+                order_id=str(response.get("orderID", response.get("id", f"{arb_id}-{side.upper()}")) if isinstance(response, dict) else f"{arb_id}-{side.upper()}"),
+                platform="polymarket",
+                market_id=market_id,
+                canonical_id=canonical_id,
+                side=side,
+                price=price,
+                quantity=qty,
+                status=OrderStatus.SUBMITTED,
+                fill_price=price,
+                fill_qty=0,
                 timestamp=now,
             )
-
-    def _log_predictit_instruction(self, arb_id: str, market_id: str,
-                                    canonical_id: str, side: str,
-                                    price: float, qty: int) -> Order:
-        """Log manual execution instructions for PredictIt (no trade API)."""
-        logger.warning(
-            f"[PREDICTIT MANUAL] {arb_id}: "
-            f"Go to https://www.predictit.org/markets/detail/{market_id.split(':')[0]} → "
-            f"Buy {side.upper()} @ ${price:.2f} × {qty} contracts"
-        )
-        return Order(
-            order_id=f"{arb_id}-{side.upper()}-PI-MANUAL",
-            platform="predictit", market_id=market_id,
-            canonical_id=canonical_id, side=side,
-            price=price, quantity=qty,
-            status=OrderStatus.PENDING,
-            timestamp=time.time(),
-            error="Manual execution required — PredictIt has no trade API",
-        )
+        except Exception as exc:
+            return Order(
+                order_id=f"{arb_id}-{side.upper()}-POLY",
+                platform="polymarket",
+                market_id=market_id,
+                canonical_id=canonical_id,
+                side=side,
+                price=price,
+                quantity=qty,
+                status=OrderStatus.FAILED,
+                timestamp=now,
+                error=f"Polymarket order exception: {exc}",
+            )
 
     @property
     def execution_history(self) -> List[ArbExecution]:
         return self._executions
 
     @property
+    def incidents(self) -> List[ExecutionIncident]:
+        return list(self._incidents)
+
+    @property
+    def manual_positions(self) -> List[ManualPosition]:
+        return list(self._manual_positions)
+
+    @property
+    def equity_curve(self) -> List[dict]:
+        running_total = 0.0
+        points = []
+        for execution in self._executions[-120:]:
+            running_total += execution.realized_pnl
+            points.append({"timestamp": execution.timestamp, "equity": round(running_total, 4)})
+        return points
+
+    @property
     def stats(self) -> dict:
-        simulated = sum(1 for e in self._executions if e.status == "simulated")
-        live = sum(1 for e in self._executions if e.status != "simulated")
-        total_pnl = sum(e.realized_pnl for e in self._executions)
+        simulated = sum(1 for execution in self._executions if execution.status == "simulated")
+        manual_statuses = {"manual_pending", "manual_entered", "manual_closed", "manual_cancelled"}
+        live = sum(1 for execution in self._executions if execution.status not in {"simulated", *manual_statuses})
+        total_pnl = sum(execution.realized_pnl for execution in self._executions)
         return {
             "total_executions": len(self._executions),
             "simulated": simulated,
             "live": live,
+            "manual": self._manual_count,
+            "incidents": len(self._incidents),
+            "recoveries": self._recovery_count,
+            "aborted": self._aborted_count,
             "total_pnl": round(total_pnl, 2),
             "dry_run": self.scanner_config.dry_run,
         }
 
     async def run(self, arb_queue: asyncio.Queue):
-        """Process arbitrage opportunities from the scanner."""
         self._running = True
-        logger.info(f"Execution engine started (dry_run={self.scanner_config.dry_run})")
+        logger.info("Execution engine started (dry_run=%s)", self.scanner_config.dry_run)
 
         while self._running:
             try:
                 opp = await asyncio.wait_for(arb_queue.get(), timeout=5.0)
                 result = await self.execute_opportunity(opp)
                 if result:
-                    # Notify balance monitor for alerts
-                    await self.balance_monitor.alert_opportunity(opp)
+                    await self.balance_monitor.alert_opportunity(result.opportunity)
             except asyncio.TimeoutError:
                 continue
             except asyncio.CancelledError:
                 break
-            except Exception as e:
-                logger.error(f"Execution error: {e}")
+            except Exception as exc:
+                logger.error("Execution error: %s", exc)
 
         logger.info("Execution engine stopped")
 
@@ -624,3 +936,47 @@ class ExecutionEngine:
         self._running = False
         if self._own_session and not self._own_session.closed:
             await self._own_session.close()
+
+    @staticmethod
+    def _merge_note(existing: str, note: str) -> str:
+        existing = str(existing or "").strip()
+        note = str(note or "").strip()
+        if not note:
+            return existing
+        if not existing:
+            return note
+        if note in existing:
+            return existing
+        return f"{existing} | {note}"
+
+    def _update_manual_execution(self, position: ManualPosition, note: str = "") -> Optional[ArbExecution]:
+        arb_id = position.position_id.replace("MANUAL-", "", 1)
+        status_map = {
+            "awaiting-entry": "manual_pending",
+            "entered": "manual_entered",
+            "closed": "manual_closed",
+            "cancelled": "manual_cancelled",
+        }
+        lifecycle_note = {
+            "entered": "Manual leg confirmed by operator",
+            "closed": "Manual position closed by operator",
+            "cancelled": "Manual position cancelled by operator",
+        }.get(position.status)
+
+        for execution in self._executions:
+            if execution.arb_id != arb_id:
+                continue
+            execution.status = status_map.get(position.status, execution.status)
+            if lifecycle_note and lifecycle_note not in execution.notes:
+                execution.notes.append(lifecycle_note)
+            if note:
+                merged = self._merge_note("", note)
+                if merged and merged not in execution.notes:
+                    execution.notes.append(merged)
+            if position.status == "closed" and execution.realized_pnl == 0.0:
+                execution.realized_pnl = round(
+                    execution.opportunity.net_edge * execution.opportunity.suggested_qty,
+                    4,
+                )
+            return execution
+        return None

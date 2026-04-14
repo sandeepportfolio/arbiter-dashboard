@@ -17,14 +17,17 @@ from .math_auditor import (
 
 class TestFeeModels:
     def test_kalshi_fee_midpoint(self):
-        # price=0.50: 0.07 * 0.50 * 0.50 = 0.0175
-        assert abs(_kalshi_fee(0.50) - 0.0175) < 1e-10
+        # One-contract order rounds 1.75 cents up to 2 cents.
+        assert abs(_kalshi_fee(0.50) - 0.02) < 1e-10
+
+    def test_kalshi_fee_bulk_order(self):
+        # 100 contracts at 50 cents -> $1.75 total, or 1.75 cents amortized.
+        assert abs(_kalshi_fee(0.50, quantity=100) - 0.0175) < 1e-10
 
     def test_kalshi_fee_extremes(self):
-        # price=0.01: 0.07 * 0.01 * 0.99 = 0.000693
-        assert abs(_kalshi_fee(0.01) - 0.000693) < 1e-6
-        # price=0.99: same as 0.01
-        assert abs(_kalshi_fee(0.99) - 0.000693) < 1e-6
+        # Small single-contract orders round up to a penny.
+        assert abs(_kalshi_fee(0.01) - 0.01) < 1e-10
+        assert abs(_kalshi_fee(0.99) - 0.01) < 1e-10
 
     def test_kalshi_fee_zero(self):
         assert _kalshi_fee(0.0) == 0.0
@@ -41,15 +44,13 @@ class TestFeeModels:
         assert abs(_polymarket_fee(0.50, "unknown") - 0.01) < 1e-10
 
     def test_predictit_total_fee_profit(self):
-        # buy at 0.40, profit = 0.60
-        # fee = 0.60 * 0.10 + (0.40 + 0.60) * 0.05 = 0.06 + 0.05 = 0.11
-        fee = _predictit_total_fee(0.40, 0.60)
+        # buy at 0.40, settle at $1.00
+        fee = _predictit_total_fee(0.40, settle_price=1.0)
         assert abs(fee - 0.11) < 1e-10
 
     def test_predictit_total_fee_no_profit(self):
-        # No profit: just withdrawal fee on principal
-        fee = _predictit_total_fee(0.40, 0.0)
-        assert abs(fee - 0.02) < 1e-10  # 0.40 * 0.05
+        fee = _predictit_total_fee(1.0, settle_price=1.0)
+        assert abs(fee - 0.05) < 1e-10
 
     def test_predictit_simple_fee(self):
         assert abs(_predictit_simple_fee(0.40) - 0.02) < 1e-10
@@ -63,13 +64,13 @@ class TestAuditorCleanOpps:
 
     def _make_kalshi_poly_opp(self, yes_price=0.42, no_price=0.45):
         """Create a correctly-computed Kalshi↔Polymarket opportunity."""
-        fee_a = _kalshi_fee(yes_price)
-        fee_b = _polymarket_fee(no_price, "politics")
+        cost_per_pair = yes_price + no_price
+        qty = max(1, int(100.0 / cost_per_pair))
+        fee_a = _kalshi_fee(yes_price, quantity=qty)
+        fee_b = _polymarket_fee(no_price, "politics", quantity=qty)
         gross = 1.0 - yes_price - no_price
         total_fees = fee_a + fee_b
         net = gross - total_fees
-        cost_per_pair = yes_price + no_price
-        qty = max(1, int(100.0 / cost_per_pair))
         return {
             "canonical_id": "TEST_MARKET",
             "yes_platform": "kalshi",
@@ -97,16 +98,14 @@ class TestAuditorCleanOpps:
 
     def _make_predictit_opp(self, yes_price=0.35, no_price=0.40):
         """Create a PredictIt↔Kalshi opportunity with correct fees."""
-        # PredictIt YES leg: full fee model
-        pi_profit = 1.0 - yes_price
-        fee_a = _predictit_total_fee(yes_price, pi_profit)
-        fee_b = _kalshi_fee(no_price)
-        gross = 1.0 - yes_price - no_price
-        total_fees = fee_a + fee_b
-        net = gross - total_fees
         cost = yes_price + no_price
         qty = min(int(100.0 / cost), int(850.0 / yes_price))
         qty = max(1, qty)
+        fee_a = _predictit_total_fee(yes_price, settle_price=1.0, quantity=qty)
+        fee_b = _kalshi_fee(no_price, quantity=qty)
+        gross = 1.0 - yes_price - no_price
+        total_fees = fee_a + fee_b
+        net = gross - total_fees
         return {
             "canonical_id": "TEST_PI",
             "yes_platform": "predictit",
@@ -178,8 +177,9 @@ class TestAuditorDiscrepancies:
 
     def test_wrong_quantity(self):
         yes_price, no_price = 0.42, 0.45
-        fee_a = _kalshi_fee(yes_price)
-        fee_b = _polymarket_fee(no_price)
+        correct_qty = max(1, int(100.0 / (yes_price + no_price)))
+        fee_a = _kalshi_fee(yes_price, quantity=correct_qty)
+        fee_b = _polymarket_fee(no_price, quantity=correct_qty)
         gross = 1.0 - yes_price - no_price
         total_fees = fee_a + fee_b
         net = gross - total_fees
@@ -199,12 +199,12 @@ class TestAuditorDiscrepancies:
     def test_max_profit_inconsistency(self):
         """max_profit doesn't match net_edge × qty."""
         yes_price, no_price = 0.42, 0.45
-        fee_a = _kalshi_fee(yes_price)
-        fee_b = _polymarket_fee(no_price)
+        qty = max(1, int(100.0 / (yes_price + no_price)))
+        fee_a = _kalshi_fee(yes_price, quantity=qty)
+        fee_b = _polymarket_fee(no_price, quantity=qty)
         gross = 1.0 - yes_price - no_price
         total_fees = fee_a + fee_b
         net = gross - total_fees
-        qty = max(1, int(100.0 / (yes_price + no_price)))
         opp = {
             "canonical_id": "TEST", "yes_platform": "kalshi", "no_platform": "polymarket",
             "yes_price": yes_price, "no_price": no_price,
@@ -266,12 +266,12 @@ class TestAuditorStats:
     def test_stats_tracking(self):
         auditor = MathAuditor()
         # Run a clean audit
-        fee_a = _kalshi_fee(0.42)
-        fee_b = _polymarket_fee(0.45)
+        qty = max(1, int(100.0 / 0.87))
+        fee_a = _kalshi_fee(0.42, quantity=qty)
+        fee_b = _polymarket_fee(0.45, quantity=qty)
         gross = 1.0 - 0.42 - 0.45
         total_fees = fee_a + fee_b
         net = gross - total_fees
-        qty = max(1, int(100.0 / 0.87))
         opp = {
             "canonical_id": "TEST", "yes_platform": "kalshi", "no_platform": "polymarket",
             "yes_price": 0.42, "no_price": 0.45,

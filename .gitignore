@@ -3,3 +3,7 @@ dist/
 trade-logs/
 .env
 *.pem
+.playwright-cli/
+.pytest_cache/
+__pycache__/
+output/playwright/

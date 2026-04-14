@@ -10,21 +10,23 @@ Usage:
 import argparse
 import asyncio
 import logging
+import os
 import signal
 import sys
+import time
 
 from .config import ArbiterConfig, load_config
 from .utils.logger import setup_logging, TradeLogger
-from .utils.price_store import PriceStore
+from .utils.price_store import PricePoint, PriceStore
 from .collectors.kalshi import KalshiCollector
 from .collectors.polymarket import PolymarketCollector
 from .collectors.predictit import PredictItCollector
 from .scanner.arbitrage import ArbitrageScanner
-from .monitor.balance import BalanceMonitor
+from .monitor.balance import BalanceMonitor, BalanceSnapshot
 from .execution.engine import ExecutionEngine
 
 
-async def run_system(config: ArbiterConfig, api_only: bool = False):
+async def run_system(config: ArbiterConfig, api_only: bool = False, port: int = 8080):
     """Start all ARBITER components."""
     logger = logging.getLogger("arbiter.main")
     trade_logger = TradeLogger()
@@ -51,11 +53,14 @@ async def run_system(config: ArbiterConfig, api_only: bool = False):
     monitor = BalanceMonitor(config.alerts, collectors_dict)
 
     # ── Execution ──────────────────────────────────────────────
-    engine = ExecutionEngine(config, monitor)
+    engine = ExecutionEngine(config, monitor, price_store=price_store, collectors=collectors_dict)
+
+    if api_only and os.getenv("ARBITER_UI_SMOKE_SEED") == "1":
+        await seed_dashboard_fixture(price_store, scanner, engine, monitor)
 
     # ── API Server (for dashboard) ─────────────────────────────
     from .api import create_api_server
-    api = create_api_server(price_store, scanner, engine, monitor, config)
+    api = create_api_server(price_store, scanner, engine, monitor, config, collectors=collectors_dict, port=port)
 
     logger.info("=" * 60)
     logger.info("  ARBITER — Prediction Market Arbitrage System")
@@ -119,6 +124,138 @@ async def run_system(config: ArbiterConfig, api_only: bool = False):
     logger.info("ARBITER shutdown complete")
 
 
+async def seed_dashboard_fixture(
+    price_store: PriceStore,
+    scanner: ArbitrageScanner,
+    engine: ExecutionEngine,
+    monitor: BalanceMonitor,
+):
+    """Populate deterministic state for dashboard smoke tests."""
+    now = time.time()
+
+    monitor._balances = {
+        "kalshi": BalanceSnapshot(platform="kalshi", balance=148.22, timestamp=now, is_low=False),
+        "polymarket": BalanceSnapshot(platform="polymarket", balance=79.54, timestamp=now, is_low=False),
+        "predictit": BalanceSnapshot(platform="predictit", balance=62.10, timestamp=now, is_low=True),
+    }
+
+    seed_prices = [
+        PricePoint(
+            platform="kalshi",
+            canonical_id="DEM_HOUSE_2026",
+            yes_price=0.41,
+            no_price=0.59,
+            yes_volume=140,
+            no_volume=140,
+            timestamp=now,
+            raw_market_id="KXPRESPARTY-2028",
+            yes_market_id="KXPRESPARTY-2028",
+            no_market_id="KXPRESPARTY-2028",
+            fee_rate=0.07,
+            mapping_status="candidate",
+            mapping_score=0.42,
+        ),
+        PricePoint(
+            platform="polymarket",
+            canonical_id="DEM_HOUSE_2026",
+            yes_price=0.49,
+            no_price=0.43,
+            yes_volume=160,
+            no_volume=160,
+            timestamp=now,
+            raw_market_id="PM-HOUSE-2026",
+            yes_market_id="PM-HOUSE-2026-YES",
+            no_market_id="PM-HOUSE-2026-NO",
+            fee_rate=0.01,
+            mapping_status="candidate",
+            mapping_score=0.42,
+        ),
+        PricePoint(
+            platform="predictit",
+            canonical_id="DEM_SENATE_2026",
+            yes_price=0.32,
+            no_price=0.68,
+            yes_volume=180,
+            no_volume=180,
+            timestamp=now,
+            raw_market_id="PI-8155-DEM",
+            yes_market_id="PI-8155-DEM",
+            no_market_id="PI-8155-DEM-NO",
+            mapping_status="confirmed",
+            mapping_score=0.91,
+        ),
+        PricePoint(
+            platform="polymarket",
+            canonical_id="DEM_SENATE_2026",
+            yes_price=0.58,
+            no_price=0.44,
+            yes_volume=220,
+            no_volume=220,
+            timestamp=now,
+            raw_market_id="PM-SEN-2026-DEM",
+            yes_market_id="PM-SEN-2026-DEM-YES",
+            no_market_id="PM-SEN-2026-DEM-NO",
+            fee_rate=0.01,
+            mapping_status="confirmed",
+            mapping_score=0.91,
+        ),
+        PricePoint(
+            platform="predictit",
+            canonical_id="GOP_SENATE_2026",
+            yes_price=0.29,
+            no_price=0.71,
+            yes_volume=165,
+            no_volume=165,
+            timestamp=now,
+            raw_market_id="PI-8155-GOP",
+            yes_market_id="PI-8155-GOP",
+            no_market_id="PI-8155-GOP-NO",
+            mapping_status="confirmed",
+            mapping_score=0.89,
+        ),
+        PricePoint(
+            platform="polymarket",
+            canonical_id="GOP_SENATE_2026",
+            yes_price=0.55,
+            no_price=0.46,
+            yes_volume=210,
+            no_volume=210,
+            timestamp=now,
+            raw_market_id="PM-SEN-2026-GOP",
+            yes_market_id="PM-SEN-2026-GOP-YES",
+            no_market_id="PM-SEN-2026-GOP-NO",
+            fee_rate=0.01,
+            mapping_status="confirmed",
+            mapping_score=0.89,
+        ),
+    ]
+    for price in seed_prices:
+        await price_store.put(price)
+
+    for _ in range(scanner.config.persistence_scans):
+        await scanner.scan_once()
+
+    for canonical_id in ("DEM_SENATE_2026", "GOP_SENATE_2026"):
+        manual_opportunity = next(
+            (
+                opportunity
+                for opportunity in scanner.current_opportunities
+                if opportunity.canonical_id == canonical_id and opportunity.status == "manual"
+            ),
+            None,
+        )
+        if manual_opportunity is not None:
+            await engine.execute_opportunity(manual_opportunity)
+
+    await engine.record_incident(
+        arb_id="ARB-SEED-RECOVERY",
+        canonical_id="DEM_HOUSE_2026",
+        severity="warning",
+        message="Seeded recovery check awaiting operator acknowledgement",
+        metadata={"route": "Kalshi vs Polymarket", "reason": "dashboard smoke fixture"},
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description="ARBITER — Prediction Market Arbitrage")
     parser.add_argument("--live", action="store_true", help="Enable live trading (default: dry run)")
@@ -134,7 +271,7 @@ def main():
     if args.live:
         config.scanner.dry_run = False
 
-    asyncio.run(run_system(config, api_only=args.api_only))
+    asyncio.run(run_system(config, api_only=args.api_only, port=args.port))
 
 
 if __name__ == "__main__":

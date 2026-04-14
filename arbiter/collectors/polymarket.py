@@ -1,55 +1,66 @@
 """
-Polymarket Price Collector
-- Gamma API for event metadata and market discovery
-- CLOB API for live orderbook prices
-- WebSocket for real-time updates
+Polymarket collector using Gamma discovery, CLOB books, and market WebSockets.
 """
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
 import time
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 import aiohttp
 
-from ..config.settings import PolymarketConfig, MARKET_MAP, polymarket_fee
+from ..config.settings import MARKET_MAP, POLYMAKET_DEFAULT_TAKER_FEE_RATE, PolymarketConfig
 from ..utils.price_store import PricePoint, PriceStore
 from ..utils.retry import CircuitBreaker, RateLimiter, retry_with_backoff
 
 logger = logging.getLogger("arbiter.collector.polymarket")
 
 
-class PolymarketCollector:
-    """
-    Collects prices from Polymarket via Gamma API + CLOB.
-    Uses slug-based event lookup (query params unreliable).
-    """
+def _coerce_json_list(raw) -> list:
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, list) else []
+        except json.JSONDecodeError:
+            return []
+    return []
 
+
+def _safe_float(value, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+class PolymarketCollector:
     def __init__(self, config: PolymarketConfig, price_store: PriceStore):
         self.config = config
         self.store = price_store
         self._session: Optional[aiohttp.ClientSession] = None
         self._ws: Optional[aiohttp.ClientWebSocketResponse] = None
         self._running = False
-        # Resilience
         self.circuit_gamma = CircuitBreaker("poly-gamma", failure_threshold=5, recovery_timeout=30)
         self.circuit_clob = CircuitBreaker("poly-clob", failure_threshold=5, recovery_timeout=20)
         self.circuit_ws = CircuitBreaker("poly-ws", failure_threshold=3, recovery_timeout=60)
         self.rate_limiter = RateLimiter("polymarket", max_requests=10, window_seconds=1.0)
         self.consecutive_errors = 0
+        self.total_fetches = 0
+        self.total_errors = 0
         self.ws_reconnect_count = 0
-        # Build reverse map: polymarket_slug -> list of (canonical_id, question_match)
-        # Multiple canonical IDs can share a slug (e.g. DEM_SENATE vs GOP_SENATE)
-        self._slug_map: Dict[str, List[tuple]] = {}
-        # Map canonical_id -> condition_ids for CLOB subscription
-        self._condition_ids: Dict[str, List[str]] = {}
+        self._slug_map: Dict[str, list[tuple[str, str]]] = {}
+        self._token_registry: Dict[str, dict] = {}
+        self._token_to_market: Dict[str, tuple[str, str]] = {}
+
         for canonical_id, mapping in MARKET_MAP.items():
-            if "polymarket" in mapping:
-                slug = mapping["polymarket"]
-                question_match = mapping.get("polymarket_question", "")
-                if slug not in self._slug_map:
-                    self._slug_map[slug] = []
-                self._slug_map[slug].append((canonical_id, question_match))
+            slug = str(mapping.get("polymarket", "") or "")
+            question_match = str(mapping.get("polymarket_question", "") or "")
+            if slug:
+                self._slug_map.setdefault(slug, []).append((canonical_id, question_match))
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -57,298 +68,328 @@ class PolymarketCollector:
         return self._session
 
     async def discover_markets(self) -> Dict[str, dict]:
-        """
-        Discover condition_ids by fetching events via slug.
-        Returns {canonical_id: {condition_id, outcomes, prices}}.
-        Matches specific sub-markets using polymarket_question from MARKET_MAP.
-        """
         session = await self._get_session()
-        discovered = {}
+        discovered: Dict[str, dict] = {}
 
         for slug, canonical_entries in self._slug_map.items():
             try:
-                url = f"{self.config.gamma_url}/events"
-                params = {"slug": slug}
+                await self.rate_limiter.acquire()
+                async with session.get(f"{self.config.gamma_url}/events", params={"slug": slug}) as response:
+                    if response.status != 200:
+                        logger.warning("Polymarket gamma %s for slug=%s", response.status, slug)
+                        continue
+                    events = await response.json()
 
-                async with session.get(url, params=params) as resp:
-                    if resp.status == 200:
-                        events = await resp.json()
-                        if events and len(events) > 0:
-                            event = events[0]
-                            markets = event.get("markets", [])
-                            if not markets:
-                                continue
+                if not events:
+                    continue
+                event = events[0]
+                markets = event.get("markets", []) or []
+                for canonical_id, question_match in canonical_entries:
+                    market = self._match_market(markets, question_match)
+                    if not market:
+                        continue
 
-                            for canonical_id, question_match in canonical_entries:
-                                # Find the matching sub-market by question text
-                                market = None
-                                if question_match:
-                                    for m in markets:
-                                        q = m.get("question", "")
-                                        if question_match.lower() in q.lower():
-                                            market = m
-                                            break
-                                if market is None:
-                                    # Fallback: first market if no question filter
-                                    market = markets[0]
+                    token_ids = _coerce_json_list(market.get("clobTokenIds"))
+                    outcomes = _coerce_json_list(market.get("outcomes"))
+                    prices = _coerce_json_list(market.get("outcomePrices"))
 
-                                condition_id = market.get("conditionId", "")
-                                outcome_prices = market.get("outcomePrices", "")
+                    yes_token_id = str(token_ids[0]) if len(token_ids) > 0 else ""
+                    no_token_id = str(token_ids[1]) if len(token_ids) > 1 else ""
+                    yes_price = _safe_float(prices[0]) if len(prices) > 0 else 0.0
+                    no_price = _safe_float(prices[1]) if len(prices) > 1 else max(1.0 - yes_price, 0.0)
+                    fee_rate = self._extract_fee_rate(market)
+                    mapping = MARKET_MAP.get(canonical_id, {})
 
-                                # Parse outcome prices
-                                try:
-                                    if isinstance(outcome_prices, str):
-                                        prices = json.loads(outcome_prices)
-                                    else:
-                                        prices = outcome_prices
-                                    yes_price = float(prices[0]) if prices else 0.0
-                                    no_price = float(prices[1]) if len(prices) > 1 else 1.0 - yes_price
-                                except (json.JSONDecodeError, IndexError, TypeError):
-                                    yes_price = 0.0
-                                    no_price = 0.0
-
-                                discovered[canonical_id] = {
-                                    "condition_id": condition_id,
-                                    "slug": slug,
-                                    "yes_price": yes_price,
-                                    "no_price": no_price,
-                                    "volume": float(market.get("volume", 0)),
-                                    "liquidity": float(market.get("liquidity", 0)),
-                                }
-
-                                if condition_id:
-                                    self._condition_ids[canonical_id] = [condition_id]
-
-                                logger.debug(
-                                    f"Polymarket {canonical_id}: YES={yes_price:.3f} NO={no_price:.3f} "
-                                    f"vol=${discovered[canonical_id]['volume']:,.0f} "
-                                    f"(matched: {market.get('question', '')[:50]})"
-                                )
-                    else:
-                        logger.warning(f"Polymarket gamma {resp.status} for slug={slug}")
-
-            except Exception as e:
-                logger.error(f"Polymarket discover error for {slug}: {e}")
+                    discovered[canonical_id] = {
+                        "slug": slug,
+                        "question": market.get("question", ""),
+                        "yes_token_id": yes_token_id,
+                        "no_token_id": no_token_id,
+                        "yes_price": yes_price,
+                        "no_price": no_price,
+                        "volume": _safe_float(market.get("volume")),
+                        "liquidity": _safe_float(market.get("liquidity")),
+                        "fee_rate": fee_rate,
+                        "mapping_status": str(mapping.get("status", "candidate")),
+                        "mapping_score": float(mapping.get("mapping_score", 0.0)),
+                    }
+                    self._token_registry[canonical_id] = discovered[canonical_id]
+                    if yes_token_id:
+                        self._token_to_market[yes_token_id] = (canonical_id, "yes")
+                    if no_token_id:
+                        self._token_to_market[no_token_id] = (canonical_id, "no")
+                    logger.debug(
+                        "Polymarket %s -> yes=%s no=%s question=%s",
+                        canonical_id,
+                        yes_token_id[:12],
+                        no_token_id[:12],
+                        market.get("question", "")[:60],
+                    )
+            except Exception as exc:
+                self.total_errors += 1
+                logger.error("Polymarket discover error for %s: %s", slug, exc)
 
         return discovered
 
-    async def fetch_clob_prices(self) -> list:
-        """Fetch live orderbook prices from CLOB API for discovered markets."""
+    async def fetch_clob_prices(self) -> list[PricePoint]:
         session = await self._get_session()
-        results = []
+        results: list[PricePoint] = []
 
-        for canonical_id, cids in self._condition_ids.items():
-            for cid in cids:
-                try:
-                    url = f"{self.config.clob_url}/book"
-                    params = {"token_id": cid}
+        for canonical_id, token_data in self._token_registry.items():
+            yes_token_id = token_data.get("yes_token_id", "")
+            no_token_id = token_data.get("no_token_id", "")
+            yes_book = await self._fetch_book(session, yes_token_id) if yes_token_id else {}
+            no_book = await self._fetch_book(session, no_token_id) if no_token_id else {}
 
-                    async with session.get(url, params=params) as resp:
-                        if resp.status == 200:
-                            book = await resp.json()
-                            bids = book.get("bids", [])
-                            asks = book.get("asks", [])
+            yes_bid = self._best_price(yes_book.get("bids"))
+            yes_ask = self._best_price(yes_book.get("asks"))
+            no_bid = self._best_price(no_book.get("bids"))
+            no_ask = self._best_price(no_book.get("asks"))
+            yes_price = yes_ask or yes_bid or token_data.get("yes_price", 0.0)
+            no_price = no_ask or no_bid or token_data.get("no_price", max(1.0 - yes_price, 0.0))
 
-                            best_bid = float(bids[0]["price"]) if bids else 0.0
-                            best_ask = float(asks[0]["price"]) if asks else 0.0
-
-                            price = PricePoint(
-                                platform="polymarket",
-                                canonical_id=canonical_id,
-                                yes_price=best_ask if best_ask > 0 else best_bid,
-                                no_price=1.0 - best_bid if best_bid > 0 else 1.0 - best_ask,
-                                yes_volume=sum(float(a.get("size", 0)) for a in asks[:5]),
-                                no_volume=sum(float(b.get("size", 0)) for b in bids[:5]),
-                                timestamp=time.time(),
-                                raw_market_id=cid,
-                            )
-                            results.append(price)
-                            await self.store.put(price)
-                        elif resp.status == 429:
-                            logger.warning("Polymarket CLOB rate limited")
-                            await asyncio.sleep(2)
-
-                except Exception as e:
-                    logger.error(f"Polymarket CLOB error for {canonical_id}: {e}")
-
-        return results
-
-    async def fetch_gamma_prices(self) -> list:
-        """Fetch prices from Gamma API (less real-time but more reliable)."""
-        discovered = await self.discover_markets()
-        results = []
-
-        for canonical_id, data in discovered.items():
-            price = PricePoint(
-                platform="polymarket",
-                canonical_id=canonical_id,
-                yes_price=data["yes_price"],
-                no_price=data["no_price"],
-                yes_volume=data["volume"],
-                no_volume=data["volume"],
-                timestamp=time.time(),
-                raw_market_id=data.get("condition_id", ""),
-            )
-            results.append(price)
-            await self.store.put(price)
-
-        return results
-
-    async def connect_websocket(self):
-        """
-        Connect to Polymarket WebSocket for real-time orderbook updates.
-        Subscribes to all tracked condition_ids.
-        """
-        if not self._condition_ids:
-            await asyncio.sleep(10)  # wait before retrying discovery
-            return
-
-        session = await self._get_session()
-        all_cids = []
-        for cids in self._condition_ids.values():
-            all_cids.extend(cids)
-
-        try:
-            self._ws = await session.ws_connect(self.config.ws_url)
-            logger.info(f"Polymarket WebSocket connected, subscribing to {len(all_cids)} markets")
-
-            # Subscribe to markets
-            for cid in all_cids:
-                sub_msg = {
-                    "type": "subscribe",
-                    "channel": "market",
-                    "market": cid,
-                }
-                await self._ws.send_json(sub_msg)
-
-            # Process messages
-            async for msg in self._ws:
-                if msg.type == aiohttp.WSMsgType.TEXT:
-                    try:
-                        data = json.loads(msg.data)
-                        await self._handle_ws_message(data)
-                    except json.JSONDecodeError:
-                        pass
-                elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
-                    logger.warning("Polymarket WebSocket closed/error")
-                    break
-
-        except Exception as e:
-            logger.error(f"Polymarket WebSocket error: {e}")
-        finally:
-            if self._ws and not self._ws.closed:
-                await self._ws.close()
-
-    async def _handle_ws_message(self, data: dict):
-        """Process a WebSocket message and update price store."""
-        msg_type = data.get("type", "")
-        if msg_type in ("book", "price_change"):
-            market_id = data.get("market", "")
-            # Find canonical_id for this condition_id
-            canonical_id = None
-            for cid, cids in self._condition_ids.items():
-                if market_id in cids:
-                    canonical_id = cid
-                    break
-            if not canonical_id:
-                return
-
-            yes_price = float(data.get("price", 0))
+            mapping = MARKET_MAP.get(canonical_id, {})
             price = PricePoint(
                 platform="polymarket",
                 canonical_id=canonical_id,
                 yes_price=yes_price,
-                no_price=1.0 - yes_price,
-                yes_volume=0,
-                no_volume=0,
+                no_price=no_price,
+                yes_volume=self._depth_volume(yes_book.get("asks") or yes_book.get("bids")),
+                no_volume=self._depth_volume(no_book.get("asks") or no_book.get("bids")),
                 timestamp=time.time(),
-                raw_market_id=market_id,
+                raw_market_id=yes_token_id or no_token_id,
+                yes_market_id=yes_token_id,
+                no_market_id=no_token_id,
+                yes_bid=yes_bid,
+                yes_ask=yes_ask,
+                no_bid=no_bid,
+                no_ask=no_ask,
+                fee_rate=float(token_data.get("fee_rate", POLYMAKET_DEFAULT_TAKER_FEE_RATE)),
+                mapping_status=str(mapping.get("status", "candidate")),
+                mapping_score=float(mapping.get("mapping_score", 0.0)),
+                metadata={
+                    "slug": token_data.get("slug", ""),
+                    "question": token_data.get("question", ""),
+                },
             )
+            results.append(price)
             await self.store.put(price)
+        return results
+
+    async def fetch_gamma_prices(self) -> list[PricePoint]:
+        discovered = await self.discover_markets()
+        results: list[PricePoint] = []
+        for canonical_id, token_data in discovered.items():
+            price = PricePoint(
+                platform="polymarket",
+                canonical_id=canonical_id,
+                yes_price=float(token_data.get("yes_price", 0.0)),
+                no_price=float(token_data.get("no_price", 0.0)),
+                yes_volume=float(token_data.get("liquidity", 0.0)),
+                no_volume=float(token_data.get("liquidity", 0.0)),
+                timestamp=time.time(),
+                raw_market_id=str(token_data.get("yes_token_id") or token_data.get("no_token_id") or ""),
+                yes_market_id=str(token_data.get("yes_token_id", "")),
+                no_market_id=str(token_data.get("no_token_id", "")),
+                fee_rate=float(token_data.get("fee_rate", POLYMAKET_DEFAULT_TAKER_FEE_RATE)),
+                mapping_status=str(token_data.get("mapping_status", "candidate")),
+                mapping_score=float(token_data.get("mapping_score", 0.0)),
+                metadata={
+                    "slug": token_data.get("slug", ""),
+                    "question": token_data.get("question", ""),
+                },
+            )
+            results.append(price)
+            await self.store.put(price)
+        return results
+
+    async def connect_websocket(self):
+        if not self._token_to_market:
+            await asyncio.sleep(5)
+            return
+
+        session = await self._get_session()
+        tracked_tokens = list(self._token_to_market.keys())
+        self._ws = await session.ws_connect(self.config.ws_url)
+        logger.info("Polymarket WebSocket connected, subscribing to %s tokens", len(tracked_tokens))
+
+        for token_id in tracked_tokens:
+            await self._ws.send_json({"type": "subscribe", "channel": "market", "market": token_id})
+
+        async for message in self._ws:
+            if message.type == aiohttp.WSMsgType.TEXT:
+                try:
+                    await self._handle_ws_message(json.loads(message.data))
+                except json.JSONDecodeError:
+                    continue
+            elif message.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                logger.warning("Polymarket WebSocket closed/error")
+                break
+
+    async def _handle_ws_message(self, data: dict):
+        token_id = str(data.get("market", "") or data.get("token_id", "") or "")
+        if not token_id or token_id not in self._token_to_market:
+            return
+
+        canonical_id, side = self._token_to_market[token_id]
+        existing = await self.store.get("polymarket", canonical_id)
+        yes_price = existing.yes_price if existing else 0.0
+        no_price = existing.no_price if existing else 0.0
+
+        price_value = _safe_float(data.get("price") or data.get("best_ask") or 0.0)
+        if side == "yes":
+            yes_price = price_value or yes_price
+        else:
+            no_price = price_value or no_price
+
+        token_data = self._token_registry.get(canonical_id, {})
+        mapping = MARKET_MAP.get(canonical_id, {})
+        await self.store.put(
+            PricePoint(
+                platform="polymarket",
+                canonical_id=canonical_id,
+                yes_price=yes_price,
+                no_price=no_price or max(1.0 - yes_price, 0.0),
+                yes_volume=existing.yes_volume if existing else 0.0,
+                no_volume=existing.no_volume if existing else 0.0,
+                timestamp=time.time(),
+                raw_market_id=token_id,
+                yes_market_id=str(token_data.get("yes_token_id", "")),
+                no_market_id=str(token_data.get("no_token_id", "")),
+                yes_bid=existing.yes_bid if existing else 0.0,
+                yes_ask=existing.yes_ask if existing else 0.0,
+                no_bid=existing.no_bid if existing else 0.0,
+                no_ask=existing.no_ask if existing else 0.0,
+                fee_rate=float(token_data.get("fee_rate", POLYMAKET_DEFAULT_TAKER_FEE_RATE)),
+                mapping_status=str(mapping.get("status", "candidate")),
+                mapping_score=float(mapping.get("mapping_score", 0.0)),
+                metadata={"source": "websocket", "question": token_data.get("question", "")},
+            )
+        )
+
+    async def _fetch_book(self, session: aiohttp.ClientSession, token_id: str) -> dict:
+        if not token_id:
+            return {}
+        await self.rate_limiter.acquire()
+        try:
+            async with session.get(f"{self.config.clob_url}/book", params={"token_id": token_id}) as response:
+                if response.status == 200:
+                    return await response.json()
+                if response.status == 429:
+                    logger.warning("Polymarket CLOB rate limited for token %s", token_id[:12])
+                    await asyncio.sleep(2)
+                return {}
+        except Exception as exc:
+            logger.error("Polymarket CLOB error for token %s: %s", token_id[:12], exc)
+            return {}
+
+    def _match_market(self, markets: list, question_match: str) -> Optional[dict]:
+        if question_match:
+            for market in markets:
+                question = str(market.get("question", "") or "")
+                if question_match.lower() in question.lower():
+                    return market
+        return markets[0] if markets else None
+
+    def _extract_fee_rate(self, market: dict) -> float:
+        for key in ("feeRate", "fee_rate", "takerFeeRate"):
+            if key in market and market.get(key) is not None:
+                return _safe_float(market.get(key), POLYMAKET_DEFAULT_TAKER_FEE_RATE)
+        for key in ("feeRateBps", "takerFeeBps", "takerBaseFee"):
+            if key in market and market.get(key) is not None:
+                return _safe_float(market.get(key), POLYMAKET_DEFAULT_TAKER_FEE_RATE * 10000) / 10000.0
+        fee_schedule = market.get("feeSchedule") or {}
+        if isinstance(fee_schedule, dict):
+            for key in ("takerFeeRate", "takerFee", "taker"):
+                if key in fee_schedule and fee_schedule.get(key) is not None:
+                    value = _safe_float(fee_schedule.get(key), 0.0)
+                    return value / 10000.0 if value > 1 else value
+        return POLYMAKET_DEFAULT_TAKER_FEE_RATE
+
+    @staticmethod
+    def _best_price(levels) -> float:
+        if not levels:
+            return 0.0
+        try:
+            return float(levels[0].get("price", 0.0))
+        except (AttributeError, IndexError, TypeError, ValueError):
+            return 0.0
+
+    @staticmethod
+    def _depth_volume(levels) -> float:
+        if not levels:
+            return 0.0
+        total = 0.0
+        for level in levels[:5]:
+            total += _safe_float(level.get("size", 0.0))
+        return total
 
     async def fetch_balance(self) -> Optional[float]:
-        """
-        Fetch Polymarket USDC balance on Polygon.
-        Derives wallet address from private key, queries on-chain USDC balance.
-        """
         if not self.config.private_key:
             logger.debug("Polymarket wallet key not configured, skipping balance")
             return None
 
         try:
-            from web3 import Web3
             from eth_account import Account
+            from web3 import Web3
 
-            # Polygon mainnet public RPC
-            w3 = Web3(Web3.HTTPProvider("https://polygon-rpc.com"))
-            if not w3.is_connected():
-                # Fallback RPCs
-                for rpc in ["https://rpc.ankr.com/polygon", "https://polygon.llamarpc.com"]:
-                    w3 = Web3(Web3.HTTPProvider(rpc))
-                    if w3.is_connected():
-                        break
-
-            if not w3.is_connected():
+            rpc_candidates = ("https://polygon-rpc.com", "https://rpc.ankr.com/polygon", "https://polygon.llamarpc.com")
+            w3 = None
+            for rpc in rpc_candidates:
+                candidate = Web3(Web3.HTTPProvider(rpc))
+                if candidate.is_connected():
+                    w3 = candidate
+                    break
+            if w3 is None:
                 logger.warning("Polymarket balance: cannot connect to Polygon RPC")
                 return None
 
-            # Derive wallet address from private key
-            acct = Account.from_key(self.config.private_key)
-            wallet_address = acct.address
-
-            # USDC on Polygon: 0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174 (PoS bridged)
-            # USDC native on Polygon: 0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359
-            USDC_POS = Web3.to_checksum_address("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174")
-            USDC_NATIVE = Web3.to_checksum_address("0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359")
-
-            # Minimal ERC20 ABI for balanceOf + decimals
-            ERC20_ABI = [
-                {"constant": True, "inputs": [{"name": "_owner", "type": "address"}],
-                 "name": "balanceOf", "outputs": [{"name": "balance", "type": "uint256"}],
-                 "type": "function"},
-                {"constant": True, "inputs": [],
-                 "name": "decimals", "outputs": [{"name": "", "type": "uint8"}],
-                 "type": "function"},
+            wallet_address = Account.from_key(self.config.private_key).address
+            usdc_addresses = (
+                Web3.to_checksum_address("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"),
+                Web3.to_checksum_address("0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"),
+            )
+            erc20_abi = [
+                {
+                    "constant": True,
+                    "inputs": [{"name": "_owner", "type": "address"}],
+                    "name": "balanceOf",
+                    "outputs": [{"name": "balance", "type": "uint256"}],
+                    "type": "function",
+                },
+                {
+                    "constant": True,
+                    "inputs": [],
+                    "name": "decimals",
+                    "outputs": [{"name": "", "type": "uint8"}],
+                    "type": "function",
+                },
             ]
 
             total_balance = 0.0
-            for label, addr in [("USDC.e", USDC_POS), ("USDC", USDC_NATIVE)]:
+            for address in usdc_addresses:
                 try:
-                    contract = w3.eth.contract(address=addr, abi=ERC20_ABI)
+                    contract = w3.eth.contract(address=address, abi=erc20_abi)
                     decimals = contract.functions.decimals().call()
-                    raw_balance = contract.functions.balanceOf(
-                        Web3.to_checksum_address(wallet_address)
-                    ).call()
-                    balance = raw_balance / (10 ** decimals)
-                    total_balance += balance
-                    if balance > 0:
-                        logger.debug(f"Polymarket {label} balance: ${balance:.2f}")
-                except Exception as e:
-                    logger.debug(f"Polymarket {label} balance check failed: {e}")
-
-            logger.info(f"Polymarket total USDC balance: ${total_balance:.2f}")
+                    raw_balance = contract.functions.balanceOf(Web3.to_checksum_address(wallet_address)).call()
+                    total_balance += raw_balance / (10 ** decimals)
+                except Exception as exc:
+                    logger.debug("Polymarket balance check failed for %s: %s", address, exc)
             return total_balance
-
         except ImportError:
-            logger.warning("Polymarket balance: web3 not installed (pip install web3)")
+            logger.warning("Polymarket balance: web3 not installed")
             return None
-        except Exception as e:
-            logger.error(f"Polymarket balance error: {e}")
+        except Exception as exc:
+            logger.error("Polymarket balance error: %s", exc)
             return None
 
     async def run(self):
-        """Main collection loop: discover → poll → optionally WS."""
         self._running = True
-        logger.info(f"Polymarket collector started (poll interval: {self.config.poll_interval}s)")
-        logger.info(f"Tracking {len(self._slug_map)} markets: {list(self._slug_map.keys())}")
-
-        # Initial discovery
+        logger.info("Polymarket collector started (poll interval: %ss)", self.config.poll_interval)
         await self.discover_markets()
 
-        # Run polling and WS in parallel
         poll_task = asyncio.create_task(self._poll_loop())
         ws_task = asyncio.create_task(self._ws_loop())
-
         try:
             await asyncio.gather(poll_task, ws_task)
         except asyncio.CancelledError:
@@ -356,49 +397,36 @@ class PolymarketCollector:
             ws_task.cancel()
 
     async def _poll_loop(self):
-        """REST polling with circuit breaker and retry."""
         while self._running:
             try:
-                await self.rate_limiter.acquire()
-
-                if self._condition_ids and self.circuit_clob.can_execute():
+                self.total_fetches += 1
+                if self._token_registry and self.circuit_clob.can_execute():
                     try:
-                        await retry_with_backoff(
-                            self.fetch_clob_prices, retries=2, base_delay=0.5,
-                            circuit=self.circuit_clob,
-                        )
+                        await retry_with_backoff(self.fetch_clob_prices, retries=2, base_delay=0.5, circuit=self.circuit_clob)
                         self.consecutive_errors = 0
                     except Exception:
-                        # Fall back to Gamma
                         if self.circuit_gamma.can_execute():
-                            await retry_with_backoff(
-                                self.fetch_gamma_prices, retries=2, base_delay=1.0,
-                                circuit=self.circuit_gamma,
-                            )
+                            await retry_with_backoff(self.fetch_gamma_prices, retries=2, base_delay=1.0, circuit=self.circuit_gamma)
                 elif self.circuit_gamma.can_execute():
-                    await retry_with_backoff(
-                        self.fetch_gamma_prices, retries=2, base_delay=1.0,
-                        circuit=self.circuit_gamma,
-                    )
+                    await retry_with_backoff(self.fetch_gamma_prices, retries=2, base_delay=1.0, circuit=self.circuit_gamma)
                 else:
-                    logger.warning("Polymarket: both circuits open, waiting")
+                    logger.warning("Polymarket: both REST circuits open, waiting")
                     await asyncio.sleep(15)
                     continue
 
                 await asyncio.sleep(self.config.poll_interval)
             except asyncio.CancelledError:
                 break
-            except Exception as e:
+            except Exception as exc:
+                self.total_errors += 1
                 self.consecutive_errors += 1
-                backoff = min(2 ** min(self.consecutive_errors, 5), 30)
-                logger.error(f"Polymarket poll error (#{self.consecutive_errors}), backoff {backoff}s: {e}")
-                await asyncio.sleep(backoff)
+                delay = min(2 ** min(self.consecutive_errors, 5), 30)
+                logger.error("Polymarket poll error (#%s), backoff %ss: %s", self.consecutive_errors, delay, exc)
+                await asyncio.sleep(delay)
 
     async def _ws_loop(self):
-        """WebSocket connection with auto-reconnect and circuit breaker."""
         while self._running:
-            if not self.circuit_ws.can_execute():
-                logger.warning(f"Polymarket WS circuit open, waiting {self.circuit_ws.recovery_timeout}s")
+            if not self.config.ws_enabled or not self.circuit_ws.can_execute():
                 await asyncio.sleep(self.circuit_ws.recovery_timeout / 2)
                 continue
             try:
@@ -406,11 +434,12 @@ class PolymarketCollector:
                 self.circuit_ws.record_success()
             except asyncio.CancelledError:
                 break
-            except Exception as e:
+            except Exception as exc:
+                self.total_errors += 1
                 self.circuit_ws.record_failure()
                 self.ws_reconnect_count += 1
                 delay = min(3 * (1.5 ** min(self.ws_reconnect_count, 8)), 60)
-                logger.error(f"Polymarket WS reconnect #{self.ws_reconnect_count} in {delay:.0f}s: {e}")
+                logger.error("Polymarket WS reconnect #%s in %ss: %s", self.ws_reconnect_count, int(delay), exc)
                 await asyncio.sleep(delay)
 
     async def stop(self):

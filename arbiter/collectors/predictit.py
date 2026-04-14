@@ -43,7 +43,7 @@ class PredictItCollector:
         self._canonical_to_pi: Dict[str, str] = {}
         for canonical_id, mapping in MARKET_MAP.items():
             if "predictit" in mapping:
-                pi_id = mapping["predictit"]
+                pi_id = str(mapping["predictit"])
                 if pi_id not in self._market_map:
                     self._market_map[pi_id] = []
                 self._market_map[pi_id].append(canonical_id)
@@ -84,7 +84,8 @@ class PredictItCollector:
                     return indexed
                 elif resp.status == 429:
                     logger.warning("PredictIt rate limited")
-                    await asyncio.sleep(30)
+                    self.config.poll_interval = min(self.config.poll_interval * 1.5, self.config.max_poll_interval)
+                    await asyncio.sleep(self.config.poll_interval)
                     return self._all_markets_cache
                 else:
                     logger.warning(f"PredictIt API returned {resp.status}")
@@ -120,6 +121,7 @@ class PredictItCollector:
                 no_price = contract.get("bestBuyNoCost") or (1.0 - yes_price) if yes_price else 0.0
 
                 # PredictIt prices are already in 0-1 range
+                mapping = MARKET_MAP.get(canonical_id, {})
                 price = PricePoint(
                     platform="predictit",
                     canonical_id=canonical_id,
@@ -129,6 +131,19 @@ class PredictItCollector:
                     no_volume=float(contract.get("totalSharesTraded", 0)),
                     timestamp=time.time(),
                     raw_market_id=f"{pi_id}:{contract.get('id', '')}",
+                    yes_market_id=f"{pi_id}:{contract.get('id', '')}",
+                    no_market_id=f"{pi_id}:{contract.get('id', '')}",
+                    yes_bid=float(contract.get("bestBuyYesCost", yes_price) or yes_price),
+                    yes_ask=float(contract.get("bestBuyYesCost", yes_price) or yes_price),
+                    no_bid=float(contract.get("bestBuyNoCost", no_price) or no_price),
+                    no_ask=float(contract.get("bestBuyNoCost", no_price) or no_price),
+                    fee_rate=0.15,
+                    mapping_status=str(mapping.get("status", "candidate")),
+                    mapping_score=float(mapping.get("mapping_score", 0.0)),
+                    metadata={
+                        "market_name": market_name,
+                        "contract_name": contract.get("name", ""),
+                    },
                 )
                 results.append(price)
                 await self.store.put(price)
@@ -144,19 +159,8 @@ class PredictItCollector:
         Match a canonical market ID to a specific PredictIt contract.
         Uses keyword matching since PredictIt contract names vary.
         """
-        # Keywords for matching canonical IDs to contracts
-        match_keywords = {
-            "DEM_HOUSE_2026": ["democratic", "democrat"],
-            "DEM_SENATE_2026": ["democratic", "democrat"],
-            "GOP_SENATE_2026": ["republican", "gop"],
-            "VANCE_NOM_2028": ["vance"],
-            "RUBIO_NOM_2028": ["rubio"],
-            "NEWSOM_NOM_2028": ["newsom"],
-            "GA_SEN_2026": ["democratic", "democrat"],
-            "MI_SEN_2026": ["democratic", "democrat"],
-        }
-
-        keywords = match_keywords.get(canonical_id, [])
+        mapping = MARKET_MAP.get(canonical_id, {})
+        keywords = list(mapping.get("predictit_contract_keywords", ()))
 
         if not keywords:
             # Default: return first contract if only one
@@ -215,12 +219,14 @@ class PredictItCollector:
                     logger.info(f"PredictIt: updated {len(prices)} prices")
                 self.consecutive_errors = 0
 
+                self.config.poll_interval = max(self.config.min_poll_interval, self.config.poll_interval * 0.98)
                 await asyncio.sleep(self.config.poll_interval)
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 self.consecutive_errors += 1
-                backoff = min(self.config.poll_interval * (2 ** min(self.consecutive_errors, 4)), 120)
+                self.config.poll_interval = min(self.config.poll_interval * 1.25, self.config.max_poll_interval)
+                backoff = min(self.config.poll_interval * (2 ** min(self.consecutive_errors, 4)), self.config.max_poll_interval)
                 logger.error(f"PredictIt error (#{self.consecutive_errors}), backoff {backoff:.0f}s: {e}")
                 await asyncio.sleep(backoff)
 

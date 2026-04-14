@@ -21,6 +21,7 @@ Discrepancy thresholds:
   - Failed fundamental constraint (yes+no+fees >= 1.0) → CRITICAL
 """
 import logging
+import math
 import time
 from dataclasses import dataclass, field
 from typing import List, Optional
@@ -30,23 +31,27 @@ logger = logging.getLogger("arbiter.audit")
 
 # ─── Independent Fee Models (duplicated on purpose — shadow must not import scanner) ─
 
-def _kalshi_fee(price: float) -> float:
-    """Kalshi: 7% of price × (1 - price)."""
-    return 0.07 * price * (1.0 - price)
+def _kalshi_fee(price: float, quantity: int = 1) -> float:
+    """Kalshi: quadratic order fee rounded up to the nearest cent."""
+    quantity = max(int(quantity), 1)
+    raw_fee = 0.07 * quantity * price * (1.0 - price)
+    return math.ceil((raw_fee * 100.0) - 1e-9) / 100.0 / quantity
 
 
-def _polymarket_fee(price: float, category: str = "politics") -> float:
-    """Polymarket: category-based rate × price."""
+def _polymarket_fee(price: float, category: str = "politics", quantity: int = 1) -> float:
+    """Polymarket: category-based taker rate × notional, amortized per contract."""
     rates = {"politics": 0.01, "sports": 0.02, "crypto": 0.015, "default": 0.02}
     rate = rates.get(category, rates["default"])
-    return rate * price
+    quantity = max(int(quantity), 1)
+    return (rate * price * quantity) / quantity
 
 
-def _predictit_total_fee(buy_price: float, profit: float) -> float:
-    """PredictIt: 10% profit fee + 5% withdrawal fee on total."""
-    if profit <= 0:
-        return buy_price * 0.05
-    return profit * 0.10 + (buy_price + profit) * 0.05
+def _predictit_total_fee(buy_price: float, settle_price: float = 1.0, quantity: int = 1) -> float:
+    """PredictIt: 10% profit fee + 5% withdrawal fee on proceeds, per contract."""
+    quantity = max(int(quantity), 1)
+    profit = max(settle_price - buy_price, 0.0)
+    total = quantity * ((profit * 0.10) + (settle_price * 0.05))
+    return total / quantity
 
 
 def _predictit_simple_fee(price: float) -> float:
@@ -173,9 +178,25 @@ class MathAuditor:
                 message=f"Gross edge mismatch: shadow={shadow_gross:.6f} vs reported={reported_gross:.6f}",
             ))
 
-        # ─── Check 2: Fee computation ─────────────────────────────────
-        shadow_fee_a = self._compute_fee(yes_platform, yes_price, "yes")
-        shadow_fee_b = self._compute_fee(no_platform, no_price, "no")
+        # ─── Check 2: Position sizing ─────────────────────────────────
+        shadow_qty = self._compute_position_size(
+            yes_platform, no_platform, yes_price, no_price
+        )
+        if shadow_qty != reported_qty:
+            flags.append(AuditFlag(
+                field="suggested_qty",
+                expected=float(shadow_qty),
+                actual=float(reported_qty),
+                discrepancy=abs(shadow_qty - reported_qty),
+                severity="warning",
+                message=f"Quantity mismatch: shadow={shadow_qty} vs reported={reported_qty}",
+            ))
+
+        qty_for_fee = max(reported_qty or shadow_qty, 1)
+
+        # ─── Check 3: Fee computation ─────────────────────────────────
+        shadow_fee_a = self._compute_fee(yes_platform, yes_price, "yes", qty_for_fee)
+        shadow_fee_b = self._compute_fee(no_platform, no_price, "no", qty_for_fee)
         shadow_total_fees = shadow_fee_a + shadow_fee_b
 
         diff = abs(shadow_total_fees - reported_total_fees)
@@ -193,7 +214,7 @@ class MathAuditor:
                 ),
             ))
 
-        # ─── Check 3: Net edge ────────────────────────────────────────
+        # ─── Check 4: Net edge ────────────────────────────────────────
         shadow_net = shadow_gross - shadow_total_fees
         diff = abs(shadow_net - reported_net_edge)
         if diff > DISCREPANCY_THRESHOLD:
@@ -207,7 +228,7 @@ class MathAuditor:
                 message=f"Net edge mismatch: shadow={shadow_net:.6f} vs reported={reported_net_edge:.6f}",
             ))
 
-        # ─── Check 4: Net edge in cents ───────────────────────────────
+        # ─── Check 5: Net edge in cents ───────────────────────────────
         shadow_cents = shadow_net * 100
         diff = abs(shadow_cents - reported_net_cents)
         if diff > 0.1:  # 0.1 cent threshold
@@ -220,7 +241,7 @@ class MathAuditor:
                 message=f"Cents mismatch: shadow={shadow_cents:.4f}¢ vs reported={reported_net_cents:.4f}¢",
             ))
 
-        # ─── Check 5: Fundamental constraint ──────────────────────────
+        # ─── Check 6: Fundamental constraint ──────────────────────────
         total_cost = yes_price + no_price + shadow_total_fees
         if total_cost >= 1.0 and shadow_net > 0:
             flags.append(AuditFlag(
@@ -234,20 +255,6 @@ class MathAuditor:
                     f"fees({shadow_total_fees:.4f}) = {total_cost:.4f} >= $1.00 "
                     f"but net_edge reported positive"
                 ),
-            ))
-
-        # ─── Check 6: Position sizing ─────────────────────────────────
-        shadow_qty = self._compute_position_size(
-            yes_platform, no_platform, yes_price, no_price
-        )
-        if shadow_qty != reported_qty:
-            flags.append(AuditFlag(
-                field="suggested_qty",
-                expected=float(shadow_qty),
-                actual=float(reported_qty),
-                discrepancy=abs(shadow_qty - reported_qty),
-                severity="warning",
-                message=f"Quantity mismatch: shadow={shadow_qty} vs reported={reported_qty}",
             ))
 
         # ─── Check 7: Max profit ──────────────────────────────────────
@@ -391,17 +398,14 @@ class MathAuditor:
         result.passed = len(result.flags) == 0
         return result
 
-    def _compute_fee(self, platform: str, price: float, side: str) -> float:
+    def _compute_fee(self, platform: str, price: float, side: str, quantity: int) -> float:
         """Shadow fee computation — independent of scanner code."""
         if platform == "kalshi":
-            return _kalshi_fee(price)
+            return _kalshi_fee(price, quantity)
         elif platform == "polymarket":
-            return _polymarket_fee(price, category="politics")
+            return _polymarket_fee(price, category="politics", quantity=quantity)
         elif platform == "predictit":
-            # Match scanner logic: for cross-platform arbs, scanner recalculates
-            # with full PredictIt fee model
-            profit = 1.0 - price  # winning contract pays $1
-            return _predictit_total_fee(price, profit)
+            return _predictit_total_fee(price, settle_price=1.0, quantity=quantity)
         return 0.0
 
     def _compute_position_size(self, platform_a: str, platform_b: str,
