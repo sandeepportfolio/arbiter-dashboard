@@ -1,0 +1,7 @@
+# ARBITER — Dependencies
+aiohttp>=3.9.0
+cryptography>=41.0.0
+redis[hiredis]>=5.0.0
+asyncpg>=0.29.0
+python-dotenv>=1.0.0
+web3>=6.0.0
