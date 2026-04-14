@@ -83,9 +83,13 @@ class PredictItCollector:
                     self._last_full_fetch = time.time()
                     return indexed
                 elif resp.status == 429:
-                    logger.warning("PredictIt rate limited")
-                    self.config.poll_interval = min(self.config.poll_interval * 1.5, self.config.max_poll_interval)
-                    await asyncio.sleep(self.config.poll_interval)
+                    delay = self.rate_limiter.apply_retry_after(
+                        resp.headers.get("Retry-After"),
+                        fallback_delay=max(self.config.poll_interval * 1.5, self.config.min_poll_interval),
+                        reason="predictit_429",
+                    )
+                    logger.warning("PredictIt rate limited, backing off %.1fs", delay)
+                    self.config.poll_interval = min(max(delay, self.config.min_poll_interval), self.config.max_poll_interval)
                     return self._all_markets_cache
                 else:
                     logger.warning(f"PredictIt API returned {resp.status}")

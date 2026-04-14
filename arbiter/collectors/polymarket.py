@@ -75,6 +75,14 @@ class PolymarketCollector:
             try:
                 await self.rate_limiter.acquire()
                 async with session.get(f"{self.config.gamma_url}/events", params={"slug": slug}) as response:
+                    if response.status == 429:
+                        delay = self.rate_limiter.apply_retry_after(
+                            response.headers.get("Retry-After"),
+                            fallback_delay=max(self.config.poll_interval * 3, 3.0),
+                            reason="polymarket_gamma_429",
+                        )
+                        logger.warning("Polymarket gamma rate limited for slug=%s, backing off %.1fs", slug, delay)
+                        continue
                     if response.status != 200:
                         logger.warning("Polymarket gamma %s for slug=%s", response.status, slug)
                         continue
@@ -276,8 +284,12 @@ class PolymarketCollector:
                 if response.status == 200:
                     return await response.json()
                 if response.status == 429:
-                    logger.warning("Polymarket CLOB rate limited for token %s", token_id[:12])
-                    await asyncio.sleep(2)
+                    delay = self.rate_limiter.apply_retry_after(
+                        response.headers.get("Retry-After"),
+                        fallback_delay=max(self.config.poll_interval * 2, 2.0),
+                        reason="polymarket_clob_429",
+                    )
+                    logger.warning("Polymarket CLOB rate limited for token %s, backing off %.1fs", token_id[:12], delay)
                 return {}
         except Exception as exc:
             logger.error("Polymarket CLOB error for token %s: %s", token_id[:12], exc)

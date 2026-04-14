@@ -188,6 +188,8 @@ function balanceTone(snapshot) {
 
 function collectorTone(collector) {
   const circuitState = collectorCircuitState(collector);
+  const penalty = Number(collector?.rate_limiter?.remaining_penalty_seconds || 0);
+  if (penalty > 0) return "tone-amber";
   if (circuitState === "open") return "tone-rose";
   if ((collector?.consecutive_errors || 0) > 0 || (collector?.total_errors || 0) > 0) return "tone-amber";
   return "tone-blue";
@@ -950,9 +952,13 @@ function renderCollectors() {
 
   container.innerHTML = Object.entries(collectors).map(([name, collector]) => {
     const circuitState = collectorCircuitState(collector);
+    const remainingPenalty = Number(collector?.rate_limiter?.remaining_penalty_seconds || 0);
+    const limiterMeta = remainingPenalty > 0
+      ? `Rate limit cooldown ${remainingPenalty.toFixed(1)}s`
+      : `Rate limiter ${formatWhole.format(collector?.rate_limiter?.available_tokens || 0)} tokens`;
     const collectorStatus = circuitState === "open"
       ? "critical"
-      : (collector.total_errors || 0) > 0 || (collector.consecutive_errors || 0) > 0
+      : remainingPenalty > 0 || (collector.total_errors || 0) > 0 || (collector.consecutive_errors || 0) > 0
         ? "review"
         : "tradable";
     return `
@@ -963,7 +969,7 @@ function renderCollectors() {
         </div>
         <div class="stack-item-meta">
           ${escapeHtml(`Fetches ${formatWhole.format(collector.total_fetches || 0)} • Consecutive ${formatWhole.format(collector.consecutive_errors || 0)}`)}<br>
-          ${escapeHtml(`Circuit ${titleCase(circuitState)}`)}
+          ${escapeHtml(`Circuit ${titleCase(circuitState)} • ${limiterMeta}`)}
         </div>
       </article>
     `;

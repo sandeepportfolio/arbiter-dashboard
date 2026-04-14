@@ -5,6 +5,7 @@ Used by all collectors for resilient API calls.
 import asyncio
 import logging
 import time
+from email.utils import parsedate_to_datetime
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Optional, Any
@@ -232,6 +233,12 @@ class RateLimiter:
 
     _tokens: float = field(default=0, init=False)
     _last_refill: float = field(default=0, init=False)
+    _penalty_until: float = field(default=0.0, init=False)
+    _penalty_count: int = field(default=0, init=False)
+    _total_wait_time: float = field(default=0.0, init=False)
+    _last_wait_seconds: float = field(default=0.0, init=False)
+    _last_penalty_reason: str = field(default="", init=False)
+    _total_acquires: int = field(default=0, init=False)
 
     def __post_init__(self):
         self._tokens = float(self.max_requests)
@@ -240,12 +247,21 @@ class RateLimiter:
     async def acquire(self):
         """Wait until a request token is available."""
         while True:
+            wait = self.remaining_penalty_seconds
+            if wait > 0:
+                self._last_wait_seconds = wait
+                self._total_wait_time += wait
+                await asyncio.sleep(wait)
+                continue
             self._refill()
             if self._tokens >= 1:
                 self._tokens -= 1
+                self._total_acquires += 1
                 return
             # Wait for next token
             wait = self.window_seconds / self.max_requests
+            self._last_wait_seconds = wait
+            self._total_wait_time += wait
             await asyncio.sleep(wait)
 
     def _refill(self):
@@ -259,3 +275,58 @@ class RateLimiter:
     def available_tokens(self) -> int:
         self._refill()
         return int(self._tokens)
+
+    @property
+    def remaining_penalty_seconds(self) -> float:
+        return max(self._penalty_until - time.time(), 0.0)
+
+    def penalize(self, delay_seconds: float, reason: str = "rate_limited") -> float:
+        delay_seconds = max(float(delay_seconds or 0.0), 0.0)
+        if delay_seconds <= 0:
+            return 0.0
+        now = time.time()
+        self._penalty_until = max(self._penalty_until, now + delay_seconds)
+        self._penalty_count += 1
+        self._last_penalty_reason = reason
+        self._tokens = min(self._tokens, 0.0)
+        return delay_seconds
+
+    def apply_retry_after(self, retry_after: Any, fallback_delay: float, reason: str = "rate_limited") -> float:
+        delay = self._parse_retry_after(retry_after)
+        if delay is None:
+            delay = max(float(fallback_delay or 0.0), 0.0)
+        return self.penalize(delay, reason=reason)
+
+    @staticmethod
+    def _parse_retry_after(retry_after: Any) -> Optional[float]:
+        if retry_after in (None, ""):
+            return None
+        if isinstance(retry_after, (int, float)):
+            return max(float(retry_after), 0.0)
+        raw = str(retry_after).strip()
+        if not raw:
+            return None
+        try:
+            return max(float(raw), 0.0)
+        except ValueError:
+            pass
+        try:
+            target = parsedate_to_datetime(raw)
+            if target.tzinfo is None:
+                return None
+            return max(target.timestamp() - time.time(), 0.0)
+        except (TypeError, ValueError, IndexError, OverflowError):
+            return None
+
+    @property
+    def stats(self) -> dict:
+        return {
+            "name": self.name,
+            "available_tokens": self.available_tokens,
+            "remaining_penalty_seconds": round(self.remaining_penalty_seconds, 3),
+            "penalty_count": self._penalty_count,
+            "last_wait_seconds": round(self._last_wait_seconds, 3),
+            "total_wait_time": round(self._total_wait_time, 3),
+            "total_acquires": self._total_acquires,
+            "last_penalty_reason": self._last_penalty_reason,
+        }

@@ -332,6 +332,8 @@ class ArbiterAPI:
                 collector_data["gamma_circuit"] = collector.circuit_gamma.stats
             if hasattr(collector, "circuit_clob"):
                 collector_data["clob_circuit"] = collector.circuit_clob.stats
+            if hasattr(collector, "rate_limiter"):
+                collector_data["rate_limiter"] = collector.rate_limiter.stats
             snapshot[name] = collector_data
         return snapshot
 

@@ -180,8 +180,12 @@ class KalshiCollector:
                                     f"Kalshi {canonical_id}: YES={yes_price:.2f} NO={no_price:.2f}"
                                 )
                     elif resp.status == 429:
-                        logger.warning("Kalshi rate limited, backing off")
-                        await asyncio.sleep(5)
+                        delay = self.rate_limiter.apply_retry_after(
+                            resp.headers.get("Retry-After"),
+                            fallback_delay=max(self.config.poll_interval * 4, 5.0),
+                            reason="kalshi_429",
+                        )
+                        logger.warning("Kalshi rate limited for %s, backing off %.1fs", event_ticker, delay)
                     else:
                         text = await resp.text()
                         logger.warning(f"Kalshi API {resp.status} for {event_ticker}: {text[:200]}")
