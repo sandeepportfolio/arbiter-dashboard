@@ -43,11 +43,13 @@ class ArbiterAPI:
         self.port = port
         self.started_at = time.time()
         self._ws_clients: list[web.WebSocketResponse] = []
+        self._site_index = Path(__file__).resolve().parent.parent / "index.html"
         self._dashboard_dir = Path(__file__).resolve().parent / "web"
 
     async def serve(self):
         app = web.Application(middlewares=[self._cors_middleware])
-        app.router.add_get("/", self.handle_dashboard)
+        app.router.add_get("/", self.handle_site_index)
+        app.router.add_get("/ops", self.handle_dashboard)
         app.router.add_get("/favicon.ico", self.handle_favicon)
         if self._dashboard_dir.exists():
             app.router.add_static("/static", str(self._dashboard_dir), show_index=False)
@@ -86,6 +88,11 @@ class ArbiterAPI:
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
         response.headers["Access-Control-Allow-Headers"] = "Content-Type"
         return response
+
+    async def handle_site_index(self, request):
+        if self._site_index.exists():
+            return web.FileResponse(self._site_index)
+        return await self.handle_dashboard(request)
 
     async def handle_dashboard(self, request):
         dashboard_path = self._dashboard_dir / "dashboard.html"

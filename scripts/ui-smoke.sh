@@ -35,6 +35,80 @@ fi
 
 echo "[ui-smoke] opening desktop dashboard"
 "${PWCLI[@]}" open "http://127.0.0.1:${PORT}" >/dev/null
+SITE_STATE="$("${PWCLI[@]}" eval "(async () => {
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    if (document.getElementById('loginForm')) break;
+    await sleep(100);
+  }
+  document.getElementById('loginEmail').value = 'sparx.sandeep@gmail.com';
+  document.getElementById('loginPassword').value = 'saibaba';
+  document.getElementById('loginForm').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  await sleep(250);
+  const chart = document.getElementById('pnlChart');
+  const chartWidth = chart ? chart.width : 0;
+  document.querySelector('.sidebar-nav-item[data-page=\"4\"]')?.click();
+  await sleep(120);
+  const systemTitle = document.getElementById('pageTitle')?.textContent?.trim();
+  document.querySelector('.sidebar-nav-item[data-page=\"0\"]')?.click();
+  await sleep(120);
+  return {
+    title: document.title,
+    loggedIn: document.getElementById('mainLayout')?.style.display === 'flex',
+    chartWidth,
+    pageTitle: document.getElementById('pageTitle')?.textContent?.trim(),
+    systemTitle,
+    sidebarItems: document.querySelectorAll('.sidebar-nav-item').length,
+  };
+})()")"
+echo "$SITE_STATE"
+
+if ! grep -q '"loggedIn": true' <<<"$SITE_STATE"; then
+  echo "[ui-smoke] public site login flow failed" >&2
+  exit 1
+fi
+if grep -q '"chartWidth": 0' <<<"$SITE_STATE"; then
+  echo "[ui-smoke] public site chart failed to size after login" >&2
+  exit 1
+fi
+if ! grep -q '"pageTitle": "Dashboard"' <<<"$SITE_STATE"; then
+  echo "[ui-smoke] public site dashboard title missing" >&2
+  exit 1
+fi
+if ! grep -q '"systemTitle": "System"' <<<"$SITE_STATE"; then
+  echo "[ui-smoke] public site navigation failed" >&2
+  exit 1
+fi
+
+echo "[ui-smoke] checking public site mobile layout"
+"${PWCLI[@]}" resize 390 844 >/dev/null
+SITE_MOBILE_STATE="$("${PWCLI[@]}" eval "(async () => {
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const mobileHeader = document.getElementById('mobileHeader');
+  const hamburger = document.getElementById('hamburgerBtn');
+  hamburger?.click();
+  await sleep(150);
+  const sidebarOpen = document.getElementById('sidebar')?.classList.contains('mobile-open');
+  document.getElementById('sidebarBackdrop')?.click();
+  await sleep(120);
+  return {
+    width: window.innerWidth,
+    mobileHeaderVisible: mobileHeader?.classList.contains('visible') || false,
+    sidebarOpen,
+  };
+})()")"
+echo "$SITE_MOBILE_STATE"
+if ! grep -q '"mobileHeaderVisible": true' <<<"$SITE_MOBILE_STATE"; then
+  echo "[ui-smoke] public site mobile header missing" >&2
+  exit 1
+fi
+if ! grep -q '"sidebarOpen": true' <<<"$SITE_MOBILE_STATE"; then
+  echo "[ui-smoke] public site mobile menu failed" >&2
+  exit 1
+fi
+
+echo "[ui-smoke] opening operator dashboard"
+"${PWCLI[@]}" open "http://127.0.0.1:${PORT}/ops" >/dev/null
 DESKTOP_STATE="$("${PWCLI[@]}" eval "(async () => {
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   for (let attempt = 0; attempt < 50; attempt += 1) {

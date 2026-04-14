@@ -1,0 +1,2788 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ARBITER - Prediction Market Arbitrage Dashboard</title>
+    <link href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500,600,700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg-0: #09090B;
+            --bg-1: #111113;
+            --bg-2: #1A1A1D;
+            --bg-3: #222225;
+            --border: rgba(255,255,255,0.06);
+            --border-hover: rgba(255,255,255,0.12);
+            --text-0: #FAFAFA;
+            --text-1: #A0A0AB;
+            --text-2: #63636E;
+            --accent: #6366F1;
+            --accent-soft: rgba(99,102,241,0.12);
+            --green: #22C55E;
+            --green-soft: rgba(34,197,94,0.12);
+            --red: #EF4444;
+            --red-soft: rgba(239,68,68,0.12);
+            --amber: #F59E0B;
+            --amber-soft: rgba(245,158,11,0.12);
+        }
+
+        body.light-theme {
+            --bg-0: #FAFAF9;
+            --bg-1: #FFFFFF;
+            --bg-2: #F5F5F4;
+            --bg-3: #E7E5E4;
+            --border: rgba(0,0,0,0.06);
+            --border-hover: rgba(0,0,0,0.12);
+            --text-0: #0C0C0D;
+            --text-1: #6B6B76;
+            --text-2: #A3A3AE;
+        }
+
+        html, body {
+            width: 100%;
+            height: 100%;
+            font-family: 'Satoshi', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-0);
+            color: var(--text-0);
+            overflow: hidden;
+        }
+
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background:
+                radial-gradient(at 20% 50%, rgba(99,102,241,0.04) 0%, transparent 50%),
+                radial-gradient(at 80% 80%, rgba(34,197,94,0.02) 0%, transparent 50%);
+            animation: gradientShift 30s ease-in-out infinite;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        @keyframes gradientShift {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.8; }
+        }
+
+        #app {
+            position: relative;
+            z-index: 1;
+            width: 100%;
+            height: 100%;
+            display: flex;
+        }
+
+        /* LOGIN SCREEN */
+        .login-screen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: var(--bg-0);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 1;
+            transition: opacity 0.3s ease;
+        }
+
+        .login-screen.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .login-container {
+            width: 100%;
+            max-width: 420px;
+            padding: 40px;
+        }
+
+        .login-logo {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        .login-logo-text {
+            font-size: 32px;
+            font-weight: 700;
+            letter-spacing: 0.12em;
+            color: var(--text-0);
+            margin-bottom: 8px;
+        }
+
+        .login-logo-sub {
+            font-size: 12px;
+            color: var(--text-2);
+            letter-spacing: 0.1em;
+        }
+
+        .login-form {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .login-form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .login-form-label {
+            font-size: 13px;
+            color: var(--text-1);
+            font-weight: 500;
+        }
+
+        .login-form-input {
+            padding: 12px 16px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--bg-1);
+            color: var(--text-0);
+            font-family: 'Satoshi', sans-serif;
+            font-size: 13px;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .login-form-input:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-soft);
+        }
+
+        .login-form-input::placeholder {
+            color: var(--text-2);
+        }
+
+        .login-button {
+            padding: 12px 16px;
+            border: none;
+            border-radius: 8px;
+            background: var(--accent);
+            color: white;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+            margin-top: 12px;
+        }
+
+        .login-button:hover {
+            filter: brightness(1.1);
+            transform: translateY(-1px);
+        }
+
+        .login-button:active {
+            transform: translateY(0);
+        }
+
+        .login-button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .login-signup {
+            text-align: center;
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid var(--border);
+        }
+
+        .login-signup-text {
+            font-size: 13px;
+            color: var(--text-1);
+            margin-bottom: 12px;
+        }
+
+        .login-signup-button {
+            padding: 12px 16px;
+            border: 1px solid var(--border-hover);
+            border-radius: 8px;
+            background: transparent;
+            color: var(--text-1);
+            font-size: 13px;
+            font-weight: 600;
+            cursor: not-allowed;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+            width: 100%;
+        }
+
+        .login-error {
+            color: var(--red);
+            font-size: 12px;
+            text-align: center;
+        }
+
+        /* MAIN LAYOUT */
+        .main-layout {
+            display: flex;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* MOBILE HEADER */
+        .mobile-header {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 56px;
+            background: var(--bg-1);
+            border-bottom: 1px solid var(--border);
+            z-index: 150;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 16px;
+        }
+
+        .mobile-header.visible {
+            display: flex;
+        }
+
+        .mobile-header-left {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .hamburger-btn {
+            width: 32px;
+            height: 32px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: transparent;
+            color: var(--text-0);
+            cursor: pointer;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .hamburger-btn:hover {
+            background: var(--bg-2);
+        }
+
+        .hamburger-btn span {
+            width: 16px;
+            height: 2px;
+            background: currentColor;
+            border-radius: 1px;
+            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .hamburger-btn.active span:nth-child(1) {
+            transform: rotate(45deg) translate(8px, 8px);
+        }
+
+        .hamburger-btn.active span:nth-child(2) {
+            opacity: 0;
+        }
+
+        .hamburger-btn.active span:nth-child(3) {
+            transform: rotate(-45deg) translate(7px, -7px);
+        }
+
+        .mobile-header-title {
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: 0.12em;
+            color: var(--text-0);
+        }
+
+        /* SIDEBAR */
+        .sidebar {
+            width: 240px;
+            background: var(--bg-1);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            padding: 24px;
+            overflow-y: auto;
+            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            z-index: 100;
+        }
+
+        .sidebar.collapsed {
+            width: 72px;
+        }
+
+        @media (max-width: 768px) {
+            .sidebar {
+                position: fixed;
+                left: 0;
+                top: 56px;
+                height: calc(100vh - 56px);
+                width: 240px;
+                transform: translateX(-100%);
+                transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+                z-index: 200;
+            }
+
+            .sidebar.mobile-open {
+                transform: translateX(0);
+            }
+        }
+
+        .sidebar-backdrop {
+            position: fixed;
+            top: 56px;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(4px);
+            z-index: 199;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .sidebar-backdrop.visible {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .sidebar-logo {
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: 0.12em;
+            color: var(--text-0);
+            margin-bottom: 4px;
+            transition: opacity 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .sidebar.collapsed .sidebar-logo {
+            opacity: 0;
+            height: 0;
+            margin: 0;
+        }
+
+        .sidebar-version {
+            font-size: 10px;
+            color: var(--text-2);
+            margin-bottom: 32px;
+            transition: opacity 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .sidebar.collapsed .sidebar-version {
+            opacity: 0;
+            height: 0;
+            margin: 0;
+        }
+
+        .sidebar-nav {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-bottom: 32px;
+        }
+
+        .sidebar-nav-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            height: 38px;
+            padding: 0 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+            font-size: 13px;
+            color: var(--text-1);
+            border-left: 2px solid transparent;
+        }
+
+        .sidebar-nav-item:hover:not(.active) {
+            background: var(--bg-2);
+            color: var(--text-0);
+        }
+
+        .sidebar-nav-item.active {
+            color: var(--accent);
+            background: var(--accent-soft);
+            border-left-color: var(--accent);
+        }
+
+        .sidebar-nav-icon {
+            width: 18px;
+            height: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            color: currentColor;
+        }
+
+        .sidebar-nav-icon svg {
+            width: 100%;
+            height: 100%;
+            stroke: currentColor;
+            fill: none;
+        }
+
+        .sidebar-nav-label {
+            flex: 1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            transition: opacity 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .sidebar.collapsed .sidebar-nav-label {
+            opacity: 0;
+            width: 0;
+        }
+
+        .sidebar-footer {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding-top: 24px;
+            border-top: 1px solid var(--border);
+        }
+
+        .sidebar-user-avatar {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: var(--accent-soft);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--accent);
+            border: 1px solid var(--border);
+            position: relative;
+            flex-shrink: 0;
+        }
+
+        .sidebar-user-avatar::after {
+            content: '';
+            position: absolute;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--green);
+            bottom: 0;
+            right: 0;
+            border: 2px solid var(--bg-1);
+        }
+
+        .sidebar-user-info {
+            flex: 1;
+            min-width: 0;
+            transition: opacity 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .sidebar.collapsed .sidebar-user-info {
+            opacity: 0;
+            width: 0;
+        }
+
+        .sidebar-user-name {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-0);
+        }
+
+        .sidebar-user-status {
+            font-size: 11px;
+            color: var(--text-2);
+        }
+
+        .sidebar-collapse-btn {
+            width: 28px;
+            height: 28px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--bg-2);
+            color: var(--text-1);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+            flex-shrink: 0;
+        }
+
+        .sidebar-collapse-btn:hover {
+            background: var(--bg-3);
+            color: var(--text-0);
+        }
+
+        .sidebar-collapse-btn svg {
+            width: 16px;
+            height: 16px;
+            stroke: currentColor;
+            transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .sidebar.collapsed .sidebar-collapse-btn svg {
+            transform: rotate(180deg);
+        }
+
+        .sidebar-logout-btn {
+            width: 28px;
+            height: 28px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--bg-2);
+            color: var(--text-1);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+            flex-shrink: 0;
+        }
+
+        .sidebar-logout-btn:hover {
+            background: var(--red);
+            color: white;
+            border-color: var(--red);
+        }
+
+        .sidebar-logout-btn svg {
+            width: 16px;
+            height: 16px;
+            stroke: currentColor;
+        }
+
+        /* CONTENT AREA */
+        .content-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            background: var(--bg-0);
+        }
+
+        @media (max-width: 768px) {
+            .content-area {
+                margin-top: 56px;
+            }
+        }
+
+        .content-header {
+            padding: 20px 32px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--bg-0);
+        }
+
+        .content-header-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: var(--text-0);
+        }
+
+        .content-header-actions {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .theme-toggle-btn {
+            width: 32px;
+            height: 32px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--bg-1);
+            color: var(--text-0);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .theme-toggle-btn:hover {
+            background: var(--bg-2);
+            border-color: var(--border-hover);
+        }
+
+        .theme-toggle-btn svg {
+            width: 16px;
+            height: 16px;
+            stroke: currentColor;
+        }
+
+        .content-main {
+            flex: 1;
+            overflow-y: auto;
+            overflow-x: hidden;
+            padding: 32px;
+        }
+
+        .content-main::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .content-main::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .content-main::-webkit-scrollbar-thumb {
+            background: var(--border-hover);
+            border-radius: 3px;
+        }
+
+        .content-main::-webkit-scrollbar-thumb:hover {
+            background: var(--border);
+        }
+
+        /* PAGES */
+        .page {
+            display: none;
+            opacity: 0;
+            animation: pageEnter 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+
+        .page.active {
+            display: block;
+        }
+
+        @keyframes pageEnter {
+            from {
+                opacity: 0;
+                transform: translateY(6px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .page > * {
+            animation: childStagger 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+
+        .page > *:nth-child(1) { animation-delay: 0ms; }
+        .page > *:nth-child(2) { animation-delay: 40ms; }
+        .page > *:nth-child(3) { animation-delay: 80ms; }
+        .page > *:nth-child(4) { animation-delay: 120ms; }
+        .page > *:nth-child(5) { animation-delay: 160ms; }
+
+        @keyframes childStagger {
+            from {
+                opacity: 0;
+                transform: translateY(6px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* CARDS */
+        .card {
+            background: var(--bg-1);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .card:hover {
+            border-color: var(--border-hover);
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+            transform: translateY(-1px);
+        }
+
+        /* METRICS */
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 16px;
+            margin-bottom: 32px;
+        }
+
+        .metric-card {
+            background: var(--bg-1);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .metric-card:hover {
+            border-color: var(--border-hover);
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+        }
+
+        .metric-label {
+            font-size: 11px;
+            color: var(--text-2);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            margin-bottom: 12px;
+            font-weight: 500;
+        }
+
+        .metric-value {
+            font-size: 28px;
+            font-weight: 700;
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--text-0);
+            margin-bottom: 12px;
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+        }
+
+        .metric-value-sub {
+            font-size: 13px;
+            color: var(--text-1);
+        }
+
+        .metric-trend {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: var(--green);
+            font-weight: 500;
+        }
+
+        .metric-trend.negative {
+            color: var(--red);
+        }
+
+        .metric-sparkline {
+            height: 40px;
+            margin-top: 12px;
+            border-top: 1px solid var(--border);
+            padding-top: 12px;
+        }
+
+        /* TABLES */
+        .table-container {
+            overflow-x: auto;
+            background: var(--bg-1);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        thead {
+            background: var(--bg-2);
+            border-bottom: 1px solid var(--border);
+        }
+
+        th {
+            padding: 12px 16px;
+            text-align: left;
+            color: var(--text-1);
+            font-weight: 500;
+            font-size: 11px;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+        }
+
+        td {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border);
+            color: var(--text-0);
+        }
+
+        tbody tr:last-child td {
+            border-bottom: none;
+        }
+
+        tbody tr:hover {
+            background: var(--bg-2);
+        }
+
+        tbody tr:nth-child(even) {
+            background: rgba(0, 0, 0, 0.02);
+        }
+
+        /* CHARTS */
+        .chart-container {
+            background: var(--bg-1);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 32px;
+        }
+
+        .chart-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-0);
+            margin-bottom: 16px;
+        }
+
+        canvas {
+            display: block;
+            width: 100% !important;
+            height: auto !important;
+        }
+
+        /* STATUS INDICATORS */
+        .status-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--amber);
+        }
+
+        .status-dot.online {
+            background: var(--green);
+        }
+
+        .status-dot.offline {
+            background: var(--red);
+        }
+
+        /* BUTTONS */
+        .btn {
+            padding: 8px 16px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: transparent;
+            color: var(--text-0);
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 500;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+            font-family: 'Satoshi', sans-serif;
+        }
+
+        .btn:hover {
+            background: var(--bg-2);
+            border-color: var(--border-hover);
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            color: white;
+            border-color: var(--accent);
+        }
+
+        .btn-primary:hover {
+            filter: brightness(1.1);
+        }
+
+        .btn-success {
+            background: transparent;
+            color: var(--green);
+            border-color: var(--green);
+        }
+
+        .btn-success:hover {
+            background: var(--green-soft);
+        }
+
+        .btn-danger {
+            background: transparent;
+            color: var(--red);
+            border-color: var(--red);
+        }
+
+        .btn-danger:hover {
+            background: var(--red-soft);
+        }
+
+        /* COMMAND PALETTE */
+        .command-palette {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            display: none;
+            align-items: flex-start;
+            justify-content: center;
+            padding-top: 100px;
+            z-index: 2000;
+            backdrop-filter: blur(4px);
+        }
+
+        .command-palette.active {
+            display: flex;
+        }
+
+        .command-palette-content {
+            width: 100%;
+            max-width: 520px;
+            background: var(--bg-1);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+
+        .command-palette-input {
+            padding: 16px;
+            border: none;
+            border-bottom: 1px solid var(--border);
+            background: var(--bg-1);
+            color: var(--text-0);
+            font-size: 14px;
+            font-family: 'Satoshi', sans-serif;
+            width: 100%;
+        }
+
+        .command-palette-input:focus {
+            outline: none;
+            background: var(--bg-2);
+        }
+
+        .command-palette-input::placeholder {
+            color: var(--text-2);
+        }
+
+        .command-palette-results {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .command-palette-item {
+            padding: 12px 16px;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .command-palette-item:last-child {
+            border-bottom: none;
+        }
+
+        .command-palette-item:hover {
+            background: var(--bg-2);
+        }
+
+        .command-palette-item.active {
+            background: var(--accent-soft);
+            border-left: 2px solid var(--accent);
+        }
+
+        .command-palette-item-title {
+            font-size: 13px;
+            color: var(--text-0);
+        }
+
+        .command-palette-item-shortcut {
+            font-size: 11px;
+            color: var(--text-2);
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        /* TOAST NOTIFICATIONS */
+        .toast-container {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 3000;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .toast {
+            background: var(--bg-1);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px 20px;
+            color: var(--text-0);
+            font-size: 13px;
+            animation: toastSlide 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        }
+
+        @keyframes toastSlide {
+            from {
+                opacity: 0;
+                transform: translateX(400px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        .toast.success {
+            border-color: var(--green);
+            border-left: 2px solid var(--green);
+        }
+
+        .toast.error {
+            border-color: var(--red);
+            border-left: 2px solid var(--red);
+        }
+
+        .toast.info {
+            border-color: var(--accent);
+            border-left: 2px solid var(--accent);
+        }
+
+        /* FILTERS */
+        .filter-bar {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .filter-toggle {
+            padding: 6px 12px;
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            background: transparent;
+            color: var(--text-1);
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .filter-toggle:hover {
+            border-color: var(--border-hover);
+            color: var(--text-0);
+        }
+
+        .filter-toggle.active {
+            background: var(--accent);
+            color: white;
+            border-color: var(--accent);
+        }
+
+        /* INPUTS */
+        input[type="text"],
+        input[type="email"],
+        input[type="password"],
+        input[type="number"],
+        textarea,
+        select {
+            padding: 8px 12px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--bg-1);
+            color: var(--text-0);
+            font-family: 'Satoshi', sans-serif;
+            font-size: 13px;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        input[type="text"]:focus,
+        input[type="email"]:focus,
+        input[type="password"]:focus,
+        input[type="number"]:focus,
+        textarea:focus,
+        select:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-soft);
+        }
+
+        input[type="range"] {
+            width: 100%;
+            cursor: pointer;
+        }
+
+        /* SETTINGS */
+        .settings-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 24px;
+        }
+
+        .settings-group {
+            background: var(--bg-1);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+        }
+
+        .settings-group-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-0);
+            margin-bottom: 16px;
+        }
+
+        .settings-item {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+
+        .settings-item:last-child {
+            margin-bottom: 0;
+        }
+
+        .settings-label {
+            font-size: 12px;
+            color: var(--text-1);
+            font-weight: 500;
+        }
+
+        /* MARKET CARDS */
+        .market-cards-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 16px;
+        }
+
+        .market-card {
+            background: var(--bg-1);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .market-card:hover {
+            border-color: var(--border-hover);
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+        }
+
+        .market-card-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-0);
+            margin-bottom: 16px;
+            line-height: 1.4;
+        }
+
+        .price-bar {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+            flex-wrap: wrap;
+        }
+
+        .price-bar-item {
+            flex: 1;
+            min-width: 60px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .price-bar-label {
+            font-size: 11px;
+            color: var(--text-2);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .price-bar-value {
+            font-size: 14px;
+            font-weight: 600;
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--text-0);
+        }
+
+        .price-bar-fill {
+            height: 4px;
+            background: var(--bg-2);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .price-bar-fill-inner {
+            height: 100%;
+            background: linear-gradient(90deg, var(--accent), var(--green));
+            border-radius: 2px;
+            transition: width 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        /* LOGS */
+        .logs-container {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .logs-toolbar {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .logs-viewer {
+            background: var(--bg-1);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            color: var(--text-1);
+            max-height: 500px;
+            overflow-y: auto;
+            line-height: 1.6;
+        }
+
+        .logs-viewer::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .logs-viewer::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .logs-viewer::-webkit-scrollbar-thumb {
+            background: var(--border-hover);
+            border-radius: 3px;
+        }
+
+        .log-entry {
+            display: grid;
+            grid-template-columns: 120px 50px 1fr;
+            gap: 12px;
+            margin-bottom: 8px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .log-entry:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+        }
+
+        .log-timestamp {
+            color: var(--text-2);
+        }
+
+        .log-level {
+            font-weight: 600;
+        }
+
+        .log-level.info {
+            color: var(--accent);
+        }
+
+        .log-level.warning {
+            color: var(--amber);
+        }
+
+        .log-level.error {
+            color: var(--red);
+        }
+
+        .log-level.success {
+            color: var(--green);
+        }
+
+        .log-message {
+            color: var(--text-1);
+            word-break: break-word;
+        }
+
+        /* SYSTEM CARDS */
+        .system-cards-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 32px;
+        }
+
+        .system-card {
+            background: var(--bg-1);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+        }
+
+        .system-card-label {
+            font-size: 11px;
+            color: var(--text-2);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            margin-bottom: 8px;
+        }
+
+        .system-card-value {
+            font-size: 24px;
+            font-weight: 700;
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--text-0);
+        }
+
+        .system-card-unit {
+            font-size: 12px;
+            color: var(--text-1);
+            font-weight: 400;
+        }
+
+        .system-status-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .system-status-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px;
+            background: var(--bg-2);
+            border-radius: 6px;
+        }
+
+        .system-status-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        .system-status-indicator.online {
+            background: var(--green);
+        }
+
+        .system-status-indicator.offline {
+            background: var(--red);
+        }
+
+        .system-status-indicator.connecting {
+            background: var(--amber);
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .system-status-name {
+            font-size: 13px;
+            color: var(--text-0);
+        }
+
+        .system-status-latency {
+            font-size: 11px;
+            color: var(--text-2);
+            margin-left: auto;
+        }
+
+        /* UTILITIES */
+        .text-success { color: var(--green); }
+        .text-danger { color: var(--red); }
+        .text-warning { color: var(--amber); }
+        .text-muted { color: var(--text-2); }
+
+        .flex { display: flex; }
+        .flex-col { flex-direction: column; }
+        .gap-2 { gap: 8px; }
+        .gap-4 { gap: 16px; }
+        .items-center { align-items: center; }
+        .justify-between { justify-content: space-between; }
+
+        .mb-4 { margin-bottom: 16px; }
+        .mb-8 { margin-bottom: 32px; }
+        .mt-4 { margin-top: 16px; }
+        .mt-8 { margin-top: 32px; }
+
+        .w-full { width: 100%; }
+        .h-full { height: 100%; }
+
+        .grid-cols-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+        .grid-cols-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+
+        /* RESPONSIVE */
+        @media (max-width: 768px) {
+            .sidebar {
+                display: flex;
+            }
+
+            .sidebar-backdrop {
+                display: block;
+            }
+
+            .mobile-header {
+                display: flex;
+            }
+
+            .content-main {
+                padding: 20px;
+            }
+
+            .content-header {
+                padding: 16px 20px;
+            }
+
+            .metrics-grid {
+                grid-template-columns: 1fr;
+            }
+
+            table {
+                font-size: 12px;
+            }
+
+            th, td {
+                padding: 10px 12px;
+            }
+
+            .command-palette {
+                padding-top: 50px;
+            }
+
+            .command-palette-content {
+                max-width: 90vw;
+            }
+
+            .grid-cols-2 {
+                grid-template-columns: 1fr;
+            }
+
+            .market-cards-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .settings-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .system-cards-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        @media (max-width: 480px) {
+            .content-header {
+                flex-direction: column;
+                gap: 12px;
+                align-items: flex-start;
+            }
+
+            .metrics-grid {
+                gap: 12px;
+            }
+
+            .metric-card {
+                padding: 16px;
+            }
+
+            .metric-value {
+                font-size: 24px;
+            }
+
+            .login-container {
+                padding: 24px;
+            }
+
+            .login-logo-text {
+                font-size: 24px;
+            }
+
+            .system-cards-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .content-header-actions {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <!-- LOGIN SCREEN -->
+        <div class="login-screen" id="loginScreen">
+            <div class="login-container">
+                <div class="login-logo">
+                    <div class="login-logo-text">ARBITER</div>
+                    <div class="login-logo-sub">PREDICTION MARKET ARBITRAGE</div>
+                </div>
+                <form class="login-form" id="loginForm">
+                    <div class="login-form-group">
+                        <label class="login-form-label">Email</label>
+                        <input type="email" class="login-form-input" id="loginEmail" placeholder="Enter email" required>
+                    </div>
+                    <div class="login-form-group">
+                        <label class="login-form-label">Password</label>
+                        <input type="password" class="login-form-input" id="loginPassword" placeholder="Enter password" required>
+                    </div>
+                    <div id="loginError" class="login-error" style="display: none;"></div>
+                    <button type="submit" class="login-button">Sign In</button>
+                </form>
+                <div class="login-signup">
+                    <div class="login-signup-text">Don't have an account?</div>
+                    <button type="button" class="login-signup-button" disabled title="Sign up coming soon">Sign Up</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- MAIN APPLICATION -->
+        <div class="main-layout" id="mainLayout" style="display: none;">
+            <!-- MOBILE HEADER -->
+            <div class="mobile-header" id="mobileHeader">
+                <div class="mobile-header-left">
+                    <button class="hamburger-btn" id="hamburgerBtn">
+                        <span></span>
+                        <span></span>
+                        <span></span>
+                    </button>
+                    <div class="mobile-header-title">ARBITER</div>
+                </div>
+                <button class="theme-toggle-btn" id="themeToggleMobile" title="Toggle theme (T)">
+                    <svg id="themeIconMobile" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                    </svg>
+                </button>
+            </div>
+
+            <!-- SIDEBAR BACKDROP -->
+            <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+
+            <!-- SIDEBAR -->
+            <aside class="sidebar" id="sidebar">
+                <div class="sidebar-logo">ARBITER</div>
+                <div class="sidebar-version">v2.0</div>
+
+                <nav class="sidebar-nav">
+                    <div class="sidebar-nav-item active" data-page="0">
+                        <div class="sidebar-nav-icon">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="3" y="3" width="7" height="7" rx="1"></rect>
+                                <rect x="14" y="3" width="7" height="7" rx="1"></rect>
+                                <rect x="3" y="14" width="7" height="7" rx="1"></rect>
+                                <rect x="14" y="14" width="7" height="7" rx="1"></rect>
+                            </svg>
+                        </div>
+                        <span class="sidebar-nav-label">Dashboard</span>
+                    </div>
+                    <div class="sidebar-nav-item" data-page="1">
+                        <div class="sidebar-nav-icon">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="11" cy="11" r="8"></circle>
+                                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                            </svg>
+                        </div>
+                        <span class="sidebar-nav-label">Scanner</span>
+                    </div>
+                    <div class="sidebar-nav-item" data-page="2">
+                        <div class="sidebar-nav-icon">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="22 7 13.5 15.5 8.5 10.5 2 17"></polyline>
+                                <polyline points="16 7 22 7 22 13"></polyline>
+                            </svg>
+                        </div>
+                        <span class="sidebar-nav-label">Markets</span>
+                    </div>
+                    <div class="sidebar-nav-item" data-page="3">
+                        <div class="sidebar-nav-icon">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M16 3l4 4-4 4"></path>
+                                <path d="M20 7H4"></path>
+                                <path d="M8 21l-4-4 4-4"></path>
+                                <path d="M4 17h16"></path>
+                            </svg>
+                        </div>
+                        <span class="sidebar-nav-label">Trades</span>
+                    </div>
+                    <div class="sidebar-nav-item" data-page="4">
+                        <div class="sidebar-nav-icon">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="4" y="4" width="16" height="16" rx="2"></rect>
+                                <rect x="9" y="9" width="6" height="6"></rect>
+                                <path d="M15 2v2"></path>
+                                <path d="M15 20v2"></path>
+                                <path d="M2 15h2"></path>
+                                <path d="M2 9h2"></path>
+                                <path d="M20 15h2"></path>
+                                <path d="M20 9h2"></path>
+                                <path d="M9 2v2"></path>
+                                <path d="M9 20v2"></path>
+                            </svg>
+                        </div>
+                        <span class="sidebar-nav-label">System</span>
+                    </div>
+                    <div class="sidebar-nav-item" data-page="5">
+                        <div class="sidebar-nav-icon">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="4 17 10 11 4 5"></polyline>
+                                <line x1="12" y1="19" x2="20" y2="19"></line>
+                            </svg>
+                        </div>
+                        <span class="sidebar-nav-label">Logs</span>
+                    </div>
+                    <div class="sidebar-nav-item" data-page="6">
+                        <div class="sidebar-nav-icon">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
+                                <circle cx="12" cy="12" r="3"></circle>
+                            </svg>
+                        </div>
+                        <span class="sidebar-nav-label">Settings</span>
+                    </div>
+                </nav>
+
+                <div class="sidebar-footer">
+                    <div class="sidebar-user-avatar">SP</div>
+                    <div class="sidebar-user-info">
+                        <div class="sidebar-user-name">Sandeep P.</div>
+                        <div class="sidebar-user-status">Online</div>
+                    </div>
+                    <button class="sidebar-logout-btn" id="logoutBtn" title="Logout">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                            <polyline points="16 17 21 12 16 7"></polyline>
+                            <line x1="21" y1="12" x2="9" y2="12"></line>
+                        </svg>
+                    </button>
+                </div>
+
+                <div style="padding-top: 24px; border-top: 1px solid var(--border); display: flex; gap: 8px;">
+                    <button class="sidebar-collapse-btn" id="collapseBtn" title="Toggle sidebar">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="15 18 9 12 15 6"></polyline>
+                        </svg>
+                    </button>
+                </div>
+            </aside>
+
+            <!-- CONTENT AREA -->
+            <div class="content-area">
+                <div class="content-header">
+                    <h1 class="content-header-title" id="pageTitle">Dashboard</h1>
+                    <div class="content-header-actions">
+                        <button class="theme-toggle-btn" id="themeToggle" title="Toggle theme (T)">
+                            <svg id="themeIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="content-main">
+                    <!-- Dashboard Page -->
+                    <div class="page active" id="page0">
+                        <div class="metrics-grid">
+                            <div class="metric-card">
+                                <div class="metric-label">Total P&L</div>
+                                <div class="metric-value">
+                                    <span>$12,456.78</span>
+                                </div>
+                                <div class="metric-trend">
+                                    <span>↑ 12.5%</span>
+                                </div>
+                                <div class="metric-sparkline">
+                                    <canvas id="sparkline1" width="200" height="40"></canvas>
+                                </div>
+                            </div>
+                            <div class="metric-card">
+                                <div class="metric-label">Active Positions</div>
+                                <div class="metric-value">
+                                    <span>24</span>
+                                </div>
+                                <div class="metric-trend">
+                                    <span>↑ 3 new</span>
+                                </div>
+                                <div class="metric-sparkline">
+                                    <canvas id="sparkline2" width="200" height="40"></canvas>
+                                </div>
+                            </div>
+                            <div class="metric-card">
+                                <div class="metric-label">Win Rate</div>
+                                <div class="metric-value">
+                                    <span>78%</span>
+                                </div>
+                                <div class="metric-trend">
+                                    <span>↑ 4.2%</span>
+                                </div>
+                                <div class="metric-sparkline">
+                                    <canvas id="sparkline3" width="200" height="40"></canvas>
+                                </div>
+                            </div>
+                            <div class="metric-card">
+                                <div class="metric-label">Avg Spread</div>
+                                <div class="metric-value">
+                                    <span>2.3%</span>
+                                </div>
+                                <div class="metric-trend negative">
+                                    <span>↓ 0.1%</span>
+                                </div>
+                                <div class="metric-sparkline">
+                                    <canvas id="sparkline4" width="200" height="40"></canvas>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="chart-container">
+                            <div class="chart-title">P&L Over Time</div>
+                            <canvas id="pnlChart" height="300"></canvas>
+                        </div>
+
+                        <div class="grid-cols-2">
+                            <div>
+                                <h3 style="font-size: 15px; font-weight: 600; margin-bottom: 16px;">Recent Opportunities</h3>
+                                <div class="table-container">
+                                    <table>
+                                        <thead>
+                                            <tr>
+                                                <th>Market</th>
+                                                <th>Spread %</th>
+                                                <th>Status</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr>
+                                                <td>Will Trump win 2024?</td>
+                                                <td style="font-family: 'JetBrains Mono', monospace; font-weight: 600;">+2.5%</td>
+                                                <td><span class="status-dot online"></span></td>
+                                            </tr>
+                                            <tr>
+                                                <td>Bitcoin above $50k by EOY?</td>
+                                                <td style="font-family: 'JetBrains Mono', monospace; font-weight: 600;">+1.8%</td>
+                                                <td><span class="status-dot online"></span></td>
+                                            </tr>
+                                            <tr>
+                                                <td>Fed rate cut in 2024?</td>
+                                                <td style="font-family: 'JetBrains Mono', monospace; font-weight: 600;">+3.2%</td>
+                                                <td><span class="status-dot online"></span></td>
+                                            </tr>
+                                            <tr>
+                                                <td>S&P 500 above 5500?</td>
+                                                <td style="font-family: 'JetBrains Mono', monospace; font-weight: 600;">+1.1%</td>
+                                                <td><span class="status-dot offline"></span></td>
+                                            </tr>
+                                            <tr>
+                                                <td>Tech IPO surge in 2024?</td>
+                                                <td style="font-family: 'JetBrains Mono', monospace; font-weight: 600;">+2.8%</td>
+                                                <td><span class="status-dot online"></span></td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                            <div>
+                                <h3 style="font-size: 15px; font-weight: 600; margin-bottom: 16px;">Platform Balances</h3>
+                                <div class="table-container">
+                                    <table>
+                                        <thead>
+                                            <tr>
+                                                <th>Platform</th>
+                                                <th>Balance</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr>
+                                                <td>Kalshi</td>
+                                                <td style="font-family: 'JetBrains Mono', monospace; font-weight: 600;">$1,250.50</td>
+                                            </tr>
+                                            <tr>
+                                                <td>Polymarket</td>
+                                                <td style="font-family: 'JetBrains Mono', monospace; font-weight: 600;">$2,100.25</td>
+                                            </tr>
+                                            <tr>
+                                                <td>PredictIt</td>
+                                                <td style="font-family: 'JetBrains Mono', monospace; font-weight: 600;">$850.00</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Scanner Page -->
+                    <div class="page" id="page1">
+                        <div class="filter-bar">
+                            <input type="text" placeholder="Search markets..." style="flex: 1; min-width: 200px;">
+                            <div style="display: flex; gap: 8px;">
+                                <button class="filter-toggle active">Kalshi</button>
+                                <button class="filter-toggle active">Polymarket</button>
+                                <button class="filter-toggle active">PredictIt</button>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <label style="font-size: 12px; color: var(--text-1);">Min Spread:</label>
+                                <input type="range" min="0" max="10" value="1" style="width: 120px;">
+                            </div>
+                        </div>
+
+                        <div class="table-container">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Market</th>
+                                        <th>Platform</th>
+                                        <th>Spread %</th>
+                                        <th>Yes Price</th>
+                                        <th>No Price</th>
+                                        <th>Vol 24h</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td>Will Trump win 2024?</td>
+                                        <td>Kalshi</td>
+                                        <td style="font-family: 'JetBrains Mono', monospace; font-weight: 600;">+2.5%</td>
+                                        <td>$0.58</td>
+                                        <td>$0.42</td>
+                                        <td>$145.2K</td>
+                                        <td><button class="btn btn-success">Arbitrage</button></td>
+                                    </tr>
+                                    <tr>
+                                        <td>Bitcoin above $50k by EOY?</td>
+                                        <td>Polymarket</td>
+                                        <td style="font-family: 'JetBrains Mono', monospace; font-weight: 600;">+1.8%</td>
+                                        <td>$0.72</td>
+                                        <td>$0.28</td>
+                                        <td>$289.5K</td>
+                                        <td><button class="btn btn-success">Arbitrage</button></td>
+                                    </tr>
+                                    <tr>
+                                        <td>Fed rate cut in 2024?</td>
+                                        <td>PredictIt</td>
+                                        <td style="font-family: 'JetBrains Mono', monospace; font-weight: 600;">+3.2%</td>
+                                        <td>$0.81</td>
+                                        <td>$0.19</td>
+                                        <td>$72.1K</td>
+                                        <td><button class="btn btn-success">Arbitrage</button></td>
+                                    </tr>
+                                    <tr>
+                                        <td>S&P 500 above 5500?</td>
+                                        <td>Kalshi</td>
+                                        <td style="font-family: 'JetBrains Mono', monospace; font-weight: 600;">+0.9%</td>
+                                        <td>$0.65</td>
+                                        <td>$0.35</td>
+                                        <td>$198.7K</td>
+                                        <td><button class="btn btn-success">Arbitrage</button></td>
+                                    </tr>
+                                    <tr>
+                                        <td>Tech IPO surge in 2024?</td>
+                                        <td>Polymarket</td>
+                                        <td style="font-family: 'JetBrains Mono', monospace; font-weight: 600;">+2.1%</td>
+                                        <td>$0.54</td>
+                                        <td>$0.46</td>
+                                        <td>$51.3K</td>
+                                        <td><button class="btn btn-success">Arbitrage</button></td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Markets Page -->
+                    <div class="page" id="page2">
+                        <div style="margin-bottom: 24px;">
+                            <h2 style="font-size: 18px; font-weight: 600; margin-bottom: 16px;">Active Markets</h2>
+                        </div>
+                        <div class="market-cards-grid">
+                            <div class="market-card">
+                                <div class="market-card-title">Will Trump win the 2024 election?</div>
+                                <div class="price-bar">
+                                    <div class="price-bar-item">
+                                        <div class="price-bar-label">Yes</div>
+                                        <div class="price-bar-value">$0.58</div>
+                                        <div class="price-bar-fill">
+                                            <div class="price-bar-fill-inner" style="width: 58%;"></div>
+                                        </div>
+                                    </div>
+                                    <div class="price-bar-item">
+                                        <div class="price-bar-label">No</div>
+                                        <div class="price-bar-value">$0.42</div>
+                                        <div class="price-bar-fill">
+                                            <div class="price-bar-fill-inner" style="width: 42%;"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div style="font-size: 12px; color: var(--text-2); margin-top: 12px;">Volume: $145.2K</div>
+                            </div>
+                            <div class="market-card">
+                                <div class="market-card-title">Bitcoin above $50k by end of year?</div>
+                                <div class="price-bar">
+                                    <div class="price-bar-item">
+                                        <div class="price-bar-label">Yes</div>
+                                        <div class="price-bar-value">$0.72</div>
+                                        <div class="price-bar-fill">
+                                            <div class="price-bar-fill-inner" style="width: 72%;"></div>
+                                        </div>
+                                    </div>
+                                    <div class="price-bar-item">
+                                        <div class="price-bar-label">No</div>
+                                        <div class="price-bar-value">$0.28</div>
+                                        <div class="price-bar-fill">
+                                            <div class="price-bar-fill-inner" style="width: 28%;"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div style="font-size: 12px; color: var(--text-2); margin-top: 12px;">Volume: $289.5K</div>
+                            </div>
+                            <div class="market-card">
+                                <div class="market-card-title">Federal Reserve will cut rates in 2024?</div>
+                                <div class="price-bar">
+                                    <div class="price-bar-item">
+                                        <div class="price-bar-label">Yes</div>
+                                        <div class="price-bar-value">$0.81</div>
+                                        <div class="price-bar-fill">
+                                            <div class="price-bar-fill-inner" style="width: 81%;"></div>
+                                        </div>
+                                    </div>
+                                    <div class="price-bar-item">
+                                        <div class="price-bar-label">No</div>
+                                        <div class="price-bar-value">$0.19</div>
+                                        <div class="price-bar-fill">
+                                            <div class="price-bar-fill-inner" style="width: 19%;"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div style="font-size: 12px; color: var(--text-2); margin-top: 12px;">Volume: $72.1K</div>
+                            </div>
+                            <div class="market-card">
+                                <div class="market-card-title">S&P 500 above 5500 by year-end?</div>
+                                <div class="price-bar">
+                                    <div class="price-bar-item">
+                                        <div class="price-bar-label">Yes</div>
+                                        <div class="price-bar-value">$0.65</div>
+                                        <div class="price-bar-fill">
+                                            <div class="price-bar-fill-inner" style="width: 65%;"></div>
+                                        </div>
+                                    </div>
+                                    <div class="price-bar-item">
+                                        <div class="price-bar-label">No</div>
+                                        <div class="price-bar-value">$0.35</div>
+                                        <div class="price-bar-fill">
+                                            <div class="price-bar-fill-inner" style="width: 35%;"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div style="font-size: 12px; color: var(--text-2); margin-top: 12px;">Volume: $198.7K</div>
+                            </div>
+                            <div class="market-card">
+                                <div class="market-card-title">Tech IPO surge expected in 2024?</div>
+                                <div class="price-bar">
+                                    <div class="price-bar-item">
+                                        <div class="price-bar-label">Yes</div>
+                                        <div class="price-bar-value">$0.54</div>
+                                        <div class="price-bar-fill">
+                                            <div class="price-bar-fill-inner" style="width: 54%;"></div>
+                                        </div>
+                                    </div>
+                                    <div class="price-bar-item">
+                                        <div class="price-bar-label">No</div>
+                                        <div class="price-bar-value">$0.46</div>
+                                        <div class="price-bar-fill">
+                                            <div class="price-bar-fill-inner" style="width: 46%;"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div style="font-size: 12px; color: var(--text-2); margin-top: 12px;">Volume: $51.3K</div>
+                            </div>
+                            <div class="market-card">
+                                <div class="market-card-title">Inflation below 3% by Q4 2024?</div>
+                                <div class="price-bar">
+                                    <div class="price-bar-item">
+                                        <div class="price-bar-label">Yes</div>
+                                        <div class="price-bar-value">$0.62</div>
+                                        <div class="price-bar-fill">
+                                            <div class="price-bar-fill-inner" style="width: 62%;"></div>
+                                        </div>
+                                    </div>
+                                    <div class="price-bar-item">
+                                        <div class="price-bar-label">No</div>
+                                        <div class="price-bar-value">$0.38</div>
+                                        <div class="price-bar-fill">
+                                            <div class="price-bar-fill-inner" style="width: 38%;"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div style="font-size: 12px; color: var(--text-2); margin-top: 12px;">Volume: $103.4K</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Trades Page -->
+                    <div class="page" id="page3">
+                        <div style="margin-bottom: 16px;">
+                            <h2 style="font-size: 18px; font-weight: 600; margin-bottom: 16px;">Trade History</h2>
+                        </div>
+                        <div class="table-container">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Date</th>
+                                        <th>Market</th>
+                                        <th>Platform</th>
+                                        <th>Type</th>
+                                        <th>Amount</th>
+                                        <th>Price</th>
+                                        <th>P&L</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td>2024-01-15 14:32</td>
+                                        <td>Trump 2024 Win</td>
+                                        <td>Kalshi</td>
+                                        <td><span class="text-success">BUY</span></td>
+                                        <td style="font-family: 'JetBrains Mono', monospace; font-weight: 600;">$500</td>
+                                        <td>$0.55</td>
+                                        <td style="font-family: 'JetBrains Mono', monospace; font-weight: 600;" class="text-success">+$34.50</td>
+                                    </tr>
+                                    <tr>
+                                        <td>2024-01-14 09:21</td>
+                                        <td>Bitcoin $50k EOY</td>
+                                        <td>Polymarket</td>
+                                        <td><span class="text-danger">SELL</span></td>
+                                        <td style="font-family: 'JetBrains Mono', monospace; font-weight: 600;">$750</td>
+                                        <td>$0.68</td>
+                                        <td style="font-family: 'JetBrains Mono', monospace; font-weight: 600;" class="text-success">+$67.20</td>
+                                    </tr>
+                                    <tr>
+                                        <td>2024-01-13 16:45</td>
+                                        <td>Fed Rate Cut 2024</td>
+                                        <td>PredictIt</td>
+                                        <td><span class="text-success">BUY</span></td>
+                                        <td style="font-family: 'JetBrains Mono', monospace; font-weight: 600;">$300</td>
+                                        <td>$0.78</td>
+                                        <td style="font-family: 'JetBrains Mono', monospace; font-weight: 600;" class="text-success">+$12.15</td>
+                                    </tr>
+                                    <tr>
+                                        <td>2024-01-12 11:03</td>
+                                        <td>S&P 500 5500</td>
+                                        <td>Kalshi</td>
+                                        <td><span class="text-danger">SELL</span></td>
+                                        <td style="font-family: 'JetBrains Mono', monospace; font-weight: 600;">$1000</td>
+                                        <td>$0.62</td>
+                                        <td style="font-family: 'JetBrains Mono', monospace; font-weight: 600;" class="text-danger">-$5.80</td>
+                                    </tr>
+                                    <tr>
+                                        <td>2024-01-11 13:28</td>
+                                        <td>Tech IPO 2024</td>
+                                        <td>Polymarket</td>
+                                        <td><span class="text-success">BUY</span></td>
+                                        <td style="font-family: 'JetBrains Mono', monospace; font-weight: 600;">$400</td>
+                                        <td>$0.51</td>
+                                        <td style="font-family: 'JetBrains Mono', monospace; font-weight: 600;" class="text-success">+$8.64</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- System Page -->
+                    <div class="page" id="page4">
+                        <div class="system-cards-grid">
+                            <div class="system-card">
+                                <div class="system-card-label">API Health</div>
+                                <div class="system-card-value">98.7<span class="system-card-unit">%</span></div>
+                            </div>
+                            <div class="system-card">
+                                <div class="system-card-label">Avg Latency</div>
+                                <div class="system-card-value">142<span class="system-card-unit">ms</span></div>
+                            </div>
+                            <div class="system-card">
+                                <div class="system-card-label">Memory Usage</div>
+                                <div class="system-card-value">456<span class="system-card-unit">MB</span></div>
+                            </div>
+                            <div class="system-card">
+                                <div class="system-card-label">Requests/s</div>
+                                <div class="system-card-value">1,245<span class="system-card-unit">/s</span></div>
+                            </div>
+                        </div>
+
+                        <div style="margin-bottom: 32px;">
+                            <h3 style="font-size: 15px; font-weight: 600; margin-bottom: 16px;">Service Status</h3>
+                            <div class="system-status-list">
+                                <div class="system-status-item">
+                                    <div class="system-status-indicator online"></div>
+                                    <div class="system-status-name">Kalshi API</div>
+                                    <div class="system-status-latency">45ms</div>
+                                </div>
+                                <div class="system-status-item">
+                                    <div class="system-status-indicator online"></div>
+                                    <div class="system-status-name">Polymarket API</div>
+                                    <div class="system-status-latency">87ms</div>
+                                </div>
+                                <div class="system-status-item">
+                                    <div class="system-status-indicator online"></div>
+                                    <div class="system-status-name">PredictIt API</div>
+                                    <div class="system-status-latency">156ms</div>
+                                </div>
+                                <div class="system-status-item">
+                                    <div class="system-status-indicator connecting"></div>
+                                    <div class="system-status-name">WebSocket Server</div>
+                                    <div class="system-status-latency">232ms</div>
+                                </div>
+                                <div class="system-status-item">
+                                    <div class="system-status-indicator online"></div>
+                                    <div class="system-status-name">PostgreSQL</div>
+                                    <div class="system-status-latency">12ms</div>
+                                </div>
+                                <div class="system-status-item">
+                                    <div class="system-status-indicator online"></div>
+                                    <div class="system-status-name">Redis Cache</div>
+                                    <div class="system-status-latency">3ms</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div>
+                            <h3 style="font-size: 15px; font-weight: 600; margin-bottom: 16px;">Performance Metrics</h3>
+                            <div class="table-container">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Metric</th>
+                                            <th>Value</th>
+                                            <th>Status</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td>Uptime</td>
+                                            <td style="font-family: 'JetBrains Mono', monospace; font-weight: 600;">99.94%</td>
+                                            <td><span class="status-dot online"></span></td>
+                                        </tr>
+                                        <tr>
+                                            <td>Response Time (p95)</td>
+                                            <td style="font-family: 'JetBrains Mono', monospace; font-weight: 600;">245ms</td>
+                                            <td><span class="status-dot online"></span></td>
+                                        </tr>
+                                        <tr>
+                                            <td>Error Rate</td>
+                                            <td style="font-family: 'JetBrains Mono', monospace; font-weight: 600;">0.02%</td>
+                                            <td><span class="status-dot online"></span></td>
+                                        </tr>
+                                        <tr>
+                                            <td>Cache Hit Rate</td>
+                                            <td style="font-family: 'JetBrains Mono', monospace; font-weight: 600;">92.1%</td>
+                                            <td><span class="status-dot online"></span></td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Logs Page -->
+                    <div class="page" id="page5">
+                        <div class="logs-container">
+                            <div class="logs-toolbar">
+                                <button class="btn btn-primary">Clear Logs</button>
+                                <button class="btn">Export</button>
+                                <input type="text" placeholder="Filter logs..." style="min-width: 300px;">
+                            </div>
+
+                            <div class="logs-viewer">
+                                <div class="log-entry">
+                                    <div class="log-timestamp">2024-01-15 14:32:45</div>
+                                    <div class="log-level success">INFO</div>
+                                    <div class="log-message">Arbitrage opportunity detected on Kalshi (Trump 2024 +2.5%)</div>
+                                </div>
+                                <div class="log-entry">
+                                    <div class="log-timestamp">2024-01-15 14:31:22</div>
+                                    <div class="log-level info">INFO</div>
+                                    <div class="log-message">Connected to Polymarket API. Polling interval: 5s</div>
+                                </div>
+                                <div class="log-entry">
+                                    <div class="log-timestamp">2024-01-15 14:30:01</div>
+                                    <div class="log-level info">INFO</div>
+                                    <div class="log-message">WebSocket connection established</div>
+                                </div>
+                                <div class="log-entry">
+                                    <div class="log-timestamp">2024-01-15 14:29:33</div>
+                                    <div class="log-level warning">WARN</div>
+                                    <div class="log-message">PredictIt API latency high (156ms). Monitoring.</div>
+                                </div>
+                                <div class="log-entry">
+                                    <div class="log-timestamp">2024-01-15 14:28:15</div>
+                                    <div class="log-level success">INFO</div>
+                                    <div class="log-message">Portfolio balances synced. Total: $4,200.75</div>
+                                </div>
+                                <div class="log-entry">
+                                    <div class="log-timestamp">2024-01-15 14:27:42</div>
+                                    <div class="log-level error">ERROR</div>
+                                    <div class="log-message">Failed to fetch market data for ID: MARKET_12345. Retrying...</div>
+                                </div>
+                                <div class="log-entry">
+                                    <div class="log-timestamp">2024-01-15 14:27:00</div>
+                                    <div class="log-level info">INFO</div>
+                                    <div class="log-message">Trade execution: BUY 500 shares at $0.55 (Bitcoin market)</div>
+                                </div>
+                                <div class="log-entry">
+                                    <div class="log-timestamp">2024-01-15 14:26:18</div>
+                                    <div class="log-level warning">WARN</div>
+                                    <div class="log-message">Low liquidity detected on PredictIt. Volume < $5K</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Settings Page -->
+                    <div class="page" id="page6">
+                        <div class="settings-grid">
+                            <div class="settings-group">
+                                <div class="settings-group-title">API Configuration</div>
+                                <div class="settings-item">
+                                    <label class="settings-label">Kalshi API Key</label>
+                                    <input type="password" placeholder="Enter API key" value="sk_live_1234...">
+                                </div>
+                                <div class="settings-item">
+                                    <label class="settings-label">Polymarket API Key</label>
+                                    <input type="password" placeholder="Enter API key" value="pk_prod_5678...">
+                                </div>
+                                <div class="settings-item">
+                                    <label class="settings-label">PredictIt API Key</label>
+                                    <input type="password" placeholder="Enter API key" value="pi_key_9012...">
+                                </div>
+                            </div>
+
+                            <div class="settings-group">
+                                <div class="settings-group-title">Backend Configuration</div>
+                                <div class="settings-item">
+                                    <label class="settings-label">Backend URL</label>
+                                    <input type="text" placeholder="https://api.example.com" value="http://localhost:3000">
+                                </div>
+                                <div class="settings-item">
+                                    <label class="settings-label">WebSocket URL</label>
+                                    <input type="text" placeholder="wss://api.example.com" value="ws://localhost:3000">
+                                </div>
+                                <div class="settings-item">
+                                    <label class="settings-label">Refresh Interval (seconds)</label>
+                                    <input type="number" min="1" max="3600" value="15">
+                                </div>
+                            </div>
+
+                            <div class="settings-group">
+                                <div class="settings-group-title">Trading Parameters</div>
+                                <div class="settings-item">
+                                    <label class="settings-label">Min Spread % to Execute</label>
+                                    <input type="number" min="0" max="100" step="0.1" value="1.5">
+                                </div>
+                                <div class="settings-item">
+                                    <label class="settings-label">Max Trades per Day</label>
+                                    <input type="number" min="1" max="1000" value="100">
+                                </div>
+                                <div class="settings-item">
+                                    <label class="settings-label">Max Position Size ($)</label>
+                                    <input type="number" min="100" max="100000" step="100" value="5000">
+                                </div>
+                            </div>
+
+                            <div class="settings-group">
+                                <div class="settings-group-title">Notifications</div>
+                                <div class="settings-item" style="gap: 12px;">
+                                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                        <input type="checkbox" checked>
+                                        <span class="settings-label" style="margin: 0;">Enable Opportunity Alerts</span>
+                                    </label>
+                                </div>
+                                <div class="settings-item" style="gap: 12px;">
+                                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                        <input type="checkbox" checked>
+                                        <span class="settings-label" style="margin: 0;">Enable Trade Confirmations</span>
+                                    </label>
+                                </div>
+                                <div class="settings-item" style="gap: 12px;">
+                                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                        <input type="checkbox" checked>
+                                        <span class="settings-label" style="margin: 0;">Enable Error Notifications</span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div class="settings-group">
+                                <div class="settings-group-title">Display</div>
+                                <div class="settings-item" style="gap: 12px;">
+                                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                        <input type="checkbox" id="darkThemeToggle">
+                                        <span class="settings-label" style="margin: 0;">Dark Theme (auto-saved)</span>
+                                    </label>
+                                </div>
+                                <div class="settings-item">
+                                    <label class="settings-label">Decimal Places</label>
+                                    <input type="number" min="2" max="8" value="2">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div style="margin-top: 32px; display: flex; gap: 12px;">
+                            <button class="btn btn-primary" onclick="showToast('Settings saved successfully!', 'success')">Save Settings</button>
+                            <button class="btn" onclick="showToast('Settings reset to defaults', 'info')">Reset to Defaults</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- COMMAND PALETTE -->
+    <div class="command-palette" id="commandPalette">
+        <div class="command-palette-content">
+            <input type="text" class="command-palette-input" id="commandInput" placeholder="Type a command..." autocomplete="off">
+            <div class="command-palette-results" id="commandResults"></div>
+        </div>
+    </div>
+
+    <!-- TOAST CONTAINER -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script>
+        // GLOBAL STATE
+        const state = {
+            isLoggedIn: false,
+            currentPage: 0,
+            isDarkTheme: true,
+            isSidebarCollapsed: false,
+            isMobileMenuOpen: false,
+            commandPaletteActive: false,
+            autoRefreshInterval: null
+        };
+
+        // PAGE CONFIGURATION
+        const pages = [
+            { title: 'Dashboard', id: 0 },
+            { title: 'Scanner', id: 1 },
+            { title: 'Markets', id: 2 },
+            { title: 'Trades', id: 3 },
+            { title: 'System', id: 4 },
+            { title: 'Logs', id: 5 },
+            { title: 'Settings', id: 6 }
+        ];
+
+        // INITIALIZATION
+        window.addEventListener('DOMContentLoaded', () => {
+            initializeEventListeners();
+            loadSavedState();
+            setupAutoRefresh();
+            drawCharts();
+        });
+
+        // EVENT LISTENERS
+        function initializeEventListeners() {
+            // Login
+            document.getElementById('loginForm').addEventListener('submit', handleLogin);
+
+            // Sidebar navigation
+            document.querySelectorAll('.sidebar-nav-item').forEach(item => {
+                item.addEventListener('click', handleNavigation);
+            });
+
+            // Sidebar controls
+            document.getElementById('collapseBtn').addEventListener('click', toggleSidebarCollapse);
+            document.getElementById('logoutBtn').addEventListener('click', handleLogout);
+
+            // Mobile menu
+            document.getElementById('hamburgerBtn').addEventListener('click', toggleMobileMenu);
+            document.getElementById('sidebarBackdrop').addEventListener('click', closeMobileMenu);
+            document.querySelectorAll('.sidebar-nav-item').forEach(item => {
+                item.addEventListener('click', closeMobileMenu);
+            });
+
+            // Theme toggle
+            document.getElementById('themeToggle').addEventListener('click', toggleTheme);
+            document.getElementById('themeToggleMobile').addEventListener('click', toggleTheme);
+            document.getElementById('darkThemeToggle').addEventListener('change', (e) => {
+                if (e.target.checked) {
+                    document.body.classList.remove('light-theme');
+                    state.isDarkTheme = true;
+                } else {
+                    document.body.classList.add('light-theme');
+                    state.isDarkTheme = false;
+                }
+                localStorage.setItem('theme', state.isDarkTheme ? 'dark' : 'light');
+                if (state.isLoggedIn && state.currentPage === 0) {
+                    scheduleChartDraw();
+                }
+            });
+
+            // Command palette
+            document.addEventListener('keydown', handleKeydown);
+            document.getElementById('commandInput').addEventListener('input', handleCommandInput);
+            document.getElementById('commandPalette').addEventListener('click', handleCommandPaletteClick);
+        }
+
+        // LOGIN HANDLER
+        function handleLogin(e) {
+            e.preventDefault();
+            const email = document.getElementById('loginEmail').value;
+            const password = document.getElementById('loginPassword').value;
+            const errorDiv = document.getElementById('loginError');
+
+            if (email === 'sparx.sandeep@gmail.com' && password === 'saibaba') {
+                state.isLoggedIn = true;
+                document.getElementById('loginScreen').classList.add('hidden');
+                document.getElementById('mainLayout').style.display = 'flex';
+                updateMobileHeaderVisibility();
+                scheduleChartDraw();
+                showToast('Welcome back, Sandeep!', 'success');
+            } else {
+                errorDiv.textContent = 'Invalid email or password';
+                errorDiv.style.display = 'block';
+            }
+        }
+
+        // NAVIGATION
+        function handleNavigation(e) {
+            const pageNum = parseInt(this.getAttribute('data-page'));
+            goToPage(pageNum);
+        }
+
+        function goToPage(pageNum) {
+            state.currentPage = pageNum;
+            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+            document.getElementById(`page${pageNum}`).classList.add('active');
+
+            document.querySelectorAll('.sidebar-nav-item').forEach(item => {
+                item.classList.remove('active');
+            });
+            document.querySelector(`[data-page="${pageNum}"]`).classList.add('active');
+
+            document.getElementById('pageTitle').textContent = pages[pageNum].title;
+            if (pageNum === 0) {
+                scheduleChartDraw();
+            }
+        }
+
+        // SIDEBAR
+        function toggleSidebarCollapse() {
+            state.isSidebarCollapsed = !state.isSidebarCollapsed;
+            document.getElementById('sidebar').classList.toggle('collapsed');
+        }
+
+        // MOBILE MENU
+        function toggleMobileMenu() {
+            state.isMobileMenuOpen = !state.isMobileMenuOpen;
+            document.getElementById('hamburgerBtn').classList.toggle('active', state.isMobileMenuOpen);
+            document.getElementById('sidebar').classList.toggle('mobile-open', state.isMobileMenuOpen);
+            document.getElementById('sidebarBackdrop').classList.toggle('visible', state.isMobileMenuOpen);
+        }
+
+        function closeMobileMenu() {
+            if (window.innerWidth <= 768) {
+                state.isMobileMenuOpen = false;
+                document.getElementById('hamburgerBtn').classList.remove('active');
+                document.getElementById('sidebar').classList.remove('mobile-open');
+                document.getElementById('sidebarBackdrop').classList.remove('visible');
+            }
+        }
+
+        function updateMobileHeaderVisibility() {
+            const mobileHeader = document.getElementById('mobileHeader');
+            if (window.innerWidth <= 768) {
+                mobileHeader.classList.add('visible');
+            } else {
+                mobileHeader.classList.remove('visible');
+            }
+        }
+
+        window.addEventListener('resize', () => {
+            updateMobileHeaderVisibility();
+            if (window.innerWidth > 768) {
+                closeMobileMenu();
+            }
+            if (state.isLoggedIn && state.currentPage === 0) {
+                scheduleChartDraw();
+            }
+        });
+
+        // THEME
+        function toggleTheme() {
+            state.isDarkTheme = !state.isDarkTheme;
+            document.body.classList.toggle('light-theme');
+            updateThemeIcon();
+            localStorage.setItem('theme', state.isDarkTheme ? 'dark' : 'light');
+            const themeToggle = document.getElementById('darkThemeToggle');
+            if (themeToggle) {
+                themeToggle.checked = state.isDarkTheme;
+            }
+            if (state.isLoggedIn && state.currentPage === 0) {
+                scheduleChartDraw();
+            }
+        }
+
+        function updateThemeIcon() {
+            const icon = state.isDarkTheme ?
+                '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>' :
+                '<circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>';
+            document.getElementById('themeIcon').innerHTML = icon;
+            document.getElementById('themeIconMobile').innerHTML = icon;
+        }
+
+        // KEYBOARD SHORTCUTS
+        function handleKeydown(e) {
+            // Prevent shortcuts in input/textarea
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
+                return;
+            }
+
+            if (e.key === 'Escape') {
+                if (state.commandPaletteActive) {
+                    closeCommandPalette();
+                }
+                return;
+            }
+
+            if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+                e.preventDefault();
+                toggleCommandPalette();
+                return;
+            }
+
+            if (e.key === 't' || e.key === 'T') {
+                toggleTheme();
+                return;
+            }
+
+            // Page shortcuts 1-7
+            if (e.key >= '1' && e.key <= '7') {
+                const pageNum = parseInt(e.key) - 1;
+                if (pageNum < pages.length) {
+                    goToPage(pageNum);
+                }
+            }
+        }
+
+        // COMMAND PALETTE
+        function toggleCommandPalette() {
+            if (state.commandPaletteActive) {
+                closeCommandPalette();
+            } else {
+                openCommandPalette();
+            }
+        }
+
+        function openCommandPalette() {
+            state.commandPaletteActive = true;
+            document.getElementById('commandPalette').classList.add('active');
+            document.getElementById('commandInput').focus();
+            renderCommandResults('');
+        }
+
+        function closeCommandPalette() {
+            state.commandPaletteActive = false;
+            document.getElementById('commandPalette').classList.remove('active');
+            document.getElementById('commandInput').value = '';
+        }
+
+        function handleCommandInput(e) {
+            renderCommandResults(e.target.value.toLowerCase());
+        }
+
+        function renderCommandResults(query) {
+            const results = document.getElementById('commandResults');
+            results.innerHTML = '';
+
+            const commands = [
+                { title: 'Go to Dashboard', shortcut: '1', action: () => goToPage(0) },
+                { title: 'Go to Scanner', shortcut: '2', action: () => goToPage(1) },
+                { title: 'Go to Markets', shortcut: '3', action: () => goToPage(2) },
+                { title: 'Go to Trades', shortcut: '4', action: () => goToPage(3) },
+                { title: 'Go to System', shortcut: '5', action: () => goToPage(4) },
+                { title: 'Go to Logs', shortcut: '6', action: () => goToPage(5) },
+                { title: 'Go to Settings', shortcut: '7', action: () => goToPage(6) },
+                { title: 'Toggle Theme', shortcut: 'T', action: toggleTheme },
+                { title: 'Logout', shortcut: 'Shift+Q', action: handleLogout }
+            ];
+
+            const filtered = query ? commands.filter(c => c.title.toLowerCase().includes(query)) : commands;
+
+            filtered.forEach((cmd, idx) => {
+                const div = document.createElement('div');
+                div.className = 'command-palette-item';
+                if (idx === 0) div.classList.add('active');
+                div.innerHTML = `
+                    <div class="command-palette-item-title">${cmd.title}</div>
+                    <div class="command-palette-item-shortcut">${cmd.shortcut}</div>
+                `;
+                div.addEventListener('click', () => {
+                    cmd.action();
+                    closeCommandPalette();
+                });
+                results.appendChild(div);
+            });
+        }
+
+        function handleCommandPaletteClick(e) {
+            if (e.target === e.currentTarget) {
+                closeCommandPalette();
+            }
+        }
+
+        // LOGOUT
+        function handleLogout() {
+            state.isLoggedIn = false;
+            document.getElementById('loginScreen').classList.remove('hidden');
+            document.getElementById('mainLayout').style.display = 'none';
+            document.getElementById('loginEmail').value = '';
+            document.getElementById('loginPassword').value = '';
+            document.getElementById('loginError').style.display = 'none';
+            showToast('Logged out successfully', 'info');
+            closeCommandPalette();
+            closeMobileMenu();
+        }
+
+        // TOAST NOTIFICATIONS
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.textContent = message;
+            container.appendChild(toast);
+
+            setTimeout(() => {
+                toast.style.animation = 'toastSlide 0.3s cubic-bezier(0.16, 1, 0.3, 1) reverse';
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+
+        // CHARTS
+        function drawCharts() {
+            drawSparkline('sparkline1', [10, 15, 12, 18, 22, 20, 25]);
+            drawSparkline('sparkline2', [20, 22, 19, 24, 26, 23, 24]);
+            drawSparkline('sparkline3', [75, 76, 75, 77, 78, 77, 78]);
+            drawSparkline('sparkline4', [2.5, 2.4, 2.3, 2.4, 2.2, 2.1, 2.3]);
+            drawPNLChart();
+        }
+
+        function scheduleChartDraw() {
+            window.requestAnimationFrame(() => {
+                window.requestAnimationFrame(() => {
+                    drawCharts();
+                });
+            });
+        }
+
+        function drawSparkline(canvasId, data) {
+            const canvas = document.getElementById(canvasId);
+            const ctx = canvas.getContext('2d');
+            const width = canvas.width;
+            const height = canvas.height;
+            const padding = 8;
+
+            ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--bg-2');
+            ctx.fillRect(0, 0, width, height);
+
+            const min = Math.min(...data);
+            const max = Math.max(...data);
+            const range = max - min || 1;
+
+            ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--accent');
+            ctx.globalAlpha = 0.1;
+
+            const pointWidth = (width - padding * 2) / (data.length - 1);
+            const points = data.map((val, i) => ({
+                x: padding + i * pointWidth,
+                y: height - padding - ((val - min) / range) * (height - padding * 2)
+            }));
+
+            ctx.beginPath();
+            ctx.moveTo(points[0].x, height - padding);
+            points.forEach(p => ctx.lineTo(p.x, p.y));
+            ctx.lineTo(points[points.length - 1].x, height - padding);
+            ctx.closePath();
+            ctx.fill();
+
+            ctx.globalAlpha = 1;
+            ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--accent');
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(points[0].x, points[0].y);
+            points.slice(1).forEach(p => ctx.lineTo(p.x, p.y));
+            ctx.stroke();
+        }
+
+        function drawPNLChart() {
+            const canvas = document.getElementById('pnlChart');
+            if (!canvas) return;
+
+            const ctx = canvas.getContext('2d');
+            const width = canvas.offsetWidth || canvas.parentElement?.offsetWidth || 0;
+            if (!width) return;
+            const height = 300;
+            canvas.width = width;
+            canvas.height = height;
+
+            const data = [100, 150, 180, 160, 220, 250, 280, 320, 350, 380, 420, 450];
+            const min = Math.min(...data);
+            const max = Math.max(...data);
+            const range = max - min || 1;
+
+            const padding = 40;
+            ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--accent-soft');
+            ctx.globalAlpha = 0.2;
+
+            const pointWidth = (width - padding * 2) / (data.length - 1);
+            const points = data.map((val, i) => ({
+                x: padding + i * pointWidth,
+                y: height - padding - ((val - min) / range) * (height - padding * 2)
+            }));
+
+            ctx.beginPath();
+            ctx.moveTo(points[0].x, height - padding);
+            points.forEach(p => ctx.lineTo(p.x, p.y));
+            ctx.lineTo(points[points.length - 1].x, height - padding);
+            ctx.closePath();
+            ctx.fill();
+
+            ctx.globalAlpha = 1;
+            ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--accent');
+            ctx.lineWidth = 3;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.beginPath();
+            ctx.moveTo(points[0].x, points[0].y);
+            points.slice(1).forEach(p => ctx.lineTo(p.x, p.y));
+            ctx.stroke();
+        }
+
+        // STATE PERSISTENCE
+        function loadSavedState() {
+            const saved = localStorage.getItem('theme');
+            if (saved === 'light') {
+                state.isDarkTheme = false;
+                document.body.classList.add('light-theme');
+            }
+            const themeToggle = document.getElementById('darkThemeToggle');
+            if (themeToggle) {
+                themeToggle.checked = state.isDarkTheme;
+            }
+            updateThemeIcon();
+        }
+
+        // AUTO REFRESH
+        function setupAutoRefresh() {
+            state.autoRefreshInterval = setInterval(() => {
+                if (state.isLoggedIn && state.currentPage !== 6) {
+                    // In production, this would fetch new data from the backend
+                }
+            }, 15000);
+        }
+
+        // Cleanup
+        window.addEventListener('beforeunload', () => {
+            if (state.autoRefreshInterval) {
+                clearInterval(state.autoRefreshInterval);
+            }
+        });
+    </script>
+</body>
+</html>

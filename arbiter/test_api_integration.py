@@ -58,9 +58,14 @@ def test_api_and_dashboard_contracts():
                 return json.loads(response.read().decode("utf-8"))
 
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5) as response:
-            html = response.read().decode("utf-8")
-        assert "ARBITER LIVE" in html
-        assert "Execution equity" in html
+            public_html = response.read().decode("utf-8")
+        assert "ARBITER - Prediction Market Arbitrage Dashboard" in public_html
+        assert 'id="loginScreen"' in public_html
+
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/ops", timeout=5) as response:
+            ops_html = response.read().decode("utf-8")
+        assert "ARBITER LIVE" in ops_html
+        assert "Execution equity" in ops_html
 
         health = get_json("/api/health")
         assert health["status"] == "ok"
