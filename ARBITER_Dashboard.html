@@ -1,0 +1,1405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>ARBITER — Prediction Market Arbitrage Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg-primary: #0a0e1a;
+            --bg-secondary: #111827;
+            --bg-tertiary: #1a1f35;
+            --text-primary: #f0f4f8;
+            --text-secondary: #b0b8c8;
+            --text-tertiary: #7a8298;
+            --green: #10b981;
+            --rose: #f43f5e;
+            --blue: #3b82f6;
+            --amber: #f59e0b;
+            --border: #2d3548;
+            --glassmorphism: rgba(17, 24, 39, 0.7);
+        }
+
+        html, body {
+            width: 100%;
+            height: 100%;
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            -webkit-font-smoothing: antialiased;
+            overflow: hidden;
+        }
+
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-image: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADIAAADICAYAAACjtH7VAAAAnklEQVRoge3BMQEAAADCoPVPbQhfoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADgbwAZWQECjaYv2QAAAAASUVORK5CYII=');
+            opacity: 0.02;
+            pointer-events: none;
+        }
+
+        main {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            width: 100%;
+            padding-bottom: env(safe-area-inset-bottom);
+        }
+
+        .page-container {
+            flex: 1;
+            overflow-y: auto;
+            overflow-x: hidden;
+            padding: 16px;
+            padding-bottom: 80px;
+            transition: opacity 0.3s ease;
+        }
+
+        .page-container.hidden {
+            display: none;
+        }
+
+        .topbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px;
+            border-bottom: 1px solid var(--border);
+            background: linear-gradient(to bottom, var(--bg-secondary), transparent);
+        }
+
+        .logo {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 20px;
+            font-weight: 600;
+            letter-spacing: 4px;
+            color: var(--blue);
+        }
+
+        .status-badge {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            animation: breathing 2s ease-in-out infinite;
+        }
+
+        .status-dot.live { background: var(--green); }
+        .status-dot.sim { background: var(--amber); }
+        .status-dot.offline { background: var(--rose); }
+
+        @keyframes breathing {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .card {
+            background: var(--glassmorphism);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px;
+            backdrop-filter: blur(10px);
+            transition: all 0.3s ease;
+        }
+
+        .card:hover {
+            border-color: var(--blue);
+            background: rgba(59, 130, 246, 0.05);
+        }
+
+        .balance-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+
+        .balance-card {
+            position: relative;
+            overflow: hidden;
+        }
+
+        .balance-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: var(--blue);
+        }
+
+        .balance-card.kalshi::before { background: #8b5cf6; }
+        .balance-card.polymarket::before { background: #06b6d4; }
+        .balance-card.predictit::before { background: #f59e0b; }
+
+        .balance-label {
+            font-size: 12px;
+            color: var(--text-tertiary);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 8px;
+        }
+
+        .balance-amount {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 28px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .balance-source {
+            font-size: 11px;
+            color: var(--text-tertiary);
+        }
+
+        .metrics-strip {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+
+        .metric {
+            text-align: center;
+            padding: 12px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+
+        .metric-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 24px;
+            font-weight: 600;
+            color: var(--blue);
+        }
+
+        .metric-label {
+            font-size: 11px;
+            color: var(--text-tertiary);
+            margin-top: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .opportunity {
+            margin-bottom: 12px;
+        }
+
+        .opportunity-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 8px;
+        }
+
+        .opportunity-title {
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .opportunity-edge {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .opportunity-edge.profit { color: var(--green); }
+        .opportunity-edge.loss { color: var(--rose); }
+
+        .opportunity-legs {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 8px;
+            flex-wrap: wrap;
+        }
+
+        .leg {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 8px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-size: 11px;
+        }
+
+        .platform-badge {
+            font-weight: 600;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 10px;
+        }
+
+        .platform-badge.kalshi { background: rgba(139, 92, 246, 0.2); color: #c4b5fd; }
+        .platform-badge.polymarket { background: rgba(6, 182, 212, 0.2); color: #a5f3fc; }
+        .platform-badge.predictit { background: rgba(245, 158, 11, 0.2); color: #fcd34d; }
+
+        .leg-price {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 600;
+        }
+
+        .confidence-bar {
+            display: flex;
+            gap: 2px;
+            margin: 8px 0;
+        }
+
+        .confidence-segment {
+            flex: 1;
+            height: 4px;
+            background: var(--bg-tertiary);
+            border-radius: 2px;
+            transition: background 0.3s ease;
+        }
+
+        .confidence-segment.active {
+            background: var(--green);
+        }
+
+        .opportunity-breakdown {
+            font-size: 11px;
+            color: var(--text-tertiary);
+            display: flex;
+            gap: 16px;
+            margin-top: 8px;
+        }
+
+        .breakdown-item {
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .feed-item {
+            display: flex;
+            gap: 12px;
+            padding: 12px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            margin-bottom: 8px;
+            font-size: 12px;
+        }
+
+        .feed-icon {
+            font-size: 20px;
+            flex-shrink: 0;
+        }
+
+        .feed-content {
+            flex: 1;
+        }
+
+        .feed-time {
+            color: var(--text-tertiary);
+            font-size: 10px;
+            margin-top: 4px;
+        }
+
+        .filter-tabs {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 16px;
+            overflow-x: auto;
+            padding-bottom: 8px;
+        }
+
+        .filter-tab {
+            padding: 8px 16px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            white-space: nowrap;
+        }
+
+        .filter-tab.active {
+            background: var(--blue);
+            border-color: var(--blue);
+            color: var(--bg-primary);
+        }
+
+        .collector-card {
+            margin-bottom: 12px;
+        }
+
+        .collector-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+        }
+
+        .collector-name {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 600;
+        }
+
+        .collector-status {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-weight: 600;
+        }
+
+        .status-closed { background: rgba(16, 185, 129, 0.2); color: #6ee7b7; }
+        .status-open { background: rgba(244, 63, 94, 0.2); color: #fb7185; }
+        .status-half-open { background: rgba(245, 158, 11, 0.2); color: #fcd34d; }
+
+        .collector-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px;
+            font-size: 12px;
+        }
+
+        .collector-stat {
+            background: var(--bg-tertiary);
+            padding: 8px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+        }
+
+        .collector-stat-label {
+            color: var(--text-tertiary);
+            font-size: 10px;
+            margin-bottom: 2px;
+        }
+
+        .collector-stat-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 600;
+        }
+
+        .error-item {
+            padding: 12px;
+            border-left: 3px solid;
+            border-radius: 6px;
+            margin-bottom: 8px;
+            background: var(--bg-tertiary);
+            font-size: 12px;
+        }
+
+        .error-item.severe { border-left-color: var(--rose); }
+        .error-item.warning { border-left-color: var(--amber); }
+        .error-item.info { border-left-color: var(--blue); }
+
+        .error-time {
+            color: var(--text-tertiary);
+            font-size: 10px;
+            margin-top: 4px;
+        }
+
+        .execution-banner {
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            font-weight: 600;
+            text-align: center;
+            font-size: 13px;
+        }
+
+        .execution-banner.dry {
+            background: rgba(245, 158, 11, 0.1);
+            border: 1px solid var(--amber);
+            color: #fcd34d;
+        }
+
+        .execution-banner.live {
+            background: rgba(16, 185, 129, 0.1);
+            border: 1px solid var(--green);
+            color: #6ee7b7;
+        }
+
+        .trade-item {
+            padding: 12px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            margin-bottom: 8px;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .trade-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+
+        .trade-status {
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 600;
+        }
+
+        .trade-status.executed { background: rgba(16, 185, 129, 0.2); color: #6ee7b7; }
+        .trade-status.failed { background: rgba(244, 63, 94, 0.2); color: #fb7185; }
+        .trade-status.simulated { background: rgba(245, 158, 11, 0.2); color: #fcd34d; }
+
+        .trade-pnl {
+            text-align: right;
+        }
+
+        .trade-pnl.profit { color: var(--green); }
+        .trade-pnl.loss { color: var(--rose); }
+
+        .settings-group {
+            margin-bottom: 24px;
+        }
+
+        .settings-title {
+            font-weight: 600;
+            margin-bottom: 12px;
+            color: var(--text-secondary);
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .setting-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            margin-bottom: 8px;
+        }
+
+        .setting-label {
+            font-weight: 500;
+        }
+
+        .setting-description {
+            font-size: 11px;
+            color: var(--text-tertiary);
+            margin-top: 2px;
+        }
+
+        .toggle {
+            width: 40px;
+            height: 24px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            cursor: pointer;
+            position: relative;
+            transition: all 0.3s ease;
+        }
+
+        .toggle.on {
+            background: var(--green);
+            border-color: var(--green);
+        }
+
+        .toggle::after {
+            content: '';
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            background: white;
+            border-radius: 50%;
+            top: 2px;
+            left: 2px;
+            transition: left 0.3s ease;
+        }
+
+        .toggle.on::after {
+            left: 18px;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .setting-input {
+            width: 80px;
+            padding: 6px 8px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-primary);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            text-align: right;
+        }
+
+        .setting-unit {
+            font-size: 11px;
+            color: var(--text-tertiary);
+            min-width: 20px;
+        }
+
+        .bottom-nav {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            display: flex;
+            justify-content: space-around;
+            align-items: center;
+            background: linear-gradient(to top, var(--bg-primary), transparent);
+            border-top: 1px solid var(--border);
+            padding: 8px 0 max(8px, env(safe-area-inset-bottom));
+            z-index: 1000;
+        }
+
+        .nav-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+            padding: 8px 16px;
+            cursor: pointer;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+            position: relative;
+            font-size: 11px;
+            color: var(--text-tertiary);
+        }
+
+        .nav-item.active {
+            color: var(--blue);
+        }
+
+        .nav-icon {
+            font-size: 20px;
+        }
+
+        .nav-badge {
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 16px;
+            height: 16px;
+            background: var(--rose);
+            border-radius: 50%;
+            font-size: 9px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--text-tertiary);
+        }
+
+        .empty-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+        }
+
+        .toast-container {
+            position: fixed;
+            top: 16px;
+            left: 16px;
+            right: 16px;
+            z-index: 2000;
+            pointer-events: none;
+        }
+
+        .toast {
+            padding: 12px 16px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            margin-bottom: 8px;
+            font-size: 12px;
+            animation: slideDown 0.3s ease;
+            pointer-events: auto;
+        }
+
+        .toast.success {
+            border-left: 3px solid var(--green);
+        }
+
+        .toast.error {
+            border-left: 3px solid var(--rose);
+        }
+
+        .toast.warning {
+            border-left: 3px solid var(--amber);
+        }
+
+        @keyframes slideDown {
+            from {
+                transform: translateY(-20px);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .balance-row {
+                grid-template-columns: 1fr;
+            }
+
+            .metrics-strip {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .collector-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @keyframes flashGreen {
+            0%, 100% { background: transparent; }
+            50% { background: rgba(16, 185, 129, 0.2); }
+        }
+
+        @keyframes flashRed {
+            0%, 100% { background: transparent; }
+            50% { background: rgba(244, 63, 94, 0.2); }
+        }
+
+        .flash-up { animation: flashGreen 0.5s ease; }
+        .flash-down { animation: flashRed 0.5s ease; }
+
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 3px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--text-tertiary);
+        }
+    </style>
+</head>
+<body>
+    <main>
+        <div class="topbar">
+            <div class="logo">ARBITER</div>
+            <div class="status-badge">
+                <div class="status-dot live" id="statusDot"></div>
+                <span id="statusText">LIVE</span>
+                <span id="uptime" style="font-size: 10px; margin-left: 4px;"></span>
+            </div>
+        </div>
+
+        <div class="page-container" id="page-dashboard">
+            <div style="margin-bottom: 20px;">
+                <h2 style="font-size: 14px; color: var(--text-secondary); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px;">Platform Balances</h2>
+                <div class="balance-row">
+                    <div class="card balance-card kalshi">
+                        <div class="balance-label">Kalshi</div>
+                        <div class="balance-amount" id="balance-kalshi">—</div>
+                        <div class="balance-source" id="source-kalshi">NOT SET</div>
+                    </div>
+                    <div class="card balance-card polymarket">
+                        <div class="balance-label">Polymarket</div>
+                        <div class="balance-amount" id="balance-polymarket">—</div>
+                        <div class="balance-source" id="source-polymarket">NOT SET</div>
+                    </div>
+                    <div class="card balance-card predictit">
+                        <div class="balance-label">PredictIt</div>
+                        <div class="balance-amount" id="balance-predictit">—</div>
+                        <div class="balance-source" id="source-predictit">NOT SET</div>
+                    </div>
+                </div>
+            </div>
+
+            <div style="margin-bottom: 20px;">
+                <h2 style="font-size: 14px; color: var(--text-secondary); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px;">Key Metrics</h2>
+                <div class="metrics-strip">
+                    <div class="metric">
+                        <div class="metric-value" id="metric-scans">0</div>
+                        <div class="metric-label">Total Scans</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-value" id="metric-scanrate">0</div>
+                        <div class="metric-label">Scans/sec</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-value" id="metric-opps">0</div>
+                        <div class="metric-label">Opportunities</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-value" id="metric-profit">$0</div>
+                        <div class="metric-label">Total Profit</div>
+                    </div>
+                </div>
+            </div>
+
+            <div style="margin-bottom: 20px;">
+                <h2 style="font-size: 14px; color: var(--text-secondary); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px;">Top Opportunities</h2>
+                <div id="top-opportunities"></div>
+            </div>
+
+            <div>
+                <h2 style="font-size: 14px; color: var(--text-secondary); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px;">Recent Activity</h2>
+                <div id="activity-feed"></div>
+            </div>
+        </div>
+
+        <div class="page-container hidden" id="page-scanner">
+            <h2 style="font-size: 14px; color: var(--text-secondary); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px;">Scanner</h2>
+            <div class="filter-tabs">
+                <div class="filter-tab active" data-filter="all">All</div>
+                <div class="filter-tab" data-filter="profitable">Profitable</div>
+                <div class="filter-tab" data-filter="cross">Cross-Platform</div>
+                <div class="filter-tab" data-filter="within">Within-Platform</div>
+            </div>
+            <div id="scanner-opportunities"></div>
+        </div>
+
+        <div class="page-container hidden" id="page-system">
+            <h2 style="font-size: 14px; color: var(--text-secondary); margin-bottom: 16px; text-transform: uppercase; letter-spacing: 1px;">Collector Health</h2>
+            <div id="collector-health"></div>
+
+            <h2 style="font-size: 14px; color: var(--text-secondary); margin-top: 24px; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px;">WebSocket Status</h2>
+            <div class="card">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                    <span id="ws-status" style="color: var(--text-tertiary); font-size: 12px;">CONNECTING...</span>
+                </div>
+                <div style="font-size: 11px; color: var(--text-tertiary); display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px;">
+                    <div>Messages Received: <span id="ws-messages" style="color: var(--blue); font-weight: 600;">0</span></div>
+                    <div>Reconnection Count: <span id="ws-reconnects" style="color: var(--blue); font-weight: 600;">0</span></div>
+                </div>
+            </div>
+
+            <h2 style="font-size: 14px; color: var(--text-secondary); margin-top: 24px; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px;">System Resources</h2>
+            <div class="card">
+                <div style="font-size: 11px; color: var(--text-tertiary); display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                    <div>Uptime: <span id="sys-uptime" style="color: var(--blue); font-weight: 600;">—</span></div>
+                    <div>Memory: <span id="sys-memory" style="color: var(--blue); font-weight: 600;">—</span></div>
+                </div>
+            </div>
+
+            <h2 style="font-size: 14px; color: var(--text-secondary); margin-top: 24px; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px;">API Keys Status</h2>
+            <div id="api-keys-status"></div>
+
+            <h2 style="font-size: 14px; color: var(--text-secondary); margin-top: 24px; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px;">Error Feed</h2>
+            <div id="error-feed"></div>
+        </div>
+
+        <div class="page-container hidden" id="page-trades">
+            <div class="execution-banner dry" id="execution-banner">DRY RUN MODE — No real trades will execute</div>
+
+            <h2 style="font-size: 14px; color: var(--text-secondary); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px;">Trade Execution Log</h2>
+            <div id="trades-log"></div>
+
+            <h2 style="font-size: 14px; color: var(--text-secondary); margin-top: 20px; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px;">Statistics</h2>
+            <div class="card">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 12px;">
+                    <div style="border-right: 1px solid var(--border); padding-right: 12px;">
+                        <div style="color: var(--text-tertiary); margin-bottom: 4px;">Total Trades</div>
+                        <div style="font-family: 'JetBrains Mono', monospace; font-size: 18px; font-weight: 600;" id="stats-total">0</div>
+                    </div>
+                    <div>
+                        <div style="color: var(--text-tertiary); margin-bottom: 4px;">Total PnL</div>
+                        <div style="font-family: 'JetBrains Mono', monospace; font-size: 18px; font-weight: 600;" id="stats-pnl">$0</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="page-container hidden" id="page-settings">
+            <div class="settings-group">
+                <div class="settings-title">Execution</div>
+                <div class="setting-row">
+                    <div>
+                        <div class="setting-label">Dry Run Mode</div>
+                        <div class="setting-description">Scan but don't execute trades</div>
+                    </div>
+                    <div class="toggle on" id="toggle-dryrun"></div>
+                </div>
+                <div class="setting-row">
+                    <div>
+                        <div class="setting-label">Auto-Execute</div>
+                        <div class="setting-description">Execute opportunities automatically</div>
+                    </div>
+                    <div class="toggle" id="toggle-autoexec"></div>
+                </div>
+            </div>
+
+            <div class="settings-group">
+                <div class="settings-title">Alerts</div>
+                <div class="setting-row">
+                    <div>
+                        <div class="setting-label">Sound Alerts</div>
+                        <div class="setting-description">Play sound for new opportunities</div>
+                    </div>
+                    <div class="toggle" id="toggle-sound"></div>
+                </div>
+            </div>
+
+            <div class="settings-group">
+                <div class="settings-title">Scanning Parameters</div>
+                <div class="setting-row">
+                    <div>
+                        <div class="setting-label">Min Edge</div>
+                        <div class="setting-description">Minimum profit threshold</div>
+                    </div>
+                    <div class="input-group">
+                        <input type="number" class="setting-input" id="input-min-edge" value="1" min="0" step="0.1">
+                        <div class="setting-unit">¢</div>
+                    </div>
+                </div>
+                <div class="setting-row">
+                    <div>
+                        <div class="setting-label">Max Position</div>
+                        <div class="setting-description">Maximum position size</div>
+                    </div>
+                    <div class="input-group">
+                        <input type="number" class="setting-input" id="input-max-pos" value="500" min="1" step="10">
+                        <div class="setting-unit">$</div>
+                    </div>
+                </div>
+                <div class="setting-row">
+                    <div>
+                        <div class="setting-label">Scan Interval</div>
+                        <div class="setting-description">Time between scans</div>
+                    </div>
+                    <div class="input-group">
+                        <input type="number" class="setting-input" id="input-interval" value="2" min="1" step="1">
+                        <div class="setting-unit">s</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="settings-group">
+                <div class="settings-title">API Keys</div>
+                <div id="settings-api-keys"></div>
+            </div>
+
+            <div class="settings-group">
+                <div class="settings-title">About</div>
+                <div class="card">
+                    <div style="font-size: 12px; color: var(--text-secondary);">
+                        <div style="margin-bottom: 8px;"><strong>ARBITER v1.0</strong></div>
+                        <div style="color: var(--text-tertiary); font-size: 11px;">Prediction Market Arbitrage System</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="bottom-nav">
+            <div class="nav-item active" data-page="dashboard">
+                <div class="nav-icon">📊</div>
+                <div>Dashboard</div>
+            </div>
+            <div class="nav-item" data-page="scanner">
+                <div class="nav-icon">🔍</div>
+                <div>Scanner</div>
+            </div>
+            <div class="nav-item" data-page="system">
+                <div class="nav-icon">⚙️</div>
+                <div>System</div>
+                <div class="nav-badge" id="system-badge" style="display: none;">0</div>
+            </div>
+            <div class="nav-item" data-page="trades">
+                <div class="nav-icon">💱</div>
+                <div>Trades</div>
+            </div>
+            <div class="nav-item" data-page="settings">
+                <div class="nav-icon">⚡</div>
+                <div>Settings</div>
+            </div>
+        </div>
+    </main>
+
+    <div class="toast-container" id="toast-container"></div>
+
+    <script>
+        const API = 'http://localhost:8080';
+        const WS_URL = 'ws://localhost:8080/ws';
+
+        const state = {
+            mode: 'live',
+            uptime: 0,
+            balances: { kalshi: 0, polymarket: 0, predictit: 0 },
+            balanceSources: { kalshi: 'NOT SET', polymarket: 'NOT SET', predictit: 'NOT SET' },
+            stats: { scans: 0, scanRate: 0, opportunities: 0, totalProfit: 0 },
+            opportunities: [],
+            activities: [],
+            errors: [],
+            trades: [],
+            collectors: { kalshi: {}, polymarket: {}, predictit: {} },
+            ws: null,
+            wsConnected: false,
+            wsMessages: 0,
+            wsReconnects: 0,
+            systemUptime: 0,
+            dryRun: true,
+            autoExecute: false,
+            soundAlerts: false,
+            minEdge: 1,
+            maxPos: 500,
+            scanInterval: 2,
+        };
+
+        function formatTimeAgo(timestamp) {
+            if (!timestamp) return 'now';
+            const diff = Date.now() - new Date(timestamp).getTime();
+            const secs = Math.floor(diff / 1000);
+            if (secs < 60) return `${secs}s ago`;
+            const mins = Math.floor(secs / 60);
+            if (mins < 60) return `${mins}m ago`;
+            const hours = Math.floor(mins / 60);
+            return `${hours}h ago`;
+        }
+
+        function initWebSocket() {
+            if (state.ws) state.ws.close();
+            let reconnectDelay = 1000;
+            let reconnectAttempts = 0;
+            const maxAttempts = 20;
+
+            function connect() {
+                if (reconnectAttempts >= maxAttempts) {
+                    state.mode = 'sim';
+                    updateStatusBadge();
+                    return;
+                }
+
+                try {
+                    state.ws = new WebSocket(WS_URL);
+                    state.ws.onopen = () => {
+                        state.wsConnected = true;
+                        state.wsReconnects++;
+                        reconnectAttempts = 0;
+                        reconnectDelay = 1000;
+                        updateStatusBadge();
+                        updateSystemPage();
+                    };
+                    state.ws.onmessage = (e) => {
+                        state.wsMessages++;
+                        try {
+                            const data = JSON.parse(e.data);
+                            handleWSMessage(data);
+                        } catch (err) {
+                            console.error('WS parse error:', err);
+                        }
+                        updateSystemPage();
+                    };
+                    state.ws.onclose = () => {
+                        state.wsConnected = false;
+                        scheduleReconnect();
+                    };
+                    state.ws.onerror = () => {
+                        scheduleReconnect();
+                    };
+                } catch (err) {
+                    scheduleReconnect();
+                }
+            }
+
+            function scheduleReconnect() {
+                reconnectAttempts++;
+                const delay = Math.min(reconnectDelay * Math.pow(1.5, reconnectAttempts), 30000);
+                setTimeout(connect, delay);
+                reconnectDelay = delay;
+            }
+
+            connect();
+        }
+
+        function handleWSMessage(data) {
+            if (data.type === 'prices') {
+                state.opportunities = data.opportunities || [];
+                renderDashboard();
+                renderScanner();
+            } else if (data.type === 'stats') {
+                state.stats = data.stats || state.stats;
+                renderDashboard();
+            }
+        }
+
+        async function fetchRetry(url, options = {}, maxRetries = 3) {
+            let delay = 1000;
+            for (let i = 0; i < maxRetries; i++) {
+                try {
+                    const response = await fetch(url, options);
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    return await response.json();
+                } catch (err) {
+                    if (i === maxRetries - 1) {
+                        addError('error', `API failed: ${url}`, new Date());
+                        state.mode = 'sim';
+                        updateStatusBadge();
+                        return null;
+                    }
+                    await new Promise(r => setTimeout(r, delay));
+                    delay *= 2;
+                }
+            }
+        }
+
+        async function pollBalances() {
+            if (state.mode === 'live' && state.wsConnected) {
+                const data = await fetchRetry(`${API}/api/balances`);
+                if (data) {
+                    state.balances = data.balances || state.balances;
+                    state.balanceSources = data.sources || state.balanceSources;
+                    renderDashboard();
+                }
+            }
+        }
+
+        async function pollSystem() {
+            if (state.mode === 'live') {
+                const data = await fetchRetry(`${API}/api/system`);
+                if (data) {
+                    state.collectors = data.collectors || state.collectors;
+                    state.systemUptime = data.uptime || 0;
+                    updateSystemPage();
+                }
+            }
+        }
+
+        async function pollErrors() {
+            const data = await fetchRetry(`${API}/api/errors`);
+            if (data && data.errors) {
+                state.errors = data.errors;
+                updateSystemPage();
+                if (state.errors.length > 0) {
+                    document.getElementById('system-badge').textContent = state.errors.length;
+                    document.getElementById('system-badge').style.display = 'flex';
+                } else {
+                    document.getElementById('system-badge').style.display = 'none';
+                }
+            }
+        }
+
+        function simulateSystem() {
+            if (state.mode !== 'sim') return;
+
+            state.balances.kalshi = 1000 + Math.random() * 500;
+            state.balances.polymarket = 1500 + Math.random() * 600;
+            state.balances.predictit = 800 + Math.random() * 400;
+
+            state.stats.scans += Math.floor(Math.random() * 10) + 5;
+            state.stats.scanRate = (Math.random() * 5 + 2).toFixed(2);
+            if (Math.random() > 0.7) {
+                state.stats.opportunities = Math.max(0, state.stats.opportunities - 1 + Math.floor(Math.random() * 3));
+            }
+            state.stats.totalProfit = (state.stats.opportunities * 0.5).toFixed(2);
+
+            if (Math.random() > 0.6) {
+                state.opportunities = [
+                    {
+                        market: 'BTC > $100k by month-end',
+                        edge: Math.floor(Math.random() * 5) + 1,
+                        legs: [
+                            { platform: 'Kalshi', side: 'YES', price: 0.62 },
+                            { platform: 'Polymarket', side: 'NO', price: 0.35 }
+                        ],
+                        confidence: Math.floor(Math.random() * 5) + 1,
+                        profit: Math.floor(Math.random() * 200) + 50
+                    }
+                ];
+            }
+
+            if (Math.random() > 0.85) {
+                state.activities.unshift({
+                    type: 'opp_found',
+                    message: 'Profitable opportunity found: BTC market',
+                    timestamp: new Date().toISOString()
+                });
+                if (state.activities.length > 10) state.activities.pop();
+            }
+
+            renderDashboard();
+            renderScanner();
+        }
+
+        function addError(severity, message, timestamp) {
+            state.errors.unshift({ severity, message, timestamp: timestamp || new Date().toISOString() });
+            if (state.errors.length > 20) state.errors.pop();
+            updateSystemPage();
+        }
+
+        function showToast(type, message) {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.textContent = message;
+            container.appendChild(toast);
+            setTimeout(() => toast.remove(), 5000);
+        }
+
+        function renderDashboard() {
+            document.getElementById('balance-kalshi').textContent = `$${state.balances.kalshi.toFixed(0)}`;
+            document.getElementById('balance-polymarket').textContent = `$${state.balances.polymarket.toFixed(0)}`;
+            document.getElementById('balance-predictit').textContent = `$${state.balances.predictit.toFixed(0)}`;
+            document.getElementById('source-kalshi').textContent = state.balanceSources.kalshi;
+            document.getElementById('source-polymarket').textContent = state.balanceSources.polymarket;
+            document.getElementById('source-predictit').textContent = state.balanceSources.predictit;
+
+            document.getElementById('metric-scans').textContent = state.stats.scans;
+            document.getElementById('metric-scanrate').textContent = state.stats.scanRate;
+            document.getElementById('metric-opps').textContent = state.stats.opportunities;
+            document.getElementById('metric-profit').textContent = `$${state.stats.totalProfit}`;
+
+            const topOppContainer = document.getElementById('top-opportunities');
+            topOppContainer.innerHTML = state.opportunities.slice(0, 3).map(opp => `
+                <div class="card opportunity">
+                    <div class="opportunity-header">
+                        <div class="opportunity-title">${opp.market}</div>
+                        <div class="opportunity-edge ${opp.edge > 0 ? 'profit' : 'loss'}">${opp.edge > 0 ? '+' : ''}${opp.edge}¢</div>
+                    </div>
+                    <div class="opportunity-legs">
+                        ${opp.legs.map(leg => `<div class="leg"><div class="platform-badge ${leg.platform.toLowerCase()}">${leg.platform}</div><div>${leg.side}</div><div class="leg-price">${(leg.price * 100).toFixed(0)}¢</div></div>`).join('')}
+                    </div>
+                    <div class="confidence-bar">
+                        ${Array(5).fill(0).map((_, i) => `<div class="confidence-segment ${i < opp.confidence ? 'active' : ''}"></div>`).join('')}
+                    </div>
+                    <div class="opportunity-breakdown">
+                        <div class="breakdown-item">Est. Profit: <strong style="color: var(--green);">+$${opp.profit}</strong></div>
+                    </div>
+                </div>
+            `).join('') || '<div class="empty-state"><div class="empty-icon">🔍</div><p>No opportunities found</p></div>';
+
+            const activityContainer = document.getElementById('activity-feed');
+            activityContainer.innerHTML = state.activities.slice(0, 10).map(act => `
+                <div class="feed-item">
+                    <div class="feed-icon">${act.type === 'opp_found' ? '✨' : act.type === 'trade' ? '💱' : '⚠️'}</div>
+                    <div class="feed-content">
+                        <div>${act.message}</div>
+                        <div class="feed-time">${formatTimeAgo(act.timestamp)}</div>
+                    </div>
+                </div>
+            `).join('') || '<div class="empty-state"><p style="font-size: 12px;">No activity yet</p></div>';
+        }
+
+        function renderScanner() {
+            const container = document.getElementById('scanner-opportunities');
+            container.innerHTML = state.opportunities.map(opp => `
+                <div class="card opportunity">
+                    <div class="opportunity-header">
+                        <div class="opportunity-title" style="flex: 1;">${opp.market}</div>
+                        <div class="opportunity-edge ${opp.edge > 0 ? 'profit' : 'loss'}" style="font-size: 24px;">${opp.edge > 0 ? '+' : ''}${opp.edge}¢</div>
+                    </div>
+                    <div style="font-size: 11px; color: var(--text-tertiary); margin-bottom: 8px;">Gross: ${opp.legs.map(l => (l.price * 100).toFixed(1)).join('/')}, Fees: 0.7-2.1%, Net: ${opp.edge}¢</div>
+                    <div class="opportunity-legs">
+                        ${opp.legs.map(leg => `<div class="leg"><div class="platform-badge ${leg.platform.toLowerCase()}">${leg.platform}</div><div>${leg.side}</div><div class="leg-price">${(leg.price * 100).toFixed(0)}¢</div></div>`).join('')}
+                    </div>
+                    <div class="confidence-bar">
+                        ${Array(5).fill(0).map((_, i) => `<div class="confidence-segment ${i < opp.confidence ? 'active' : ''}"></div>`).join('')}
+                    </div>
+                </div>
+            `).join('') || '<div class="empty-state"><div class="empty-icon">🔍</div><p>No opportunities match filter</p></div>';
+        }
+
+        function updateSystemPage() {
+            const healthContainer = document.getElementById('collector-health');
+            healthContainer.innerHTML = ['kalshi', 'polymarket', 'predictit'].map(platform => {
+                const collector = state.collectors[platform] || {};
+                const status = collector.circuitBreakerState || 'UNKNOWN';
+                let statusClass = status === 'CLOSED' ? 'status-closed' : status === 'OPEN' ? 'status-open' : 'status-half-open';
+                return `
+                    <div class="card collector-card">
+                        <div class="collector-header">
+                            <div class="collector-name">
+                                <div class="status-dot" style="width: 8px; height: 8px; background: ${platform === 'kalshi' ? '#8b5cf6' : platform === 'polymarket' ? '#06b6d4' : '#f59e0b'};"></div>
+                                <span>${platform.charAt(0).toUpperCase() + platform.slice(1)}</span>
+                            </div>
+                            <div class="collector-status ${statusClass.split('-')[1]}">${status}</div>
+                        </div>
+                        <div class="collector-grid">
+                            <div class="collector-stat">
+                                <div class="collector-stat-label">Errors</div>
+                                <div class="collector-stat-value">${collector.errorCount || 0}</div>
+                            </div>
+                            <div class="collector-stat">
+                                <div class="collector-stat-label">Success</div>
+                                <div class="collector-stat-value">${collector.successCount || 0}</div>
+                            </div>
+                            <div class="collector-stat">
+                                <div class="collector-stat-label">Rate Limiter</div>
+                                <div class="collector-stat-value" style="font-size: 11px;">${collector.rateLimiter || 'OK'}</div>
+                            </div>
+                            <div class="collector-stat">
+                                <div class="collector-stat-label">Last Success</div>
+                                <div class="collector-stat-value" style="font-size: 11px;">${formatTimeAgo(collector.lastSuccess)}</div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            document.getElementById('ws-status').textContent = state.wsConnected ? 'CONNECTED' : 'RECONNECTING';
+            document.getElementById('ws-messages').textContent = state.wsMessages;
+            document.getElementById('ws-reconnects').textContent = state.wsReconnects;
+
+            const hours = Math.floor(state.systemUptime / 3600);
+            const mins = Math.floor((state.systemUptime % 3600) / 60);
+            document.getElementById('sys-uptime').textContent = `${hours}h ${mins}m`;
+            document.getElementById('sys-memory').textContent = '—';
+
+            const errorContainer = document.getElementById('error-feed');
+            if (state.errors.length === 0) {
+                errorContainer.innerHTML = '<div class="empty-state"><div style="font-size: 20px; margin-bottom: 8px;">✓</div><p>No errors — system healthy</p></div>';
+            } else {
+                errorContainer.innerHTML = state.errors.slice(0, 15).map(err => `
+                    <div class="error-item ${err.severity}">
+                        <strong>${err.message}</strong>
+                        <div class="error-time">${formatTimeAgo(err.timestamp)}</div>
+                    </div>
+                `).join('');
+            }
+
+            const apiKeysContainer = document.getElementById('api-keys-status');
+            apiKeysContainer.innerHTML = `
+                <div class="card" style="font-size: 12px;">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border);">
+                        <span>Kalshi</span>
+                        <span style="color: var(--green);">Connected</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border);">
+                        <span>Polymarket</span>
+                        <span style="color: var(--green);">Connected</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between;">
+                        <span>PredictIt</span>
+                        <span style="color: var(--text-tertiary);">Public API</span>
+                    </div>
+                </div>
+            `;
+
+            const settingsApiContainer = document.getElementById('settings-api-keys');
+            settingsApiContainer.innerHTML = `
+                <div class="setting-row">
+                    <div>
+                        <div class="setting-label">Kalshi API</div>
+                        <div class="setting-description">Key: ••••••••••</div>
+                    </div>
+                </div>
+                <div class="setting-row">
+                    <div>
+                        <div class="setting-label">Polymarket Wallet</div>
+                        <div class="setting-description">0x••••••</div>
+                    </div>
+                </div>
+                <div class="setting-row">
+                    <div>
+                        <div class="setting-label">PredictIt</div>
+                        <div class="setting-description">Public API (no auth)</div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function updateStatusBadge() {
+            const dot = document.getElementById('statusDot');
+            const text = document.getElementById('statusText');
+            if (state.mode === 'live' && state.wsConnected) {
+                dot.className = 'status-dot live';
+                text.textContent = 'LIVE';
+            } else if (state.mode === 'sim') {
+                dot.className = 'status-dot sim';
+                text.textContent = 'SIM';
+            } else {
+                dot.className = 'status-dot offline';
+                text.textContent = 'OFFLINE';
+            }
+        }
+
+        document.querySelectorAll('.nav-item').forEach(item => {
+            item.addEventListener('click', () => {
+                const page = item.dataset.page;
+                document.querySelectorAll('.page-container').forEach(p => p.classList.add('hidden'));
+                document.getElementById(`page-${page}`).classList.remove('hidden');
+                document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+                item.classList.add('active');
+            });
+        });
+
+        document.getElementById('toggle-dryrun').addEventListener('click', function() {
+            this.classList.toggle('on');
+            state.dryRun = this.classList.contains('on');
+            document.getElementById('execution-banner').className = `execution-banner ${state.dryRun ? 'dry' : 'live'}`;
+            document.getElementById('execution-banner').textContent = state.dryRun ? 'DRY RUN MODE — No real trades will execute' : 'LIVE MODE — Executing trades';
+        });
+
+        document.getElementById('toggle-autoexec').addEventListener('click', function() {
+            this.classList.toggle('on');
+            state.autoExecute = this.classList.contains('on');
+        });
+
+        document.getElementById('toggle-sound').addEventListener('click', function() {
+            this.classList.toggle('on');
+            state.soundAlerts = this.classList.contains('on');
+        });
+
+        document.getElementById('input-min-edge').addEventListener('change', e => state.minEdge = parseFloat(e.target.value));
+        document.getElementById('input-max-pos').addEventListener('change', e => state.maxPos = parseFloat(e.target.value));
+        document.getElementById('input-interval').addEventListener('change', e => state.scanInterval = parseFloat(e.target.value));
+
+        document.querySelectorAll('.filter-tab').forEach(tab => {
+            tab.addEventListener('click', function() {
+                document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
+                this.classList.add('active');
+                renderScanner();
+            });
+        });
+
+        setInterval(() => {
+            state.uptime++;
+            const hours = Math.floor(state.uptime / 3600);
+            const mins = Math.floor((state.uptime % 3600) / 60);
+            document.getElementById('uptime').textContent = `${hours}h ${mins}m`;
+        }, 1000);
+
+        window.addEventListener('load', () => {
+            initWebSocket();
+            setInterval(pollBalances, 5000);
+            setInterval(pollSystem, 5000);
+            setInterval(pollErrors, 3000);
+            setInterval(simulateSystem, 3000);
+            updateStatusBadge();
+            renderDashboard();
+            updateSystemPage();
+        });
+    </script>
+</body>
+</html>
