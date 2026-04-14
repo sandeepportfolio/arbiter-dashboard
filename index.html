@@ -1656,6 +1656,8 @@
       <input type="email" class="auth-input" id="authEmail" placeholder="Email" autocomplete="email">
       <input type="password" class="auth-input" id="authPassword" placeholder="Password" autocomplete="current-password">
       <button class="auth-button" id="authSubmit">Sign In</button>
+      <button class="auth-button" style="margin-top:8px;background:transparent;border:1px solid var(--bg-3);color:var(--text-1);cursor:not-allowed;opacity:0.5;" disabled onclick="return false;" title="Sign ups are not currently available">Sign Up</button>
+      <p style="text-align:center;margin-top:12px;font-size:12px;color:var(--text-2);">Sign ups are not available at this time.</p>
     </div>
   </div>
 
@@ -2088,7 +2090,7 @@
           return;
         }
 
-        if (email === 'sparx.sandeep@gmail.com' && password === 'password123') {
+        if (email === 'sparx.sandeep@gmail.com' && password === 'saibaba') {
           this.state.authenticated = true;
           this.state.session = {
             email,
