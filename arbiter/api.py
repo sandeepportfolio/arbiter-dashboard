@@ -20,6 +20,7 @@ from aiohttp.web_exceptions import HTTPUnauthorized
 from .config.settings import MARKET_MAP, ArbiterConfig, update_market_mapping
 from .execution.engine import ArbExecution, ExecutionEngine, ExecutionIncident
 from .monitor.balance import BalanceMonitor
+from .profitability import ProfitabilityValidator
 from .scanner.arbitrage import ArbitrageOpportunity, ArbitrageScanner
 from .utils.price_store import PricePoint, PriceStore
 
@@ -127,6 +128,7 @@ class ArbiterAPI:
         monitor: BalanceMonitor,
         config: ArbiterConfig,
         collectors: Optional[Dict[str, object]] = None,
+        profitability: Optional[ProfitabilityValidator] = None,
         host: str = "0.0.0.0",
         port: int = 8080,
     ):
@@ -136,6 +138,7 @@ class ArbiterAPI:
         self.monitor = monitor
         self.config = config
         self.collectors = collectors or {}
+        self.profitability = profitability
         self.host = host
         self.port = port
         self.started_at = time.time()
@@ -165,6 +168,7 @@ class ArbiterAPI:
         app.router.add_post("/api/errors/{incident_id}", self.handle_incident_action)
         app.router.add_get("/api/manual-positions", self.handle_manual_positions)
         app.router.add_post("/api/manual-positions/{position_id}", self.handle_manual_position_action)
+        app.router.add_get("/api/profitability", self.handle_profitability)
         app.router.add_get("/api/portfolio", self.handle_portfolio)
         app.router.add_get("/api/portfolio/violations", self.handle_portfolio_violations)
         app.router.add_post("/api/portfolio/unwind/{position_id}", self.handle_portfolio_unwind)
@@ -215,6 +219,7 @@ class ArbiterAPI:
                 "scanner": self.scanner.stats,
                 "execution": self.engine.stats,
                 "audit": self.engine.stats.get("audit", {}),
+                "profitability": self._profitability_snapshot(),
             }
         )
 
@@ -256,6 +261,9 @@ class ArbiterAPI:
 
     async def handle_manual_positions(self, request):
         return web.json_response([position.to_dict() for position in self.engine.manual_positions])
+
+    async def handle_profitability(self, request):
+        return web.json_response(self._profitability_snapshot())
 
     async def handle_market_mapping_action(self, request):
         canonical_id = request.match_info["canonical_id"]
@@ -609,11 +617,13 @@ class ArbiterAPI:
             "scanner": self.scanner.stats,
             "execution": self.engine.stats,
             "audit": self.engine.stats.get("audit", {}),
+            "profitability": self._profitability_snapshot(),
             "collectors": self._collector_snapshot(),
             "balances": balances,
             "series": {
                 "scanner": self.scanner.history,
                 "equity": self.engine.equity_curve,
+                "profitability": self.profitability.history if self.profitability else [],
             },
             "counts": {
                 "prices": len(active_prices),
@@ -624,6 +634,17 @@ class ArbiterAPI:
             },
             "tracked_markets": tracked_markets,
         }
+
+    def _profitability_snapshot(self) -> dict:
+        if not self.profitability:
+            return {
+                "verdict": "unavailable",
+                "is_profitable": False,
+                "is_determined": False,
+                "progress": 0.0,
+                "reasons": ["Profitability validator is not configured"],
+            }
+        return self.profitability.get_snapshot().to_dict()
 
     def _collector_snapshot(self) -> dict:
         snapshot = {}
@@ -653,5 +674,25 @@ class ArbiterAPI:
             raise web.HTTPBadRequest(text="Invalid JSON body")
 
 
-def create_api_server(price_store, scanner, engine, monitor, config, collectors=None, host="0.0.0.0", port=8080) -> ArbiterAPI:
-    return ArbiterAPI(price_store, scanner, engine, monitor, config, collectors=collectors, host=host, port=port)
+def create_api_server(
+    price_store,
+    scanner,
+    engine,
+    monitor,
+    config,
+    collectors=None,
+    profitability=None,
+    host="0.0.0.0",
+    port=8080,
+) -> ArbiterAPI:
+    return ArbiterAPI(
+        price_store,
+        scanner,
+        engine,
+        monitor,
+        config,
+        collectors=collectors,
+        profitability=profitability,
+        host=host,
+        port=port,
+    )

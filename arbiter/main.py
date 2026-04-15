@@ -24,6 +24,7 @@ from .collectors.predictit import PredictItCollector
 from .scanner.arbitrage import ArbitrageScanner
 from .monitor.balance import BalanceMonitor, BalanceSnapshot
 from .execution.engine import ExecutionEngine
+from .profitability import ProfitabilityConfig, ProfitabilityValidator
 
 
 async def run_system(config: ArbiterConfig, api_only: bool = False, port: int = 8080):
@@ -54,13 +55,24 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, port: int = 
 
     # ── Execution ──────────────────────────────────────────────
     engine = ExecutionEngine(config, monitor, price_store=price_store, collectors=collectors_dict)
+    profitability = ProfitabilityValidator(ProfitabilityConfig(), scanner, engine)
 
     if api_only and os.getenv("ARBITER_UI_SMOKE_SEED") == "1":
         await seed_dashboard_fixture(price_store, scanner, engine, monitor)
+        profitability.refresh()
 
     # ── API Server (for dashboard) ─────────────────────────────
     from .api import create_api_server
-    api = create_api_server(price_store, scanner, engine, monitor, config, collectors=collectors_dict, port=port)
+    api = create_api_server(
+        price_store,
+        scanner,
+        engine,
+        monitor,
+        config,
+        collectors=collectors_dict,
+        profitability=profitability,
+        port=port,
+    )
 
     logger.info("=" * 60)
     logger.info("  ARBITER — Prediction Market Arbitrage System")
@@ -85,6 +97,8 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, port: int = 
             asyncio.create_task(monitor.run(alert_queue), name="balance-monitor"),
             asyncio.create_task(engine.run(arb_queue), name="execution-engine"),
         ])
+
+    tasks.append(asyncio.create_task(profitability.run(), name="profitability-validator"))
 
     # API server always runs
     tasks.append(asyncio.create_task(api.serve(), name="api-server"))
@@ -116,11 +130,13 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, port: int = 
     await scanner.stop()
     await monitor.stop()
     await engine.stop()
+    profitability.stop()
 
     # Final stats
     logger.info("─" * 40)
     logger.info(f"Scanner stats: {scanner.stats}")
     logger.info(f"Execution stats: {engine.stats}")
+    logger.info(f"Profitability: {profitability.get_snapshot().to_dict()}")
     logger.info("ARBITER shutdown complete")
 
 

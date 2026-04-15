@@ -74,19 +74,25 @@ def test_api_and_dashboard_contracts():
         health = get_json("/api/health")
         assert health["status"] == "ok"
         assert "audit" in health
+        assert "profitability" in health
 
         system = get_json("/api/system")
         assert system["mode"] == "dry-run"
         assert "scanner" in system
         assert "execution" in system
         assert "audit" in system
+        assert "profitability" in system
         assert "counts" in system
         assert "series" in system
+        assert "profitability" in system["series"]
 
         assert isinstance(get_json("/api/opportunities"), list)
         assert isinstance(get_json("/api/trades"), list)
         assert isinstance(get_json("/api/errors"), list)
         assert isinstance(get_json("/api/manual-positions"), list)
+        profitability = get_json("/api/profitability")
+        assert "verdict" in profitability
+        assert "progress" in profitability
         assert len(get_json("/api/manual-positions")) >= 2
         assert len(get_json("/api/errors")) >= 1
 
