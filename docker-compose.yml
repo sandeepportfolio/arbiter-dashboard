@@ -1,47 +1,82 @@
 version: "3.9"
 
+# ARBITER — Full Production Stack
+# Usage:
+#   docker compose up -d          # Start all services
+#   docker compose exec arbiter python scripts/migrate.py --apply  # Run migrations
+#   docker compose logs -f arbiter  # Watch logs
+#   docker compose down            # Stop all
+
 services:
-  # ── ARBITER Core ─────────────────────────────────────
-  arbiter:
-    build: .
-    container_name: arbiter-core
-    env_file: .env
-    ports:
-      - "8080:8080"        # API + WebSocket for dashboard
-    depends_on:
-      - redis
-      - postgres
-    volumes:
-      - ./keys:/app/keys:ro  # RSA keys for Kalshi
-      - ./logs:/app/logs
-    restart: unless-stopped
-    command: python -m arbiter --log-level INFO
-
-  # ── Redis (sub-second price cache) ───────────────────
-  redis:
-    image: redis:7-alpine
-    container_name: arbiter-redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
-    restart: unless-stopped
-
-  # ── Postgres (trade logging + audit) ─────────────────
+  # ── Postgres (durable state) ────────────────────────────
   postgres:
     image: postgres:16-alpine
     container_name: arbiter-postgres
     environment:
-      POSTGRES_DB: arbiter
-      POSTGRES_USER: arbiter
-      POSTGRES_PASSWORD: arbiter_secret
+      POSTGRES_DB: ${PG_DATABASE:-arbiter_dev}
+      POSTGRES_USER: ${PG_USER:-arbiter}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-arbiter_secret}
     ports:
-      - "5432:5432"
+      - "${PG_PORT:-5432}:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
-      - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./arbiter/sql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-arbiter}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
+
+  # ── Redis (quote cache + fanout) ────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: arbiter-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    command: >
+      redis-server
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --save ""
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  # ── ARBITER API Server ──────────────────────────────────
+  arbiter:
+    build: .
+    container_name: arbiter-core
+    image: ghcr.io/sandeepportfolio/arbiter:latest
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${PG_USER:-arbiter}:${PG_PASSWORD:-arbiter_secret}@postgres:5432/${PG_DATABASE:-arbiter_dev}
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "${ARBITER_PORT:-8090}:${ARBITER_PORT:-8090}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./keys:/app/keys:ro
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:${ARBITER_PORT:-8090}/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    command: >
+      sh -c "python scripts/migrate.py --apply &&
+             python -m arbiter.main --port ${ARBITER_PORT:-8090} --log-level $${LOG_LEVEL:-INFO}"
 
 volumes:
   redis_data:
