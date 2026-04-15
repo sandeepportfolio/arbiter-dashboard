@@ -2426,18 +2426,31 @@
             const email = document.getElementById('loginEmail').value;
             const password = document.getElementById('loginPassword').value;
             const errorDiv = document.getElementById('loginError');
+            errorDiv.style.display = 'none';
 
-            if (email === 'sparx.sandeep@gmail.com' && password === 'saibaba') {
-                state.isLoggedIn = true;
-                document.getElementById('loginScreen').classList.add('hidden');
-                document.getElementById('mainLayout').style.display = 'flex';
-                updateMobileHeaderVisibility();
-                scheduleChartDraw();
-                showToast('Welcome back, Sandeep!', 'success');
-            } else {
-                errorDiv.textContent = 'Invalid email or password';
+            fetch('/api/auth/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email, password }),
+                credentials: 'same-origin',
+            })
+            .then(r => {
+                if (r.ok) {
+                    state.isLoggedIn = true;
+                    document.getElementById('loginScreen').classList.add('hidden');
+                    document.getElementById('mainLayout').style.display = 'flex';
+                    updateMobileHeaderVisibility();
+                    scheduleChartDraw();
+                    showToast('Welcome back!', 'success');
+                } else {
+                    errorDiv.textContent = 'Invalid email or password';
+                    errorDiv.style.display = 'block';
+                }
+            })
+            .catch(() => {
+                errorDiv.textContent = 'Login failed — server unreachable';
                 errorDiv.style.display = 'block';
-            }
+            });
         }
 
         // NAVIGATION
