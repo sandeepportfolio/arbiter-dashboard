@@ -30,7 +30,7 @@ from .readiness import OperationalReadiness
 from .workflow import PredictItWorkflowManager
 
 
-async def run_system(config: ArbiterConfig, api_only: bool = False, port: int = 8080):
+async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = "0.0.0.0", port: int = 8080):
     """Start all ARBITER components."""
     logger = logging.getLogger("arbiter.main")
     trade_logger = TradeLogger()
@@ -98,6 +98,7 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, port: int = 
         workflow_manager=workflow,
         profitability=profitability,
         readiness=readiness,
+        host=host,
         port=port,
     )
 
@@ -307,6 +308,7 @@ def main():
     parser = argparse.ArgumentParser(description="ARBITER — Prediction Market Arbitrage")
     parser.add_argument("--live", action="store_true", help="Enable live trading (default: dry run)")
     parser.add_argument("--api-only", action="store_true", help="Run API server only")
+    parser.add_argument("--host", default=os.getenv("ARBITER_HOST", "0.0.0.0"), help="API server host/interface")
     parser.add_argument("--port", type=int, default=8080, help="API server port")
     parser.add_argument("--log-level", default="INFO", help="Log level")
     parser.add_argument("--log-file", default=None, help="Log file path")
@@ -324,7 +326,7 @@ def main():
                 logging.getLogger("arbiter.main").critical("Live startup blocked: %s", failure)
             sys.exit(2)
 
-    asyncio.run(run_system(config, api_only=args.api_only, port=args.port))
+    asyncio.run(run_system(config, api_only=args.api_only, host=args.host, port=args.port))
 
 
 if __name__ == "__main__":

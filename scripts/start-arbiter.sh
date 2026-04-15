@@ -45,8 +45,12 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # ─── Start API server ─────────────────────────────────────────────────
-log "Starting API server on port ${ARBITER_PORT:-8090}..."
-CMD=(python3 -m arbiter.main --port "${ARBITER_PORT:-8090}" --log-level "${LOG_LEVEL:-INFO}")
+HOST="${ARBITER_HOST:-0.0.0.0}"
+PORT="${ARBITER_PORT:-8090}"
+LAN_IP="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true)"
+
+log "Starting API server on ${HOST}:${PORT}..."
+CMD=(python3 -m arbiter.main --host "$HOST" --port "$PORT" --log-level "${LOG_LEVEL:-INFO}")
 if [[ "${DRY_RUN:-true}" == "false" ]]; then
   CMD+=(--live)
 fi
@@ -56,8 +60,14 @@ echo $SERVER_PID > "$PID_FILE"
 log "API server started (PID=$SERVER_PID)"
 
 log "ARBITER is running. Logs: /tmp/arbiter-server.log"
-log "API: http://127.0.0.1:${ARBITER_PORT:-8090}"
-log "Dashboard: http://127.0.0.1:${ARBITER_PORT:-8090}/ops"
-log "Health: http://127.0.0.1:${ARBITER_PORT:-8090}/api/health"
+log "Local API: http://127.0.0.1:${PORT}"
+log "Local dashboard: http://127.0.0.1:${PORT}/ops"
+if [[ -n "$LAN_IP" ]]; then
+  log "LAN API: http://${LAN_IP}:${PORT}"
+  log "LAN dashboard: http://${LAN_IP}:${PORT}/ops"
+  log "LAN health: http://${LAN_IP}:${PORT}/api/health"
+else
+  warn "Could not detect a LAN IP automatically. Use this machine's IP with port ${PORT} from other devices."
+fi
 
 wait
