@@ -79,7 +79,8 @@ class MockConn:
             self._positions[args[0]] = pos
             return "INSERT 0 1"
         if "INSERT INTO position_events" in query:
-            self._events.append({"position_id": args[0], "event_type": args[1], "metadata": args[2]})
+            # args: position_id, event_type, metadata (dict)
+            self._events.append({"position_id": args[0], "event_type": args[1], "metadata": args[2] if len(args) > 2 else {}})
             return "INSERT 0 1"
         if "UPDATE positions" in query and "hedge_status" in query.lower():
             pos_id = args[0]
@@ -116,6 +117,31 @@ class MockConn:
         return None
 
     async def fetchrow(self, query: str, *args):
+        if "UPDATE positions" in query and "RETURNING *" in query:
+            # Handle UPDATE ... RETURNING * — apply changes first
+            pos_id = args[0]
+            if pos_id not in self._positions:
+                return None
+            p = self._positions[pos_id]
+            _q = query.lower()
+            if "hedge_status" in _q and "'complete'" in _q:
+                p["hedge_status"] = "complete"
+                p["hedge_order_id"] = str(args[1])
+                p["no_fill_price"] = float(args[2])
+                p["fees_paid"] = float(p["fees_paid"]) + float(args[3])
+                p["status"] = "hedged"
+            elif "status = 'settled'" in query:
+                p["status"] = "settled"
+                p["settlement_price"] = float(args[1])
+                p["settlement_pnl"] = float(args[2])
+                p["settled_at"] = args[3]
+                p["realized_pnl"] = float(p["realized_pnl"]) + float(args[2])
+            elif "status = 'unwind'" in query:
+                p["status"] = "unwind"
+                p["unwind_reason"] = str(args[1])
+                p["realized_pnl"] = float(p["realized_pnl"]) + float(args[2])
+                p["closed_at"] = args[3]
+            return MockRecord(p)
         if "SELECT * FROM positions WHERE position_id" in query:
             pos_id = args[0]
             if pos_id in self._positions:
@@ -142,9 +168,12 @@ class MockConn:
 
     async def fetch(self, query: str, *args):
         if "SELECT * FROM positions WHERE status IN" in query:
+            # args[0] = canonical_id if filter is present
+            canon_filter = args[0] if args else None
             return [
                 MockRecord(p) for p in self._positions.values()
                 if p["status"] in ("open", "hedged")
+                and (canon_filter is None or p["canonical_id"] == canon_filter)
             ]
         if "SELECT * FROM positions WHERE position_id" in query:
             pos_id = args[0]
