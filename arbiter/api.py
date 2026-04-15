@@ -20,9 +20,11 @@ from aiohttp.web_exceptions import HTTPUnauthorized
 from .config.settings import MARKET_MAP, ArbiterConfig, update_market_mapping
 from .execution.engine import ArbExecution, ExecutionEngine, ExecutionIncident
 from .monitor.balance import BalanceMonitor
+from .portfolio import PortfolioMonitor
 from .profitability import ProfitabilityValidator
 from .scanner.arbitrage import ArbitrageOpportunity, ArbitrageScanner
 from .utils.price_store import PricePoint, PriceStore
+from .workflow import PredictItWorkflowManager, UnwindReason
 
 logger = logging.getLogger("arbiter.api")
 
@@ -128,6 +130,8 @@ class ArbiterAPI:
         monitor: BalanceMonitor,
         config: ArbiterConfig,
         collectors: Optional[Dict[str, object]] = None,
+        portfolio: Optional[PortfolioMonitor] = None,
+        workflow_manager: Optional[PredictItWorkflowManager] = None,
         profitability: Optional[ProfitabilityValidator] = None,
         host: str = "0.0.0.0",
         port: int = 8080,
@@ -138,6 +142,8 @@ class ArbiterAPI:
         self.monitor = monitor
         self.config = config
         self.collectors = collectors or {}
+        self.portfolio = portfolio
+        self.workflow_manager = workflow_manager
         self.profitability = profitability
         self.host = host
         self.port = port
@@ -170,6 +176,7 @@ class ArbiterAPI:
         app.router.add_post("/api/manual-positions/{position_id}", self.handle_manual_position_action)
         app.router.add_get("/api/profitability", self.handle_profitability)
         app.router.add_get("/api/portfolio", self.handle_portfolio)
+        app.router.add_get("/api/portfolio/positions", self.handle_portfolio_positions)
         app.router.add_get("/api/portfolio/violations", self.handle_portfolio_violations)
         app.router.add_post("/api/portfolio/unwind/{position_id}", self.handle_portfolio_unwind)
         app.router.add_get("/api/portfolio/summary", self.handle_portfolio_summary)
@@ -191,15 +198,27 @@ class ArbiterAPI:
 
     @web.middleware
     async def _cors_middleware(self, request, handler):
-        response = await handler(request)
+        if request.method == "OPTIONS":
+            response = web.Response(status=204)
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+            response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
+            response.headers["Access-Control-Max-Age"] = "86400"
+            response.headers["Vary"] = "Origin"
+            return response
+
+        try:
+            response = await handler(request)
+        except web.HTTPException as exc:
+            response = exc
         response.headers["Access-Control-Allow-Origin"] = "*"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-        response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
+        response.headers["Access-Control-Max-Age"] = "86400"
+        response.headers["Vary"] = "Origin"
         return response
 
     async def handle_site_index(self, request):
-        if self._site_index.exists():
-            return web.FileResponse(self._site_index)
         return await self.handle_dashboard(request)
 
     async def handle_dashboard(self, request):
@@ -266,6 +285,7 @@ class ArbiterAPI:
         return web.json_response(self._profitability_snapshot())
 
     async def handle_market_mapping_action(self, request):
+        await require_auth(request)
         canonical_id = request.match_info["canonical_id"]
         if canonical_id not in MARKET_MAP:
             return web.json_response({"error": f"Unknown mapping: {canonical_id}"}, status=404)
@@ -306,6 +326,7 @@ class ArbiterAPI:
         return web.json_response(mapping)
 
     async def handle_incident_action(self, request):
+        await require_auth(request)
         incident_id = request.match_info["incident_id"]
         payload = await self._read_json_body(request)
         action = str(payload.get("action", "")).strip().lower()
@@ -319,6 +340,7 @@ class ArbiterAPI:
         return web.json_response(incident.to_dict())
 
     async def handle_manual_position_action(self, request):
+        await require_auth(request)
         position_id = request.match_info["position_id"]
         payload = await self._read_json_body(request)
         action = str(payload.get("action", "")).strip().lower()
@@ -337,66 +359,15 @@ class ArbiterAPI:
 
     async def handle_portfolio(self, request):
         """Return full portfolio snapshot."""
-        dry_run = os.getenv("DRY_RUN", "true").lower() != "false"
-        snapshot = {
-            "timestamp": time.time(),
-            "total_exposure": 0.0,
-            "total_open_positions": len(self.engine._executions) if hasattr(self.engine, "_executions") else 0,
-            "total_hedged": 0,
-            "total_unhedged": 0,
-            "by_venue": {},
-            "by_canonical": {},
-            "violations": [],
-            "unsettled_positions": 0,
-            "realized_pnl_today": 0.0,
-            "unrealized_pnl": 0.0,
-            "dry_run": dry_run,
-        }
-        # Populate from engine executions
-        if hasattr(self.engine, "_executions"):
-            executions = [e for e in self.engine._executions if e.status in ("pending", "submitted", "simulated")]
-            by_canonical = {}
-            for e in executions:
-                opp = e.opportunity
-                cid = opp.canonical_id
-                cost = opp.suggested_qty * (opp.yes_price + opp.no_price)
-                snapshot["total_exposure"] += cost
-                snapshot["total_open_positions"] = len(executions)
-                by_canonical[cid] = {
-                    "canonical_id": cid,
-                    "description": opp.description,
-                    "quantity": opp.suggested_qty,
-                    "total_cost": round(cost, 2),
-                    "status": e.status,
-                    "hedge_status": "complete" if e.leg_no.status.value == "filled" else "none",
-                    "age_seconds": round(time.time() - e.timestamp, 0),
-                }
-                if e.leg_no.status.value == "filled":
-                    snapshot["total_hedged"] += 1
-                else:
-                    snapshot["total_unhedged"] += 1
-            snapshot["by_canonical"] = by_canonical
-        return web.json_response(snapshot)
+        return web.json_response(self._portfolio_snapshot())
 
     async def handle_portfolio_violations(self, request):
         """Return active risk violations only."""
-        # TODO: wire to PortfolioMonitor for full violation list
-        # For now, return inline checks
-        violations = []
-        dry_run = os.getenv("DRY_RUN", "true").lower() != "false"
-        if not dry_run:
-            violations.append({
-                "violation_id": "live_trading",
-                "level": "critical",
-                "category": "mode",
-                "message": "LIVE TRADING ACTIVE — DRY_RUN=false",
-                "canonical_id": None,
-                "platform": None,
-                "current_value": 1,
-                "limit_value": 0,
-                "timestamp": time.time(),
-            })
-        return web.json_response({"violations": violations})
+        snapshot = self._portfolio_monitor_snapshot()
+        if snapshot is not None:
+            return web.json_response({"violations": [violation.to_dict() for violation in snapshot.violations]})
+        fallback = self._portfolio_snapshot()
+        return web.json_response({"violations": fallback.get("violations", [])})
 
     async def handle_portfolio_positions(self, request):
         """Return all open positions with full details."""
@@ -413,7 +384,7 @@ class ArbiterAPI:
                     "no_platform": opp.no_platform,
                     "yes_price": opp.yes_price,
                     "no_price": opp.no_price,
-                    "gross_edge_cents": opp.gross_edge_cents,
+                    "gross_edge_cents": round(opp.gross_edge * 100.0, 4),
                     "net_edge_cents": opp.net_edge_cents,
                     "status": e.status,
                     "yes_fill_price": e.leg_yes.fill_price,
@@ -429,15 +400,14 @@ class ArbiterAPI:
         """Return aggregated portfolio performance summary."""
         executions = getattr(self.engine, "_executions", [])
         realized = sum(e.realized_pnl for e in executions)
-        total_fees = 0.0
-        for e in executions:
-            opp = e.opportunity
-            qty = opp.suggested_qty
-            total_fees += qty * opp.yes_price * 0.07 + qty * opp.no_price * 0.02
+        portfolio_snapshot = self._portfolio_monitor_snapshot()
+        total_fees = sum(e.opportunity.total_fees * e.opportunity.suggested_qty for e in executions)
         return web.json_response({
             "total_executions": len(executions),
             "realized_pnl": round(realized, 4),
             "estimated_fees": round(total_fees, 4),
+            "unrealized_pnl": round(portfolio_snapshot.unrealized_pnl, 4) if portfolio_snapshot else 0.0,
+            "total_exposure": round(portfolio_snapshot.total_exposure, 4) if portfolio_snapshot else 0.0,
             "dry_run": os.getenv("DRY_RUN", "true").lower() != "false",
             "drift_guard_active": True,
         })
@@ -457,7 +427,7 @@ class ArbiterAPI:
         if not token:
             return web.json_response({"error": "Invalid credentials"}, status=401)
 
-        response = web.json_response({"status": "ok", "email": email})
+        response = web.json_response({"status": "ok", "email": email, "token": token})
         response.set_cookie(
             "arbiter_session",
             token,
@@ -470,7 +440,8 @@ class ArbiterAPI:
 
     async def handle_logout(self, request):
         """Logout — invalidate session."""
-        token = request.cookies.get("arbiter_session", "")
+        auth = request.headers.get("Authorization", "")
+        token = auth[7:] if auth.startswith("Bearer ") else request.cookies.get("arbiter_session", "")
         await logout_user(token)
         response = web.json_response({"status": "logged_out"})
         response.del_cookie("arbiter_session")
@@ -480,7 +451,7 @@ class ArbiterAPI:
         """Return current user info if authenticated."""
         user = await get_current_user(request)
         if not user:
-            return web.json_response({"authenticated": False}, status=401)
+            return web.json_response({"authenticated": False})
         return web.json_response({"authenticated": True, "email": user})
 
     async def handle_portfolio_unwind(self, request):
@@ -488,6 +459,7 @@ class ArbiterAPI:
         Trigger unwind workflow for a stuck position.
         Sends Telegram unwind alert to operator.
         """
+        await require_auth(request)
         position_id = request.match_info["position_id"]
         payload = await self._read_json_body(request)
         reason = str(payload.get("reason", "one_leg_timeout"))
@@ -504,13 +476,63 @@ class ArbiterAPI:
         if execution is None:
             return web.json_response({"error": f"Position not found: {position_id}"}, status=404)
 
-        # TODO: wire to PredictItWorkflowManager for real unwind alert
-        logger.warning(f"Unwind requested for {position_id}: reason={reason}, notes={notes}")
+        if not self.workflow_manager:
+            logger.warning(f"Unwind requested for {position_id}: reason={reason}, notes={notes}")
+            return web.json_response({
+                "status": "unwind_initiated",
+                "position_id": position_id,
+                "reason": reason,
+                "message": f"Unwind alert sent for {position_id}",
+                "next_step": "Check Telegram for unwind instructions",
+            })
+
+        reason_enum = self._parse_unwind_reason(reason)
+        manual_position = next(
+            (
+                position
+                for position in self.engine.manual_positions
+                if position.position_id == position_id or position.position_id.endswith(execution.arb_id)
+            ),
+            None,
+        )
+        if manual_position is None:
+            manual_position = self._build_manual_position_from_execution(execution)
+
+        instruction = self.workflow_manager.generate_unwind_instruction(
+            position=manual_position,
+            reason=reason_enum,
+            yes_fill_qty=self._resolved_fill_qty(execution.leg_yes, execution.opportunity.suggested_qty),
+            no_fill_qty=self._resolved_fill_qty(execution.leg_no, execution.opportunity.suggested_qty),
+            yes_avg_price=execution.leg_yes.fill_price or execution.opportunity.yes_price,
+            no_avg_price=execution.leg_no.fill_price or execution.opportunity.no_price,
+            yes_order_id=execution.leg_yes.order_id,
+            no_order_id=execution.leg_no.order_id,
+            notes=[notes] if notes else None,
+        )
+        sent = await self.workflow_manager.send_unwind_alert(instruction)
+        await self.engine.record_incident(
+            arb_id=execution.arb_id,
+            canonical_id=execution.opportunity.canonical_id,
+            severity="warning",
+            message=f"Unwind initiated for {position_id}",
+            metadata={
+                "reason": reason_enum.value,
+                "instruction": self._instruction_payload(instruction),
+                "alert_sent": sent,
+            },
+        )
         return web.json_response({
             "status": "unwind_initiated",
             "position_id": position_id,
-            "reason": reason,
-            "message": f"Unwind alert sent for {position_id}",
+            "reason": reason_enum.value,
+            "message": f"Unwind alert {'sent' if sent else 'queued locally'} for {position_id}",
+            "instruction": {
+                "recommended_action": instruction.recommended_action,
+                "close_yes_first": instruction.close_yes_first,
+                "estimated_cost": round(instruction.estimated_cost, 4),
+                "exposure_at_risk": round(instruction.exposure_at_risk, 4),
+                "notes": list(instruction.notes),
+            },
             "next_step": "Check Telegram for unwind instructions",
         })
 
@@ -646,6 +668,88 @@ class ArbiterAPI:
             }
         return self.profitability.get_snapshot().to_dict()
 
+    def _portfolio_monitor_snapshot(self):
+        if self.portfolio:
+            return self.portfolio.get_snapshot() or self.portfolio.compute_snapshot()
+        return None
+
+    def _portfolio_snapshot(self) -> dict:
+        snapshot = self._portfolio_monitor_snapshot()
+        if snapshot is not None:
+            return snapshot.to_dict()
+
+        dry_run = os.getenv("DRY_RUN", "true").lower() != "false"
+        return {
+            "timestamp": time.time(),
+            "total_exposure": 0.0,
+            "total_open_positions": 0,
+            "total_hedged": 0,
+            "total_unhedged": 0,
+            "by_venue": {},
+            "by_canonical": {},
+            "violations": [],
+            "unsettled_positions": 0,
+            "realized_pnl_today": 0.0,
+            "unrealized_pnl": 0.0,
+            "dry_run": dry_run,
+        }
+
+    @staticmethod
+    def _parse_unwind_reason(reason: str) -> UnwindReason:
+        normalized = str(reason or "").strip().lower()
+        try:
+            return UnwindReason(normalized)
+        except ValueError:
+            return UnwindReason.ONE_LEG_TIMEOUT
+
+    @staticmethod
+    def _build_manual_position_from_execution(execution: ArbExecution):
+        from .execution.engine import ManualPosition
+
+        return ManualPosition(
+            position_id=f"MANUAL-{execution.arb_id}",
+            canonical_id=execution.opportunity.canonical_id,
+            description=execution.opportunity.description,
+            instructions="Operator unwind requested from dashboard.",
+            yes_platform=execution.opportunity.yes_platform,
+            no_platform=execution.opportunity.no_platform,
+            quantity=execution.opportunity.suggested_qty,
+            yes_price=execution.opportunity.yes_price,
+            no_price=execution.opportunity.no_price,
+            status=execution.status,
+            timestamp=execution.timestamp,
+            updated_at=time.time(),
+        )
+
+    @staticmethod
+    def _resolved_fill_qty(order, fallback_qty: int) -> int:
+        if getattr(order, "fill_qty", 0) > 0:
+            return int(order.fill_qty)
+        if getattr(order, "status", None) and getattr(order.status, "value", "").lower() in {"filled", "simulated"}:
+            return int(fallback_qty)
+        return 0
+
+    @staticmethod
+    def _instruction_payload(instruction) -> dict:
+        return {
+            "reason": instruction.reason.value,
+            "position_id": instruction.position_id,
+            "canonical_id": instruction.canonical_id,
+            "yes_platform": instruction.yes_platform,
+            "no_platform": instruction.no_platform,
+            "yes_order_id": instruction.yes_order_id,
+            "no_order_id": instruction.no_order_id,
+            "yes_fill_qty": instruction.yes_fill_qty,
+            "no_fill_qty": instruction.no_fill_qty,
+            "yes_avg_price": instruction.yes_avg_price,
+            "no_avg_price": instruction.no_avg_price,
+            "exposure_at_risk": instruction.exposure_at_risk,
+            "recommended_action": instruction.recommended_action,
+            "close_yes_first": instruction.close_yes_first,
+            "estimated_cost": instruction.estimated_cost,
+            "notes": list(instruction.notes),
+        }
+
     def _collector_snapshot(self) -> dict:
         snapshot = {}
         for name, collector in self.collectors.items():
@@ -681,6 +785,8 @@ def create_api_server(
     monitor,
     config,
     collectors=None,
+    portfolio=None,
+    workflow_manager=None,
     profitability=None,
     host="0.0.0.0",
     port=8080,
@@ -692,6 +798,8 @@ def create_api_server(
         monitor,
         config,
         collectors=collectors,
+        portfolio=portfolio,
+        workflow_manager=workflow_manager,
         profitability=profitability,
         host=host,
         port=port,

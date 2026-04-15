@@ -24,7 +24,9 @@ from .collectors.predictit import PredictItCollector
 from .scanner.arbitrage import ArbitrageScanner
 from .monitor.balance import BalanceMonitor, BalanceSnapshot
 from .execution.engine import ExecutionEngine
+from .portfolio import PortfolioConfig, PortfolioMonitor
 from .profitability import ProfitabilityConfig, ProfitabilityValidator
+from .workflow import PredictItWorkflowManager
 
 
 async def run_system(config: ArbiterConfig, api_only: bool = False, port: int = 8080):
@@ -55,6 +57,18 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, port: int = 
 
     # ── Execution ──────────────────────────────────────────────
     engine = ExecutionEngine(config, monitor, price_store=price_store, collectors=collectors_dict)
+    portfolio = PortfolioMonitor(
+        PortfolioConfig(
+            max_per_market_usd=config.scanner.max_position_usd,
+            kalshi_min_balance=config.alerts.kalshi_low,
+            polymarket_min_balance=config.alerts.polymarket_low,
+            predictit_min_balance=config.alerts.predictit_low,
+        ),
+        config.scanner,
+        engine,
+        monitor,
+    )
+    workflow = PredictItWorkflowManager(config.alerts)
     profitability = ProfitabilityValidator(ProfitabilityConfig(), scanner, engine)
 
     if api_only and os.getenv("ARBITER_UI_SMOKE_SEED") == "1":
@@ -70,6 +84,8 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, port: int = 
         monitor,
         config,
         collectors=collectors_dict,
+        portfolio=portfolio,
+        workflow_manager=workflow,
         profitability=profitability,
         port=port,
     )
@@ -96,6 +112,8 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, port: int = 
             asyncio.create_task(scanner.run(), name="arb-scanner"),
             asyncio.create_task(monitor.run(alert_queue), name="balance-monitor"),
             asyncio.create_task(engine.run(arb_queue), name="execution-engine"),
+            asyncio.create_task(portfolio.run(), name="portfolio-monitor"),
+            asyncio.create_task(workflow.run(lambda: engine.manual_positions), name="predictit-workflow"),
         ])
 
     tasks.append(asyncio.create_task(profitability.run(), name="profitability-validator"))
@@ -130,6 +148,8 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, port: int = 
     await scanner.stop()
     await monitor.stop()
     await engine.stop()
+    portfolio.stop()
+    await workflow.stop()
     profitability.stop()
 
     # Final stats

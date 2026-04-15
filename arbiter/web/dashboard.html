@@ -3,7 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ARBITER</title>
+  <title>ARBITER Live Desk</title>
+  <link rel="icon" href="data:,">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -12,16 +13,70 @@
 <body>
   <div class="aurora aurora-a"></div>
   <div class="aurora aurora-b"></div>
+  <div id="authOverlay" class="auth-overlay hidden" aria-hidden="true">
+    <div class="auth-panel">
+      <p class="eyebrow">Operator Access</p>
+      <h2>Sign in to the ops desk</h2>
+      <p class="panel-copy">Operator mode enables manual workflow controls, mapping review, incident resolution, and production test actions.</p>
+      <form id="authForm" class="auth-form">
+        <label class="auth-field">
+          <span>Email</span>
+          <input id="authEmail" name="email" type="email" autocomplete="email" placeholder="operator@arbiter" required>
+        </label>
+        <label class="auth-field">
+          <span>Password</span>
+          <input id="authPassword" name="password" type="password" autocomplete="current-password" placeholder="Enter password" required>
+        </label>
+        <div class="auth-actions">
+          <button id="authSubmit" type="submit" class="auth-button">Sign in</button>
+          <a id="authPublicLink" class="ghost-link" href="/">View public desk</a>
+        </div>
+        <p id="authMessage" class="auth-message" role="status" aria-live="polite"></p>
+      </form>
+    </div>
+  </div>
+  <div id="connectionOverlay" class="auth-overlay hidden" aria-hidden="true">
+    <div class="auth-panel connection-panel">
+      <p class="eyebrow">Connection</p>
+      <h2>Choose the API source</h2>
+      <p class="panel-copy">Leave this blank for same-origin local testing. For a static frontend, paste the backend base URL so the dashboard can talk to the live API server.</p>
+      <form id="connectionForm" class="auth-form">
+        <label class="auth-field">
+          <span>API base URL</span>
+          <input id="apiBaseInput" name="apiBase" type="url" autocomplete="url" placeholder="https://arbiter-api.example.com">
+        </label>
+        <div class="auth-actions">
+          <button type="submit" class="auth-button">Save connection</button>
+          <button id="connectionReset" type="button" class="ghost-button">Use same origin</button>
+        </div>
+        <p id="connectionMessage" class="auth-message" role="status" aria-live="polite"></p>
+      </form>
+    </div>
+  </div>
   <main class="shell">
+    <section class="utility-bar">
+      <div class="utility-group">
+        <span class="utility-mark">ARBITER</span>
+        <span id="deskModeTag" class="utility-pill">Public desk</span>
+        <span id="apiBasePill" class="utility-pill utility-pill-muted">API: same origin</span>
+      </div>
+      <div class="utility-actions">
+        <button id="apiConfigButton" type="button" class="ghost-button">API source</button>
+        <a id="opsShortcut" class="ghost-link" href="/ops">Open ops desk</a>
+        <button id="logoutButton" type="button" class="ghost-button hidden">Logout</button>
+      </div>
+    </section>
     <header class="hero">
       <div>
         <p class="eyebrow">ARBITER LIVE</p>
-        <h1>Live trading desk</h1>
-        <p class="subtitle">Fee-aware routes, live charts, manual PredictIt queue, and recovery state in one operator-first view.</p>
+        <h1 id="heroTitle">Live trading desk</h1>
+        <p id="heroSubtitle" class="subtitle">Fee-aware routes, live charts, manual PredictIt queue, and recovery state in one operator-first view.</p>
       </div>
       <div class="hero-status">
         <div class="pill"><span class="label">Mode</span><span id="modePill" class="value">Loading</span></div>
+        <div class="pill"><span class="label">Access</span><span id="accessPill" class="value value-muted">Checking</span></div>
         <div class="pill"><span class="label">WebSocket</span><span id="wsStatus" class="value value-muted">Connecting</span></div>
+        <div class="pill"><span class="label">Validator</span><span id="profitabilityPill" class="value value-muted">Loading</span></div>
       </div>
     </header>
 
@@ -55,6 +110,32 @@
       </article>
     </section>
 
+    <section class="panel-grid panel-grid-tight">
+      <article class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="panel-kicker">Validation</p>
+            <h2>Profitability verdict</h2>
+          </div>
+          <span id="profitabilityVerdictBadge" class="panel-badge">Loading</span>
+        </div>
+        <p id="profitabilitySummary" class="panel-copy">Arbiter is collecting evidence before it can call the engine profitable.</p>
+        <div id="profitabilityReasons" class="stack-list compact-stack"></div>
+      </article>
+
+      <article class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="panel-kicker">Guardrails</p>
+            <h2>Portfolio posture</h2>
+          </div>
+          <span id="portfolioExposureBadge" class="panel-badge">$0.00</span>
+        </div>
+        <p id="portfolioSummary" class="panel-copy">Exposure, funding, and operator risk warnings appear here so production tests stay controlled.</p>
+        <div id="portfolioList" class="stack-list compact-stack"></div>
+      </article>
+    </section>
+
     <section class="panel-grid panel-grid-tight panel-grid-single">
       <article class="panel">
         <div class="panel-header">
@@ -68,7 +149,7 @@
       </article>
     </section>
 
-    <section class="panel-grid panel-grid-tight">
+    <section class="panel-grid panel-grid-tight ops-only" data-ops-only="true">
       <article class="panel">
         <div class="panel-header">
           <div>
@@ -169,6 +250,14 @@
       </article>
     </section>
   </main>
+  <script>
+    window.ARBITER_BOOTSTRAP = {
+      staticFrontend: false,
+      defaultApiBase: "",
+      publicHref: "/",
+      opsHref: "/ops"
+    };
+  </script>
   <script type="module" src="/static/dashboard.js"></script>
 </body>
 </html>

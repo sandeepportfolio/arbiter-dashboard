@@ -209,6 +209,7 @@ class PortfolioMonitor:
         Call this on a timer or after each trade event.
         """
         now = time.time()
+        dry_run = self.scanner_config.dry_run if self.scanner_config else dry_run
         positions = self._get_open_positions()
 
         # Compute per-canonical exposures
@@ -216,8 +217,6 @@ class PortfolioMonitor:
         total_exposure = 0.0
         total_hedged = 0
         total_unhedged = 0
-        unrealized = 0.0
-
         for pos in positions:
             cid = pos.get("canonical_id", "unknown")
             qty = pos.get("quantity", 0)
@@ -262,7 +261,16 @@ class PortfolioMonitor:
             all_platforms.add(pos.get("yes_platform", ""))
             all_platforms.add(pos.get("no_platform", ""))
 
-        balances = self.balance_monitor.get_all_balances() if self.balance_monitor else {}
+        balances = {}
+        if self.balance_monitor:
+            balances = {
+                platform: {
+                    "balance": snapshot.balance,
+                    "is_low": snapshot.is_low,
+                    "timestamp": snapshot.timestamp,
+                }
+                for platform, snapshot in self.balance_monitor.current_balances.items()
+            }
         for platform in all_platforms:
             venue_positions = [p for p in positions
                               if p.get("yes_platform") == platform or p.get("no_platform") == platform]
@@ -295,6 +303,7 @@ class PortfolioMonitor:
         # Unrealized P&L (rough — based on current price vs entry price)
         unrealized = self._estimate_unrealized(positions)
 
+        realized_today = self._estimate_realized_today(now)
         snapshot = PortfolioSnapshot(
             timestamp=now,
             total_exposure=total_exposure,
@@ -305,7 +314,7 @@ class PortfolioMonitor:
             by_canonical=by_canonical,
             violations=violations,
             unsettled_positions=len([p for p in positions if p.get("status") in ("open", "hedged")]),
-            realized_pnl_today=0.0,  # TODO: wire from ledger
+            realized_pnl_today=realized_today,
             unrealized_pnl=unrealized,
             dry_run=dry_run,
         )
@@ -319,6 +328,15 @@ class PortfolioMonitor:
 
         # From in-memory engine
         if self.engine:
+            active_statuses = {
+                "pending",
+                "submitted",
+                "simulated",
+                "filled",
+                "recovering",
+                "manual_pending",
+                "manual_entered",
+            }
             for arb_exec in getattr(self.engine, "_executions", []):
                 pos = {
                     "canonical_id": arb_exec.opportunity.canonical_id if hasattr(arb_exec, "opportunity") else arb_exec.arb_id,
@@ -329,12 +347,21 @@ class PortfolioMonitor:
                     "yes_platform": arb_exec.opportunity.yes_platform if hasattr(arb_exec, "opportunity") else "",
                     "no_platform": arb_exec.opportunity.no_platform if hasattr(arb_exec, "opportunity") else "",
                     "status": arb_exec.status,
-                    "hedge_status": "complete" if arb_exec.leg_no.status == OrderStatus.FILLED else "none",
+                    "hedge_status": (
+                        "complete"
+                        if arb_exec.status in {"simulated", "filled"}
+                        or (
+                            arb_exec.leg_yes.status in (OrderStatus.FILLED, OrderStatus.SIMULATED)
+                            and arb_exec.leg_no.status in (OrderStatus.FILLED, OrderStatus.SIMULATED)
+                        )
+                        else "none"
+                    ),
                     "created_at": arb_exec.timestamp,
                     "updated_at": arb_exec.timestamp,
                     "source": "engine",
+                    "realized_pnl": arb_exec.realized_pnl,
                 }
-                if pos["status"] in ("pending", "submitted", "simulated"):
+                if pos["status"] in active_statuses:
                     positions.append(pos)
 
         # From durable ledger
@@ -445,6 +472,21 @@ class PortfolioMonitor:
         # This is informational — no violation object needed, handled in snapshot.dry_run
 
         return violations
+
+    def _estimate_realized_today(self, now: float) -> float:
+        """
+        Approximate today's realized P&L from execution history when the ledger
+        is not yet connected to the monitor.
+        """
+        if not self.engine:
+            return 0.0
+
+        start_of_day = datetime.fromtimestamp(now).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+        realized = 0.0
+        for execution in getattr(self.engine, "_executions", []):
+            if execution.timestamp >= start_of_day:
+                realized += execution.realized_pnl
+        return realized
 
     def _estimate_unrealized(self, positions: List[Dict[str, Any]]) -> float:
         """

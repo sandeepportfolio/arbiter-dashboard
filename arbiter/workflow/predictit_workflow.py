@@ -12,16 +12,21 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Deque, Dict, List, Optional, Tuple
+from typing import Callable, Deque, Dict, List, Optional, Tuple
 
 from ..config.settings import AlertConfig
 from ..execution.engine import ManualPosition
 from ..monitor.balance import TelegramNotifier
 
 logger = logging.getLogger("arbiter.workflow")
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 # How long before a reminder is sent for a stuck position (in hours)
@@ -153,7 +158,8 @@ class PredictItWorkflowManager:
         )
         self.reminder_interval = reminder_interval_seconds
         self._running = False
-        self._closed_results: Deque[CloseResult] = Deque(maxlen=500)
+        self._closed_results: Deque[CloseResult] = deque(maxlen=500)
+        self._last_reminder_at: Dict[str, float] = {}
 
     async def start(self) -> None:
         self._running = True
@@ -162,6 +168,26 @@ class PredictItWorkflowManager:
     async def stop(self) -> None:
         self._running = False
         logger.info("PredictItWorkflowManager: stopped")
+
+    async def run(
+        self,
+        position_provider: Callable[[], List[ManualPosition]],
+    ) -> None:
+        """
+        Periodically check manual positions and send reminder alerts.
+        """
+        await self.start()
+        while self._running:
+            try:
+                positions = list(position_provider() or [])
+                await self.send_stale_reminders(positions)
+                await asyncio.sleep(self.reminder_interval)
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.error("PredictItWorkflowManager error: %s", exc)
+                await asyncio.sleep(min(self.reminder_interval, 5.0))
+        await self.stop()
 
     # ─── Stale Position Monitoring ─────────────────────────────────────────
 
@@ -245,9 +271,15 @@ class PredictItWorkflowManager:
         """Check stale positions and send Telegram reminders. Returns count sent."""
         alerts = await self.check_stale_positions(positions)
         sent = 0
+        now = time.time()
         for alert in alerts:
+            cooldown_key = f"{alert.position_id}:{alert.current_status}"
+            last_sent = self._last_reminder_at.get(cooldown_key, 0.0)
+            if now - last_sent < self.reminder_interval:
+                continue
             success = await self.telegram.send(alert.to_telegram_message())
             if success:
+                self._last_reminder_at[cooldown_key] = now
                 sent += 1
                 logger.info(
                     f"[Workflow] Sent stale reminder for {alert.position_id} "
@@ -361,7 +393,7 @@ class PredictItWorkflowManager:
             realized_pnl=realized_pnl,
             fees_paid=fees_paid,
             net_pnl=realized_pnl - fees_paid,
-            closed_at=datetime.utcnow(),
+            closed_at=utc_now(),
             operator_note=operator_note,
         )
         self._closed_results.appendleft(result)

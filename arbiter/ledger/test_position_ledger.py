@@ -6,7 +6,7 @@ or real Postgres if DATABASE_URL is set.
 import asyncio
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 
@@ -18,6 +18,10 @@ from arbiter.ledger.position_ledger import (
     PositionLedger,
     PositionStatus,
 )
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 # ─── Mock Postgres for unit testing ──────────────────────────────────────────
@@ -294,8 +298,8 @@ async def test_mark_hedged(mock_pool, monkeypatch):
         "settlement_pnl": 0,
         "unwind_reason": "",
         "notes": [],
-        "created_at": datetime.utcnow(),
-        "entry_confirmed_at": datetime.utcnow(),
+        "created_at": utc_now(),
+        "entry_confirmed_at": utc_now(),
     }
 
     updated = await ledger.mark_hedged(
@@ -348,8 +352,8 @@ async def test_get_open_positions(mock_pool, monkeypatch):
             "settlement_pnl": 0,
             "unwind_reason": "",
             "notes": [],
-            "created_at": datetime.utcnow(),
-            "entry_confirmed_at": datetime.utcnow(),
+            "created_at": utc_now(),
+            "entry_confirmed_at": utc_now(),
         }
 
     positions = await ledger.get_open_positions()
@@ -394,8 +398,8 @@ async def test_settle_position(mock_pool, monkeypatch):
         "settlement_pnl": 0,
         "unwind_reason": "",
         "notes": [],
-        "created_at": datetime.utcnow(),
-        "entry_confirmed_at": datetime.utcnow(),
+        "created_at": utc_now(),
+        "entry_confirmed_at": utc_now(),
     }
 
     settled = await ledger.settle_position(
@@ -445,8 +449,8 @@ async def test_unwind_position(mock_pool, monkeypatch):
         "settlement_pnl": 0,
         "unwind_reason": "",
         "notes": [],
-        "created_at": datetime.utcnow(),
-        "entry_confirmed_at": datetime.utcnow(),
+        "created_at": utc_now(),
+        "entry_confirmed_at": utc_now(),
     }
 
     unwound = await ledger.unwind_position(

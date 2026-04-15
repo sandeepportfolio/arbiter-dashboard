@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ARBITER Redirect</title>
+  <link rel="icon" href="data:,">
+</head>
+<body>
+  <script>
+    (function redirectToShell() {
+      const requestedPath = window.location.pathname.replace(/\/404\.html$/, "") || "/";
+      const route = requestedPath.endsWith("/ops") ? "/ops" : "/";
+      const params = new URLSearchParams(window.location.search);
+      if (route !== "/") {
+        params.set("route", route);
+      }
+      const query = params.toString();
+      window.location.replace(`./${query ? `?${query}` : ""}${window.location.hash}`);
+    })();
+  </script>
+</body>
+</html>

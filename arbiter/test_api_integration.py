@@ -51,20 +51,30 @@ def test_api_and_dashboard_contracts():
             with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=5) as response:
                 return json.loads(response.read().decode("utf-8"))
 
-        def post_json(path: str, payload: dict):
+        def post_json(path: str, payload: dict, headers: dict | None = None):
             request = urllib.request.Request(
                 f"http://127.0.0.1:{port}{path}",
                 data=json.dumps(payload).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
+                headers={"Content-Type": "application/json", **(headers or {})},
                 method="POST",
             )
             with urllib.request.urlopen(request, timeout=5) as response:
                 return json.loads(response.read().decode("utf-8"))
 
+        def options(path: str, headers: dict | None = None):
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{port}{path}",
+                headers=headers or {},
+                method="OPTIONS",
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return response.status, dict(response.headers)
+
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5) as response:
             public_html = response.read().decode("utf-8")
-        assert "ARBITER - Prediction Market Arbitrage Dashboard" in public_html
-        assert 'id="loginScreen"' in public_html
+        assert "ARBITER Live Desk" in public_html
+        assert 'id="heroTitle"' in public_html
+        assert 'id="connectionOverlay"' in public_html
 
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/ops", timeout=5) as response:
             ops_html = response.read().decode("utf-8")
@@ -96,6 +106,31 @@ def test_api_and_dashboard_contracts():
         assert len(get_json("/api/manual-positions")) >= 2
         assert len(get_json("/api/errors")) >= 1
 
+        login = post_json("/api/auth/login", {"email": "sparx.sandeep@gmail.com", "password": "saibaba"})
+        assert login["status"] == "ok"
+        assert login["email"] == "sparx.sandeep@gmail.com"
+        assert login["token"]
+        auth_headers = {"Authorization": f"Bearer {login['token']}"}
+
+        with urllib.request.urlopen(
+            urllib.request.Request(f"http://127.0.0.1:{port}/api/auth/me", headers=auth_headers),
+            timeout=5,
+        ) as response:
+            auth_me = json.loads(response.read().decode("utf-8"))
+        assert auth_me["authenticated"] is True
+        assert auth_me["email"] == "sparx.sandeep@gmail.com"
+
+        preflight_status, preflight_headers = options(
+            "/api/auth/login",
+            headers={
+                "Origin": "https://example.com",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "authorization, content-type",
+            },
+        )
+        assert preflight_status == 204
+        assert preflight_headers["Access-Control-Allow-Headers"] == "Authorization, Content-Type"
+
         mappings = get_json("/api/market-mappings")
         assert isinstance(mappings, list)
         assert len(mappings) >= 1
@@ -103,16 +138,32 @@ def test_api_and_dashboard_contracts():
         assert any(row["canonical_id"] == "DEM_HOUSE_2026" for row in mappings)
 
         manual_positions = get_json("/api/manual-positions")
-        entered = post_json(f"/api/manual-positions/{manual_positions[0]['position_id']}", {"action": "mark_entered"})
+        entered = post_json(
+            f"/api/manual-positions/{manual_positions[0]['position_id']}",
+            {"action": "mark_entered"},
+            headers=auth_headers,
+        )
         assert entered["status"] == "entered"
 
         incidents = get_json("/api/errors")
-        resolved = post_json(f"/api/errors/{incidents[0]['incident_id']}", {"action": "resolve"})
+        resolved = post_json(
+            f"/api/errors/{incidents[0]['incident_id']}",
+            {"action": "resolve"},
+            headers=auth_headers,
+        )
         assert resolved["status"] == "resolved"
 
-        mapping_update = post_json("/api/market-mappings/DEM_HOUSE_2026", {"action": "confirm"})
+        mapping_update = post_json(
+            "/api/market-mappings/DEM_HOUSE_2026",
+            {"action": "confirm"},
+            headers=auth_headers,
+        )
         assert mapping_update["status"] == "confirmed"
-        auto_trade_enabled = post_json("/api/market-mappings/DEM_HOUSE_2026", {"action": "enable_auto_trade"})
+        auto_trade_enabled = post_json(
+            "/api/market-mappings/DEM_HOUSE_2026",
+            {"action": "enable_auto_trade"},
+            headers=auth_headers,
+        )
         assert auto_trade_enabled["status"] == "confirmed"
         assert auto_trade_enabled["allow_auto_trade"] is True
 

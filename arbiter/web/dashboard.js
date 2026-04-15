@@ -1,3 +1,40 @@
+const boot = window.ARBITER_BOOTSTRAP || {};
+const search = new URLSearchParams(window.location.search);
+const API_BASE_STORAGE_KEY = "arbiter.apiBase";
+const AUTH_TOKEN_STORAGE_KEY = "arbiter.authToken";
+
+function readStorage(storage, key) {
+  try {
+    return storage?.getItem(key) || "";
+  } catch {
+    return "";
+  }
+}
+
+function writeStorage(storage, key, value) {
+  try {
+    if (!storage) return;
+    if (value) {
+      storage.setItem(key, value);
+    } else {
+      storage.removeItem(key);
+    }
+  } catch {
+    // Ignore storage access failures in privacy-restricted contexts.
+  }
+}
+
+function normalizeApiBase(value) {
+  return String(value || "").trim().replace(/\/+$/, "");
+}
+
+const initialRoute = search.get("route") || boot.routeMode || window.location.pathname || "/";
+const initialApiBase = normalizeApiBase(
+  search.get("api") || boot.defaultApiBase || readStorage(window.localStorage, API_BASE_STORAGE_KEY)
+);
+const initialAuthToken = readStorage(window.sessionStorage, AUTH_TOKEN_STORAGE_KEY);
+const normalizedInitialRoute = initialRoute.replace(/\/+$/, "");
+
 const state = {
   system: null,
   opportunities: [],
@@ -5,9 +42,19 @@ const state = {
   manualPositions: [],
   incidents: [],
   mappings: [],
+  portfolio: null,
+  profitability: null,
   wsConnected: false,
   lastQuoteAt: null,
   activeLogFilter: "all",
+  apiBase: initialApiBase,
+  authToken: initialAuthToken,
+  operatorAuthenticated: false,
+  operatorEmail: "",
+  routeMode: normalizedInitialRoute === "/ops" || normalizedInitialRoute.endsWith("/ops") ? "ops" : "public",
+  websocket: null,
+  refreshTimer: null,
+  connectionMessage: "",
 };
 
 const LOG_DEFINITIONS = {
@@ -89,10 +136,156 @@ const wsStatusEl = document.getElementById("wsStatus");
 const modePillEl = document.getElementById("modePill");
 const edgeChartMetaEl = document.getElementById("edgeChartMeta");
 const equityChartMetaEl = document.getElementById("equityChartMeta");
+const authOverlayEl = document.getElementById("authOverlay");
+const authFormEl = document.getElementById("authForm");
+const authMessageEl = document.getElementById("authMessage");
+const authSubmitEl = document.getElementById("authSubmit");
+const authPublicLinkEl = document.getElementById("authPublicLink");
+const authEmailEl = document.getElementById("authEmail");
+const authPasswordEl = document.getElementById("authPassword");
+const connectionOverlayEl = document.getElementById("connectionOverlay");
+const connectionFormEl = document.getElementById("connectionForm");
+const connectionMessageEl = document.getElementById("connectionMessage");
+const connectionResetEl = document.getElementById("connectionReset");
+const apiBaseInputEl = document.getElementById("apiBaseInput");
+const deskModeTagEl = document.getElementById("deskModeTag");
+const apiBasePillEl = document.getElementById("apiBasePill");
+const apiConfigButtonEl = document.getElementById("apiConfigButton");
+const opsShortcutEl = document.getElementById("opsShortcut");
+const logoutButtonEl = document.getElementById("logoutButton");
+const heroTitleEl = document.getElementById("heroTitle");
+const heroSubtitleEl = document.getElementById("heroSubtitle");
+const accessPillEl = document.getElementById("accessPill");
+const profitabilityPillEl = document.getElementById("profitabilityPill");
+const profitabilityVerdictBadgeEl = document.getElementById("profitabilityVerdictBadge");
+const profitabilitySummaryEl = document.getElementById("profitabilitySummary");
+const profitabilityReasonsEl = document.getElementById("profitabilityReasons");
+const portfolioExposureBadgeEl = document.getElementById("portfolioExposureBadge");
+const portfolioSummaryEl = document.getElementById("portfolioSummary");
+const portfolioListEl = document.getElementById("portfolioList");
 
 const formatUsd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
 const formatWhole = new Intl.NumberFormat("en-US");
 const formatClock = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" });
+
+function isStaticFrontend() {
+  return Boolean(boot.staticFrontend);
+}
+
+function isOpsMode() {
+  return state.routeMode === "ops";
+}
+
+function hasOperatorAccess() {
+  return isOpsMode() && state.operatorAuthenticated;
+}
+
+function getPublicHref() {
+  if (!isStaticFrontend()) {
+    return boot.publicHref || "/";
+  }
+  const params = new URLSearchParams(window.location.search);
+  params.delete("route");
+  if (state.apiBase) params.set("api", state.apiBase);
+  else params.delete("api");
+  const query = params.toString();
+  return `./${query ? `?${query}` : ""}`;
+}
+
+function getOpsHref() {
+  if (!isStaticFrontend()) {
+    return boot.opsHref || "/ops";
+  }
+  const params = new URLSearchParams(window.location.search);
+  params.set("route", "/ops");
+  if (state.apiBase) params.set("api", state.apiBase);
+  else params.delete("api");
+  return `./?${params.toString()}`;
+}
+
+function syncLocationState() {
+  if (!isStaticFrontend() || !window.history?.replaceState) return;
+  const params = new URLSearchParams(window.location.search);
+  if (isOpsMode()) params.set("route", "/ops");
+  else params.delete("route");
+  if (state.apiBase) params.set("api", state.apiBase);
+  else params.delete("api");
+  const query = params.toString();
+  window.history.replaceState({}, "", `./${query ? `?${query}` : ""}`);
+}
+
+function apiDisplayLabel() {
+  if (state.apiBase) return state.apiBase;
+  return isStaticFrontend() ? "API not configured" : "same origin";
+}
+
+function buildApiUrl(path) {
+  const base = state.apiBase || window.location.origin;
+  return new URL(path, `${base.replace(/\/+$/, "")}/`).toString();
+}
+
+function buildWebSocketUrl() {
+  const base = new URL(state.apiBase || window.location.origin);
+  const protocol = base.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${base.host}/ws`;
+}
+
+function setWsLabel(text, muted = true) {
+  if (!wsStatusEl) return;
+  wsStatusEl.textContent = text;
+  wsStatusEl.classList.toggle("value-muted", muted);
+}
+
+function setAuthMessage(message, isError = false) {
+  if (!authMessageEl) return;
+  authMessageEl.textContent = message || "";
+  authMessageEl.classList.toggle("auth-message-error", Boolean(message) && isError);
+}
+
+function setConnectionMessage(message, isError = false) {
+  state.connectionMessage = message || "";
+  if (!connectionMessageEl) return;
+  connectionMessageEl.textContent = state.connectionMessage;
+  connectionMessageEl.classList.toggle("auth-message-error", Boolean(message) && isError);
+}
+
+function showAuthOverlay(message = "") {
+  if (!authOverlayEl) return;
+  setAuthMessage(message);
+  authOverlayEl.classList.remove("hidden");
+  authOverlayEl.setAttribute("aria-hidden", "false");
+}
+
+function hideAuthOverlay() {
+  if (!authOverlayEl) return;
+  authOverlayEl.classList.add("hidden");
+  authOverlayEl.setAttribute("aria-hidden", "true");
+}
+
+function showConnectionOverlay(message = "") {
+  if (!connectionOverlayEl) return;
+  if (apiBaseInputEl) apiBaseInputEl.value = state.apiBase;
+  setConnectionMessage(message);
+  connectionOverlayEl.classList.remove("hidden");
+  connectionOverlayEl.setAttribute("aria-hidden", "false");
+}
+
+function hideConnectionOverlay() {
+  if (!connectionOverlayEl) return;
+  connectionOverlayEl.classList.add("hidden");
+  connectionOverlayEl.setAttribute("aria-hidden", "true");
+}
+
+function persistApiBase(apiBase) {
+  state.apiBase = normalizeApiBase(apiBase);
+  writeStorage(window.localStorage, API_BASE_STORAGE_KEY, state.apiBase);
+  syncLocationState();
+}
+
+function persistAuthToken(token) {
+  state.authToken = token || "";
+  writeStorage(window.sessionStorage, AUTH_TOKEN_STORAGE_KEY, state.authToken);
+}
 
 function cents(value) {
   return `${Number(value || 0).toFixed(1)}\u00a2`;
@@ -552,33 +745,78 @@ function renderLogEntry(entry) {
   `;
 }
 
-async function fetchJson(path) {
-  const response = await fetch(path, { cache: "no-store" });
-  if (!response.ok) throw new Error(`${path} failed with ${response.status}`);
+async function requestJson(path, options = {}) {
+  const headers = {
+    ...(options.headers || {}),
+  };
+  if (state.authToken) {
+    headers.Authorization = `Bearer ${state.authToken}`;
+  }
+
+  const response = await fetch(buildApiUrl(path), {
+    method: options.method || "GET",
+    cache: options.cache || "no-store",
+    headers,
+    body: options.body,
+  });
+
+  if (response.status === 401 && options.allowUnauthorized) {
+    return null;
+  }
+
+  if (!response.ok) {
+    const message = await response.text();
+    if (response.status === 401) {
+      state.operatorAuthenticated = false;
+      state.operatorEmail = "";
+      persistAuthToken("");
+      renderChrome();
+      if (isOpsMode()) {
+        showAuthOverlay("Sign in to continue using operator controls.");
+      }
+    }
+    throw new Error(`${path} failed with ${response.status}: ${message}`);
+  }
+
   return response.json();
 }
 
-async function postJson(path, payload) {
-  const response = await fetch(path, {
+async function fetchJson(path, options = {}) {
+  return requestJson(path, options);
+}
+
+async function postJson(path, payload, options = {}) {
+  return requestJson(path, {
+    ...options,
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
     body: JSON.stringify(payload || {}),
   });
-  if (!response.ok) {
-    const message = await response.text();
-    throw new Error(`${path} failed with ${response.status}: ${message}`);
+}
+
+async function refreshOperatorSession() {
+  const payload = await fetchJson("/api/auth/me", { allowUnauthorized: true });
+  state.operatorAuthenticated = Boolean(payload?.authenticated);
+  state.operatorEmail = payload?.email || "";
+  if (!state.operatorAuthenticated && !state.authToken) {
+    state.operatorEmail = "";
   }
-  return response.json();
+  return state.operatorAuthenticated;
 }
 
 async function loadSnapshot() {
-  const [system, opportunities, trades, incidents, manualPositions, mappings] = await Promise.all([
+  const [system, opportunities, trades, incidents, manualPositions, mappings, portfolio, profitability] = await Promise.all([
     fetchJson("/api/system"),
     fetchJson("/api/opportunities"),
     fetchJson("/api/trades"),
     fetchJson("/api/errors"),
     fetchJson("/api/manual-positions"),
     fetchJson("/api/market-mappings"),
+    fetchJson("/api/portfolio"),
+    fetchJson("/api/profitability"),
   ]);
   state.system = system;
   state.opportunities = opportunities;
@@ -586,6 +824,8 @@ async function loadSnapshot() {
   state.incidents = incidents;
   state.manualPositions = manualPositions;
   state.mappings = mappings;
+  state.portfolio = portfolio;
+  state.profitability = profitability;
   render();
 }
 
@@ -602,14 +842,33 @@ function upsertOpportunity(opportunity) {
     .slice(0, 16);
 }
 
+function disconnectWebSocket() {
+  if (!state.websocket) return;
+  const socket = state.websocket;
+  state.websocket = null;
+  try {
+    socket.close();
+  } catch {
+    // Ignore shutdown races.
+  }
+}
+
 function connectWebSocket() {
-  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-  const socket = new WebSocket(`${protocol}://${window.location.host}/ws`);
+  disconnectWebSocket();
+
+  if (isStaticFrontend() && !state.apiBase) {
+    state.wsConnected = false;
+    setWsLabel("API needed", true);
+    return;
+  }
+
+  const socket = new WebSocket(buildWebSocketUrl());
+  state.websocket = socket;
 
   socket.addEventListener("open", () => {
+    if (state.websocket !== socket) return;
     state.wsConnected = true;
-    wsStatusEl.textContent = "Live";
-    wsStatusEl.classList.remove("value-muted");
+    setWsLabel("Live", false);
     socket.send(JSON.stringify({ action: "refresh" }));
   });
 
@@ -617,6 +876,7 @@ function connectWebSocket() {
     const message = JSON.parse(event.data);
     if (message.type === "bootstrap" || message.type === "system") {
       state.system = message.payload;
+      state.profitability = message.payload?.profitability || state.profitability;
     } else if (message.type === "quote") {
       state.lastQuoteAt = message.payload.timestamp;
       if (state.system?.counts) {
@@ -645,9 +905,9 @@ function connectWebSocket() {
   });
 
   socket.addEventListener("close", () => {
+    if (state.websocket !== socket) return;
     state.wsConnected = false;
-    wsStatusEl.textContent = "Reconnecting";
-    wsStatusEl.classList.add("value-muted");
+    setWsLabel("Reconnecting", true);
     window.setTimeout(connectWebSocket, 1500);
   });
 
@@ -655,8 +915,11 @@ function connectWebSocket() {
 }
 
 function render() {
+  renderChrome();
   renderStatusBand();
   renderMetrics();
+  renderProfitabilityPanel();
+  renderPortfolioPanel();
   renderOpportunities();
   renderManualQueue();
   renderIncidentQueue();
@@ -664,6 +927,112 @@ function render() {
   renderMappings();
   renderCollectors();
   renderCharts();
+}
+
+function renderChrome() {
+  const publicHref = getPublicHref();
+  const opsHref = getOpsHref();
+  const profitability = state.profitability || state.system?.profitability;
+  const opsVisible = hasOperatorAccess();
+
+  if (deskModeTagEl) {
+    deskModeTagEl.textContent = isOpsMode() ? "Ops desk" : "Public desk";
+  }
+  if (apiBasePillEl) {
+    apiBasePillEl.textContent = `API: ${apiDisplayLabel()}`;
+    apiBasePillEl.classList.toggle("utility-pill-warn", isStaticFrontend() && !state.apiBase);
+  }
+  if (opsShortcutEl) {
+    opsShortcutEl.href = isOpsMode() ? publicHref : opsHref;
+    opsShortcutEl.textContent = isOpsMode() ? "Back to public desk" : "Open ops desk";
+  }
+  if (authPublicLinkEl) {
+    authPublicLinkEl.href = publicHref;
+  }
+  if (logoutButtonEl) {
+    logoutButtonEl.classList.toggle("hidden", !state.operatorAuthenticated);
+  }
+  if (heroTitleEl) {
+    heroTitleEl.textContent = isOpsMode() ? "Operator trading desk" : "Live trading desk";
+  }
+  if (heroSubtitleEl) {
+    heroSubtitleEl.textContent = isOpsMode()
+      ? "Authenticated operator mode unlocks manual queue actions, mapping controls, incident recovery, and production test workflows."
+      : "Public read-only mode streams live opportunities, risk posture, and profitability evidence from the core engine.";
+  }
+  if (accessPillEl) {
+    accessPillEl.textContent = hasOperatorAccess()
+      ? `Operator${state.operatorEmail ? ` • ${state.operatorEmail}` : ""}`
+      : isOpsMode()
+        ? "Sign in required"
+        : "Read only";
+    accessPillEl.classList.toggle("value-muted", !hasOperatorAccess());
+  }
+  if (profitabilityPillEl) {
+    profitabilityPillEl.textContent = profitability ? titleCase(profitability.verdict) : "Loading";
+    profitabilityPillEl.classList.toggle("value-muted", !profitability || profitability.verdict === "collecting_evidence");
+  }
+
+  document.querySelectorAll("[data-ops-only]").forEach((element) => {
+    element.classList.toggle("hidden", !opsVisible);
+  });
+}
+
+function renderProfitabilityPanel() {
+  const profitability = state.profitability || state.system?.profitability;
+  if (!profitabilityVerdictBadgeEl || !profitabilitySummaryEl || !profitabilityReasonsEl) return;
+  if (!profitability) {
+    profitabilityVerdictBadgeEl.textContent = "Unavailable";
+    profitabilitySummaryEl.textContent = "Profitability evidence is still loading.";
+    profitabilityReasonsEl.innerHTML = emptyState("The validator has not published a snapshot yet.");
+    return;
+  }
+
+  const progressPct = Math.round((Number(profitability.progress || 0) * 100));
+  profitabilityVerdictBadgeEl.textContent = titleCase(profitability.verdict);
+  profitabilitySummaryEl.textContent = profitability.verdict === "validated_profitable"
+    ? `The validator has enough evidence to call the current run profitable after ${formatWhole.format(profitability.completed_executions || 0)} completed executions and ${formatUsd.format(profitability.total_realized_pnl || 0)} in realized P&L.`
+    : profitability.verdict === "blocked"
+      ? "The run is blocked by risk, audit, or incident quality gates. The desk should stay in test mode until those regressions are cleared."
+      : profitability.verdict === "not_profitable"
+        ? "The validator reached a negative determination. The route inventory is not clearing the profitability bar yet."
+        : `The validator is still collecting evidence. ${progressPct}% of the required proof threshold is complete.`;
+
+  const summaryCards = [
+    compactPanelItem("Evidence", `${progressPct}% complete against the profitability thresholds.`),
+    compactPanelItem("Executions", `${formatWhole.format(profitability.completed_executions || 0)} completed, ${formatWhole.format(profitability.profitable_executions || 0)} profitable, ${formatWhole.format(profitability.losing_executions || 0)} losing.`),
+    compactPanelItem("Quality", `${pct(profitability.audit_pass_rate || 0)} audit pass rate with ${pct(1 - Number(profitability.incident_rate || 0))} non-incident execution quality.`),
+    ...(profitability.reasons || []).slice(0, 3).map((reason) => compactPanelItem("Gate", reason)),
+  ];
+  profitabilityReasonsEl.innerHTML = summaryCards.join("");
+}
+
+function renderPortfolioPanel() {
+  const portfolio = state.portfolio;
+  if (!portfolioExposureBadgeEl || !portfolioSummaryEl || !portfolioListEl) return;
+  if (!portfolio) {
+    portfolioExposureBadgeEl.textContent = "$0.00";
+    portfolioSummaryEl.textContent = "Portfolio state is still loading.";
+    portfolioListEl.innerHTML = emptyState("Exposure and violation details will appear once the API responds.");
+    return;
+  }
+
+  const violations = portfolio.violations || [];
+  portfolioExposureBadgeEl.textContent = formatUsd.format(portfolio.total_exposure || 0);
+  portfolioSummaryEl.textContent = violations.length
+    ? `${formatWhole.format(violations.length)} active risk warnings are open across ${formatWhole.format(portfolio.total_open_positions || 0)} positions.`
+    : `${formatWhole.format(portfolio.total_open_positions || 0)} open positions are inside the current venue and exposure guardrails.`;
+
+  const venueCards = Object.values(portfolio.by_venue || {}).slice(0, 3).map((venue) =>
+    compactPanelItem(
+      platformLabel(venue.platform),
+      `${formatUsd.format(venue.total_exposure || 0)} exposure across ${formatWhole.format(venue.position_count || 0)} positions${venue.is_low_balance ? " • low balance" : ""}.`
+    )
+  );
+  const violationCards = violations.slice(0, 2).map((violation) =>
+    compactPanelItem(titleCase(violation.level || "warning"), violation.message || "Risk violation detected.")
+  );
+  portfolioListEl.innerHTML = [...violationCards, ...venueCards].join("") || emptyState("No positions or violations are active.");
 }
 
 function renderStatusBand() {
@@ -836,6 +1205,10 @@ function renderManualQueue() {
   const countEl = document.getElementById("manualCount");
   if (countEl) countEl.textContent = formatWhole.format(state.manualPositions.length);
   if (!container) return;
+  if (!hasOperatorAccess()) {
+    container.innerHTML = emptyState("Sign in to operator mode to use manual queue actions.");
+    return;
+  }
   if (!state.manualPositions.length) {
     container.innerHTML = emptyState("No manual venues need operator action right now.");
     return;
@@ -877,6 +1250,10 @@ function renderIncidentQueue() {
   const countEl = document.getElementById("incidentCount");
   if (countEl) countEl.textContent = formatWhole.format(state.incidents.length);
   if (!container) return;
+  if (!hasOperatorAccess()) {
+    container.innerHTML = emptyState("Sign in to operator mode to resolve incidents from the desk.");
+    return;
+  }
   if (!state.incidents.length) {
     container.innerHTML = emptyState("No recovery incidents are open.");
     return;
@@ -1020,11 +1397,11 @@ function renderMappings() {
       <div class="operator-meta-row">
         <span>${escapeHtml(mapping.allow_auto_trade ? "Auto-trade allowed" : "Held for review before auto-trade")}</span>
       </div>
-      <div class="action-row">
+      ${hasOperatorAccess() ? `<div class="action-row">
         ${mappingStatus(mapping) !== "confirmed" ? renderActionButton("Confirm match", "confirm", "mapping", mapping.canonical_id, mapping.canonical_id) : ""}
         ${mapping.allow_auto_trade ? renderActionButton("Hold auto-trade", "disable_auto_trade", "mapping", mapping.canonical_id, mapping.canonical_id, true) : renderActionButton("Enable auto-trade", "enable_auto_trade", "mapping", mapping.canonical_id, mapping.canonical_id)}
         ${mappingStatus(mapping) !== "review" ? renderActionButton("Mark review", "review", "mapping", mapping.canonical_id, mapping.canonical_id, true) : ""}
-      </div>
+      </div>` : ""}
     </article>
   `).join("");
 }
@@ -1214,6 +1591,17 @@ function buildSmoothPath(coords) {
   return path;
 }
 
+function compactPanelItem(label, copy) {
+  return `
+    <article class="stack-item compact-item">
+      <div class="stack-item-header">
+        <div class="stack-item-title">${escapeHtml(label)}</div>
+      </div>
+      <div class="stack-item-meta">${escapeHtml(copy)}</div>
+    </article>
+  `;
+}
+
 function emptyState(message) {
   return `<article class="stack-item"><div class="stack-item-meta">${escapeHtml(message)}</div></article>`;
 }
@@ -1265,6 +1653,10 @@ document.addEventListener("click", (event) => {
 
   const manualTarget = event.target.closest("[data-manual-action]");
   if (manualTarget) {
+    if (!hasOperatorAccess()) {
+      showAuthOverlay("Sign in to use manual desk controls.");
+      return;
+    }
     const action = manualTarget.getAttribute("data-manual-action");
     const positionId = manualTarget.getAttribute("data-target-id");
     if (!action || !positionId) return;
@@ -1274,6 +1666,10 @@ document.addEventListener("click", (event) => {
 
   const incidentTarget = event.target.closest("[data-incident-action]");
   if (incidentTarget) {
+    if (!hasOperatorAccess()) {
+      showAuthOverlay("Sign in to resolve incidents from the ops desk.");
+      return;
+    }
     const action = incidentTarget.getAttribute("data-incident-action");
     const incidentId = incidentTarget.getAttribute("data-target-id");
     if (!action || !incidentId) return;
@@ -1283,12 +1679,91 @@ document.addEventListener("click", (event) => {
 
   const mappingTarget = event.target.closest("[data-mapping-action]");
   if (mappingTarget) {
+    if (!hasOperatorAccess()) {
+      showAuthOverlay("Sign in to change mapping state.");
+      return;
+    }
     const action = mappingTarget.getAttribute("data-mapping-action");
     const canonicalId = mappingTarget.getAttribute("data-target-id");
     if (!action || !canonicalId) return;
     void runAction(mappingTarget, () => postJson(`/api/market-mappings/${encodeURIComponent(canonicalId)}`, { action }));
+    return;
+  }
+
+  if (event.target === apiConfigButtonEl) {
+    showConnectionOverlay(state.connectionMessage);
+    return;
+  }
+
+  if (event.target === logoutButtonEl) {
+    void (async () => {
+      try {
+        await postJson("/api/auth/logout", {});
+      } catch {
+        // Local cleanup still matters even if the server session is already gone.
+      }
+      persistAuthToken("");
+      state.operatorAuthenticated = false;
+      state.operatorEmail = "";
+      renderChrome();
+      if (isOpsMode()) {
+        showAuthOverlay("Signed out. Sign in again to continue using the ops desk.");
+      }
+    })();
   }
 });
+
+if (authFormEl) {
+  authFormEl.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const email = authEmailEl?.value.trim().toLowerCase() || "";
+    const password = authPasswordEl?.value || "";
+    if (!email || !password) {
+      setAuthMessage("Enter both email and password.", true);
+      return;
+    }
+
+    void (async () => {
+      if (authSubmitEl) authSubmitEl.disabled = true;
+      setAuthMessage("Signing in...");
+      try {
+        const payload = await postJson("/api/auth/login", { email, password });
+        persistAuthToken(payload.token || "");
+        state.operatorAuthenticated = true;
+        state.operatorEmail = payload.email || email;
+        hideAuthOverlay();
+        setAuthMessage("");
+        renderChrome();
+        await loadSnapshot();
+        connectWebSocket();
+      } catch (error) {
+        setAuthMessage(error instanceof Error ? error.message : "Sign-in failed.", true);
+      } finally {
+        if (authSubmitEl) authSubmitEl.disabled = false;
+      }
+    })();
+  });
+}
+
+if (connectionFormEl) {
+  connectionFormEl.addEventListener("submit", (event) => {
+    event.preventDefault();
+    persistApiBase(apiBaseInputEl?.value || "");
+    setConnectionMessage(state.apiBase ? "Saved. Reconnecting to the selected API." : "Using same-origin API.");
+    hideConnectionOverlay();
+    void refreshAllData();
+  });
+}
+
+if (connectionResetEl) {
+  connectionResetEl.addEventListener("click", () => {
+    persistApiBase("");
+    if (apiBaseInputEl) apiBaseInputEl.value = "";
+    setConnectionMessage(isStaticFrontend() ? "Connection cleared. Configure an API source to use the static dashboard." : "Using same-origin API.");
+    hideConnectionOverlay();
+    void refreshAllData();
+  });
+}
 
 if (edgeChartEl && equityChartEl) {
   const resizeObserver = new ResizeObserver(() => renderCharts());
@@ -1300,9 +1775,59 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden) renderCharts();
 });
 
-window.setInterval(() => {
-  loadSnapshot().catch((error) => console.error(error));
-}, 7000);
+async function refreshAllData() {
+  if (isStaticFrontend() && !state.apiBase) {
+    state.system = null;
+    state.portfolio = null;
+    state.profitability = null;
+    state.opportunities = [];
+    state.trades = [];
+    state.manualPositions = [];
+    state.incidents = [];
+    state.mappings = [];
+    state.wsConnected = false;
+    setWsLabel("API needed", true);
+    render();
+    showConnectionOverlay("Set the backend API source before using the static dashboard.");
+    return;
+  }
 
-loadSnapshot().catch((error) => console.error(error));
-connectWebSocket();
+  try {
+    if (isOpsMode() || state.authToken) {
+      await refreshOperatorSession();
+    } else {
+      state.operatorAuthenticated = false;
+      state.operatorEmail = "";
+    }
+    if (isOpsMode() && !state.operatorAuthenticated) {
+      showAuthOverlay("Sign in to unlock the operator desk.");
+    } else {
+      hideAuthOverlay();
+    }
+    await loadSnapshot();
+    hideConnectionOverlay();
+    connectWebSocket();
+  } catch (error) {
+    state.wsConnected = false;
+    setWsLabel("Offline", true);
+    render();
+    if (isStaticFrontend()) {
+      showConnectionOverlay(error instanceof Error ? error.message : "Unable to reach the selected API.");
+    } else {
+      console.error(error);
+    }
+  }
+}
+
+function startPolling() {
+  if (state.refreshTimer) return;
+  state.refreshTimer = window.setInterval(() => {
+    if (isStaticFrontend() && !state.apiBase) return;
+    loadSnapshot().catch((error) => console.error(error));
+  }, 7000);
+}
+
+renderChrome();
+setWsLabel("Connecting", true);
+startPolling();
+void refreshAllData();

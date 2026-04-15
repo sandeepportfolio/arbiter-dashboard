@@ -9,7 +9,7 @@ import logging
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -17,6 +17,10 @@ import asyncpg
 from ..config.settings import MARKET_SEEDS, MarketMappingRecord, normalize_market_text, similarity_score
 
 logger = logging.getLogger("arbiter.mapping")
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class MappingStatus(str, Enum):
@@ -45,8 +49,8 @@ class MarketMapping:
     confidence: float = 0.0
     expires_at: Optional[datetime] = None
     last_validated_at: Optional[datetime] = None
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
 
     def to_dict(self) -> dict:
         return {
@@ -285,7 +289,7 @@ class MarketMappingStore:
         """Insert or update a mapping."""
         conn = await self.acquire()
         try:
-            now = datetime.utcnow()
+            now = utc_now()
             await conn.execute(
                 """
                 INSERT INTO market_mappings (
@@ -356,7 +360,7 @@ class MarketMappingStore:
         mapping.review_note = review_note
         if allow_auto_trade is not None:
             mapping.allow_auto_trade = allow_auto_trade
-        mapping.updated_at = datetime.utcnow()
+        mapping.updated_at = utc_now()
 
         return await self.upsert(mapping)
 

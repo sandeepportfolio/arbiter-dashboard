@@ -4,7 +4,7 @@ Tests for MarketMappingStore.
 import asyncio
 import sys
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 
@@ -15,6 +15,10 @@ from arbiter.mapping.market_map import (
     MarketMapping,
     MarketMappingStore,
 )
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class MockRecord:
@@ -54,7 +58,7 @@ class MockConn:
                 "status": "pending",
                 "reviewed_at": None,
                 "reviewer_note": "",
-                "created_at": datetime.utcnow(),
+                "created_at": utc_now(),
             }
             self._candidates[self._next_cid] = c
             self._next_cid += 1
@@ -63,7 +67,7 @@ class MockConn:
             cid = args[0]
             if cid in self._candidates:
                 self._candidates[cid]["status"] = args[1]
-                self._candidates[cid]["reviewed_at"] = datetime.utcnow()
+                self._candidates[cid]["reviewed_at"] = utc_now()
                 self._candidates[cid]["reviewer_note"] = args[2] if len(args) > 2 else ""
             return "UPDATE 1"
         if "DELETE FROM market_mappings" in query:
@@ -112,7 +116,7 @@ class MockConn:
                 "status": "pending",
                 "reviewed_at": None,
                 "reviewer_note": "",
-                "created_at": datetime.utcnow(),
+                "created_at": utc_now(),
             }
             self._candidates[self._next_cid] = c
             self._next_cid += 1
@@ -183,8 +187,8 @@ class MockConn:
             "confidence": float(args[14]) if args[14] else 0.0,
             "expires_at": args[15],
             "last_validated_at": args[16],
-            "created_at": args[17] if len(args) > 17 else datetime.utcnow(),
-            "updated_at": datetime.utcnow(),
+            "created_at": args[17] if len(args) > 17 else utc_now(),
+            "updated_at": utc_now(),
         }
 
 

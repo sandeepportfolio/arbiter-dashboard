@@ -8,7 +8,7 @@ import asyncio
 import logging
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
@@ -16,6 +16,10 @@ from typing import Any, Dict, List, Optional, Tuple
 import asyncpg
 
 logger = logging.getLogger("arbiter.ledger")
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class PositionStatus(str, Enum):
@@ -58,8 +62,8 @@ class Position:
     settlement_pnl: float = 0.0
     fees_paid: float = 0.0
     is_simulation: bool = True
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    entry_confirmed_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=utc_now)
+    entry_confirmed_at: datetime = field(default_factory=utc_now)
     closed_at: Optional[datetime] = None
     settled_at: Optional[datetime] = None
     unwind_reason: str = ""
@@ -241,7 +245,7 @@ class PositionLedger:
     ) -> Position:
         """Record a new open position after both legs have been filled."""
         position_id = f"POS-{uuid.uuid4().hex[:12].upper()}"
-        now = datetime.utcnow()
+        now = utc_now()
 
         conn = await self.acquire()
         try:
@@ -350,7 +354,7 @@ class PositionLedger:
         notes: str = "",
     ) -> Position:
         """Close an open/hedged position."""
-        now = datetime.utcnow()
+        now = utc_now()
         conn = await self.acquire()
         try:
             row = await conn.fetchrow(
@@ -387,7 +391,7 @@ class PositionLedger:
         settlement_pnl: float,
     ) -> Position:
         """Record market resolution and final P&L."""
-        now = datetime.utcnow()
+        now = utc_now()
         conn = await self.acquire()
         try:
             row = await conn.fetchrow(
@@ -431,7 +435,7 @@ class PositionLedger:
         unwind_pnl: float = 0.0,
     ) -> Position:
         """Record an unwind event (one-leg recovery, emergency exit)."""
-        now = datetime.utcnow()
+        now = utc_now()
         conn = await self.acquire()
         try:
             row = await conn.fetchrow(
