@@ -22,6 +22,7 @@ from .execution.engine import ArbExecution, ExecutionEngine, ExecutionIncident
 from .monitor.balance import BalanceMonitor
 from .portfolio import PortfolioMonitor
 from .profitability import ProfitabilityValidator
+from .readiness import OperationalReadiness
 from .scanner.arbitrage import ArbitrageOpportunity, ArbitrageScanner
 from .utils.price_store import PricePoint, PriceStore
 from .workflow import PredictItWorkflowManager, UnwindReason
@@ -133,6 +134,7 @@ class ArbiterAPI:
         portfolio: Optional[PortfolioMonitor] = None,
         workflow_manager: Optional[PredictItWorkflowManager] = None,
         profitability: Optional[ProfitabilityValidator] = None,
+        readiness: Optional[OperationalReadiness] = None,
         host: str = "0.0.0.0",
         port: int = 8080,
     ):
@@ -145,6 +147,7 @@ class ArbiterAPI:
         self.portfolio = portfolio
         self.workflow_manager = workflow_manager
         self.profitability = profitability
+        self.readiness = readiness
         self.host = host
         self.port = port
         self.started_at = time.time()
@@ -175,6 +178,7 @@ class ArbiterAPI:
         app.router.add_get("/api/manual-positions", self.handle_manual_positions)
         app.router.add_post("/api/manual-positions/{position_id}", self.handle_manual_position_action)
         app.router.add_get("/api/profitability", self.handle_profitability)
+        app.router.add_get("/api/readiness", self.handle_readiness)
         app.router.add_get("/api/portfolio", self.handle_portfolio)
         app.router.add_get("/api/portfolio/positions", self.handle_portfolio_positions)
         app.router.add_get("/api/portfolio/violations", self.handle_portfolio_violations)
@@ -239,6 +243,7 @@ class ArbiterAPI:
                 "execution": self.engine.stats,
                 "audit": self.engine.stats.get("audit", {}),
                 "profitability": self._profitability_snapshot(),
+                "readiness": self._readiness_snapshot(),
             }
         )
 
@@ -283,6 +288,9 @@ class ArbiterAPI:
 
     async def handle_profitability(self, request):
         return web.json_response(self._profitability_snapshot())
+
+    async def handle_readiness(self, request):
+        return web.json_response(self._readiness_snapshot())
 
     async def handle_market_mapping_action(self, request):
         await require_auth(request)
@@ -408,7 +416,7 @@ class ArbiterAPI:
             "estimated_fees": round(total_fees, 4),
             "unrealized_pnl": round(portfolio_snapshot.unrealized_pnl, 4) if portfolio_snapshot else 0.0,
             "total_exposure": round(portfolio_snapshot.total_exposure, 4) if portfolio_snapshot else 0.0,
-            "dry_run": os.getenv("DRY_RUN", "true").lower() != "false",
+            "dry_run": self.config.scanner.dry_run,
             "drift_guard_active": True,
         })
 
@@ -640,6 +648,7 @@ class ArbiterAPI:
             "execution": self.engine.stats,
             "audit": self.engine.stats.get("audit", {}),
             "profitability": self._profitability_snapshot(),
+            "readiness": self._readiness_snapshot(),
             "collectors": self._collector_snapshot(),
             "balances": balances,
             "series": {
@@ -668,6 +677,18 @@ class ArbiterAPI:
             }
         return self.profitability.get_snapshot().to_dict()
 
+    def _readiness_snapshot(self) -> dict:
+        if not self.readiness:
+            return {
+                "timestamp": time.time(),
+                "mode": "dry-run" if self.config.scanner.dry_run else "live",
+                "ready_for_live_trading": False,
+                "blocking_reasons": ["Readiness gate is not configured"],
+                "warnings": [],
+                "checks": [],
+            }
+        return self.readiness.get_snapshot().to_dict()
+
     def _portfolio_monitor_snapshot(self):
         if self.portfolio:
             return self.portfolio.get_snapshot() or self.portfolio.compute_snapshot()
@@ -678,7 +699,7 @@ class ArbiterAPI:
         if snapshot is not None:
             return snapshot.to_dict()
 
-        dry_run = os.getenv("DRY_RUN", "true").lower() != "false"
+        dry_run = self.config.scanner.dry_run
         return {
             "timestamp": time.time(),
             "total_exposure": 0.0,
@@ -788,6 +809,7 @@ def create_api_server(
     portfolio=None,
     workflow_manager=None,
     profitability=None,
+    readiness=None,
     host="0.0.0.0",
     port=8080,
 ) -> ArbiterAPI:
@@ -801,6 +823,7 @@ def create_api_server(
         portfolio=portfolio,
         workflow_manager=workflow_manager,
         profitability=profitability,
+        readiness=readiness,
         host=host,
         port=port,
     )

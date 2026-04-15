@@ -20,6 +20,14 @@ jobs:
           pip install -r requirements.txt pytest
       - name: Compile package
         run: python -m compileall arbiter
+      - name: Syntax check critical entrypoints
+        run: |
+          python -m py_compile \
+            arbiter/api.py \
+            arbiter/main.py \
+            arbiter/portfolio/monitor.py \
+            arbiter/profitability/validator.py \
+            arbiter/readiness.py
       - name: Run Python audit tests
         run: python -m pytest -q arbiter
       - name: Smoke test API
@@ -46,6 +54,8 @@ jobs:
           cache: "npm"
       - name: Install Node dependencies
         run: npm ci
+      - name: Syntax check dashboard bundle
+        run: node --check arbiter/web/dashboard.js
       - name: Typecheck
         run: npm run typecheck
       - name: Run Vitest

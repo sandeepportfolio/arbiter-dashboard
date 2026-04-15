@@ -26,6 +26,7 @@ from .monitor.balance import BalanceMonitor, BalanceSnapshot
 from .execution.engine import ExecutionEngine
 from .portfolio import PortfolioConfig, PortfolioMonitor
 from .profitability import ProfitabilityConfig, ProfitabilityValidator
+from .readiness import OperationalReadiness
 from .workflow import PredictItWorkflowManager
 
 
@@ -70,10 +71,19 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, port: int = 
     )
     workflow = PredictItWorkflowManager(config.alerts)
     profitability = ProfitabilityValidator(ProfitabilityConfig(), scanner, engine)
+    readiness = OperationalReadiness(
+        config,
+        engine=engine,
+        monitor=monitor,
+        profitability=profitability,
+        collectors=collectors_dict,
+    )
+    engine.set_trade_gate(readiness.allow_execution)
 
     if api_only and os.getenv("ARBITER_UI_SMOKE_SEED") == "1":
         await seed_dashboard_fixture(price_store, scanner, engine, monitor)
         profitability.refresh()
+        readiness.refresh()
 
     # ── API Server (for dashboard) ─────────────────────────────
     from .api import create_api_server
@@ -87,6 +97,7 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, port: int = 
         portfolio=portfolio,
         workflow_manager=workflow,
         profitability=profitability,
+        readiness=readiness,
         port=port,
     )
 
@@ -306,6 +317,12 @@ def main():
     config = load_config()
     if args.live:
         config.scanner.dry_run = False
+        readiness = OperationalReadiness(config)
+        failures = readiness.startup_failures()
+        if failures:
+            for failure in failures:
+                logging.getLogger("arbiter.main").critical("Live startup blocked: %s", failure)
+            sys.exit(2)
 
     asyncio.run(run_system(config, api_only=args.api_only, port=args.port))
 

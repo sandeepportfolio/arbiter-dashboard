@@ -18,6 +18,19 @@ cd "$ROOT_DIR"
 echo "[quick-check] compile package"
 python3 -m compileall arbiter >/dev/null
 
+echo "[quick-check] syntax check critical Python entrypoints"
+python3 -m py_compile \
+  arbiter/api.py \
+  arbiter/main.py \
+  arbiter/portfolio/monitor.py \
+  arbiter/profitability/validator.py \
+  arbiter/readiness.py
+
+if command -v node >/dev/null 2>&1; then
+  echo "[quick-check] syntax check dashboard bundle"
+  node --check arbiter/web/dashboard.js
+fi
+
 echo "[quick-check] run python package tests"
 python3 -m pytest -q arbiter
 

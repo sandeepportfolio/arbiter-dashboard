@@ -223,6 +223,14 @@ class RiskManager:
         self._daily_pnl += pnl
         self._daily_trades += 1
 
+    def release_trade(self, canonical_id: str, exposure: float, pnl: float = 0.0):
+        remaining = max(self._open_positions.get(canonical_id, 0.0) - exposure, 0.0)
+        if remaining > 0:
+            self._open_positions[canonical_id] = remaining
+        else:
+            self._open_positions.pop(canonical_id, None)
+        self._daily_pnl += pnl
+
 
 class ExecutionEngine:
     def __init__(
@@ -255,6 +263,10 @@ class ExecutionEngine:
             max_position_usd=config.scanner.max_position_usd,
             predictit_cap=config.scanner.predictit_cap,
         )
+        self._trade_gate = None
+
+    def set_trade_gate(self, gate) -> None:
+        self._trade_gate = gate
 
     def subscribe(self) -> asyncio.Queue:
         queue: asyncio.Queue = asyncio.Queue(maxsize=100)
@@ -277,6 +289,19 @@ class ExecutionEngine:
         if time.time() - last_seen < 30.0:
             return None
         self._recent_signatures[signature] = time.time()
+
+        gate_allowed, gate_reason, gate_context = await self._check_trade_gate(opp)
+        if not gate_allowed:
+            self._aborted_count += 1
+            if not self.scanner_config.dry_run:
+                await self._record_incident(
+                    "ARB-GATE",
+                    opp,
+                    "warning",
+                    f"Trade gate blocked execution: {gate_reason}",
+                    metadata={"gate": gate_context},
+                )
+            return None
 
         self._execution_count += 1
         arb_id = f"ARB-{self._execution_count:06d}"
@@ -629,7 +654,12 @@ class ExecutionEngine:
         self._executions.append(execution)
 
         if status in {"submitted", "filled"}:
-            self.risk.record_trade(opp.canonical_id, opp.suggested_qty * (opp.yes_price + opp.no_price), execution.realized_pnl)
+            if status == "filled":
+                self.risk.record_trade(
+                    opp.canonical_id,
+                    opp.suggested_qty * (opp.yes_price + opp.no_price),
+                    execution.realized_pnl,
+                )
         return execution
 
     async def _place_order_for_leg(
@@ -1017,6 +1047,22 @@ class ExecutionEngine:
         if self._own_session and not self._own_session.closed:
             await self._own_session.close()
 
+    async def _check_trade_gate(self, opp: ArbitrageOpportunity) -> Tuple[bool, str, Dict[str, Any]]:
+        if self._trade_gate is None:
+            return True, "no trade gate configured", {}
+
+        result = self._trade_gate(opp)
+        if asyncio.iscoroutine(result):
+            result = await result
+        if isinstance(result, tuple):
+            if len(result) == 3:
+                allowed, reason, context = result
+                return bool(allowed), str(reason), dict(context or {})
+            if len(result) == 2:
+                allowed, reason = result
+                return bool(allowed), str(reason), {}
+        return bool(result), "trade gate evaluated", {}
+
     @staticmethod
     def _merge_note(existing: str, note: str) -> str:
         existing = str(existing or "").strip()
@@ -1046,6 +1092,7 @@ class ExecutionEngine:
         for execution in self._executions:
             if execution.arb_id != arb_id:
                 continue
+            previous_status = execution.status
             execution.status = status_map.get(position.status, execution.status)
             if lifecycle_note and lifecycle_note not in execution.notes:
                 execution.notes.append(lifecycle_note)
@@ -1053,10 +1100,23 @@ class ExecutionEngine:
                 merged = self._merge_note("", note)
                 if merged and merged not in execution.notes:
                     execution.notes.append(merged)
+            exposure = execution.opportunity.suggested_qty * (
+                execution.opportunity.yes_price + execution.opportunity.no_price
+            )
+            if position.status == "entered" and previous_status != "manual_entered":
+                self.risk.record_trade(execution.opportunity.canonical_id, exposure, 0.0)
             if position.status == "closed" and execution.realized_pnl == 0.0:
                 execution.realized_pnl = round(
                     execution.opportunity.net_edge * execution.opportunity.suggested_qty,
                     4,
                 )
+            if position.status == "closed":
+                self.risk.release_trade(
+                    execution.opportunity.canonical_id,
+                    exposure,
+                    execution.realized_pnl,
+                )
+            elif position.status == "cancelled":
+                self.risk.release_trade(execution.opportunity.canonical_id, exposure, 0.0)
             return execution
         return None

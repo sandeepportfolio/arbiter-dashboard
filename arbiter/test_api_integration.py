@@ -36,6 +36,7 @@ def test_api_and_dashboard_contracts():
     port = free_port()
     env = dict(os.environ)
     env["ARBITER_UI_SMOKE_SEED"] = "1"
+    env["DRY_RUN"] = "true"
     proc = subprocess.Popen(
         [sys.executable, "-m", "arbiter.main", "--api-only", "--port", str(port)],
         cwd=os.getcwd(),
@@ -85,6 +86,7 @@ def test_api_and_dashboard_contracts():
         assert health["status"] == "ok"
         assert "audit" in health
         assert "profitability" in health
+        assert "readiness" in health
 
         system = get_json("/api/system")
         assert system["mode"] == "dry-run"
@@ -92,6 +94,7 @@ def test_api_and_dashboard_contracts():
         assert "execution" in system
         assert "audit" in system
         assert "profitability" in system
+        assert "readiness" in system
         assert "counts" in system
         assert "series" in system
         assert "profitability" in system["series"]
@@ -103,8 +106,22 @@ def test_api_and_dashboard_contracts():
         profitability = get_json("/api/profitability")
         assert "verdict" in profitability
         assert "progress" in profitability
+        readiness = get_json("/api/readiness")
+        assert "ready_for_live_trading" in readiness
+        assert isinstance(readiness["checks"], list)
         assert len(get_json("/api/manual-positions")) >= 2
         assert len(get_json("/api/errors")) >= 1
+
+        portfolio = get_json("/api/portfolio")
+        assert "dry_run" in portfolio
+        assert portfolio["dry_run"] is True
+        portfolio_positions = get_json("/api/portfolio/positions")
+        assert isinstance(portfolio_positions["positions"], list)
+        portfolio_violations = get_json("/api/portfolio/violations")
+        assert "violations" in portfolio_violations
+        portfolio_summary = get_json("/api/portfolio/summary")
+        assert portfolio_summary["dry_run"] is True
+        assert "realized_pnl" in portfolio_summary
 
         login = post_json("/api/auth/login", {"email": "sparx.sandeep@gmail.com", "password": "saibaba"})
         assert login["status"] == "ok"

@@ -105,6 +105,8 @@ class PredictItCollector:
         Handles PredictIt's contract structure (each market has multiple contracts).
         """
         results = []
+        source_timestamp = self._last_full_fetch or time.time()
+        stale_source_seconds = max(time.time() - source_timestamp, 0.0)
 
         for pi_id, canonical_ids in self._market_map.items():
             market = all_markets.get(pi_id)
@@ -133,7 +135,7 @@ class PredictItCollector:
                     no_price=no_price,
                     yes_volume=float(contract.get("totalSharesTraded", 0)),
                     no_volume=float(contract.get("totalSharesTraded", 0)),
-                    timestamp=time.time(),
+                    timestamp=source_timestamp,
                     raw_market_id=f"{pi_id}:{contract.get('id', '')}",
                     yes_market_id=f"{pi_id}:{contract.get('id', '')}",
                     no_market_id=f"{pi_id}:{contract.get('id', '')}",
@@ -147,6 +149,8 @@ class PredictItCollector:
                     metadata={
                         "market_name": market_name,
                         "contract_name": contract.get("name", ""),
+                        "source_timestamp": source_timestamp,
+                        "stale_source_seconds": round(stale_source_seconds, 4),
                     },
                 )
                 results.append(price)

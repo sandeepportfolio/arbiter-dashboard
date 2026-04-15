@@ -1,7 +1,8 @@
 # ARBITER — Developer Makefile
 
 .PHONY: help test test-watch lint clean migrate migrate-plan db-reset db-shell \
-        start-dev stop docker-build docker-push health
+        start-dev stop docker-build docker-push health verify-quick verify-ui \
+        verify-static verify-full
 
 # ── Defaults ────────────────────────────────────────────────────────────
 PYTEST      := python3 -m pytest
@@ -79,6 +80,20 @@ health: ## Check health of all services
 
 # ── Quick smoke ────────────────────────────────────────────────────────
 smoke: test ## Run quick smoke (same as test right now)
+
+verify-quick: ## Run the fast repo verification gate
+	./scripts/quick-check.sh
+
+verify-ui: ## Run the same-origin browser smoke gate
+	./scripts/ui-smoke.sh
+
+verify-static: ## Run the static cross-origin browser smoke gate
+	./scripts/static-smoke.sh
+
+verify-full: ## Run the full Gate 0-2 verification chain
+	./scripts/quick-check.sh
+	./scripts/ui-smoke.sh
+	./scripts/static-smoke.sh
 
 # ── Secrets ─────────────────────────────────────────────────────────────
 gen-secret: ## Generate a random UI session secret

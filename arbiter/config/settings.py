@@ -353,7 +353,7 @@ class ScannerConfig:
     max_quote_age_seconds: float = 15.0
     min_liquidity: float = 25.0
     slippage_tolerance: float = 0.01
-    dry_run: bool = True
+    dry_run: bool = field(default_factory=lambda: os.getenv("DRY_RUN", "true").lower() != "false")
 
 
 @dataclass

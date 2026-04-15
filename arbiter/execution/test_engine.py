@@ -10,6 +10,7 @@ from arbiter.utils.price_store import PricePoint, PriceStore
 
 def make_engine(price_store: PriceStore) -> ExecutionEngine:
     config = ArbiterConfig()
+    config.scanner.dry_run = True
     config.scanner.confidence_threshold = 0.1
     config.scanner.min_edge_cents = 1.0
     config.scanner.slippage_tolerance = 0.01
@@ -270,6 +271,104 @@ def test_manual_position_actions_update_execution_history():
         assert closed.status == "closed"
         assert engine.execution_history[0].status == "manual_closed"
         assert engine.execution_history[0].realized_pnl > 0.0
+
+    asyncio.run(runner())
+
+
+def test_live_trade_gate_blocks_execution_until_ready():
+    async def runner():
+        store = PriceStore(ttl=60)
+        config = ArbiterConfig()
+        config.scanner.dry_run = False
+        config.scanner.confidence_threshold = 0.1
+        config.scanner.min_edge_cents = 1.0
+        monitor = BalanceMonitor(config.alerts, {"kalshi": object(), "polymarket": object()})
+        engine = ExecutionEngine(config, monitor, price_store=store, collectors={})
+        engine.risk._max_daily_trades = 250
+        engine.risk._max_total_exposure = 50_000
+        engine.set_trade_gate(lambda opp: (False, "profitability still collecting evidence", {"gate": "readiness"}))
+
+        opportunity = ArbitrageOpportunity(
+            canonical_id="TEST_LIVE_GATE",
+            description="Live gate block opportunity",
+            yes_platform="kalshi",
+            yes_price=0.40,
+            yes_fee=0.02,
+            yes_market_id="K-LIVE",
+            no_platform="polymarket",
+            no_price=0.45,
+            no_fee=0.01,
+            no_market_id="P-LIVE",
+            gross_edge=0.15,
+            total_fees=0.03,
+            net_edge=0.12,
+            net_edge_cents=12.0,
+            suggested_qty=10,
+            max_profit_usd=1.2,
+            timestamp=time.time(),
+            confidence=0.9,
+            status="tradable",
+            persistence_count=3,
+            quote_age_seconds=1.0,
+            min_available_liquidity=100.0,
+            mapping_status="confirmed",
+            mapping_score=0.95,
+            requires_manual=False,
+            yes_fee_rate=0.07,
+            no_fee_rate=0.01,
+        )
+
+        execution = await engine.execute_opportunity(opportunity)
+        assert execution is None
+        assert len(engine.incidents) == 1
+        assert "Trade gate blocked execution" in engine.incidents[0].message
+
+    asyncio.run(runner())
+
+
+def test_manual_position_close_releases_risk_exposure():
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        opportunity = ArbitrageOpportunity(
+            canonical_id="TEST_MANUAL_RELEASE",
+            description="Manual exposure release",
+            yes_platform="predictit",
+            yes_price=0.35,
+            yes_fee=0.115,
+            yes_market_id="PI:789",
+            no_platform="kalshi",
+            no_price=0.48,
+            no_fee=0.0175,
+            no_market_id="K-789",
+            gross_edge=0.17,
+            total_fees=0.1325,
+            net_edge=0.0375,
+            net_edge_cents=3.75,
+            suggested_qty=120,
+            max_profit_usd=4.5,
+            timestamp=time.time(),
+            confidence=0.72,
+            status="manual",
+            persistence_count=3,
+            quote_age_seconds=1.0,
+            min_available_liquidity=200.0,
+            mapping_status="confirmed",
+            mapping_score=0.9,
+            requires_manual=True,
+            no_fee_rate=0.07,
+        )
+
+        execution = await engine.execute_opportunity(opportunity)
+        assert execution is not None
+        position = engine.manual_positions[0]
+        exposure = opportunity.suggested_qty * (opportunity.yes_price + opportunity.no_price)
+
+        await engine.update_manual_position(position.position_id, "mark_entered")
+        assert engine.risk._open_positions[opportunity.canonical_id] == exposure
+
+        await engine.update_manual_position(position.position_id, "mark_closed")
+        assert engine.risk._open_positions.get(opportunity.canonical_id, 0.0) == 0.0
 
     asyncio.run(runner())
 

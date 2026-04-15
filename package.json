@@ -16,7 +16,8 @@
     "test:python": "python3 -m pytest -q arbiter",
     "verify:quick": "./scripts/quick-check.sh",
     "verify:ui": "./scripts/ui-smoke.sh",
-    "verify:full": "./scripts/quick-check.sh && ./scripts/ui-smoke.sh"
+    "verify:static": "./scripts/static-smoke.sh",
+    "verify:full": "./scripts/quick-check.sh && ./scripts/ui-smoke.sh && ./scripts/static-smoke.sh"
   },
   "dependencies": {
     "typescript": "^5.4.0"

@@ -38,45 +38,36 @@ echo "[ui-smoke] opening desktop dashboard"
 SITE_STATE="$("${PWCLI[@]}" eval "(async () => {
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   for (let attempt = 0; attempt < 30; attempt += 1) {
-    if (document.getElementById('loginForm')) break;
+    if (document.querySelectorAll('.metric-card').length > 0) break;
     await sleep(100);
   }
-  document.getElementById('loginEmail').value = 'sparx.sandeep@gmail.com';
-  document.getElementById('loginPassword').value = 'saibaba';
-  document.getElementById('loginForm').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-  await sleep(250);
-  const chart = document.getElementById('pnlChart');
-  const chartWidth = chart ? chart.width : 0;
-  document.querySelector('.sidebar-nav-item[data-page=\"4\"]')?.click();
-  await sleep(120);
-  const systemTitle = document.getElementById('pageTitle')?.textContent?.trim();
-  document.querySelector('.sidebar-nav-item[data-page=\"0\"]')?.click();
-  await sleep(120);
   return {
     title: document.title,
-    loggedIn: document.getElementById('mainLayout')?.style.display === 'flex',
-    chartWidth,
-    pageTitle: document.getElementById('pageTitle')?.textContent?.trim(),
-    systemTitle,
-    sidebarItems: document.querySelectorAll('.sidebar-nav-item').length,
+    hero: document.getElementById('heroTitle')?.textContent?.trim(),
+    access: document.getElementById('accessPill')?.textContent?.trim(),
+    metrics: document.querySelectorAll('.metric-card').length,
+    opportunities: document.getElementById('opportunityList')?.children.length || 0,
+    collectors: document.getElementById('collectorList')?.children.length || 0,
+    authHidden: document.getElementById('authOverlay')?.classList.contains('hidden') || false,
+    edgeChartReady: !!document.querySelector('#edgeChart svg, #edgeChart .stack-item'),
   };
 })()")"
 echo "$SITE_STATE"
 
-if ! grep -q '"loggedIn": true' <<<"$SITE_STATE"; then
-  echo "[ui-smoke] public site login flow failed" >&2
+if ! grep -q '"hero": "Live trading desk"' <<<"$SITE_STATE"; then
+  echo "[ui-smoke] public hero title missing" >&2
   exit 1
 fi
-if grep -q '"chartWidth": 0' <<<"$SITE_STATE"; then
-  echo "[ui-smoke] public site chart failed to size after login" >&2
+if ! grep -q '"access": "Read only"' <<<"$SITE_STATE"; then
+  echo "[ui-smoke] public access pill is wrong" >&2
   exit 1
 fi
-if ! grep -q '"pageTitle": "Dashboard"' <<<"$SITE_STATE"; then
-  echo "[ui-smoke] public site dashboard title missing" >&2
+if ! grep -q '"metrics": ' <<<"$SITE_STATE" || grep -q '"metrics": 0' <<<"$SITE_STATE"; then
+  echo "[ui-smoke] public metric cards did not render" >&2
   exit 1
 fi
-if ! grep -q '"systemTitle": "System"' <<<"$SITE_STATE"; then
-  echo "[ui-smoke] public site navigation failed" >&2
+if ! grep -q '"authHidden": true' <<<"$SITE_STATE"; then
+  echo "[ui-smoke] auth overlay should be hidden on the public desk" >&2
   exit 1
 fi
 
@@ -84,26 +75,16 @@ echo "[ui-smoke] checking public site mobile layout"
 "${PWCLI[@]}" resize 390 844 >/dev/null
 SITE_MOBILE_STATE="$("${PWCLI[@]}" eval "(async () => {
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const mobileHeader = document.getElementById('mobileHeader');
-  const hamburger = document.getElementById('hamburgerBtn');
-  hamburger?.click();
-  await sleep(150);
-  const sidebarOpen = document.getElementById('sidebar')?.classList.contains('mobile-open');
-  document.getElementById('sidebarBackdrop')?.click();
-  await sleep(120);
   return {
     width: window.innerWidth,
-    mobileHeaderVisible: mobileHeader?.classList.contains('visible') || false,
-    sidebarOpen,
+    hero: document.getElementById('heroTitle')?.textContent?.trim(),
+    metrics: document.querySelectorAll('.metric-card').length,
+    opportunities: document.getElementById('opportunityList')?.children.length || 0,
   };
 })()")"
 echo "$SITE_MOBILE_STATE"
-if ! grep -q '"mobileHeaderVisible": true' <<<"$SITE_MOBILE_STATE"; then
-  echo "[ui-smoke] public site mobile header missing" >&2
-  exit 1
-fi
-if ! grep -q '"sidebarOpen": true' <<<"$SITE_MOBILE_STATE"; then
-  echo "[ui-smoke] public site mobile menu failed" >&2
+if ! grep -q '"width": 390' <<<"$SITE_MOBILE_STATE"; then
+  echo "[ui-smoke] public site mobile viewport did not apply" >&2
   exit 1
 fi
 
@@ -111,35 +92,45 @@ echo "[ui-smoke] opening operator dashboard"
 "${PWCLI[@]}" open "http://127.0.0.1:${PORT}/ops" >/dev/null
 DESKTOP_STATE="$("${PWCLI[@]}" eval "(async () => {
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    const ready = document.querySelectorAll('.metric-card').length === 5
-      && document.querySelectorAll('[data-manual-action]').length >= 2
-      && !!document.querySelector('[data-incident-action=\"resolve\"]')
-      && !!document.querySelector('[data-mapping-action=\"confirm\"]')
-      && !!document.querySelector('#edgeChart svg');
-    if (ready) {
-      return {
-        title: document.title,
-        metrics: document.querySelectorAll('.metric-card').length,
-        panels: document.querySelectorAll('.panel').length,
-        hasOpportunityList: !!document.getElementById('opportunityList'),
-        hasCollectorList: !!document.getElementById('collectorList'),
-        hasManualQueue: !!document.getElementById('manualQueue'),
-        hasIncidentList: !!document.getElementById('incidentList'),
-        hasEdgeChart: !!document.querySelector('#edgeChart svg, #edgeChart .stack-item'),
-      };
-    }
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    if (document.getElementById('authForm')) break;
     await sleep(120);
   }
-  return { timeout: true, title: document.title, metrics: document.querySelectorAll('.metric-card').length };
+  document.getElementById('authEmail').value = 'sparx.sandeep@gmail.com';
+  document.getElementById('authPassword').value = 'saibaba';
+  document.getElementById('authForm').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    const ready = document.querySelectorAll('[data-manual-action]').length >= 2
+      && !!document.querySelector('[data-incident-action=\"resolve\"]')
+      && !!document.querySelector('[data-mapping-action=\"confirm\"]')
+      && document.querySelectorAll('.metric-card').length > 0;
+    if (ready) break;
+    await sleep(120);
+  }
+  return {
+    title: document.title,
+    hero: document.getElementById('heroTitle')?.textContent?.trim(),
+    access: document.getElementById('accessPill')?.textContent?.trim(),
+    metrics: document.querySelectorAll('.metric-card').length,
+    hasOpportunityList: !!document.getElementById('opportunityList'),
+    hasCollectorList: !!document.getElementById('collectorList'),
+    hasManualQueue: !!document.getElementById('manualQueue'),
+    hasIncidentList: !!document.getElementById('incidentList'),
+    hasEdgeChart: !!document.querySelector('#edgeChart svg, #edgeChart .stack-item'),
+    authHidden: document.getElementById('authOverlay')?.classList.contains('hidden') || false,
+  };
 })()")"
 echo "$DESKTOP_STATE"
 
-if ! grep -q '"title": "ARBITER"' <<<"$DESKTOP_STATE"; then
+if ! grep -q '"hero": "Operator trading desk"' <<<"$DESKTOP_STATE"; then
   echo "[ui-smoke] dashboard title check failed" >&2
   exit 1
 fi
-if ! grep -q '"metrics": 5' <<<"$DESKTOP_STATE"; then
+if ! grep -q '"authHidden": true' <<<"$DESKTOP_STATE"; then
+  echo "[ui-smoke] operator auth overlay did not close after sign-in" >&2
+  exit 1
+fi
+if ! grep -q '"metrics": ' <<<"$DESKTOP_STATE" || grep -q '"metrics": 0' <<<"$DESKTOP_STATE"; then
   echo "[ui-smoke] metric card count check failed" >&2
   exit 1
 fi

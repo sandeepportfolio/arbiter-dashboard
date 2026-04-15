@@ -46,22 +46,14 @@ trap cleanup EXIT INT TERM
 
 # ─── Start API server ─────────────────────────────────────────────────
 log "Starting API server on port ${ARBITER_PORT:-8090}..."
-python3 -m arbiter.main \
-  --port "${ARBITER_PORT:-8090}" \
-  --log-level "${LOG_LEVEL:-INFO}" \
-  > /tmp/arbiter-server.log 2>&1 &
+CMD=(python3 -m arbiter.main --port "${ARBITER_PORT:-8090}" --log-level "${LOG_LEVEL:-INFO}")
+if [[ "${DRY_RUN:-true}" == "false" ]]; then
+  CMD+=(--live)
+fi
+"${CMD[@]}" > /tmp/arbiter-server.log 2>&1 &
 SERVER_PID=$!
 echo $SERVER_PID > "$PID_FILE"
 log "API server started (PID=$SERVER_PID)"
-
-# ─── Start background workers ─────────────────────────────────────────
-WORKER_LOG="/tmp/arbiter-workers.log"
-for worker in scanner collector workflow; do
-  log "Starting $worker worker..."
-  python3 -m arbiter.workers."$worker" \
-    >> "$WORKER_LOG" 2>&1 &
-  log "  $worker worker started (PID=$!)"
-done
 
 log "ARBITER is running. Logs: /tmp/arbiter-server.log"
 log "API: http://127.0.0.1:${ARBITER_PORT:-8090}"
