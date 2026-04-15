@@ -110,6 +110,7 @@ class ArbiterAPI:
                 "uptime_seconds": round(time.time() - self.started_at, 1),
                 "scanner": self.scanner.stats,
                 "execution": self.engine.stats,
+                "audit": self.engine.stats.get("audit", {}),
             }
         )
 
@@ -322,6 +323,7 @@ class ArbiterAPI:
             "mode": "dry-run" if self.config.scanner.dry_run else "live",
             "scanner": self.scanner.stats,
             "execution": self.engine.stats,
+            "audit": self.engine.stats.get("audit", {}),
             "collectors": self._collector_snapshot(),
             "balances": balances,
             "series": {

@@ -84,8 +84,11 @@ const TRACKED_TYPES = [
 
 const edgeChartEl = document.getElementById("edgeChart");
 const equityChartEl = document.getElementById("equityChart");
+const statusBandEl = document.getElementById("statusBand");
 const wsStatusEl = document.getElementById("wsStatus");
 const modePillEl = document.getElementById("modePill");
+const edgeChartMetaEl = document.getElementById("edgeChartMeta");
+const equityChartMetaEl = document.getElementById("equityChartMeta");
 
 const formatUsd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
 const formatWhole = new Intl.NumberFormat("en-US");
@@ -97,6 +100,10 @@ function cents(value) {
 
 function pct(value) {
   return `${(Number(value || 0) * 100).toFixed(1)}%`;
+}
+
+function clamp01(value) {
+  return Math.max(0, Math.min(1, Number(value || 0)));
 }
 
 function relTime(timestamp) {
@@ -204,6 +211,14 @@ function mappingTone(status) {
 
 function mappingStatus(mapping) {
   return String(mapping?.status || "candidate");
+}
+
+function auditPassRate() {
+  return Number(state.system?.audit?.pass_rate || state.system?.execution?.audit?.pass_rate || 0);
+}
+
+function activeCooldownCount() {
+  return Object.values(state.system?.collectors || {}).filter((collector) => Number(collector?.rate_limiter?.remaining_penalty_seconds || 0) > 0).length;
 }
 
 function fetchTrackedCount(key) {
@@ -640,6 +655,7 @@ function connectWebSocket() {
 }
 
 function render() {
+  renderStatusBand();
   renderMetrics();
   renderOpportunities();
   renderManualQueue();
@@ -648,6 +664,53 @@ function render() {
   renderMappings();
   renderCollectors();
   renderCharts();
+}
+
+function renderStatusBand() {
+  if (!statusBandEl || !state.system) return;
+
+  const auditRate = auditPassRate();
+  const openIncidents = state.incidents.filter((incident) => incident.status !== "resolved").length;
+  const cooldowns = activeCooldownCount();
+  const lastPulse = state.lastQuoteAt || state.system.timestamp;
+  const opportunity = state.opportunities[0];
+
+  const strips = [
+    {
+      tone: "tone-mint",
+      label: "Last pulse",
+      value: state.lastQuoteAt ? relTime(lastPulse) : "Waiting",
+      copy: state.wsConnected ? "WebSocket is hot and streaming fresh market events." : "Realtime link is reconnecting, so the desk is watching for the next pulse.",
+    },
+    {
+      tone: auditRate >= 0.99 ? "tone-blue" : "tone-amber",
+      label: "Math audit",
+      value: pct(auditRate),
+      copy: `${formatWhole.format(state.system?.audit?.audits_run || 0)} shadow checks compare scanner math, fee totals, and sizing before trust is granted.`,
+    },
+    {
+      tone: openIncidents ? "tone-rose" : "tone-mint",
+      label: "Recovery load",
+      value: formatWhole.format(openIncidents),
+      copy: openIncidents ? "Open incidents still need operator review before the route is comfortable." : "No active recovery incidents are pressuring the trading surface right now.",
+    },
+    {
+      tone: opportunity?.status === "tradable" ? "tone-gold" : "tone-plum",
+      label: "Best route",
+      value: opportunity ? cents(opportunity.net_edge_cents) : "No route",
+      copy: opportunity
+        ? `${platformLabel(opportunity.yes_platform)} YES paired with ${platformLabel(opportunity.no_platform)} NO. ${cooldowns ? `${formatWhole.format(cooldowns)} collector cooldowns active.` : "Collectors are flowing cleanly."}`
+        : "The scanner is still waiting for a route that clears fees, persistence, and freshness.",
+    },
+  ];
+
+  statusBandEl.innerHTML = strips.map((strip) => `
+    <article class="status-strip ${strip.tone}">
+      <div class="status-strip-label">${escapeHtml(strip.label)}</div>
+      <div class="status-strip-value">${escapeHtml(strip.value)}</div>
+      <div class="status-strip-copy">${escapeHtml(strip.copy)}</div>
+    </article>
+  `).join("");
 }
 
 function renderMetrics() {
@@ -674,14 +737,14 @@ function renderMetrics() {
       meta: `${formatWhole.format(system.execution?.total_executions || 0)} tracked executions`,
     },
     {
-      label: "Collector quotes",
-      value: formatWhole.format(system.counts?.prices || 0),
-      meta: state.lastQuoteAt ? `Last quote ${relTime(state.lastQuoteAt)}` : "Waiting for quotes",
+      label: "Audit pass rate",
+      value: pct(auditPassRate()),
+      meta: `${formatWhole.format(system.audit?.audits_run || 0)} independent checks against scanner and execution math`,
     },
     {
-      label: "Runtime uptime",
-      value: `${Math.floor((system.uptime_seconds || 0) / 60)}m`,
-      meta: `${formatWhole.format(system.counts?.incidents || 0)} incidents, ${formatWhole.format(system.counts?.manual_positions || 0)} manual positions`,
+      label: "Feed posture",
+      value: state.lastQuoteAt ? relTime(state.lastQuoteAt) : "Waiting",
+      meta: `${formatWhole.format(system.counts?.prices || 0)} quotes, ${formatWhole.format(activeCooldownCount())} cooldowns, ${formatWhole.format(system.counts?.incidents || 0)} incidents`,
     },
   ];
 
@@ -712,6 +775,8 @@ function renderOpportunities() {
     const gross = Math.max(opp.gross_edge || 0, 0.0001);
     const fees = Math.max(opp.total_fees || 0, 0.0001);
     const net = Math.max(opp.net_edge || 0, 0.0001);
+    const freshness = clamp01(1 - ((opp.quote_age_seconds || 0) / (state.system?.scanner?.max_quote_age_seconds || 15)));
+    const confidence = clamp01(opp.confidence || 0);
     return `
       <article class="opportunity-card">
         <div class="opportunity-top">
@@ -721,14 +786,33 @@ function renderOpportunities() {
               <span class="${statusClass(opp.status)}">${escapeHtml(opp.status)}</span>
               <span class="badge badge-review">${escapeHtml(`${opp.persistence_count || 0}/${state.system?.scanner?.persistence_scans || 3} scans`)}</span>
               <span class="badge badge-review">${escapeHtml(relTime(opp.timestamp))}</span>
-              <span class="badge badge-review">${escapeHtml(`Freshness ${pct(Math.max(0, 1 - (opp.quote_age_seconds || 0) / (state.system?.scanner?.max_quote_age_seconds || 15)))}`)}</span>
+              <span class="badge badge-review">${escapeHtml(`Freshness ${pct(freshness)}`)}</span>
             </div>
           </div>
-          <div class="panel-badge">${escapeHtml(cents(opp.net_edge_cents))}</div>
+          <div class="opportunity-signal">
+            <span class="signal-label">Net edge</span>
+            <span class="signal-value">${escapeHtml(cents(opp.net_edge_cents))}</span>
+            <span class="signal-meta">${escapeHtml(`${formatUsd.format(opp.max_profit_usd || 0)} est. max P&L`)}</span>
+          </div>
+        </div>
+        <div class="opportunity-route">
+          <span class="route-node">${escapeHtml(`${platformLabel(opp.yes_platform)} YES`)}</span>
+          <span class="route-arrow">paired with</span>
+          <span class="route-node">${escapeHtml(`${platformLabel(opp.no_platform)} NO`)}</span>
+          <span class="route-market">${escapeHtml(opp.canonical_id)}</span>
+        </div>
+        <div class="opportunity-insights">
+          <span class="insight-chip"><strong>${escapeHtml(pct(confidence))}</strong> confidence</span>
+          <span class="insight-chip"><strong>${escapeHtml(formatWhole.format(opp.suggested_qty || 0))}</strong> suggested qty</span>
+          <span class="insight-chip"><strong>${escapeHtml(formatWhole.format(Math.round(opp.min_available_liquidity || 0)))}</strong> contracts liquid</span>
+          <span class="insight-chip"><strong>${escapeHtml(titleCase(opp.mapping_status || "candidate"))}</strong> mapping</span>
+        </div>
+        <div class="confidence-meter" style="--meter-fill:${(confidence * 100).toFixed(1)}%">
+          <span></span>
         </div>
         <div class="opportunity-legs">
-          ${renderLegCard("Buy YES", opp.yes_platform, opp.yes_price, opp.yes_fee, opp.yes_market_id)}
-          ${renderLegCard("Buy NO", opp.no_platform, opp.no_price, opp.no_fee, opp.no_market_id)}
+          ${renderLegCard("Buy YES", opp.yes_platform, opp.yes_price, opp.yes_fee, opp.yes_market_id, opp.yes_fee_rate)}
+          ${renderLegCard("Buy NO", opp.no_platform, opp.no_price, opp.no_fee, opp.no_market_id, opp.no_fee_rate)}
         </div>
         <div class="waterfall">
           <div class="waterfall-track" style="--gross:${gross}; --fees:${fees}; --net:${net};">
@@ -818,7 +902,7 @@ function renderIncidentQueue() {
   `).join("");
 }
 
-function renderLegCard(label, platform, price, fee, marketId) {
+function renderLegCard(label, platform, price, fee, marketId, feeRate) {
   const normalizedPlatform = String(platform || "unknown").toLowerCase();
   return `
     <div class="leg-card">
@@ -829,6 +913,10 @@ function renderLegCard(label, platform, price, fee, marketId) {
       </div>
       <div class="leg-price">${escapeHtml(formatUsd.format(price || 0))}</div>
       <div class="leg-subtext">${escapeHtml(marketId || "Unmapped leg")}</div>
+      <div class="leg-detail-row">
+        <span>${escapeHtml(feeRate ? `Rate ${pct(feeRate)}` : "Variable fee")}</span>
+        <span>${escapeHtml(`${platformLabel(platform)} contract`)}</span>
+      </div>
     </div>
   `;
 }
@@ -980,24 +1068,60 @@ function renderCollectors() {
 function renderCharts() {
   const scannerSeries = state.system?.series?.scanner || [];
   const equitySeries = state.system?.series?.equity || [];
+  renderChartMeta(edgeChartMetaEl, scannerSeries, "best_edge_cents", "\u00a2");
+  renderChartMeta(equityChartMetaEl, equitySeries, "equity", "$");
   drawLineChart(edgeChartEl, scannerSeries, {
     valueKey: "best_edge_cents",
     color: "#8ce0cf",
     fill: "rgba(140, 224, 207, 0.28)",
     axisSuffix: "\u00a2",
+    focusColor: "#8ce0cf",
   });
   drawLineChart(equityChartEl, equitySeries, {
     valueKey: "equity",
     color: "#ffd178",
     fill: "rgba(255, 209, 120, 0.22)",
     axisPrefix: "$",
+    focusColor: "#ffd178",
   });
+}
+
+function renderChartMeta(target, series, valueKey, unitPrefix = "") {
+  if (!target) return;
+  if (!series.length) {
+    target.innerHTML = "";
+    return;
+  }
+
+  const values = series.map((point) => Number(point[valueKey] || 0));
+  const latest = values[values.length - 1] || 0;
+  const high = Math.max(...values);
+  const low = Math.min(...values);
+  const average = values.reduce((sum, value) => sum + value, 0) / Math.max(values.length, 1);
+  const lastTimestamp = series[series.length - 1]?.timestamp || 0;
+
+  const formatter = unitPrefix === "$"
+    ? (value) => formatUsd.format(value)
+    : (value) => `${Number(value).toFixed(1)}${unitPrefix}`;
+
+  target.innerHTML = [
+    { label: "Latest", value: formatter(latest) },
+    { label: "Range high", value: formatter(high) },
+    { label: "Range low", value: formatter(low) },
+    { label: "Average", value: formatter(average) },
+    { label: "Updated", value: lastTimestamp ? relTime(lastTimestamp) : "Waiting" },
+  ]
+    .map((item) => `<span class="chart-meta-pill"><strong>${escapeHtml(item.value)}</strong><span>${escapeHtml(item.label)}</span></span>`)
+    .join("");
 }
 
 function drawLineChart(target, points, options) {
   if (!target) return;
-  const width = target.clientWidth;
-  const height = Math.max(target.clientHeight || 260, 220);
+  const rect = target.getBoundingClientRect();
+  const width = rect.width || target.clientWidth;
+  const computedHeight = Number.parseFloat(window.getComputedStyle(target).height || "0");
+  const rawHeight = rect.height || target.clientHeight || computedHeight || 280;
+  const height = Math.min(Math.max(rawHeight, 220), 340);
   if (!width) {
     window.requestAnimationFrame(() => drawLineChart(target, points, options));
     return;
@@ -1018,19 +1142,25 @@ function drawLineChart(target, points, options) {
 
   const coords = points.map((point, index) => {
     const x = padding.left + (innerWidth * (points.length === 1 ? 0 : index / (points.length - 1)));
-    const y = padding.top + innerHeight - ((Number(point[options.valueKey] || 0) - min) / range) * innerHeight;
+    const normalized = (max - min) < 1e-6 ? 0.5 : ((Number(point[options.valueKey] || 0) - min) / range);
+    const y = padding.top + innerHeight - normalized * innerHeight;
     return [x, y];
   });
 
-  const linePath = coords.map(([x, y], index) => `${index === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`).join(" ");
+  const linePath = buildSmoothPath(coords);
   const fillPath = `${linePath} L ${padding.left + innerWidth} ${padding.top + innerHeight} L ${padding.left} ${padding.top + innerHeight} Z`;
   const gridLines = [0, 0.5, 1].map((fraction) => {
     const y = padding.top + innerHeight * fraction;
     return `<line class="chart-grid-line" x1="${padding.left}" y1="${y}" x2="${padding.left + innerWidth}" y2="${y}"></line>`;
   }).join("");
-  const minLabel = `${options.axisPrefix || ""}${min.toFixed(1)}${options.axisSuffix || ""}`;
-  const maxLabel = `${options.axisPrefix || ""}${max.toFixed(1)}${options.axisSuffix || ""}`;
+  const minLabel = formatChartAxisValue(min, options);
+  const maxLabel = formatChartAxisValue(max, options);
   const lastLabel = formatClock.format(new Date((points[points.length - 1]?.timestamp || Date.now() / 1000) * 1000));
+  const [lastX, lastY] = coords[coords.length - 1];
+  const latestValue = Number(values[values.length - 1] || 0);
+  const latestText = formatChartAxisValue(latestValue, options);
+  const labelX = Math.max(padding.left + 40, Math.min(lastX - 12, padding.left + innerWidth - 48));
+  const labelY = Math.max(padding.top + 14, lastY - 12);
 
   target.innerHTML = `
     <svg class="chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="Live chart">
@@ -1043,11 +1173,45 @@ function drawLineChart(target, points, options) {
       ${gridLines}
       <path class="chart-fill" d="${fillPath}" fill="url(#fill-${target.id})"></path>
       <path class="chart-line" d="${linePath}" stroke="${options.color}"></path>
+      <circle class="chart-focus-halo" cx="${lastX.toFixed(2)}" cy="${lastY.toFixed(2)}" r="9"></circle>
+      <circle class="chart-focus-core" cx="${lastX.toFixed(2)}" cy="${lastY.toFixed(2)}" r="4.5" style="--chart-focus:${options.focusColor || options.color}"></circle>
+      <text class="chart-focus-label" x="${labelX.toFixed(2)}" y="${labelY.toFixed(2)}">${escapeHtml(latestText)}</text>
       <text class="chart-axis-label" x="${padding.left}" y="${padding.top + 12}">${escapeHtml(maxLabel)}</text>
       <text class="chart-axis-label" x="${padding.left}" y="${padding.top + innerHeight - 6}">${escapeHtml(minLabel)}</text>
       <text class="chart-axis-label" x="${padding.left + innerWidth - 36}" y="${height - 8}">${escapeHtml(lastLabel)}</text>
     </svg>
   `;
+}
+
+function formatChartAxisValue(value, options) {
+  if ((options.axisPrefix || "") === "$") {
+    return formatUsd.format(value || 0);
+  }
+  return `${Number(value || 0).toFixed(1)}${options.axisSuffix || ""}`;
+}
+
+function buildSmoothPath(coords) {
+  if (!coords.length) return "";
+  if (coords.length === 1) {
+    const [x, y] = coords[0];
+    return `M ${x.toFixed(2)} ${y.toFixed(2)}`;
+  }
+
+  let path = `M ${coords[0][0].toFixed(2)} ${coords[0][1].toFixed(2)}`;
+  for (let index = 0; index < coords.length - 1; index += 1) {
+    const previous = coords[index - 1] || coords[index];
+    const current = coords[index];
+    const next = coords[index + 1];
+    const afterNext = coords[index + 2] || next;
+
+    const cp1x = current[0] + (next[0] - previous[0]) / 6;
+    const cp1y = current[1] + (next[1] - previous[1]) / 6;
+    const cp2x = next[0] - (afterNext[0] - current[0]) / 6;
+    const cp2y = next[1] - (afterNext[1] - current[1]) / 6;
+
+    path += ` C ${cp1x.toFixed(2)} ${cp1y.toFixed(2)}, ${cp2x.toFixed(2)} ${cp2y.toFixed(2)}, ${next[0].toFixed(2)} ${next[1].toFixed(2)}`;
+  }
+  return path;
 }
 
 function emptyState(message) {

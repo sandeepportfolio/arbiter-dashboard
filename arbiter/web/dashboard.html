@@ -4,6 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ARBITER</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
@@ -13,14 +16,16 @@
     <header class="hero">
       <div>
         <p class="eyebrow">ARBITER LIVE</p>
-        <h1>Prediction market arbitrage with live edge, fee truth, and failure-aware execution.</h1>
-        <p class="subtitle">One canonical dashboard for scanner health, fee-aware opportunities, trade legs, manual PredictIt workflows, and execution incidents.</p>
+        <h1>Live trading desk</h1>
+        <p class="subtitle">Fee-aware routes, live charts, manual PredictIt queue, and recovery state in one operator-first view.</p>
       </div>
       <div class="hero-status">
         <div class="pill"><span class="label">Mode</span><span id="modePill" class="value">Loading</span></div>
         <div class="pill"><span class="label">WebSocket</span><span id="wsStatus" class="value value-muted">Connecting</span></div>
       </div>
     </header>
+
+    <section id="statusBand" class="status-band"></section>
 
     <section id="metricGrid" class="metric-grid"></section>
 
@@ -33,6 +38,7 @@
           </div>
           <span id="bestEdgeLabel" class="panel-badge">0.0¢</span>
         </div>
+        <div id="edgeChartMeta" class="chart-meta-row"></div>
         <div id="edgeChart" class="chart-surface"></div>
       </article>
 
@@ -44,6 +50,7 @@
           </div>
           <span id="equityLabel" class="panel-badge">$0.00</span>
         </div>
+        <div id="equityChartMeta" class="chart-meta-row"></div>
         <div id="equityChart" class="chart-surface"></div>
       </article>
     </section>

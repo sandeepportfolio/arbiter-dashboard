@@ -25,7 +25,9 @@ except ImportError:
 
 
 KALSHI_TAKER_FEE_RATE = 0.07
-POLYMAKET_DEFAULT_TAKER_FEE_RATE = 0.02
+POLYMARKET_DEFAULT_TAKER_FEE_RATE = 0.02
+# Backwards-compatible alias for older imports.
+POLYMAKET_DEFAULT_TAKER_FEE_RATE = POLYMARKET_DEFAULT_TAKER_FEE_RATE
 POLYMARKET_DEFAULT_MAKER_FEE_RATE = 0.0
 PREDICTIT_PROFIT_FEE_RATE = 0.10
 PREDICTIT_WITHDRAWAL_FEE_RATE = 0.05
@@ -71,13 +73,16 @@ def polymarket_order_fee(
         return 0.0
 
     fallback_rates = {
-        "politics": POLYMAKET_DEFAULT_TAKER_FEE_RATE,
+        "politics": POLYMARKET_DEFAULT_TAKER_FEE_RATE,
         "sports": 0.02,
         "crypto": 0.015,
-        "default": POLYMAKET_DEFAULT_TAKER_FEE_RATE,
+        "default": POLYMARKET_DEFAULT_TAKER_FEE_RATE,
     }
     resolved_rate = fee_rate if fee_rate is not None else fallback_rates.get(category, fallback_rates["default"])
-    return price * quantity * max(float(resolved_rate), 0.0)
+    resolved_rate = max(float(resolved_rate), 0.0)
+    if resolved_rate <= 0:
+        return 0.0
+    return resolved_rate * quantity * price * (1.0 - price)
 
 
 def polymarket_fee(

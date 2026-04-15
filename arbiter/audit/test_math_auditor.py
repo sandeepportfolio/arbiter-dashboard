@@ -33,15 +33,16 @@ class TestFeeModels:
         assert _kalshi_fee(0.0) == 0.0
 
     def test_polymarket_fee_politics(self):
-        # 1% rate
-        assert abs(_polymarket_fee(0.60, "politics") - 0.006) < 1e-10
+        assert abs(_polymarket_fee(0.60, "politics") - 0.0048) < 1e-10
 
     def test_polymarket_fee_sports(self):
-        assert abs(_polymarket_fee(0.60, "sports") - 0.012) < 1e-10
+        assert abs(_polymarket_fee(0.60, "sports") - 0.0048) < 1e-10
+
+    def test_polymarket_fee_explicit_rate(self):
+        assert abs(_polymarket_fee(0.60, "politics", fee_rate=0.01) - 0.0024) < 1e-10
 
     def test_polymarket_fee_unknown_category(self):
-        # defaults to 2%
-        assert abs(_polymarket_fee(0.50, "unknown") - 0.01) < 1e-10
+        assert abs(_polymarket_fee(0.50, "unknown") - 0.005) < 1e-10
 
     def test_predictit_total_fee_profit(self):
         # buy at 0.40, settle at $1.00

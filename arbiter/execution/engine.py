@@ -15,6 +15,7 @@ from typing import Any, Deque, Dict, List, Optional, Tuple
 
 import aiohttp
 
+from ..audit.math_auditor import MathAuditor
 from ..config.settings import ArbiterConfig, ScannerConfig
 from ..monitor.balance import BalanceMonitor
 from ..scanner.arbitrage import ArbitrageOpportunity, compute_fee
@@ -60,6 +61,22 @@ class Order:
             "quantity": self.quantity,
             "status": self.status.value,
             "fill_price": round(self.fill_price, 4),
+            "fill_qty": self.fill_qty,
+            "timestamp": self.timestamp,
+            "error": self.error,
+        }
+
+    def to_audit_dict(self) -> dict:
+        return {
+            "order_id": self.order_id,
+            "platform": self.platform,
+            "market_id": self.market_id,
+            "canonical_id": self.canonical_id,
+            "side": self.side,
+            "price": self.price,
+            "quantity": self.quantity,
+            "status": self.status.value,
+            "fill_price": self.fill_price,
             "fill_qty": self.fill_qty,
             "timestamp": self.timestamp,
             "error": self.error,
@@ -155,6 +172,18 @@ class ArbExecution:
             "notes": self.notes,
         }
 
+    def to_audit_dict(self) -> dict:
+        return {
+            "arb_id": self.arb_id,
+            "opportunity": self.opportunity.to_audit_dict(),
+            "leg_yes": self.leg_yes.to_audit_dict(),
+            "leg_no": self.leg_no.to_audit_dict(),
+            "status": self.status,
+            "realized_pnl": self.realized_pnl,
+            "timestamp": self.timestamp,
+            "notes": list(self.notes),
+        }
+
 
 class RiskManager:
     def __init__(self, config: ScannerConfig):
@@ -222,6 +251,10 @@ class ExecutionEngine:
         self._aborted_count = 0
         self._manual_count = 0
         self._recovery_count = 0
+        self._auditor = MathAuditor(
+            max_position_usd=config.scanner.max_position_usd,
+            predictit_cap=config.scanner.predictit_cap,
+        )
 
     def subscribe(self) -> asyncio.Queue:
         queue: asyncio.Queue = asyncio.Queue(maxsize=100)
@@ -249,7 +282,11 @@ class ExecutionEngine:
         arb_id = f"ARB-{self._execution_count:06d}"
 
         if opp.requires_manual:
+            if not await self._audit_opportunity(arb_id, opp):
+                self._aborted_count += 1
+                return None
             execution = await self._queue_manual_execution(arb_id, opp)
+            await self._audit_execution(execution)
             await self._publish_execution(execution)
             return execution
 
@@ -258,11 +295,16 @@ class ExecutionEngine:
             self._aborted_count += 1
             return None
 
+        if not await self._audit_opportunity(arb_id, requoted):
+            self._aborted_count += 1
+            return None
+
         if self.scanner_config.dry_run:
             execution = await self._simulate_execution(arb_id, requoted)
         else:
             execution = await self._live_execution(arb_id, requoted)
 
+        await self._audit_execution(execution)
         await self._publish_execution(execution)
         return execution
 
@@ -462,6 +504,43 @@ class ExecutionEngine:
             net_edge_cents=net_edge_cents,
             quote_age_seconds=age,
             timestamp=time.time(),
+            yes_fee_rate=current_yes.fee_rate,
+            no_fee_rate=current_no.fee_rate,
+        )
+
+    async def _audit_opportunity(self, arb_id: str, opp: ArbitrageOpportunity) -> bool:
+        audit_result = self._auditor.audit_opportunity(opp.to_audit_dict())
+        if audit_result.passed:
+            return True
+
+        severities = {flag.severity for flag in audit_result.flags}
+        severity = "critical" if "critical" in severities else "warning"
+        top_messages = "; ".join(flag.message for flag in audit_result.flags[:3])
+        await self._record_incident(
+            arb_id,
+            opp,
+            severity,
+            "Shadow math audit rejected opportunity before execution",
+            metadata={
+                "audit": audit_result.to_dict(),
+                "summary": top_messages,
+            },
+        )
+        return False
+
+    async def _audit_execution(self, execution: ArbExecution) -> None:
+        audit_result = self._auditor.audit_execution(execution.to_audit_dict())
+        if audit_result.passed:
+            return
+
+        severities = {flag.severity for flag in audit_result.flags}
+        severity = "critical" if "critical" in severities else "warning"
+        await self.record_incident(
+            arb_id=execution.arb_id,
+            canonical_id=execution.opportunity.canonical_id,
+            severity=severity,
+            message="Shadow execution audit flagged the completed trade state",
+            metadata={"audit": audit_result.to_dict()},
         )
 
     async def _simulate_execution(self, arb_id: str, opp: ArbitrageOpportunity) -> ArbExecution:
@@ -911,6 +990,7 @@ class ExecutionEngine:
             "aborted": self._aborted_count,
             "total_pnl": round(total_pnl, 2),
             "dry_run": self.scanner_config.dry_run,
+            "audit": self._auditor.stats,
         }
 
     async def run(self, arb_queue: asyncio.Queue):

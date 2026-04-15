@@ -38,12 +38,19 @@ def _kalshi_fee(price: float, quantity: int = 1) -> float:
     return math.ceil((raw_fee * 100.0) - 1e-9) / 100.0 / quantity
 
 
-def _polymarket_fee(price: float, category: str = "politics", quantity: int = 1) -> float:
-    """Polymarket: category-based taker rate × notional, amortized per contract."""
-    rates = {"politics": 0.01, "sports": 0.02, "crypto": 0.015, "default": 0.02}
+def _polymarket_fee(
+    price: float,
+    category: str = "politics",
+    quantity: int = 1,
+    fee_rate: Optional[float] = None,
+) -> float:
+    """Polymarket: fee rate × price × (1-price), amortized per contract."""
+    rates = {"politics": 0.02, "sports": 0.02, "crypto": 0.015, "default": 0.02}
     rate = rates.get(category, rates["default"])
+    if fee_rate is not None:
+        rate = max(float(fee_rate), 0.0)
     quantity = max(int(quantity), 1)
-    return (rate * price * quantity) / quantity
+    return (rate * price * (1.0 - price) * quantity) / quantity
 
 
 def _predictit_total_fee(buy_price: float, settle_price: float = 1.0, quantity: int = 1) -> float:
@@ -164,6 +171,9 @@ class MathAuditor:
         reported_net_cents = opp_dict.get("net_edge_cents", 0.0)
         reported_qty = opp_dict.get("suggested_qty", 0)
         reported_max_profit = opp_dict.get("max_profit_usd", 0.0)
+        reported_liquidity = opp_dict.get("min_available_liquidity", 0.0)
+        yes_fee_rate = opp_dict.get("yes_fee_rate")
+        no_fee_rate = opp_dict.get("no_fee_rate")
 
         # ─── Check 1: Gross edge ──────────────────────────────────────
         shadow_gross = 1.0 - yes_price - no_price
@@ -180,7 +190,11 @@ class MathAuditor:
 
         # ─── Check 2: Position sizing ─────────────────────────────────
         shadow_qty = self._compute_position_size(
-            yes_platform, no_platform, yes_price, no_price
+            yes_platform,
+            no_platform,
+            yes_price,
+            no_price,
+            min_available_liquidity=reported_liquidity,
         )
         if shadow_qty != reported_qty:
             flags.append(AuditFlag(
@@ -195,8 +209,8 @@ class MathAuditor:
         qty_for_fee = max(reported_qty or shadow_qty, 1)
 
         # ─── Check 3: Fee computation ─────────────────────────────────
-        shadow_fee_a = self._compute_fee(yes_platform, yes_price, "yes", qty_for_fee)
-        shadow_fee_b = self._compute_fee(no_platform, no_price, "no", qty_for_fee)
+        shadow_fee_a = self._compute_fee(yes_platform, yes_price, "yes", qty_for_fee, fee_rate=yes_fee_rate)
+        shadow_fee_b = self._compute_fee(no_platform, no_price, "no", qty_for_fee, fee_rate=no_fee_rate)
         shadow_total_fees = shadow_fee_a + shadow_fee_b
 
         diff = abs(shadow_total_fees - reported_total_fees)
@@ -398,24 +412,39 @@ class MathAuditor:
         result.passed = len(result.flags) == 0
         return result
 
-    def _compute_fee(self, platform: str, price: float, side: str, quantity: int) -> float:
+    def _compute_fee(
+        self,
+        platform: str,
+        price: float,
+        side: str,
+        quantity: int,
+        fee_rate: Optional[float] = None,
+    ) -> float:
         """Shadow fee computation — independent of scanner code."""
         if platform == "kalshi":
             return _kalshi_fee(price, quantity)
         elif platform == "polymarket":
-            return _polymarket_fee(price, category="politics", quantity=quantity)
+            return _polymarket_fee(price, category="politics", quantity=quantity, fee_rate=fee_rate)
         elif platform == "predictit":
             return _predictit_total_fee(price, settle_price=1.0, quantity=quantity)
         return 0.0
 
-    def _compute_position_size(self, platform_a: str, platform_b: str,
-                                yes_price: float, no_price: float) -> int:
+    def _compute_position_size(
+        self,
+        platform_a: str,
+        platform_b: str,
+        yes_price: float,
+        no_price: float,
+        min_available_liquidity: float = 0.0,
+    ) -> int:
         """Shadow position sizing — independent of scanner code."""
         cost_per_pair = yes_price + no_price
         if cost_per_pair <= 0:
             return 0
 
         max_by_capital = int(self.max_position_usd / cost_per_pair)
+        if min_available_liquidity > 0:
+            max_by_capital = min(max_by_capital, int(max(min_available_liquidity, 1.0)))
 
         if platform_a == "predictit":
             if yes_price > 0:

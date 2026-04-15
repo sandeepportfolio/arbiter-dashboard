@@ -51,6 +51,8 @@ class ArbitrageOpportunity:
     mapping_score: float = 0.0
     requires_manual: bool = False
     fee_breakdown: Dict[str, float] = field(default_factory=dict)
+    yes_fee_rate: float = 0.0
+    no_fee_rate: float = 0.0
 
     def key(self) -> str:
         return f"{self.canonical_id}:{self.yes_platform}:{self.no_platform}:{self.yes_market_id}:{self.no_market_id}"
@@ -84,6 +86,41 @@ class ArbitrageOpportunity:
             "mapping_score": round(self.mapping_score, 3),
             "requires_manual": self.requires_manual,
             "fee_breakdown": {name: round(value, 4) for name, value in self.fee_breakdown.items()},
+            "yes_fee_rate": round(self.yes_fee_rate, 6),
+            "no_fee_rate": round(self.no_fee_rate, 6),
+        }
+
+    def to_audit_dict(self) -> dict:
+        return {
+            "canonical_id": self.canonical_id,
+            "description": self.description,
+            "yes_platform": self.yes_platform,
+            "yes_price": self.yes_price,
+            "yes_fee": self.yes_fee,
+            "yes_market_id": self.yes_market_id,
+            "no_platform": self.no_platform,
+            "no_price": self.no_price,
+            "no_fee": self.no_fee,
+            "no_market_id": self.no_market_id,
+            "gross_edge": self.gross_edge,
+            "total_fees": self.total_fees,
+            "net_edge": self.net_edge,
+            "net_edge_cents": self.net_edge_cents,
+            "suggested_qty": self.suggested_qty,
+            "max_profit_usd": self.max_profit_usd,
+            "timestamp": self.timestamp,
+            "confidence": self.confidence,
+            "arb_type": self.arb_type,
+            "status": self.status,
+            "persistence_count": self.persistence_count,
+            "quote_age_seconds": self.quote_age_seconds,
+            "min_available_liquidity": self.min_available_liquidity,
+            "mapping_status": self.mapping_status,
+            "mapping_score": self.mapping_score,
+            "requires_manual": self.requires_manual,
+            "fee_breakdown": dict(self.fee_breakdown),
+            "yes_fee_rate": self.yes_fee_rate,
+            "no_fee_rate": self.no_fee_rate,
         }
 
 
@@ -297,6 +334,8 @@ class ArbitrageScanner:
                 "yes_total_fee": yes_fee_total,
                 "no_total_fee": no_fee_total,
             },
+            yes_fee_rate=yes_price_point.fee_rate,
+            no_fee_rate=no_price_point.fee_rate,
         )
 
     def _resolve_status(self, opportunity: ArbitrageOpportunity, mapping: dict) -> str:

@@ -8,11 +8,15 @@ import time
 import urllib.request
 
 import aiohttp
+import pytest
 
 
 def free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
+        try:
+            sock.bind(("127.0.0.1", 0))
+        except PermissionError as exc:
+            pytest.skip(f"Local socket binding unavailable in this sandbox: {exc}")
         return sock.getsockname()[1]
 
 
@@ -69,11 +73,13 @@ def test_api_and_dashboard_contracts():
 
         health = get_json("/api/health")
         assert health["status"] == "ok"
+        assert "audit" in health
 
         system = get_json("/api/system")
         assert system["mode"] == "dry-run"
         assert "scanner" in system
         assert "execution" in system
+        assert "audit" in system
         assert "counts" in system
         assert "series" in system
 
