@@ -113,29 +113,43 @@
     </section>
 
     <section id="riskSection" class="panel-grid panel-grid-tight">
-      <article class="panel">
-        <div class="panel-header">
-          <div>
-            <p class="panel-kicker">Validation</p>
-            <h2>Profitability verdict</h2>
+      <details class="panel panel-disclosure" data-dense-disclosure="profitability" open>
+        <summary class="panel-disclosure-trigger">
+          <div class="panel-disclosure-copy">
+            <div class="panel-header">
+              <div>
+                <p class="panel-kicker">Validation</p>
+                <h2>Profitability verdict</h2>
+              </div>
+              <span id="profitabilityVerdictBadge" class="panel-badge">Loading</span>
+            </div>
+            <p id="profitabilitySummary" class="panel-copy panel-disclosure-summary-copy">Arbiter is collecting evidence before it can call the engine profitable.</p>
           </div>
-          <span id="profitabilityVerdictBadge" class="panel-badge">Loading</span>
+          <span class="panel-disclosure-caret" aria-hidden="true"></span>
+        </summary>
+        <div class="panel-disclosure-body">
+          <div id="profitabilityReasons" class="stack-list compact-stack"></div>
         </div>
-        <p id="profitabilitySummary" class="panel-copy">Arbiter is collecting evidence before it can call the engine profitable.</p>
-        <div id="profitabilityReasons" class="stack-list compact-stack"></div>
-      </article>
+      </details>
 
-      <article class="panel">
-        <div class="panel-header">
-          <div>
-            <p class="panel-kicker">Guardrails</p>
-            <h2>Portfolio posture</h2>
+      <details class="panel panel-disclosure" data-dense-disclosure="portfolio" open>
+        <summary class="panel-disclosure-trigger">
+          <div class="panel-disclosure-copy">
+            <div class="panel-header">
+              <div>
+                <p class="panel-kicker">Guardrails</p>
+                <h2>Portfolio posture</h2>
+              </div>
+              <span id="portfolioExposureBadge" class="panel-badge">$0.00</span>
+            </div>
+            <p id="portfolioSummary" class="panel-copy panel-disclosure-summary-copy">Exposure, funding, and operator risk warnings appear here so production tests stay controlled.</p>
           </div>
-          <span id="portfolioExposureBadge" class="panel-badge">$0.00</span>
+          <span class="panel-disclosure-caret" aria-hidden="true"></span>
+        </summary>
+        <div class="panel-disclosure-body">
+          <div id="portfolioList" class="stack-list compact-stack"></div>
         </div>
-        <p id="portfolioSummary" class="panel-copy">Exposure, funding, and operator risk warnings appear here so production tests stay controlled.</p>
-        <div id="portfolioList" class="stack-list compact-stack"></div>
-      </article>
+      </details>
     </section>
 
     <section id="opportunitiesSection" class="panel-grid panel-grid-tight panel-grid-single">
@@ -248,16 +262,24 @@
         <div id="mappingList" class="stack-list mapping-list"></div>
       </article>
 
-      <article class="panel">
-        <div class="panel-header">
-          <div>
-            <p class="panel-kicker">Collectors</p>
-            <h2>Platform health</h2>
+      <details class="panel panel-disclosure" data-dense-disclosure="collectors" open>
+        <summary class="panel-disclosure-trigger">
+          <div class="panel-disclosure-copy">
+            <div class="panel-header">
+              <div>
+                <p class="panel-kicker">Collectors</p>
+                <h2>Platform health</h2>
+              </div>
+              <span id="collectorCount" class="panel-badge">0</span>
+            </div>
+            <p class="panel-copy panel-disclosure-summary-copy">Venue polling, circuit breakers, and feed stability stay visible while the detail list folds away.</p>
           </div>
-          <span id="collectorCount" class="panel-badge">0</span>
+          <span class="panel-disclosure-caret" aria-hidden="true"></span>
+        </summary>
+        <div class="panel-disclosure-body">
+          <div id="collectorList" class="stack-list"></div>
         </div>
-        <div id="collectorList" class="stack-list"></div>
-      </article>
+      </details>
     </section>
   </main>
   <nav class="mobile-dock" aria-label="Quick navigation">

@@ -217,10 +217,19 @@ const deskMenuEl = document.getElementById("deskMenu");
 const logScopeTabsEl = document.getElementById("logScopeTabs");
 const logSearchInputEl = document.getElementById("logSearchInput");
 const logResultSummaryEl = document.getElementById("logResultSummary");
+const denseDisclosurePanels = Array.from(document.querySelectorAll("[data-dense-disclosure]"));
+const denseDisclosureQuery = window.matchMedia ? window.matchMedia("(max-width: 760px)") : null;
 
 const formatUsd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
 const formatWhole = new Intl.NumberFormat("en-US");
 const formatClock = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" });
+
+function syncDenseDisclosures() {
+  const shouldCollapse = Boolean(denseDisclosureQuery?.matches);
+  denseDisclosurePanels.forEach((panel) => {
+    panel.open = !shouldCollapse;
+  });
+}
 
 function isStaticFrontend() {
   return Boolean(boot.staticFrontend);
@@ -2178,5 +2187,11 @@ function startPolling() {
 
 renderChrome();
 setWsLabel("Connecting", true);
+syncDenseDisclosures();
+if (denseDisclosureQuery?.addEventListener) {
+  denseDisclosureQuery.addEventListener("change", syncDenseDisclosures);
+} else if (denseDisclosureQuery?.addListener) {
+  denseDisclosureQuery.addListener(syncDenseDisclosures);
+}
 startPolling();
 void refreshAllData();
