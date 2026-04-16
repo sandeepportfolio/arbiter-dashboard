@@ -359,3 +359,33 @@ async def test_cancel_returns_false_on_no_auth():
     )
     assert await adapter.cancel_order(order) is False
     assert not session.delete.called
+
+
+# ─── CR-02: external_client_order_id population ──────────────────────────
+
+@pytest.mark.asyncio
+async def test_place_fok_returns_external_client_order_id():
+    """CR-02 regression: Order.external_client_order_id carries the Kalshi
+    client_order_id (the engine-chosen ARB-prefixed string), even when Kalshi
+    returns a different server-assigned order_id in the response.
+    """
+    body = json.dumps({
+        "order": {
+            "order_id": "KALSHI-SERVER-XYZ-123",
+            "status": "executed",
+            "fill_count_fp": "10.00",
+            "yes_price_dollars": "0.5500",
+        },
+    })
+    session = _session_with_post(200, body)
+    adapter = _make_adapter(session)
+    order = await adapter.place_fok("ARB-000042", "TICKER", "CID", "yes", 0.55, 10)
+    assert order.external_client_order_id is not None
+    assert order.external_client_order_id.startswith("ARB-000042-YES-")
+    # The order_id is the Kalshi server id — explicitly different from external_client_order_id
+    assert order.order_id == "KALSHI-SERVER-XYZ-123"
+    assert order.order_id != order.external_client_order_id
+
+
+# Alias for VALIDATION.md row 02.1-01-01 naming
+test_place_fok_populates_external_client_order_id = test_place_fok_returns_external_client_order_id

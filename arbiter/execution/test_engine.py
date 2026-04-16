@@ -508,31 +508,376 @@ def test_engine_returns_failed_when_no_adapter_for_platform():
 
 
 def test_engine_timeout_triggers_cancel():
-    """asyncio.wait_for fires; cancel_order is called; final status is CANCELLED."""
+    """CR-01 regression: timeout cancels REAL orders found by client_order_id prefix,
+    not the synthetic placeholder Order. Replaces the prior false-green test
+    that only asserted .assert_awaited_once() without inspecting call_args.
+    """
+    from arbiter.execution.engine import OrderStatus, Order
+
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        engine.execution_timeout_s = 0.1
+
+        adapter = MagicMock()
+        adapter.platform = "kalshi"
+
+        async def _hangs(*args, **kwargs):
+            await asyncio.sleep(10.0)
+
+        real_order = Order(
+            order_id="KALSHI-SERVER-XYZ-123",
+            platform="kalshi",
+            market_id="M",
+            canonical_id="C",
+            side="yes",
+            price=0.5,
+            quantity=1,
+            status=OrderStatus.SUBMITTED,
+        )
+        adapter.place_fok = _hangs
+        adapter.list_open_orders_by_client_id = AsyncMock(return_value=[real_order])
+        adapter.cancel_order = AsyncMock(return_value=True)
+
+        engine.adapters = {"kalshi": adapter}
+
+        result = await engine._place_order_for_leg(
+            arb_id="ARB-99", platform="kalshi",
+            market_id="M", canonical_id="C", side="yes",
+            price=0.5, qty=1,
+        )
+        adapter.list_open_orders_by_client_id.assert_awaited_once_with("ARB-99-YES-")
+        adapter.cancel_order.assert_awaited_once_with(real_order)
+        assert result.status == OrderStatus.CANCELLED
+
+    asyncio.run(runner())
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Phase 02.1 / CR-02 + CR-01: external_client_order_id field, _derive
+# helper rewrite, and timeout-recovery via list_open_orders_by_client_id.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_order_external_field_defaults_none():
+    """CR-02 dataclass smoke: external_client_order_id defaults to None."""
+    from arbiter.execution.engine import Order, OrderStatus
+    o = Order(
+        order_id="x", platform="kalshi",
+        market_id="M", canonical_id="C", side="yes",
+        price=0.5, quantity=1, status=OrderStatus.PENDING,
+    )
+    assert o.external_client_order_id is None
+
+    o2 = Order(
+        order_id="x", platform="kalshi",
+        market_id="M", canonical_id="C", side="yes",
+        price=0.5, quantity=1, status=OrderStatus.PENDING,
+        external_client_order_id="ARB-X-YES-deadbeef",
+    )
+    assert o2.external_client_order_id == "ARB-X-YES-deadbeef"
+
+
+def test_derive_client_order_id_returns_external_field():
+    """CR-02 regression: _derive_client_order_id reads order.external_client_order_id,
+    not order.order_id (which after Kalshi success holds the platform-assigned id).
+    """
+    from arbiter.execution.engine import ExecutionEngine, Order, OrderStatus
+    o = Order(
+        order_id="KALSHI-SERVER-99",  # platform-assigned id (would mislead old heuristic)
+        platform="kalshi",
+        market_id="M", canonical_id="C", side="yes",
+        price=0.5, quantity=1,
+        status=OrderStatus.FILLED,
+        external_client_order_id="ARB-000042-YES-deadbeef",
+    )
+    assert ExecutionEngine._derive_client_order_id(o) == "ARB-000042-YES-deadbeef"
+
+    o2 = Order(
+        order_id="KALSHI-SERVER-99", platform="kalshi",
+        market_id="M", canonical_id="C", side="yes",
+        price=0.5, quantity=1, status=OrderStatus.FILLED,
+        # external_client_order_id defaults to None
+    )
+    assert ExecutionEngine._derive_client_order_id(o2) is None
+
+    o3 = Order(
+        order_id="POLY-X", platform="polymarket",
+        market_id="M", canonical_id="C", side="yes",
+        price=0.5, quantity=1, status=OrderStatus.FILLED,
+    )
+    assert ExecutionEngine._derive_client_order_id(o3) is None
+
+
+def test_kalshi_fill_persists_client_order_id_correctly():
+    """CR-02 integration: on a successful Kalshi fill, engine.store.upsert_order
+    is called with kwarg ``client_order_id`` set to the ARB-prefixed string
+    carried by Order.external_client_order_id, NOT the platform order_id.
+    """
+    from arbiter.execution.engine import OrderStatus, Order as _Order
+
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+
+        adapter = MagicMock()
+        adapter.platform = "kalshi"
+        adapter.place_fok = AsyncMock(return_value=_Order(
+            order_id="KALSHI-SERVER-XYZ",          # platform-assigned id
+            platform="kalshi",
+            market_id="M", canonical_id="C", side="yes",
+            price=0.5, quantity=1,
+            status=OrderStatus.FILLED,
+            fill_price=0.5, fill_qty=1,
+            external_client_order_id="ARB-000042-YES-abcd1234",
+        ))
+        engine.adapters = {"kalshi": adapter}
+        engine.store = AsyncMock()
+
+        order = await engine._place_order_for_leg(
+            arb_id="ARB-000042", platform="kalshi",
+            market_id="M", canonical_id="C", side="yes",
+            price=0.5, qty=1,
+        )
+        assert order.status == OrderStatus.FILLED
+        engine.store.upsert_order.assert_awaited_once()
+        kwargs = engine.store.upsert_order.call_args.kwargs
+        assert kwargs["client_order_id"] == "ARB-000042-YES-abcd1234"
+        assert kwargs["client_order_id"] != "KALSHI-SERVER-XYZ"
+
+    asyncio.run(runner())
+
+
+def test_timeout_looks_up_real_orders_by_client_id():
+    """CR-01 regression: on timeout, engine queries adapter.list_open_orders_by_client_id
+    with the ARB-prefixed string, not the synthetic placeholder order_id.
+    """
     from arbiter.execution.engine import OrderStatus
 
     async def runner():
         store = PriceStore(ttl=60)
         engine = make_engine(store)
-        engine.execution_timeout_s = 0.1  # short timeout
+        engine.execution_timeout_s = 0.1
 
-        slow_adapter = MagicMock()
-        slow_adapter.platform = "kalshi"
+        adapter = MagicMock()
+        adapter.platform = "kalshi"
 
         async def _hangs(*args, **kwargs):
-            await asyncio.sleep(10.0)  # exceeds the 0.1s timeout
+            await asyncio.sleep(10.0)
 
-        slow_adapter.place_fok = _hangs
-        slow_adapter.cancel_order = AsyncMock(return_value=True)
+        adapter.place_fok = _hangs
+        adapter.list_open_orders_by_client_id = AsyncMock(return_value=[])
+        adapter.cancel_order = AsyncMock(return_value=False)
 
-        engine.adapters = {"kalshi": slow_adapter}
-
+        engine.adapters = {"kalshi": adapter}
         order = await engine._place_order_for_leg(
-            arb_id="ARB-T", platform="kalshi",
+            arb_id="ARB-42", platform="kalshi",
             market_id="M", canonical_id="C", side="yes",
             price=0.5, qty=1,
         )
-        assert order.status == OrderStatus.CANCELLED
-        slow_adapter.cancel_order.assert_awaited_once()
+        adapter.list_open_orders_by_client_id.assert_awaited_once_with("ARB-42-YES-")
+        assert order.status == OrderStatus.FAILED
+        assert "no matching open order found" in order.error
+        adapter.cancel_order.assert_not_called()
+
+    asyncio.run(runner())
+
+
+def test_timeout_uses_list_open_orders_by_client_id_with_correct_prefix():
+    """CR-01 prefix-shape: list_open_orders_by_client_id is called with the
+    exact prefix ``f"{arb_id}-{SIDE}-"``. Mirrors PATTERNS.md Section 6.
+    """
+    from arbiter.execution.engine import OrderStatus
+
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        engine.execution_timeout_s = 0.1
+
+        adapter = MagicMock()
+        adapter.platform = "kalshi"
+
+        async def _hangs(*args, **kwargs):
+            await asyncio.sleep(10.0)
+
+        adapter.place_fok = _hangs
+        adapter.list_open_orders_by_client_id = AsyncMock(return_value=[])
+        adapter.cancel_order = AsyncMock(return_value=False)
+
+        engine.adapters = {"kalshi": adapter}
+        order = await engine._place_order_for_leg(
+            arb_id="ARB-42", platform="kalshi",
+            market_id="M", canonical_id="C", side="yes",
+            price=0.5, qty=1,
+        )
+        adapter.list_open_orders_by_client_id.assert_awaited_once_with("ARB-42-YES-")
+        assert order.status == OrderStatus.FAILED
+        assert "no matching open order found" in order.error
+        adapter.cancel_order.assert_not_called()
+
+    asyncio.run(runner())
+
+
+def test_timeout_cancel_success_sets_cancelled():
+    """CR-01: list_open_orders_by_client_id returns one real order; cancel succeeds;
+    final Order.status == CANCELLED.
+    """
+    from arbiter.execution.engine import OrderStatus, Order
+
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        engine.execution_timeout_s = 0.1
+
+        adapter = MagicMock()
+        adapter.platform = "kalshi"
+
+        async def _hangs(*args, **kwargs):
+            await asyncio.sleep(10.0)
+
+        real_order = Order(
+            order_id="KALSHI-SERVER-AAA",
+            platform="kalshi",
+            market_id="M", canonical_id="C", side="yes",
+            price=0.5, quantity=1,
+            status=OrderStatus.SUBMITTED,
+        )
+        adapter.place_fok = _hangs
+        adapter.list_open_orders_by_client_id = AsyncMock(return_value=[real_order])
+        adapter.cancel_order = AsyncMock(return_value=True)
+
+        engine.adapters = {"kalshi": adapter}
+        result = await engine._place_order_for_leg(
+            arb_id="ARB-77", platform="kalshi",
+            market_id="M", canonical_id="C", side="yes",
+            price=0.5, qty=1,
+        )
+        adapter.list_open_orders_by_client_id.assert_awaited_once_with("ARB-77-YES-")
+        adapter.cancel_order.assert_awaited_once_with(real_order)
+        assert result.status == OrderStatus.CANCELLED
+
+    asyncio.run(runner())
+
+
+def test_timeout_no_match_sets_failed_with_clear_error():
+    """CR-01: lookup returns []; cancel_order is NEVER called; final status FAILED
+    with ``"no matching open order found"`` in error.
+    """
+    from arbiter.execution.engine import OrderStatus
+
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        engine.execution_timeout_s = 0.1
+
+        adapter = MagicMock()
+        adapter.platform = "kalshi"
+
+        async def _hangs(*args, **kwargs):
+            await asyncio.sleep(10.0)
+
+        adapter.place_fok = _hangs
+        adapter.list_open_orders_by_client_id = AsyncMock(return_value=[])
+        adapter.cancel_order = AsyncMock(return_value=True)
+
+        engine.adapters = {"kalshi": adapter}
+        result = await engine._place_order_for_leg(
+            arb_id="ARB-NO-MATCH", platform="kalshi",
+            market_id="M", canonical_id="C", side="yes",
+            price=0.5, qty=1,
+        )
+        adapter.list_open_orders_by_client_id.assert_awaited_once_with("ARB-NO-MATCH-YES-")
+        adapter.cancel_order.assert_not_awaited()
+        assert result.status == OrderStatus.FAILED
+        assert "no matching open order found" in result.error
+
+    asyncio.run(runner())
+
+
+def test_timeout_lookup_exception_logs_and_fails_safely():
+    """CR-01: list_open_orders_by_client_id raises; engine catches it, logs a
+    warning, degrades to FAILED. Engine NEVER re-raises across the
+    _place_order_for_leg boundary. cancel_order is NOT called (nothing to
+    cancel since the lookup failed).
+    """
+    from arbiter.execution.engine import OrderStatus
+
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        engine.execution_timeout_s = 0.1
+
+        adapter = MagicMock()
+        adapter.platform = "kalshi"
+
+        async def _hangs(*args, **kwargs):
+            await asyncio.sleep(10.0)
+
+        adapter.place_fok = _hangs
+        adapter.list_open_orders_by_client_id = AsyncMock(
+            side_effect=RuntimeError("network down"),
+        )
+        adapter.cancel_order = AsyncMock(return_value=True)
+
+        engine.adapters = {"kalshi": adapter}
+        # MUST NOT raise — engine boundary invariant
+        result = await engine._place_order_for_leg(
+            arb_id="ARB-EXC", platform="kalshi",
+            market_id="M", canonical_id="C", side="yes",
+            price=0.5, qty=1,
+        )
+        assert result.status == OrderStatus.FAILED
+        adapter.cancel_order.assert_not_awaited()
+
+    asyncio.run(runner())
+
+
+def test_timeout_recovery_end_to_end():
+    """End-to-end: hang on place_fok → lookup returns one real Order with the
+    ARB-prefixed external_client_order_id → cancel succeeds → engine.store.upsert_order
+    is called with the prefix-derived client_order_id and CANCELLED status.
+    """
+    from arbiter.execution.engine import OrderStatus, Order
+
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        engine.execution_timeout_s = 0.1
+
+        adapter = MagicMock()
+        adapter.platform = "kalshi"
+
+        async def _hangs(*args, **kwargs):
+            await asyncio.sleep(10.0)
+
+        # The real order returned from the lookup carries the ARB-prefixed id
+        # in external_client_order_id — this is what _derive_client_order_id
+        # must thread into upsert_order(client_order_id=...).
+        real_order = Order(
+            order_id="KALSHI-SERVER-LATE",
+            platform="kalshi",
+            market_id="M", canonical_id="C", side="yes",
+            price=0.5, quantity=1,
+            status=OrderStatus.SUBMITTED,
+            external_client_order_id="ARB-42-YES-abcd1234",
+        )
+        adapter.place_fok = _hangs
+        adapter.list_open_orders_by_client_id = AsyncMock(return_value=[real_order])
+        adapter.cancel_order = AsyncMock(return_value=True)
+
+        engine.adapters = {"kalshi": adapter}
+        engine.store = AsyncMock()
+
+        result = await engine._place_order_for_leg(
+            arb_id="ARB-42", platform="kalshi",
+            market_id="M", canonical_id="C", side="yes",
+            price=0.5, qty=1,
+        )
+        assert result.status == OrderStatus.CANCELLED
+        engine.store.upsert_order.assert_awaited_once()
+        kwargs = engine.store.upsert_order.call_args.kwargs
+        # The persisted client_order_id is the prefix-derived ARB string,
+        # picked up from the real order returned by the lookup.
+        assert kwargs["client_order_id"] == "ARB-42-YES-abcd1234"
 
     asyncio.run(runner())

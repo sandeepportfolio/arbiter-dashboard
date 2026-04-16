@@ -354,3 +354,24 @@ def test_polymarket_does_not_decorate_place_fok_with_transient_retry():
     assert not hasattr(method, "statistics"), (
         "PolymarketAdapter.place_fok appears tenacity-decorated"
     )
+
+
+# --- CR-02 parity: external_client_order_id is None on Polymarket -----------
+
+@pytest.mark.asyncio
+async def test_place_fok_returns_external_client_order_id_none():
+    """CR-02 parity: Polymarket has no client_order_id concept; the field is
+    None on the returned Order on success.
+    """
+    client = MagicMock()
+    client.get_orders = MagicMock(return_value=[])
+    client.create_order = MagicMock(return_value="SIGNED")
+    client.post_order = MagicMock(return_value=_good_post_response("P-42"))
+    adapter = _make_adapter(client=client)
+    order = await adapter.place_fok("ARB-1", "TOKEN-A", "DEM_HOUSE", "yes", 0.55, 10)
+    assert order.status == OrderStatus.FILLED
+    assert order.external_client_order_id is None
+
+
+# Alias for VALIDATION.md row 02.1-01-08 naming
+test_place_fok_leaves_external_client_order_id_none = test_place_fok_returns_external_client_order_id_none
