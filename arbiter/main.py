@@ -28,7 +28,6 @@ from .execution.engine import ExecutionEngine
 from .portfolio import PortfolioConfig, PortfolioMonitor
 from .profitability import ProfitabilityConfig, ProfitabilityValidator
 from .readiness import OperationalReadiness
-from .workflow import PredictItWorkflowManager
 
 
 def sync_runtime_reconciliation(
@@ -110,7 +109,6 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
         engine,
         monitor,
     )
-    workflow = PredictItWorkflowManager(config.alerts)
     profitability = ProfitabilityValidator(ProfitabilityConfig(), scanner, engine)
     reconciler = PnLReconciler(log_to_disk=not api_only)
     readiness = OperationalReadiness(
@@ -139,7 +137,7 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
         config,
         collectors=collectors_dict,
         portfolio=portfolio,
-        workflow_manager=workflow,
+        workflow_manager=None,
         profitability=profitability,
         readiness=readiness,
         reconciler=reconciler,
@@ -170,7 +168,6 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
             asyncio.create_task(monitor.run(alert_queue), name="balance-monitor"),
             asyncio.create_task(engine.run(arb_queue), name="execution-engine"),
             asyncio.create_task(portfolio.run(), name="portfolio-monitor"),
-            asyncio.create_task(workflow.run(lambda: engine.manual_positions), name="predictit-workflow"),
         ])
 
     tasks.append(asyncio.create_task(profitability.run(), name="profitability-validator"))
@@ -207,7 +204,6 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     await monitor.stop()
     await engine.stop()
     portfolio.stop()
-    await workflow.stop()
     profitability.stop()
 
     # Final stats

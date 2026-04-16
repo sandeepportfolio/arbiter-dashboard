@@ -25,7 +25,6 @@ from .profitability import ProfitabilityValidator
 from .readiness import OperationalReadiness
 from .scanner.arbitrage import ArbitrageOpportunity, ArbitrageScanner
 from .utils.price_store import PricePoint, PriceStore
-from .workflow import PredictItWorkflowManager, UnwindReason
 
 logger = logging.getLogger("arbiter.api")
 
@@ -147,7 +146,7 @@ class ArbiterAPI:
         config: ArbiterConfig,
         collectors: Optional[Dict[str, object]] = None,
         portfolio: Optional[PortfolioMonitor] = None,
-        workflow_manager: Optional[PredictItWorkflowManager] = None,
+        workflow_manager: Optional[object] = None,
         profitability: Optional[ProfitabilityValidator] = None,
         readiness: Optional[OperationalReadiness] = None,
         reconciler=None,
@@ -761,12 +760,8 @@ class ArbiterAPI:
         }
 
     @staticmethod
-    def _parse_unwind_reason(reason: str) -> UnwindReason:
-        normalized = str(reason or "").strip().lower()
-        try:
-            return UnwindReason(normalized)
-        except ValueError:
-            return UnwindReason.ONE_LEG_TIMEOUT
+    def _parse_unwind_reason(reason: str) -> str:
+        return reason.strip().lower().replace(" ", "_")
 
     @staticmethod
     def _build_manual_position_from_execution(execution: ArbExecution):
