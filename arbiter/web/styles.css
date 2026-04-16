@@ -865,9 +865,13 @@ h2 {
 .log-filter-chip {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 10px;
-  padding: 10px 14px;
+  min-height: 38px;
+  padding: 0 14px;
   border-radius: 999px;
+  line-height: 1;
+  vertical-align: middle;
 }
 
 .log-filter-chip span {

@@ -1919,20 +1919,28 @@ function renderActionButton(label, action, scope, targetId, canonicalId, seconda
 
 async function runAction(button, operation) {
   if (!button || button.disabled) return;
-  const originalLabel = button.textContent;
+  const labelEl = button.querySelector(".action-button-label");
+  const setLabel = (value) => {
+    if (labelEl) {
+      labelEl.textContent = value;
+    } else {
+      button.textContent = value;
+    }
+  };
+  const originalLabel = labelEl?.textContent || button.textContent;
   button.disabled = true;
-  button.textContent = "Working...";
+  setLabel("Working...");
   try {
     await operation();
     await loadSnapshot();
   } catch (error) {
-    button.textContent = "Retry";
+    setLabel("Retry");
     button.title = error instanceof Error ? error.message : "Action failed";
   } finally {
     if (button.isConnected) {
       button.disabled = false;
-      if (button.textContent === "Working...") {
-        button.textContent = originalLabel;
+      if ((labelEl?.textContent || button.textContent) === "Working...") {
+        setLabel(originalLabel);
       }
     }
   }
