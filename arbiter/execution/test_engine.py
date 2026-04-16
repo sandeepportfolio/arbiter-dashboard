@@ -1,5 +1,7 @@
 import asyncio
+import json
 import time
+from unittest.mock import AsyncMock, MagicMock
 
 from arbiter.config.settings import ArbiterConfig
 from arbiter.execution.engine import ExecutionEngine
@@ -430,5 +432,141 @@ def test_shadow_audit_blocks_unprofitable_manual_math():
         assert len(engine.manual_positions) == 0
         assert engine.stats["aborted"] == 1
         assert any("Shadow math audit rejected" in incident.message for incident in engine.incidents)
+
+    asyncio.run(runner())
+
+
+def test_kalshi_order_format_yes_side():
+    """Verify Kalshi order body uses yes_price_dollars string format (per D-15)."""
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+
+        # Mock the session and collector auth
+        mock_collector = MagicMock()
+        mock_collector.auth.is_authenticated = True
+        mock_collector.auth.get_headers = MagicMock(return_value={"Authorization": "test"})
+        engine._collectors = {"kalshi": mock_collector}
+
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_response.text = AsyncMock(return_value=json.dumps({
+            "order": {
+                "order_id": "test-order-123",
+                "status": "resting",
+                "fill_count_fp": "0.00",
+                "yes_price_dollars": "0.5600",
+            }
+        }))
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=False)
+
+        mock_session = MagicMock()
+        mock_session.closed = False
+        mock_session.post = MagicMock(return_value=mock_response)
+        engine._own_session = mock_session
+
+        order = await engine._place_kalshi_order(
+            arb_id="TEST", market_id="TICKER-123",
+            canonical_id="test_market", side="yes",
+            price=0.56, qty=10,
+        )
+
+        # Verify the POST call was made with dollar string format
+        call_args = mock_session.post.call_args
+        body = call_args.kwargs.get("json") or call_args[1].get("json")
+        assert "yes_price_dollars" in body, "Must use yes_price_dollars, not yes_price"
+        assert body["yes_price_dollars"] == "0.5600"
+        assert "count_fp" in body, "Must use count_fp, not count"
+        assert body["count_fp"] == "10.00"
+        assert "yes_price" not in body, "Legacy yes_price field must not be present"
+        assert "count" not in body, "Legacy count field must not be present"
+
+    asyncio.run(runner())
+
+
+def test_kalshi_order_format_no_side():
+    """Verify Kalshi order body uses no_price_dollars for no-side orders."""
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+
+        mock_collector = MagicMock()
+        mock_collector.auth.is_authenticated = True
+        mock_collector.auth.get_headers = MagicMock(return_value={"Authorization": "test"})
+        engine._collectors = {"kalshi": mock_collector}
+
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_response.text = AsyncMock(return_value=json.dumps({
+            "order": {
+                "order_id": "test-order-456",
+                "status": "resting",
+                "fill_count_fp": "0.00",
+                "no_price_dollars": "0.4400",
+            }
+        }))
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=False)
+
+        mock_session = MagicMock()
+        mock_session.closed = False
+        mock_session.post = MagicMock(return_value=mock_response)
+        engine._own_session = mock_session
+
+        order = await engine._place_kalshi_order(
+            arb_id="TEST", market_id="TICKER-456",
+            canonical_id="test_market", side="no",
+            price=0.44, qty=5,
+        )
+
+        call_args = mock_session.post.call_args
+        body = call_args.kwargs.get("json") or call_args[1].get("json")
+        assert "no_price_dollars" in body, "Must use no_price_dollars, not no_price"
+        assert body["no_price_dollars"] == "0.4400"
+        assert body["count_fp"] == "5.00"
+        assert "no_price" not in body, "Legacy no_price field must not be present"
+        assert "count" not in body, "Legacy count field must not be present"
+
+    asyncio.run(runner())
+
+
+def test_kalshi_response_parsing_dollar_strings():
+    """Verify response parsing reads fill_count_fp and *_price_dollars fields."""
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+
+        mock_collector = MagicMock()
+        mock_collector.auth.is_authenticated = True
+        mock_collector.auth.get_headers = MagicMock(return_value={"Authorization": "test"})
+        engine._collectors = {"kalshi": mock_collector}
+
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_response.text = AsyncMock(return_value=json.dumps({
+            "order": {
+                "order_id": "filled-order-789",
+                "status": "executed",
+                "fill_count_fp": "10.00",
+                "yes_price_dollars": "0.5600",
+            }
+        }))
+        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_response.__aexit__ = AsyncMock(return_value=False)
+
+        mock_session = MagicMock()
+        mock_session.closed = False
+        mock_session.post = MagicMock(return_value=mock_response)
+        engine._own_session = mock_session
+
+        order = await engine._place_kalshi_order(
+            arb_id="TEST", market_id="TICKER-789",
+            canonical_id="test_market", side="yes",
+            price=0.56, qty=10,
+        )
+
+        assert order.fill_qty == 10.0, f"Expected fill_qty=10.0 from fill_count_fp, got {order.fill_qty}"
+        assert abs(order.fill_price - 0.56) < 0.001, f"Expected fill_price=0.56 from yes_price_dollars, got {order.fill_price}"
 
     asyncio.run(runner())
