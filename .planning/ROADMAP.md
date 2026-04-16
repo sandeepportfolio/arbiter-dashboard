@@ -79,12 +79,16 @@ Plans:
   3. One-leg exposure is detected within one scan cycle after a failed second leg -- operator is alerted via Telegram and an unwind recommendation is logged
   4. API rate limits are enforced per-platform with configurable thresholds -- sustained high-frequency calls are throttled before hitting platform limits
   5. SIGINT/SIGTERM triggers graceful shutdown that cancels all open orders before process exit -- verified by sending signal during active session
-**Plans**: TBD
+**Plans**: 7 plans
 
 Plans:
-- [ ] 03-01: TBD
-- [ ] 03-02: TBD
-- [ ] 03-03: TBD
+- [ ] 03-01-PLAN.md -- SafetySupervisor + SafetyConfig + /api/kill-switch + WebSocket safety event plumbing + cancel_all stubs (SAFE-01)
+- [ ] 03-02-PLAN.md -- RiskManager per-platform exposure limit + order_rejected structured incident (SAFE-02)
+- [ ] 03-03-PLAN.md -- One-leg exposure structured metadata + Telegram alert + dedicated one_leg_exposure WS event (SAFE-03)
+- [ ] 03-04-PLAN.md -- Per-adapter rate-limit acquire + 429 retry-after + periodic rate_limit_state WS broadcast (SAFE-04)
+- [ ] 03-05-PLAN.md -- Graceful shutdown re-ordering + full KalshiAdapter/PolymarketAdapter cancel_all + prepare_shutdown (SAFE-05)
+- [ ] 03-06-PLAN.md -- MARKET_MAP resolution_criteria schema + mapping_state WS event + SQL ALTER migration (SAFE-06)
+- [ ] 03-07-PLAN.md -- Dashboard UI consolidation: safety section + rate-limit pills + one-leg hero alert + shutdown banner + resolution comparison (SAFE-01..06 UI)
 
 ### Phase 4: Sandbox Validation
 **Goal**: The full pipeline (collect -> scan -> execute -> monitor -> reconcile) is validated end-to-end against real platform APIs in sandbox/demo mode with no real money at risk
@@ -123,6 +127,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 |-------|----------------|--------|-----------|
 | 1. API Integration Fixes | 0/5 | Planned | - |
 | 2. Execution & Operational Hardening | 0/6 | Planned | - |
-| 3. Safety Layer | 0/3 | Not started | - |
+| 3. Safety Layer | 0/7 | Planned | - |
 | 4. Sandbox Validation | 0/2 | Not started | - |
 | 5. Live Trading | 0/1 | Not started | - |
