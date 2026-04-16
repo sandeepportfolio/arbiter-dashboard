@@ -7,6 +7,12 @@ This package contains:
 - polymarket.PolymarketAdapter (added in Plan 05)
 """
 from .base import PlatformAdapter
+from .polymarket import PolymarketAdapter
 from .retry_policy import TRANSIENT_EXCEPTIONS, transient_retry
 
-__all__ = ["PlatformAdapter", "TRANSIENT_EXCEPTIONS", "transient_retry"]
+__all__ = [
+    "PlatformAdapter",
+    "PolymarketAdapter",
+    "TRANSIENT_EXCEPTIONS",
+    "transient_retry",
+]
