@@ -282,6 +282,8 @@ class PolymarketAdapter:
             fill_price=price,
             fill_qty=fill_qty,
             timestamp=now,
+            # CR-02 parity: Polymarket has no client_order_id concept.
+            external_client_order_id=None,
         )
 
     def _order_from_record(
@@ -319,6 +321,8 @@ class PolymarketAdapter:
             fill_price=fill_price,
             fill_qty=fill_qty,
             timestamp=now,
+            # CR-02 parity: Polymarket has no client_order_id concept.
+            external_client_order_id=None,
         )
 
     # --- cancel_order (mirrors engine.py:732-745) ------------------------
@@ -514,4 +518,6 @@ class PolymarketAdapter:
             status=OrderStatus.FAILED,
             timestamp=ts,
             error=error,
+            # CR-02 parity: Polymarket has no client_order_id concept.
+            external_client_order_id=None,
         )

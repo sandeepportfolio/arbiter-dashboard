@@ -54,6 +54,11 @@ class Order:
     fill_qty: int = 0
     timestamp: float = 0.0
     error: str = ""
+    # CR-02: adapter populates with the engine-chosen client_order_id
+    # (e.g. ARB-000042-YES-deadbeef); engine threads this into
+    # ExecutionStore.upsert_order(client_order_id=...) so the DB column
+    # holds the real idempotency key, not the platform-assigned order_id.
+    external_client_order_id: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -69,6 +74,7 @@ class Order:
             "fill_qty": self.fill_qty,
             "timestamp": self.timestamp,
             "error": self.error,
+            "external_client_order_id": self.external_client_order_id,
         }
 
     def to_audit_dict(self) -> dict:
@@ -85,6 +91,7 @@ class Order:
             "fill_qty": self.fill_qty,
             "timestamp": self.timestamp,
             "error": self.error,
+            "external_client_order_id": self.external_client_order_id,
         }
 
 
@@ -783,13 +790,18 @@ class ExecutionEngine:
 
     @staticmethod
     def _derive_client_order_id(order: Order) -> Optional[str]:
-        """Kalshi adapter uses ``{arb_id}-{SIDE}-{8-hex}`` as the client_order_id
-        AND as the fallback order_id when the platform response lacks an id.
-        For Polymarket there is no client_order_id concept; return None.
+        """Return the adapter-populated client_order_id, or None.
+
+        Kalshi adapter populates ``Order.external_client_order_id`` with the
+        ``ARB-{n}-{SIDE}-{hex}`` string used as the Kalshi idempotency key
+        (the value sent to Kalshi as ``client_order_id`` in the order body).
+        Polymarket has no client_order_id concept and leaves the field None.
+        The previous ``-`` heuristic on ``order.order_id`` was unsound because
+        Kalshi's server-assigned order_ids also contain ``-``, causing the
+        DB ``client_order_id`` column to be populated with the platform id
+        rather than the engine-chosen idempotency key (CR-02).
         """
-        if order.platform == "kalshi" and order.order_id and "-" in order.order_id:
-            return order.order_id
-        return None
+        return order.external_client_order_id
 
     @staticmethod
     def _derive_arb_id_from_order(order: Order) -> Optional[str]:

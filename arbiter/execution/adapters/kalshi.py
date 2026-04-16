@@ -183,6 +183,10 @@ class KalshiAdapter:
             fill_price=fill_price,
             fill_qty=fill_qty,
             timestamp=now,
+            # CR-02: preserve the engine-chosen idempotency key so the engine
+            # can persist it to ``execution_orders.client_order_id`` instead
+            # of Kalshi's server-assigned order_id.
+            external_client_order_id=client_order_id,
         )
 
     @transient_retry()
