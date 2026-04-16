@@ -29,7 +29,10 @@ This is not a generic crypto wallet clone. The composition follows the approved 
 - public dashboard shell and content alignment polish
 - operator dashboard shell and control alignment polish
 - hover, focus, pressed, and active-state stability for all interactive controls
+- mobile-first collapsible disclosure patterns for dense secondary sections
+- lightweight expand/collapse motion for detail surfaces
 - Activity Atlas compaction and readability improvements
+- desktop event-consolidation controls for very large live streams
 - high-volume mapping experience redesign
 - desktop, tablet, and mobile spacing, overflow, and truncation cleanup
 
@@ -120,6 +123,14 @@ The previous chip-heavy controls were too soft and too unstable under hover. The
 - icon and text spacing remains fixed at all states
 - if a label is too long for a control, the control must be redesigned rather than allowed to clip during hover
 
+### Disclosure and motion rules
+
+- secondary detail sections may collapse, but the collapsed header must still communicate the current status or summary value
+- desktop keeps critical panels open by default and collapses only dense subsections or inspector sections
+- mobile collapses secondary detail aggressively so the primary chart and core queue surfaces remain visible
+- expand/collapse motion should use short height-and-opacity transitions only; no bounce, scale, or layout-jumping effects
+- motion must respect `prefers-reduced-motion` by removing animated transitions
+
 ### Filter language
 
 - segmented range controls
@@ -178,6 +189,7 @@ Provide concise, scannable event history and live operational context without fo
 
 - left or top scope controls for event domains
 - category atlas for quick filtering
+- summary strip and consolidation controls above the event stream
 - center timeline pane with fixed height and internal scroll
 - search and compact filter rail above the timeline
 
@@ -206,6 +218,9 @@ Each event card should compress into three layers:
 - timeline pane must be height-bounded with internal scroll
 - category pane must be independently scrollable
 - event cards must stay visually compact under large result sets
+- desktop must support consolidation controls such as `group by`, `show exceptions`, and `digest mode`
+- bursty event streams should collapse into grouped summary rows when the operator does not need every individual entry visible at once
+- grouped rows must show a compact aggregate label, count, recency, and dominant status, then expand on demand
 - mobile must preserve the same event hierarchy without multi-line chaos
 
 ## Mapping Workspace
@@ -284,6 +299,7 @@ The operator dashboard must look as polished as the public dashboard while remai
 - card headers must maintain consistent title-to-badge spacing
 - action rows must keep equal button heights and consistent wrapping rules
 - dense operational cards may be redesigned if needed to prevent label collision or button truncation
+- dense sections such as profitability, exposure, platform health, and collector detail may use disclosure rows when that improves clarity, especially on mobile
 - utility takes precedence over decorative symmetry, but visual sloppiness is not acceptable
 
 ## Responsive Behavior
@@ -293,6 +309,7 @@ The operator dashboard must look as polished as the public dashboard while remai
 - keep the large split layout: chart left, risk/trades right
 - operational workbenches use bounded panes instead of page-height expansion
 - navigation remains fully visible
+- high-volume event surfaces use consolidation controls before they are allowed to become visually noisy
 
 ### Tablet 768-1024
 
@@ -309,6 +326,7 @@ The operator dashboard must look as polished as the public dashboard while remai
 - right rail becomes a compressed bottom sheet below the chart
 - metrics collapse into paired tiles
 - secondary content becomes modern disclosure tiles with leading icons, short summaries, and clear chevron affordance
+- profitability, exposure, platform health, and other secondary detail surfaces should default collapsed when that reduces page length
 - mapping becomes a compact queue list plus bottom-sheet inspector
 - Activity Atlas becomes a compact event queue with stable line wrapping and bounded panes
 - primary section navigation moves to a bottom dock
@@ -329,6 +347,7 @@ The operator dashboard must look as polished as the public dashboard while remai
 - preserve semantic grouping so operators can scan the page by section
 - ensure critical information remains visible without hover
 - support keyboard focus states that do not distort layout
+- ensure expand/collapse interactions remain understandable without animation
 
 ## Implementation Notes
 
@@ -346,6 +365,8 @@ The redesign is successful when:
 - desktop clearly matches the approved reference-inspired direction
 - public and operator dashboards feel premium, dense, and intentional
 - button, chip, and badge text stay aligned and untruncated in all interactive states
+- mobile users can collapse secondary detail instead of scrolling through long open panels
+- desktop users can consolidate very large event streams into grouped summaries without losing access to underlying detail
 - Activity Atlas reads as a concise event console rather than a long scrolling feed
 - mapping works as a bounded high-volume workspace rather than an endless list
 - tablet and mobile keep the same identity without awkward shrinking or uncontrolled overflow

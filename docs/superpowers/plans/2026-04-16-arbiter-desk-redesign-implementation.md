@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Fix the remaining UI defects in the Arbiter public and operator dashboards, compact Activity Atlas, and redesign mapping into a bounded high-volume workspace without changing backend behavior.
+**Goal:** Fix the remaining UI defects in the Arbiter public and operator dashboards, add mobile-friendly collapsible detail patterns, compact Activity Atlas, and redesign mapping into a bounded high-volume workspace without changing backend behavior.
 
-**Architecture:** Keep the existing fetch/WebSocket/state pipeline in `C:\Users\sande\Documents\arbiter-dashboard\arbiter\web\dashboard.js`, but move dense UI presentation into stronger view-model helpers and bounded pane layouts. Stabilize shared control primitives first, then apply them to scanner rows, Activity Atlas, and the mapping workbench so the same visual rules hold on desktop, tablet, and mobile.
+**Architecture:** Keep the existing fetch/WebSocket/state pipeline in `C:\Users\sande\Documents\arbiter-dashboard\arbiter\web\dashboard.js`, but move dense UI presentation into stronger view-model helpers, a reusable disclosure-state layer, and bounded pane layouts. Stabilize shared control primitives first, then apply them to scanner rows, collapsible secondary panels, Activity Atlas, and the mapping workbench so the same visual rules hold on desktop, tablet, and mobile.
 
 **Tech Stack:** Static HTML, vanilla JS, shared CSS, Vitest, Playwright-based node scripts in `output/`, existing dashboard fetch/WebSocket pipeline
 
@@ -15,7 +15,7 @@
 - `C:\Users\sande\Documents\arbiter-dashboard\index.html` - static-host entrypoint; must mirror the UI shell used by the served dashboard.
 - `C:\Users\sande\Documents\arbiter-dashboard\arbiter\web\dashboard.html` - API-served dashboard markup.
 - `C:\Users\sande\Documents\arbiter-dashboard\arbiter\web\styles.css` - canonical visual system, responsive layout rules, button/chip behavior, atlas and mapping workbench styling.
-- `C:\Users\sande\Documents\arbiter-dashboard\arbiter\web\dashboard.js` - render pipeline, local UI state, DOM event handling, mapping/atlas rendering.
+- `C:\Users\sande\Documents\arbiter-dashboard\arbiter\web\dashboard.js` - render pipeline, local UI state, disclosure handling, DOM event wiring, mapping/atlas rendering.
 - `C:\Users\sande\Documents\arbiter-dashboard\arbiter\web\activity-atlas-model.js` - atlas filtering and presentation shaping.
 - `C:\Users\sande\Documents\arbiter-dashboard\arbiter\web\activity-atlas-model.test.js` - atlas unit tests.
 - `C:\Users\sande\Documents\arbiter-dashboard\arbiter\web\mapping-workspace-model.js` - new pure helper for high-volume mapping views, row windowing, selection, and inspector summaries.
@@ -160,16 +160,16 @@ git commit -m "fix: stabilize dashboard control geometry"
 
 ---
 
-### Task 2: Tighten scanner rows and operator card alignment
+### Task 2: Tighten scanner rows, operator cards, and collapsible dense panels
 
 **Files:**
 - Modify: `C:\Users\sande\Documents\arbiter-dashboard\arbiter\web\styles.css`
 - Modify: `C:\Users\sande\Documents\arbiter-dashboard\arbiter\web\dashboard.js`
 - Modify: `C:\Users\sande\Documents\arbiter-dashboard\output\ui_verify.mjs`
 
-- [ ] **Step 1: Write the failing scanner/operator layout checks**
+- [ ] **Step 1: Write the failing scanner/operator/disclosure layout checks**
 
-Extend `C:\Users\sande\Documents\arbiter-dashboard\output\ui_verify.mjs` to assert that operator card headers, status badges, and action rows fit without overflow.
+Extend `C:\Users\sande\Documents\arbiter-dashboard\output\ui_verify.mjs` to assert that operator card headers, status badges, and action rows fit without overflow, and that dense secondary panels can collapse without changing trigger geometry or clipping summary text.
 
 ```js
 const operatorFacts = await page.evaluate(() => {
@@ -187,15 +187,29 @@ const operatorFacts = await page.evaluate(() => {
     };
   });
 });
+
+const disclosureFacts = await page.evaluate(() => {
+  return [...document.querySelectorAll('[data-disclosure]')].map((panel) => {
+    const trigger = panel.querySelector('[data-disclosure-trigger]');
+    const summary = panel.querySelector('.disclosure-summary');
+    const content = panel.querySelector('[data-disclosure-content]');
+    return {
+      label: trigger?.textContent?.replace(/\s+/g, ' ').trim() || '',
+      triggerOverflow: trigger ? trigger.scrollWidth > trigger.clientWidth + 1 : false,
+      summaryOverflow: summary ? summary.scrollWidth > summary.clientWidth + 1 : false,
+      contentHidden: content ? (panel.getAttribute('data-disclosure-open') !== 'true' ? content.clientHeight === 0 : content.clientHeight > 0) : true,
+    };
+  });
+});
 ```
 
 - [ ] **Step 2: Run the broad UI sweep and verify it fails on the current compact desktop/mobile cases**
 
 Run: `node output/ui_verify.mjs`
 
-Expected: FAIL with at least one operator-card or scanner-row alignment error.
+Expected: FAIL with at least one operator-card, scanner-row, or disclosure-summary alignment error.
 
-- [ ] **Step 3: Rebuild the scanner side column and operator action layout with stable grid boundaries**
+- [ ] **Step 3: Rebuild the scanner side column, operator action layout, and disclosure headers with stable grid boundaries**
 
 Update `C:\Users\sande\Documents\arbiter-dashboard\arbiter\web\styles.css`.
 
@@ -247,21 +261,59 @@ Update `C:\Users\sande\Documents\arbiter-dashboard\arbiter\web\styles.css`.
 .action-row .action-button-secondary {
   flex: 0 0 auto;
 }
+
+.disclosure-panel {
+  border-radius: 18px;
+  overflow: clip;
+}
+
+.disclosure-trigger {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 12px;
+  align-items: center;
+  width: 100%;
+}
+
+.disclosure-summary {
+  min-width: 0;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.disclosure-content {
+  display: grid;
+  gap: 12px;
+  overflow: hidden;
+  transition: grid-template-rows 200ms ease, opacity 200ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .disclosure-content {
+    transition: none;
+  }
+}
 ```
 
-Shorten operator button labels in `C:\Users\sande\Documents\arbiter-dashboard\arbiter\web\dashboard.js` where needed so they read as controls, not sentences.
+Shorten operator button labels in `C:\Users\sande\Documents\arbiter-dashboard\arbiter\web\dashboard.js` where needed so they read as controls, not sentences, and add a reusable disclosure state for dense secondary surfaces such as profitability verdict, platform health, risk and exposure, and collector detail. Keep those panels open on desktop by default and collapsed on mobile when they are secondary to the primary chart/workbench.
 
 ```js
 buttons.push(renderActionButton('Entered', 'mark_entered', 'manual', position.position_id, position.canonical_id));
 buttons.push(renderActionButton('Cancel', 'cancel', 'manual', position.position_id, position.canonical_id, true));
 buttons.push(renderActionButton('Closed', 'mark_closed', 'manual', position.position_id, position.canonical_id));
+
+state.disclosures = {
+  profitabilityVerdict: !matchMedia('(max-width: 767px)').matches,
+  platformHealth: !matchMedia('(max-width: 767px)').matches,
+  riskExposure: !matchMedia('(max-width: 767px)').matches,
+};
 ```
 
-- [ ] **Step 4: Run the UI sweep again to verify scanner rows and operator cards are clean**
+- [ ] **Step 4: Run the UI sweep again to verify scanner rows, operator cards, and dense panels are clean**
 
 Run: `node output/ui_verify.mjs`
 
-Expected: PASS with no operator-card overflow and no new desktop/mobile layout errors.
+Expected: PASS with no operator-card overflow, no disclosure-trigger truncation, and no new desktop/mobile layout errors.
 
 - [ ] **Step 5: Commit**
 
@@ -272,7 +324,7 @@ git commit -m "fix: align scanner and operator dashboard cards"
 
 ---
 
-### Task 3: Compact Activity Atlas into terse operational events
+### Task 3: Compact Activity Atlas into terse operational events with desktop consolidation
 
 **Files:**
 - Modify: `C:\Users\sande\Documents\arbiter-dashboard\arbiter\web\activity-atlas-model.js`
@@ -281,12 +333,12 @@ git commit -m "fix: align scanner and operator dashboard cards"
 - Modify: `C:\Users\sande\Documents\arbiter-dashboard\arbiter\web\styles.css`
 - Modify: `C:\Users\sande\Documents\arbiter-dashboard\output\verify_activity_atlas.mjs`
 
-- [ ] **Step 1: Write failing unit tests for terse atlas presentation**
+- [ ] **Step 1: Write failing unit tests for terse atlas presentation and grouped summaries**
 
 Extend `C:\Users\sande\Documents\arbiter-dashboard\arbiter\web\activity-atlas-model.test.js` with a pure presentation helper test.
 
 ```js
-import { buildActivityAtlasView, presentActivityEntry } from './activity-atlas-model.js';
+import { buildActivityAtlasView, buildDigestGroups, presentActivityEntry } from './activity-atlas-model.js';
 
 it('compresses activity entries into title line, meta line, and compact tags', () => {
   const presented = presentActivityEntry({
@@ -306,15 +358,31 @@ it('compresses activity entries into title line, meta line, and compact tags', (
   expect(presented.metaLine).toBe('Kalshi -> PredictIt - 1m ago - edge 18.4c');
   expect(presented.tags).toEqual(['3/3 scans', 'tradable', 'edge 18.4c']);
 });
+
+it('groups bursty activity into a digest row when digest mode is enabled', () => {
+  const view = buildActivityAtlasView({
+    logs: [
+      { id: '1', category: 'opportunity', title: 'BTC to 100k', status: 'tradable', timestamp: 200, eventVerb: 'Route published', venuePath: 'Kalshi -> PredictIt' },
+      { id: '2', category: 'opportunity', title: 'BTC to 100k', status: 'tradable', timestamp: 198, eventVerb: 'Route published', venuePath: 'Kalshi -> PredictIt' },
+      { id: '3', category: 'opportunity', title: 'BTC to 100k', status: 'tradable', timestamp: 196, eventVerb: 'Route published', venuePath: 'Kalshi -> PredictIt' },
+    ],
+    digestMode: true,
+    groupBy: 'title',
+  });
+
+  expect(view.entries).toHaveLength(1);
+  expect(view.entries[0].aggregateCount).toBe(3);
+  expect(view.entries[0].titleLine).toContain('3 events');
+});
 ```
 
 - [ ] **Step 2: Run the atlas unit test to verify it fails**
 
 Run: `npx vitest run arbiter/web/activity-atlas-model.test.js`
 
-Expected: FAIL because `presentActivityEntry` does not exist yet.
+Expected: FAIL because digest grouping does not exist yet.
 
-- [ ] **Step 3: Implement a pure atlas presentation helper**
+- [ ] **Step 3: Implement pure atlas presentation and grouped digest helpers**
 
 Add `presentActivityEntry` to `C:\Users\sande\Documents\arbiter-dashboard\arbiter\web\activity-atlas-model.js`.
 
@@ -353,12 +421,38 @@ export function presentActivityEntry(entry, nowTimestamp = Date.now() / 1000) {
     tags: (entry.tags || []).slice(0, 3),
   };
 }
+
+export function buildDigestGroups(entries = [], groupBy = 'title') {
+  const buckets = new Map();
+  entries.forEach((entry) => {
+    const key = groupBy === 'status'
+      ? String(entry.status || 'active')
+      : groupBy === 'venue'
+        ? String(entry.venuePath || 'Unknown route')
+        : String(entry.title || entry.eventVerb || 'Untitled');
+    const current = buckets.get(key) || [];
+    current.push(entry);
+    buckets.set(key, current);
+  });
+  return [...buckets.entries()].map(([key, bucket]) => ({
+    id: `digest-${groupBy}-${key}`,
+    titleLine: `${bucket.length} events - ${key}`,
+    metaLine: `${presentActivityEntry(bucket[0]).statusLabel} - ${presentActivityEntry(bucket[0]).metaLine}`,
+    aggregateCount: bucket.length,
+    status: bucket[0].status,
+    tags: [`${bucket.length} events`],
+    tone: bucket[0].tone || 'tone-slate',
+    timestamp: bucket[0].timestamp,
+    summary: 'Grouped digest',
+    isDigest: true,
+  }));
+}
 ```
 
-Update `C:\Users\sande\Documents\arbiter-dashboard\arbiter\web\dashboard.js` so the import line includes `presentActivityEntry`, the entry builders expose terse UI fields, and `renderLogEntry` uses the presented entry instead of long-form copy.
+Update `C:\Users\sande\Documents\arbiter-dashboard\arbiter\web\dashboard.js` so the import line includes `presentActivityEntry`, digest/grouping state is tracked, the entry builders expose terse UI fields, grouped summary rows render in digest mode, and `renderLogEntry` uses the presented entry instead of long-form copy.
 
 ```js
-import { buildActivityAtlasView, presentActivityEntry } from './activity-atlas-model.js';
+import { buildActivityAtlasView, buildDigestGroups, presentActivityEntry } from './activity-atlas-model.js';
 
 function buildOpportunityEntry(opp, index) {
   return {
@@ -387,7 +481,7 @@ function renderLogEntry(entry) {
   const presented = presentActivityEntry(entry, Date.now() / 1000);
   const category = LOG_DEFINITIONS[presented.category];
   return `
-    <article class="log-entry ${presented.tone}">
+    <article class="log-entry ${presented.tone} ${presented.isDigest ? 'is-digest' : ''}">
       <div class="log-entry-head">
         <div class="log-entry-kicker">
           <span class="log-entry-source">${escapeHtml(category.label)}</span>
@@ -407,9 +501,20 @@ function renderLogEntry(entry) {
     </article>
   `;
 }
+
+function renderAtlasSummary(view) {
+  return `
+    <div class="atlas-summary-strip">
+      <span>${escapeHtml(formatWhole.format(view.readyCount || 0))} ready</span>
+      <span>${escapeHtml(formatWhole.format(view.reviewCount || 0))} review</span>
+      <span>${escapeHtml(formatWhole.format(view.failedCount || 0))} failed</span>
+      <button type="button" class="filter-pill" data-atlas-digest-toggle="true">${state.atlasDigestMode ? 'Digest mode' : 'Live mode'}</button>
+    </div>
+  `;
+}
 ```
 
-Update `C:\Users\sande\Documents\arbiter-dashboard\arbiter\web\styles.css` to keep entries compact.
+Update `C:\Users\sande\Documents\arbiter-dashboard\arbiter\web\styles.css` to keep entries compact and grouped rows readable.
 
 ```css
 .log-entry {
@@ -432,6 +537,17 @@ Update `C:\Users\sande\Documents\arbiter-dashboard\arbiter\web\styles.css` to ke
   padding: 4px 8px;
   font-size: 0.68rem;
 }
+
+.atlas-summary-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.log-entry.is-digest {
+  border-style: dashed;
+}
 ```
 
 - [ ] **Step 4: Extend the Playwright atlas audit and verify the atlas is compact and bounded**
@@ -448,13 +564,20 @@ const entryFacts = await page.evaluate(() => {
     scrollHeight: entry.scrollHeight,
   }));
 });
+
+const digestFacts = await page.evaluate(() => {
+  return {
+    hasSummaryStrip: !!document.querySelector('.atlas-summary-strip'),
+    groupedRows: document.querySelectorAll('.log-entry.is-digest').length,
+  };
+});
 ```
 
 Run:
 - `npx vitest run arbiter/web/activity-atlas-model.test.js`
 - `node output/verify_activity_atlas.mjs`
 
-Expected: PASS with no atlas entry overflow and sticky/header behavior still intact.
+Expected: PASS with no atlas entry overflow, sticky/header behavior still intact, and digest mode rendering grouped rows without expanding page height.
 
 - [ ] **Step 5: Commit**
 
@@ -608,6 +731,12 @@ state.mappingView = 'all';
 state.mappingQuery = '';
 state.mappingSelectedId = '';
 state.mappingScrollTop = 0;
+state.mappingInspectorSections = {
+  summary: true,
+  platforms: true,
+  confidence: false,
+  notes: false,
+};
 const mappingSearchInputEl = document.getElementById('mappingSearch');
 const mappingViewportEl = document.getElementById('mappingTableViewport');
 
@@ -653,9 +782,18 @@ function renderMappings() {
   }
   if (inspectorEl) {
     inspectorEl.innerHTML = view.selected ? `
-      <div class="mapping-inspector-card">
-        <h3>${escapeHtml(view.selected.description || view.selected.title || view.selected.canonical_id)}</h3>
-        <p class="mapping-inspector-copy">Review venue alignment, confidence, and operator posture without expanding the list.</p>
+      <div class="mapping-inspector-card" data-disclosure="mapping-inspector">
+        <section class="mapping-inspector-section" data-disclosure-open="${state.mappingInspectorSections.summary}">
+          <button type="button" class="disclosure-trigger" data-disclosure-trigger="summary">
+            <span>Canonical event</span>
+            <span class="disclosure-summary">${escapeHtml(titleCase(view.selected.status || 'review'))}</span>
+            <span aria-hidden="true">v</span>
+          </button>
+          <div class="disclosure-content" data-disclosure-content>
+            <h3>${escapeHtml(view.selected.description || view.selected.title || view.selected.canonical_id)}</h3>
+            <p class="mapping-inspector-copy">Review venue alignment, confidence, and operator posture without expanding the list.</p>
+          </div>
+        </section>
       </div>
     ` : emptyState('Select a mapping to inspect it.');
   }
@@ -674,6 +812,14 @@ document.addEventListener('click', (event) => {
   const mappingSelectTarget = event.target.closest('[data-mapping-select]');
   if (mappingSelectTarget) {
     state.mappingSelectedId = mappingSelectTarget.getAttribute('data-mapping-select') || '';
+    renderMappings();
+    return;
+  }
+
+  const inspectorDisclosure = event.target.closest('[data-disclosure-trigger]');
+  if (inspectorDisclosure && inspectorDisclosure.closest('.mapping-inspector-card')) {
+    const key = inspectorDisclosure.getAttribute('data-disclosure-trigger') || '';
+    state.mappingInspectorSections[key] = !state.mappingInspectorSections[key];
     renderMappings();
   }
 });
@@ -694,7 +840,7 @@ if (mappingViewportEl) {
 }
 ```
 
-- [ ] **Step 6: Add bounded workbench styling and viewport scrolling**
+- [ ] **Step 6: Add bounded workbench styling, viewport scrolling, and collapsible inspector sections**
 
 Update `C:\Users\sande\Documents\arbiter-dashboard\arbiter\web\styles.css`.
 
@@ -751,6 +897,13 @@ Update `C:\Users\sande\Documents\arbiter-dashboard\arbiter\web\styles.css`.
   white-space: nowrap;
 }
 
+.mapping-inspector-section {
+  display: grid;
+  gap: 10px;
+  padding: 12px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
 @media (max-width: 1120px) {
   .mapping-workspace {
     grid-template-columns: 1fr;
@@ -771,10 +924,15 @@ Add to `C:\Users\sande\Documents\arbiter-dashboard\output\verify_dashboard_polis
 const mappingFacts = await page.evaluate(() => {
   const workspace = document.querySelector('.mapping-workspace');
   const viewport = document.querySelector('#mappingTableViewport');
+  const inspectorSections = [...document.querySelectorAll('.mapping-inspector-section')].map((section) => ({
+    open: section.getAttribute('data-disclosure-open') === 'true',
+    overflow: section.scrollWidth > section.clientWidth + 1,
+  }));
   return {
     workspaceHeight: workspace ? Math.round(workspace.getBoundingClientRect().height) : 0,
     viewportHeight: viewport ? Math.round(viewport.getBoundingClientRect().height) : 0,
     viewportScrollHeight: viewport ? Math.round(viewport.scrollHeight) : 0,
+    inspectorSections,
   };
 });
 ```
@@ -821,7 +979,7 @@ Expected: PASS with no output.
 
 Run: `node output/verify_dashboard_polish.mjs`
 
-Expected: `Dashboard polish checks passed.`
+Expected: `Dashboard polish checks passed.` including bounded mapping panes and stable disclosure sections.
 
 - [ ] **Step 4: Run the Activity Atlas audit**
 
@@ -833,7 +991,7 @@ Expected: JSON output with no console/page/request errors, sticky header preserv
 
 Run: `node output/ui_verify.mjs`
 
-Expected: JSON report where each scenario has `errors: []` and `facts.hasHorizontalOverflow: false`.
+Expected: JSON report where each scenario has `errors: []`, `facts.hasHorizontalOverflow: false`, and dense disclosures maintain summary visibility when collapsed.
 
 - [ ] **Step 6: If any script fails, fix only the surfaced UI defect and rerun the exact failing command before continuing**
 
@@ -850,6 +1008,10 @@ Apply the smallest possible UI-only fix. Typical examples:
 
   .operator-meta-row {
     grid-template-columns: 1fr;
+  }
+
+  .disclosure-trigger {
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 }
 ```
