@@ -436,137 +436,103 @@ def test_shadow_audit_blocks_unprofitable_manual_math():
     asyncio.run(runner())
 
 
-def test_kalshi_order_format_yes_side():
-    """Verify Kalshi order body uses yes_price_dollars string format (per D-15)."""
+# ─────────────────────────────────────────────────────────────────────────
+# Plan 02-06 integration: engine now dispatches leg placement through
+# self.adapters[platform], not the deleted _place_kalshi_order /
+# _place_polymarket_order helpers. The exhaustive body-shape and
+# response-parsing tests that used to live here now live in
+# arbiter/execution/adapters/test_kalshi_adapter.py (alongside the
+# adapter they actually cover). The tests below prove the adapter
+# dispatch contract at the engine level.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_engine_dispatches_to_adapter_for_known_platform():
+    """Smoke test: ExecutionEngine constructor accepts adapters dict and
+    _place_order_for_leg dispatches through it."""
+    from arbiter.execution.engine import OrderStatus
+    from arbiter.execution.engine import Order as _Order
+
     async def runner():
         store = PriceStore(ttl=60)
         engine = make_engine(store)
 
-        # Mock the session and collector auth
-        mock_collector = MagicMock()
-        mock_collector.auth.is_authenticated = True
-        mock_collector.auth.get_headers = MagicMock(return_value={"Authorization": "test"})
-        engine._collectors = {"kalshi": mock_collector}
-
-        mock_response = AsyncMock()
-        mock_response.status = 200
-        mock_response.text = AsyncMock(return_value=json.dumps({
-            "order": {
-                "order_id": "test-order-123",
-                "status": "resting",
-                "fill_count_fp": "0.00",
-                "yes_price_dollars": "0.5600",
-            }
-        }))
-        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
-        mock_response.__aexit__ = AsyncMock(return_value=False)
-
-        mock_session = MagicMock()
-        mock_session.closed = False
-        mock_session.post = MagicMock(return_value=mock_response)
-        engine._own_session = mock_session
-
-        order = await engine._place_kalshi_order(
-            arb_id="TEST", market_id="TICKER-123",
-            canonical_id="test_market", side="yes",
-            price=0.56, qty=10,
+        kalshi_adapter = MagicMock()
+        kalshi_adapter.platform = "kalshi"
+        kalshi_adapter.place_fok = AsyncMock(
+            return_value=_Order(
+                order_id="ARB-X-YES-aaa",
+                platform="kalshi",
+                market_id="M",
+                canonical_id="C",
+                side="yes",
+                price=0.5,
+                quantity=1,
+                status=OrderStatus.FILLED,
+                fill_price=0.5,
+                fill_qty=1,
+            )
         )
+        kalshi_adapter.cancel_order = AsyncMock(return_value=True)
+        engine.adapters = {"kalshi": kalshi_adapter}
 
-        # Verify the POST call was made with dollar string format
-        call_args = mock_session.post.call_args
-        body = call_args.kwargs.get("json") or call_args[1].get("json")
-        assert "yes_price_dollars" in body, "Must use yes_price_dollars, not yes_price"
-        assert body["yes_price_dollars"] == "0.5600"
-        assert "count_fp" in body, "Must use count_fp, not count"
-        assert body["count_fp"] == "10.00"
-        assert "yes_price" not in body, "Legacy yes_price field must not be present"
-        assert "count" not in body, "Legacy count field must not be present"
+        order = await engine._place_order_for_leg(
+            arb_id="ARB-1", platform="kalshi",
+            market_id="M", canonical_id="C", side="yes",
+            price=0.5, qty=1,
+        )
+        assert order.status == OrderStatus.FILLED
+        kalshi_adapter.place_fok.assert_awaited_once()
 
     asyncio.run(runner())
 
 
-def test_kalshi_order_format_no_side():
-    """Verify Kalshi order body uses no_price_dollars for no-side orders."""
+def test_engine_returns_failed_when_no_adapter_for_platform():
+    """No adapter for the requested platform -> Order(status=FAILED)."""
+    from arbiter.execution.engine import OrderStatus
+
     async def runner():
         store = PriceStore(ttl=60)
         engine = make_engine(store)
+        engine.adapters = {}  # explicitly no adapters wired
 
-        mock_collector = MagicMock()
-        mock_collector.auth.is_authenticated = True
-        mock_collector.auth.get_headers = MagicMock(return_value={"Authorization": "test"})
-        engine._collectors = {"kalshi": mock_collector}
-
-        mock_response = AsyncMock()
-        mock_response.status = 200
-        mock_response.text = AsyncMock(return_value=json.dumps({
-            "order": {
-                "order_id": "test-order-456",
-                "status": "resting",
-                "fill_count_fp": "0.00",
-                "no_price_dollars": "0.4400",
-            }
-        }))
-        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
-        mock_response.__aexit__ = AsyncMock(return_value=False)
-
-        mock_session = MagicMock()
-        mock_session.closed = False
-        mock_session.post = MagicMock(return_value=mock_response)
-        engine._own_session = mock_session
-
-        order = await engine._place_kalshi_order(
-            arb_id="TEST", market_id="TICKER-456",
-            canonical_id="test_market", side="no",
-            price=0.44, qty=5,
+        order = await engine._place_order_for_leg(
+            arb_id="ARB-1", platform="missing",
+            market_id="M", canonical_id="C", side="yes",
+            price=0.5, qty=1,
         )
-
-        call_args = mock_session.post.call_args
-        body = call_args.kwargs.get("json") or call_args[1].get("json")
-        assert "no_price_dollars" in body, "Must use no_price_dollars, not no_price"
-        assert body["no_price_dollars"] == "0.4400"
-        assert body["count_fp"] == "5.00"
-        assert "no_price" not in body, "Legacy no_price field must not be present"
-        assert "count" not in body, "Legacy count field must not be present"
+        assert order.status == OrderStatus.FAILED
+        assert "No adapter configured" in order.error
 
     asyncio.run(runner())
 
 
-def test_kalshi_response_parsing_dollar_strings():
-    """Verify response parsing reads fill_count_fp and *_price_dollars fields."""
+def test_engine_timeout_triggers_cancel():
+    """asyncio.wait_for fires; cancel_order is called; final status is CANCELLED."""
+    from arbiter.execution.engine import OrderStatus
+
     async def runner():
         store = PriceStore(ttl=60)
         engine = make_engine(store)
+        engine.execution_timeout_s = 0.1  # short timeout
 
-        mock_collector = MagicMock()
-        mock_collector.auth.is_authenticated = True
-        mock_collector.auth.get_headers = MagicMock(return_value={"Authorization": "test"})
-        engine._collectors = {"kalshi": mock_collector}
+        slow_adapter = MagicMock()
+        slow_adapter.platform = "kalshi"
 
-        mock_response = AsyncMock()
-        mock_response.status = 200
-        mock_response.text = AsyncMock(return_value=json.dumps({
-            "order": {
-                "order_id": "filled-order-789",
-                "status": "executed",
-                "fill_count_fp": "10.00",
-                "yes_price_dollars": "0.5600",
-            }
-        }))
-        mock_response.__aenter__ = AsyncMock(return_value=mock_response)
-        mock_response.__aexit__ = AsyncMock(return_value=False)
+        async def _hangs(*args, **kwargs):
+            await asyncio.sleep(10.0)  # exceeds the 0.1s timeout
 
-        mock_session = MagicMock()
-        mock_session.closed = False
-        mock_session.post = MagicMock(return_value=mock_response)
-        engine._own_session = mock_session
+        slow_adapter.place_fok = _hangs
+        slow_adapter.cancel_order = AsyncMock(return_value=True)
 
-        order = await engine._place_kalshi_order(
-            arb_id="TEST", market_id="TICKER-789",
-            canonical_id="test_market", side="yes",
-            price=0.56, qty=10,
+        engine.adapters = {"kalshi": slow_adapter}
+
+        order = await engine._place_order_for_leg(
+            arb_id="ARB-T", platform="kalshi",
+            market_id="M", canonical_id="C", side="yes",
+            price=0.5, qty=1,
         )
-
-        assert order.fill_qty == 10.0, f"Expected fill_qty=10.0 from fill_count_fp, got {order.fill_qty}"
-        assert abs(order.fill_price - 0.56) < 0.001, f"Expected fill_price=0.56 from yes_price_dollars, got {order.fill_price}"
+        assert order.status == OrderStatus.CANCELLED
+        slow_adapter.cancel_order.assert_awaited_once()
 
     asyncio.run(runner())
