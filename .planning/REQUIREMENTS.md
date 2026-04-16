@@ -84,39 +84,39 @@ Deferred to after live trading is proven profitable.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| API-01 | - | Pending |
-| API-02 | - | Pending |
-| API-03 | - | Pending |
-| API-04 | - | Pending |
-| API-05 | - | Pending |
-| API-06 | - | Pending |
-| API-07 | - | Pending |
-| SAFE-01 | - | Pending |
-| SAFE-02 | - | Pending |
-| SAFE-03 | - | Pending |
-| SAFE-04 | - | Pending |
-| SAFE-05 | - | Pending |
-| SAFE-06 | - | Pending |
-| EXEC-01 | - | Pending |
-| EXEC-02 | - | Pending |
-| EXEC-03 | - | Pending |
-| EXEC-04 | - | Pending |
-| EXEC-05 | - | Pending |
-| TEST-01 | - | Pending |
-| TEST-02 | - | Pending |
-| TEST-03 | - | Pending |
-| TEST-04 | - | Pending |
-| TEST-05 | - | Pending |
-| OPS-01 | - | Pending |
-| OPS-02 | - | Pending |
-| OPS-03 | - | Pending |
-| OPS-04 | - | Pending |
+| API-01 | Phase 1 | Pending |
+| API-02 | Phase 1 | Pending |
+| API-03 | Phase 1 | Pending |
+| API-04 | Phase 1 | Pending |
+| API-05 | Phase 1 | Pending |
+| API-06 | Phase 1 | Pending |
+| API-07 | Phase 1 | Pending |
+| SAFE-01 | Phase 3 | Pending |
+| SAFE-02 | Phase 3 | Pending |
+| SAFE-03 | Phase 3 | Pending |
+| SAFE-04 | Phase 3 | Pending |
+| SAFE-05 | Phase 3 | Pending |
+| SAFE-06 | Phase 3 | Pending |
+| EXEC-01 | Phase 2 | Pending |
+| EXEC-02 | Phase 2 | Pending |
+| EXEC-03 | Phase 2 | Pending |
+| EXEC-04 | Phase 2 | Pending |
+| EXEC-05 | Phase 2 | Pending |
+| TEST-01 | Phase 4 | Pending |
+| TEST-02 | Phase 4 | Pending |
+| TEST-03 | Phase 4 | Pending |
+| TEST-04 | Phase 4 | Pending |
+| TEST-05 | Phase 5 | Pending |
+| OPS-01 | Phase 2 | Pending |
+| OPS-02 | Phase 2 | Pending |
+| OPS-03 | Phase 2 | Pending |
+| OPS-04 | Phase 2 | Pending |
 
 **Coverage:**
 - v1 requirements: 27 total
-- Mapped to phases: 0
-- Unmapped: 27
+- Mapped to phases: 27
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-16*
-*Last updated: 2026-04-16 after initial definition*
+*Last updated: 2026-04-16 after roadmap phase mapping*
