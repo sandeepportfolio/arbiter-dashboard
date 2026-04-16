@@ -50,8 +50,8 @@ async function auditScenario(browser, scenario) {
   await page.goto(scenario.url, { waitUntil: 'networkidle' });
 
   if (scenario.opsAuth) {
-    const authEmail = process.env.UI_USER_EMAIL || 'sparx.sandeep@gmail.com';
-    const authPassword = process.env.UI_USER_PASSWORD || 'saibaba';
+    const authEmail = process.env.UI_USER_EMAIL || 'operator@arbiter.local';
+    const authPassword = process.env.UI_USER_PASSWORD || 'secret';
     await page.waitForSelector('#authOverlay:not(.hidden)');
     await page.fill('#authEmail', authEmail);
     await page.fill('#authPassword', authPassword);
