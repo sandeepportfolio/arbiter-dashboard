@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildActivityAtlasRow, buildActivityAtlasView } from "./activity-atlas-model.js";
+import { buildActivityAtlasView } from "./activity-atlas-model.js";
 
 const scopeDefinitions = {
   all: {
@@ -14,17 +14,6 @@ const scopeDefinitions = {
     label: "Ops workflow",
     categories: ["manual", "incident", "mapping"],
   },
-};
-
-const categoryDefinitions = {
-  market: { label: "Market Pulse", digestLabel: "market pulses" },
-  opportunity: { label: "Scanner", digestLabel: "scanner updates" },
-  execution: { label: "Execution", digestLabel: "execution events" },
-  manual: { label: "Manual Flow", digestLabel: "manual queue updates" },
-  incident: { label: "Recovery", digestLabel: "recovery events" },
-  balance: { label: "Balance", digestLabel: "balance checks" },
-  collector: { label: "Collectors", digestLabel: "collector updates" },
-  mapping: { label: "Mapping", digestLabel: "mapping updates" },
 };
 
 const filterOrder = ["all", "market", "opportunity", "execution", "manual", "incident", "balance", "collector", "mapping"];
@@ -77,54 +66,5 @@ describe("activity atlas model", () => {
 
     expect(view.filterItems.map((item) => item.key)).toEqual(["all", "manual", "mapping"]);
     expect(view.categoryCounts.incident).toBe(0);
-  });
-
-  it("builds terse operational rows with title, meta, and compact tags", () => {
-    const row = buildActivityAtlasRow(entries[0], {
-      categoryDefinitions,
-      nowTimestamp: 125,
-    });
-
-    expect(row.kind).toBe("entry");
-    expect(row.titleLine).toBe("Quote pulse");
-    expect(row.metaLine).toBe("fresh");
-    expect(row.tags).toEqual(["Market Pulse", "25s ago", "market"]);
-  });
-
-  it("collapses bursty streams into digest rows in digest mode", () => {
-    const burstEntries = [
-      { category: "opportunity", title: "BTC route", headline: "tradable", narrative: "Route is live", tags: ["btc"], timestamp: 200, tone: "tone-mint", id: "opp-1" },
-      { category: "opportunity", title: "ETH route", headline: "tradable", narrative: "Route is live", tags: ["eth"], timestamp: 188, tone: "tone-mint", id: "opp-2" },
-      { category: "opportunity", title: "Fed route", headline: "review", narrative: "Needs confirmation", tags: ["fed"], timestamp: 180, tone: "tone-amber", id: "opp-3" },
-      { category: "opportunity", title: "Oil route", headline: "stale", narrative: "Quote aged out", tags: ["oil"], timestamp: 170, tone: "tone-blue", id: "opp-4" },
-      { category: "manual", title: "Manual queue", headline: "awaiting", narrative: "Operator action required", tags: ["manual"], timestamp: 120, tone: "tone-plum", id: "manual-1" },
-    ];
-
-    const view = buildActivityAtlasView({
-      entries: burstEntries,
-      activeScope: "all",
-      activeFilter: "all",
-      query: "",
-      scopeDefinitions,
-      filterOrder,
-      categoryDefinitions,
-      presentationMode: "digest",
-      nowTimestamp: 200,
-    });
-
-    expect(view.filteredEntries).toHaveLength(5);
-    expect(view.displayItems).toHaveLength(2);
-    expect(view.displayItems[0]).toMatchObject({
-      kind: "digest",
-      category: "opportunity",
-      count: 4,
-      titleLine: "4 scanner updates",
-    });
-    expect(view.displayItems[0].tags).toContain("30s burst");
-    expect(view.displayItems[1]).toMatchObject({
-      kind: "entry",
-      category: "manual",
-      titleLine: "Manual queue",
-    });
   });
 });

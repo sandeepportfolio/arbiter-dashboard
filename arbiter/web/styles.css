@@ -3007,13 +3007,6 @@ h2,
   display: none;
 }
 
-.log-presentation-controls {
-  display: inline-flex;
-  gap: 8px;
-  padding-right: 4px;
-  margin-right: 4px;
-}
-
 .log-scope-chip,
 .log-filter-chip {
   flex: 0 0 auto;
@@ -3043,38 +3036,26 @@ h2,
   min-height: 0;
   max-height: min(64vh, 760px);
   overflow-y: auto;
-  overscroll-behavior: contain;
   padding-right: 4px;
   align-items: stretch;
-  scrollbar-gutter: stable;
 }
 
 .log-entry {
   display: grid;
   flex: 0 0 auto;
-  gap: 10px;
+  gap: 12px;
   align-content: start;
-  padding: 12px 14px 12px 18px;
+  padding: 14px 16px 14px 18px;
   border-radius: 18px;
   height: auto;
   min-width: 0;
 }
 
-.log-entry.is-digest {
-  border-color: rgba(215, 255, 31, 0.16);
-  background: linear-gradient(180deg, rgba(27, 32, 7, 0.98), rgba(14, 18, 9, 0.98));
-}
-
 .log-entry-head {
   margin-bottom: 0;
-  align-items: flex-start;
-  flex-wrap: wrap;
 }
 
 .log-entry-body {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
   align-items: start;
   min-width: 0;
 }
@@ -3083,19 +3064,27 @@ h2,
   min-width: 0;
 }
 
-.log-entry-title {
-  font-size: 0.98rem;
-  line-height: 1.28;
+.log-entry-body h3 {
+  font-size: 1rem;
   overflow-wrap: anywhere;
 }
 
-.log-entry-meta {
-  margin: 4px 0 0;
-  color: var(--muted);
-  font-size: 0.82rem;
+.log-entry-headline {
+  margin: 6px 0 0;
+  font-size: 0.86rem;
   line-height: 1.45;
   display: -webkit-box;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.log-entry-narrative {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
   min-width: 0;
@@ -3103,37 +3092,16 @@ h2,
 
 .log-entry-tags {
   gap: 6px;
-  min-width: 0;
 }
 
 .log-entry-tags span {
-  max-width: 100%;
-  padding: 4px 8px;
-  font-size: 0.68rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  padding: 5px 8px;
+  font-size: 0.7rem;
 }
 
 .log-entry::before,
 .operator-card::before {
   width: 3px;
-}
-
-.log-entry-source,
-.log-entry-time,
-.log-entry-badge {
-  white-space: nowrap;
-}
-
-.log-entry-kicker {
-  min-width: 0;
-  flex: 1 1 220px;
-}
-
-.log-entry-source {
-  max-width: 18ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .log-entry-tags span,
@@ -3616,20 +3584,6 @@ h2,
   .log-entry-narrative {
     display: block;
     overflow: visible;
-  }
-
-  .log-entry-body {
-    grid-template-columns: 1fr;
-  }
-
-  .log-entry-badge,
-  .log-entry-time,
-  .log-entry-source {
-    white-space: normal;
-  }
-
-  .log-entry-badge {
-    justify-self: start;
   }
 
   .trade-spotlight-route,
