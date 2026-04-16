@@ -745,9 +745,14 @@ class ExecutionEngine:
                 timeout=self.execution_timeout_s,
             )
         except asyncio.TimeoutError:
-            # EXEC-05: local timeout fired. Attempt best-effort cancel on the
-            # adapter; a partial that did reach the platform needs explicit
-            # cancel, and the adapter can decide whether that succeeds.
+            # EXEC-05: local timeout fired. Best-effort recovery: ask the
+            # adapter to surface any orders we placed under this arb_id+side
+            # prefix (the request may have reached the platform but the
+            # response got lost), then cancel each match. Synthetic
+            # ``partial.order_id`` is the DB row PK only — it must NOT be
+            # passed to adapter.cancel_order (CR-01: that always 404s on
+            # Kalshi). The new code calls list_open_orders_by_client_id
+            # first, then cancel_order on each REAL order returned.
             partial = Order(
                 order_id=f"{arb_id}-{side.upper()}-{platform.upper()}",
                 platform=platform,
@@ -760,20 +765,53 @@ class ExecutionEngine:
                 timestamp=time.time(),
                 error=f"local timeout after {self.execution_timeout_s}s",
             )
+            cancelled_any = False
+            prefix = f"{arb_id}-{side.upper()}-"
             try:
-                cancelled = await adapter.cancel_order(partial)
-            except Exception as cancel_exc:  # adapter must never raise, but defend
+                open_orders = await adapter.list_open_orders_by_client_id(prefix)
+            except Exception as exc:
                 logger.warning(
-                    "Adapter %s cancel_order raised on timeout: %s",
-                    platform,
-                    cancel_exc,
+                    "timeout_recovery.lookup_failed platform=%s arb_id=%s prefix=%s err=%s",
+                    platform, arb_id, prefix, exc,
                 )
-                cancelled = False
-            if cancelled:
+                open_orders = []
+            found_count = len(open_orders)
+            # CR-02 thread-through: when the lookup surfaces a real order, its
+            # external_client_order_id is the engine-chosen ARB-prefixed key
+            # (the same value Kalshi stored as client_order_id). Propagate it
+            # to the synthetic partial so the persisted DB row carries the
+            # real idempotency key, not NULL.
+            for real in open_orders:
+                if real.external_client_order_id:
+                    partial.external_client_order_id = real.external_client_order_id
+                    break
+            for real in open_orders:
+                try:
+                    if await adapter.cancel_order(real):
+                        cancelled_any = True
+                except Exception as cancel_exc:
+                    logger.warning(
+                        "timeout_recovery.cancel_raised platform=%s order_id=%s err=%s",
+                        platform, real.order_id, cancel_exc,
+                    )
+            if cancelled_any:
                 partial.status = OrderStatus.CANCELLED
+                partial.error += (
+                    f"; cancelled {found_count} orphaned order(s)"
+                    " found by client_order_id prefix"
+                )
+            elif found_count > 0:
+                partial.status = OrderStatus.FAILED
+                partial.error += (
+                    f"; found {found_count} orphaned order(s) but cancel failed"
+                    " - manual reconciliation required"
+                )
             else:
                 partial.status = OrderStatus.FAILED
-                partial.error += "; cancel failed - manual reconciliation may be required"
+                partial.error += (
+                    "; no matching open order found"
+                    " - platform may have rejected or never received"
+                )
             order = partial
 
         # EXEC-02 / D-16: persist every state transition. Store is optional

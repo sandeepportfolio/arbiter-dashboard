@@ -408,6 +408,11 @@ class KalshiAdapter:
             fill_qty = float(od.get("fill_count_fp", "0") or "0")
         except (TypeError, ValueError):
             fill_qty = 0.0
+        # CR-02: surface the engine-chosen client_order_id so callers
+        # (e.g. timeout-recovery in engine._place_order_for_leg) can
+        # propagate it back into the persistence layer.
+        cid = od.get("client_order_id")
+        external_cid = str(cid) if cid else None
         return Order(
             order_id=str(od.get("order_id", "")),
             platform="kalshi",
@@ -420,4 +425,5 @@ class KalshiAdapter:
             fill_price=fill_price,
             fill_qty=fill_qty,
             timestamp=time.time(),
+            external_client_order_id=external_cid,
         )
