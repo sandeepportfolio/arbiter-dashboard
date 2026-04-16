@@ -1172,7 +1172,7 @@ function renderOpportunities() {
     return `
       <article class="opportunity-card">
         <div class="opportunity-top">
-          <div>
+          <div class="opportunity-copy">
             <div class="opportunity-title">${escapeHtml(opp.description)}</div>
             <div class="opportunity-meta">
               <span class="${statusClass(opp.status)}">${escapeHtml(opp.status)}</span>
