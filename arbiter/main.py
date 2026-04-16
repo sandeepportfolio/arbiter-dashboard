@@ -14,6 +14,9 @@ import os
 import signal
 import sys
 import time
+from typing import Optional
+
+import aiohttp
 
 from .audit.pnl_reconciler import PnLReconciler
 from .config import ArbiterConfig, load_config
@@ -25,9 +28,13 @@ from .collectors.predictit import PredictItCollector
 from .scanner.arbitrage import ArbitrageScanner
 from .monitor.balance import BalanceMonitor, BalanceSnapshot
 from .execution.engine import ExecutionEngine
+from .execution.adapters import KalshiAdapter, PolymarketAdapter
+from .execution.recovery import reconcile_non_terminal_orders
+from .execution.store import ExecutionStore
 from .portfolio import PortfolioConfig, PortfolioMonitor
 from .profitability import ProfitabilityConfig, ProfitabilityValidator
 from .readiness import OperationalReadiness
+from .utils.retry import CircuitBreaker, RateLimiter
 
 import sentry_sdk
 from sentry_sdk.integrations.aiohttp import AioHttpIntegration
@@ -119,8 +126,67 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     }
     monitor = BalanceMonitor(config.alerts, collectors_dict)
 
+    # ── Persistence (EXEC-02) ──────────────────────────────────
+    database_url = os.getenv("DATABASE_URL")
+    store: Optional[ExecutionStore] = None
+    if database_url:
+        store = ExecutionStore(database_url)
+        await store.connect()
+        await store.init_schema()
+        logger.info("ExecutionStore connected, schema applied")
+    else:
+        logger.warning(
+            "DATABASE_URL not set; execution persistence disabled (dev mode)"
+        )
+
+    execution_timeout_s = float(os.getenv("EXECUTION_TIMEOUT_S", "10.0"))
+
     # ── Execution ──────────────────────────────────────────────
-    engine = ExecutionEngine(config, monitor, price_store=price_store, collectors=collectors_dict)
+    engine = ExecutionEngine(
+        config,
+        monitor,
+        price_store=price_store,
+        collectors=collectors_dict,
+        store=store,
+        execution_timeout_s=execution_timeout_s,
+        # adapters attached right after — need engine reference for poly factory (D-13)
+    )
+
+    # ── Build adapters (uses engine for cached ClobClient via factory) ──
+    # Shared aiohttp session for adapter HTTP calls. Engine keeps its own
+    # internal session for legacy paths; Phase 3 can consolidate.
+    shared_session = aiohttp.ClientSession()
+
+    kalshi_circuit = CircuitBreaker(
+        name="kalshi-exec", failure_threshold=5, recovery_timeout=30.0,
+    )
+    kalshi_rate_limiter = RateLimiter(
+        name="kalshi-exec", max_requests=10, window_seconds=1.0,  # SAFE-04: 10 writes/sec
+    )
+    poly_circuit = CircuitBreaker(
+        name="poly-exec", failure_threshold=5, recovery_timeout=30.0,
+    )
+    poly_rate_limiter = RateLimiter(
+        name="poly-exec", max_requests=5, window_seconds=1.0,  # conservative starting point
+    )
+
+    kalshi_adapter = KalshiAdapter(
+        config=config,
+        session=shared_session,
+        auth=kalshi.auth,  # KalshiAuth (not the collector)
+        rate_limiter=kalshi_rate_limiter,
+        circuit=kalshi_circuit,
+    )
+    poly_adapter = PolymarketAdapter(
+        config=config,
+        # D-13: share cached ClobClient with heartbeat task via factory closure
+        clob_client_factory=lambda: engine._get_poly_clob_client(),
+        rate_limiter=poly_rate_limiter,
+        circuit=poly_circuit,
+    )
+    adapters = {"kalshi": kalshi_adapter, "polymarket": poly_adapter}
+    engine.adapters = adapters  # late binding — engine constructed before adapters
+
     portfolio = PortfolioMonitor(
         PortfolioConfig(
             max_per_market_usd=config.scanner.max_position_usd,
@@ -185,6 +251,25 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     logger.info(f"  Telegram alerts: {'✓' if config.alerts.telegram_bot_token else '✗'}")
     logger.info("=" * 60)
 
+    # ── Restart reconciliation (Pitfall 5 / D-17) ──────────────
+    if store is not None:
+        orphaned = await reconcile_non_terminal_orders(store, adapters)
+        for o in orphaned:
+            try:
+                parts = o.order_id.split("-")
+                arb_id_resolved = (
+                    "-".join(parts[0:2]) if len(parts) >= 2 else o.order_id
+                )
+                await engine.record_incident(
+                    arb_id=arb_id_resolved,
+                    canonical_id=o.canonical_id,
+                    severity="warning",
+                    message=f"Orphaned order on restart: {o.order_id}",
+                    metadata={"platform": o.platform, "error": o.error},
+                )
+            except Exception as exc:
+                logger.warning("Failed to emit orphaned-order incident: %s", exc)
+
     # ── Launch all tasks ───────────────────────────────────────
     tasks = []
 
@@ -236,6 +321,10 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     await engine.stop()
     portfolio.stop()
     profitability.stop()
+    if store is not None:
+        await store.disconnect()
+    if not shared_session.closed:
+        await shared_session.close()
 
     # Final stats
     logger.info("─" * 40)

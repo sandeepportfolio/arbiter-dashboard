@@ -11,15 +11,20 @@ import uuid
 from collections import deque
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Any, Deque, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Deque, Dict, List, Optional, Tuple
 
 import aiohttp
+from structlog.contextvars import bind_contextvars, clear_contextvars
 
 from ..audit.math_auditor import MathAuditor
 from ..config.settings import ArbiterConfig, ScannerConfig
 from ..monitor.balance import BalanceMonitor
 from ..scanner.arbitrage import ArbitrageOpportunity, compute_fee
 from ..utils.price_store import PricePoint, PriceStore
+
+if TYPE_CHECKING:
+    from .adapters.base import PlatformAdapter
+    from .store import ExecutionStore
 
 logger = logging.getLogger("arbiter.execution")
 
@@ -239,6 +244,9 @@ class ExecutionEngine:
         balance_monitor: BalanceMonitor,
         price_store: Optional[PriceStore] = None,
         collectors: Optional[Dict[str, Any]] = None,
+        adapters: Optional[Dict[str, "PlatformAdapter"]] = None,
+        store: Optional["ExecutionStore"] = None,
+        execution_timeout_s: float = 10.0,
     ):
         self.config = config
         self.scanner_config = config.scanner
@@ -265,6 +273,10 @@ class ExecutionEngine:
             predictit_cap=config.scanner.predictit_cap,
         )
         self._trade_gate = None
+        # Plan 02-06 integration: adapters + store + per-leg timeout
+        self.adapters: Dict[str, "PlatformAdapter"] = adapters or {}
+        self.store: Optional["ExecutionStore"] = store
+        self.execution_timeout_s: float = execution_timeout_s
 
     def set_trade_gate(self, gate) -> None:
         self._trade_gate = gate
@@ -291,48 +303,61 @@ class ExecutionEngine:
             return None
         self._recent_signatures[signature] = time.time()
 
-        gate_allowed, gate_reason, gate_context = await self._check_trade_gate(opp)
-        if not gate_allowed:
-            self._aborted_count += 1
-            if not self.scanner_config.dry_run:
-                await self._record_incident(
-                    "ARB-GATE",
-                    opp,
-                    "warning",
-                    f"Trade gate blocked execution: {gate_reason}",
-                    metadata={"gate": gate_context},
-                )
-            return None
-
+        # Bump counter + bind contextvars early (OPS-01 / Pitfall 6) — every
+        # downstream log line will carry arb_id + canonical_id until the finally
+        # block clears them.
         self._execution_count += 1
         arb_id = f"ARB-{self._execution_count:06d}"
 
-        if opp.requires_manual:
-            if not await self._audit_opportunity(arb_id, opp):
+        clear_contextvars()
+        bind_contextvars(
+            arb_id=arb_id,
+            canonical_id=opp.canonical_id,
+            platform_yes=opp.yes_platform,
+            platform_no=opp.no_platform,
+        )
+        try:
+            gate_allowed, gate_reason, gate_context = await self._check_trade_gate(opp)
+            if not gate_allowed:
+                self._aborted_count += 1
+                if not self.scanner_config.dry_run:
+                    await self._record_incident(
+                        arb_id,
+                        opp,
+                        "warning",
+                        f"Trade gate blocked execution: {gate_reason}",
+                        metadata={"gate": gate_context},
+                    )
+                return None
+
+            if opp.requires_manual:
+                if not await self._audit_opportunity(arb_id, opp):
+                    self._aborted_count += 1
+                    return None
+                execution = await self._queue_manual_execution(arb_id, opp)
+                await self._audit_execution(execution)
+                await self._publish_execution(execution)
+                return execution
+
+            requoted = await self._pre_trade_requote(arb_id, opp)
+            if not requoted:
                 self._aborted_count += 1
                 return None
-            execution = await self._queue_manual_execution(arb_id, opp)
+
+            if not await self._audit_opportunity(arb_id, requoted):
+                self._aborted_count += 1
+                return None
+
+            if self.scanner_config.dry_run:
+                execution = await self._simulate_execution(arb_id, requoted)
+            else:
+                execution = await self._live_execution(arb_id, requoted)
+
             await self._audit_execution(execution)
             await self._publish_execution(execution)
             return execution
-
-        requoted = await self._pre_trade_requote(arb_id, opp)
-        if not requoted:
-            self._aborted_count += 1
-            return None
-
-        if not await self._audit_opportunity(arb_id, requoted):
-            self._aborted_count += 1
-            return None
-
-        if self.scanner_config.dry_run:
-            execution = await self._simulate_execution(arb_id, requoted)
-        else:
-            execution = await self._live_execution(arb_id, requoted)
-
-        await self._audit_execution(execution)
-        await self._publish_execution(execution)
-        return execution
+        finally:
+            clear_contextvars()
 
     async def _queue_manual_execution(self, arb_id: str, opp: ArbitrageOpportunity) -> ArbExecution:
         now = time.time()
@@ -462,6 +487,13 @@ class ExecutionEngine:
                     subscriber.put_nowait(updated)
                 except asyncio.QueueFull:
                     logger.debug("Skipping slow incident subscriber")
+            # EXEC-02 / D-16: mirror the resolution to Postgres
+            # (insert_incident's ON CONFLICT handles the update path).
+            if self.store is not None:
+                try:
+                    await self.store.insert_incident(updated)
+                except Exception as exc:
+                    logger.warning("ExecutionStore insert_incident (resolve) failed: %s", exc)
             return updated
         return None
 
@@ -661,6 +693,13 @@ class ExecutionEngine:
                     opp.suggested_qty * (opp.yes_price + opp.no_price),
                     execution.realized_pnl,
                 )
+
+        # EXEC-02 / D-16: persist the completed arb execution.
+        if self.store is not None:
+            try:
+                await self.store.record_arb(execution)
+            except Exception as exc:
+                logger.warning("ExecutionStore record_arb failed: %s", exc)
         return execution
 
     async def _place_order_for_leg(
@@ -673,22 +712,92 @@ class ExecutionEngine:
         price: float,
         qty: int,
     ) -> Order:
-        if platform == "kalshi":
-            return await self._place_kalshi_order(arb_id, market_id, canonical_id, side, price, qty)
-        if platform == "polymarket":
-            return await self._place_polymarket_order(arb_id, market_id, canonical_id, side, price, qty)
-        return Order(
-            order_id=f"{arb_id}-{side.upper()}-UNSUPPORTED",
-            platform=platform,
-            market_id=market_id,
-            canonical_id=canonical_id,
-            side=side,
-            price=price,
-            quantity=qty,
-            status=OrderStatus.FAILED,
-            timestamp=time.time(),
-            error=f"Unsupported auto-trading platform: {platform}",
-        )
+        """Dispatch a leg through self.adapters[platform], wrapped in asyncio.wait_for (EXEC-05).
+
+        On local timeout, best-effort cancel through the same adapter.
+        Every state transition is persisted via self.store.upsert_order (EXEC-02 / D-16).
+        """
+        adapter = self.adapters.get(platform)
+        if adapter is None:
+            return Order(
+                order_id=f"{arb_id}-{side.upper()}-NOADAPTER",
+                platform=platform,
+                market_id=market_id,
+                canonical_id=canonical_id,
+                side=side,
+                price=price,
+                quantity=qty,
+                status=OrderStatus.FAILED,
+                timestamp=time.time(),
+                error=f"No adapter configured for platform: {platform}",
+            )
+
+        try:
+            order = await asyncio.wait_for(
+                adapter.place_fok(arb_id, market_id, canonical_id, side, price, qty),
+                timeout=self.execution_timeout_s,
+            )
+        except asyncio.TimeoutError:
+            # EXEC-05: local timeout fired. Attempt best-effort cancel on the
+            # adapter; a partial that did reach the platform needs explicit
+            # cancel, and the adapter can decide whether that succeeds.
+            partial = Order(
+                order_id=f"{arb_id}-{side.upper()}-{platform.upper()}",
+                platform=platform,
+                market_id=market_id,
+                canonical_id=canonical_id,
+                side=side,
+                price=price,
+                quantity=qty,
+                status=OrderStatus.PENDING,
+                timestamp=time.time(),
+                error=f"local timeout after {self.execution_timeout_s}s",
+            )
+            try:
+                cancelled = await adapter.cancel_order(partial)
+            except Exception as cancel_exc:  # adapter must never raise, but defend
+                logger.warning(
+                    "Adapter %s cancel_order raised on timeout: %s",
+                    platform,
+                    cancel_exc,
+                )
+                cancelled = False
+            if cancelled:
+                partial.status = OrderStatus.CANCELLED
+            else:
+                partial.status = OrderStatus.FAILED
+                partial.error += "; cancel failed - manual reconciliation may be required"
+            order = partial
+
+        # EXEC-02 / D-16: persist every state transition. Store is optional
+        # (dev mode without Postgres) — failures here MUST NOT break execution.
+        if self.store is not None:
+            try:
+                client_order_id = self._derive_client_order_id(order)
+                await self.store.upsert_order(
+                    order, arb_id=arb_id, client_order_id=client_order_id,
+                )
+            except Exception as exc:
+                logger.warning("ExecutionStore upsert_order failed: %s", exc)
+        return order
+
+    @staticmethod
+    def _derive_client_order_id(order: Order) -> Optional[str]:
+        """Kalshi adapter uses ``{arb_id}-{SIDE}-{8-hex}`` as the client_order_id
+        AND as the fallback order_id when the platform response lacks an id.
+        For Polymarket there is no client_order_id concept; return None.
+        """
+        if order.platform == "kalshi" and order.order_id and "-" in order.order_id:
+            return order.order_id
+        return None
+
+    @staticmethod
+    def _derive_arb_id_from_order(order: Order) -> Optional[str]:
+        if order.order_id and order.order_id.startswith("ARB-"):
+            parts = order.order_id.split("-")
+            if len(parts) >= 2:
+                return f"{parts[0]}-{parts[1]}"
+        return None
 
     async def _recover_one_leg_risk(self, arb_id: str, opp: ArbitrageOpportunity, leg_yes: Order, leg_no: Order) -> List[str]:
         self._recovery_count += 1
@@ -708,41 +817,25 @@ class ExecutionEngine:
         return notes
 
     async def _cancel_order(self, order: Order) -> bool:
-        if order.platform == "kalshi":
-            return await self._cancel_kalshi_order(order)
-        if order.platform == "polymarket":
-            return await self._cancel_polymarket_order(order)
-        return False
-
-    async def _cancel_kalshi_order(self, order: Order) -> bool:
-        collector = self._collectors.get("kalshi")
-        if not collector or not collector.auth.is_authenticated:
+        """Dispatch cancel through self.adapters[order.platform]. Platform-agnostic."""
+        adapter = self.adapters.get(order.platform)
+        if adapter is None:
+            logger.warning("No adapter for platform %s on cancel", order.platform)
             return False
-        session = await self._get_session()
-        path = f"/trade-api/v2/portfolio/orders/{order.order_id}"
-        url = f"{self.config.kalshi.base_url}/portfolio/orders/{order.order_id}"
-        headers = collector.auth.get_headers("DELETE", path)
         try:
-            async with session.delete(url, headers=headers) as response:
-                return response.status in (200, 204)
+            cancelled = await adapter.cancel_order(order)
         except Exception as exc:
-            logger.error("Kalshi cancel failed for %s: %s", order.order_id, exc)
+            logger.warning("Adapter %s cancel_order raised: %s", order.platform, exc)
             return False
-
-    async def _cancel_polymarket_order(self, order: Order) -> bool:
-        client = self._get_poly_clob_client()
-        if client is None:
-            return False
-        loop = asyncio.get_event_loop()
-        try:
-            for attr in ("cancel", "cancel_order"):
-                if hasattr(client, attr):
-                    method = getattr(client, attr)
-                    await loop.run_in_executor(None, lambda: method(order.order_id))
-                    return True
-        except Exception as exc:
-            logger.error("Polymarket cancel failed for %s: %s", order.order_id, exc)
-        return False
+        if cancelled and self.store is not None:
+            order.status = OrderStatus.CANCELLED
+            try:
+                await self.store.upsert_order(
+                    order, arb_id=self._derive_arb_id_from_order(order),
+                )
+            except Exception as exc:
+                logger.warning("ExecutionStore cancel-upsert failed: %s", exc)
+        return cancelled
 
     async def _publish_execution(self, execution: ArbExecution):
         for subscriber in list(self._subscribers):
@@ -776,6 +869,12 @@ class ExecutionEngine:
             except asyncio.QueueFull:
                 logger.debug("Skipping slow incident subscriber")
         logger.warning("[%s] %s", severity.upper(), message)
+        # EXEC-02 / D-16: persist the incident to Postgres if a store is wired.
+        if self.store is not None:
+            try:
+                await self.store.insert_incident(incident)
+            except Exception as exc:
+                logger.warning("ExecutionStore insert_incident failed: %s", exc)
         return incident
 
     async def _record_incident(
@@ -798,106 +897,6 @@ class ExecutionEngine:
         if self._own_session is None or self._own_session.closed:
             self._own_session = aiohttp.ClientSession()
         return self._own_session
-
-    async def _place_kalshi_order(self, arb_id: str, market_id: str, canonical_id: str, side: str, price: float, qty: int | float) -> Order:
-        now = time.time()
-        collector = self._collectors.get("kalshi")
-        if not collector or not collector.auth.is_authenticated:
-            return Order(
-                order_id=f"{arb_id}-{side.upper()}-KALSHI",
-                platform="kalshi",
-                market_id=market_id,
-                canonical_id=canonical_id,
-                side=side,
-                price=price,
-                quantity=qty,
-                status=OrderStatus.FAILED,
-                timestamp=now,
-                error="Kalshi auth not configured",
-            )
-
-        if not (0 < price < 1):
-            return Order(
-                order_id=f"{arb_id}-{side.upper()}-KALSHI",
-                platform="kalshi",
-                market_id=market_id,
-                canonical_id=canonical_id,
-                side=side,
-                price=price,
-                quantity=qty,
-                status=OrderStatus.FAILED,
-                timestamp=now,
-                error=f"Invalid price {price}: must be between 0 and 1 exclusive",
-            )
-
-        session = await self._get_session()
-        order_body = {
-            "ticker": market_id,
-            "client_order_id": f"{arb_id}-{side.upper()}-{uuid.uuid4().hex[:8]}",
-            "action": "buy",
-            "side": side,
-            "type": "limit",
-            "count_fp": f"{float(qty):.2f}",
-        }
-        if side == "yes":
-            order_body["yes_price_dollars"] = f"{price:.4f}"
-        else:
-            order_body["no_price_dollars"] = f"{price:.4f}"
-
-        path = "/trade-api/v2/portfolio/orders"
-        url = f"{self.config.kalshi.base_url}/portfolio/orders"
-        headers = collector.auth.get_headers("POST", path)
-        try:
-            async with session.post(url, json=order_body, headers=headers) as response:
-                payload = await response.text()
-                if response.status not in (200, 201):
-                    return Order(
-                        order_id=f"{arb_id}-{side.upper()}-KALSHI",
-                        platform="kalshi",
-                        market_id=market_id,
-                        canonical_id=canonical_id,
-                        side=side,
-                        price=price,
-                        quantity=qty,
-                        status=OrderStatus.FAILED,
-                        timestamp=now,
-                        error=f"Kalshi API {response.status}: {payload[:200]}",
-                    )
-                data = json.loads(payload)
-                order_data = data.get("order", data)
-                status_map = {
-                    "resting": OrderStatus.SUBMITTED,
-                    "pending": OrderStatus.PENDING,
-                    "executed": OrderStatus.FILLED,
-                    "canceled": OrderStatus.CANCELLED,
-                }
-                fill_qty = float(order_data.get("fill_count_fp", order_data.get("count_filled", "0")) or "0")
-                return Order(
-                    order_id=str(order_data.get("order_id", f"{arb_id}-{side.upper()}")),
-                    platform="kalshi",
-                    market_id=market_id,
-                    canonical_id=canonical_id,
-                    side=side,
-                    price=price,
-                    quantity=qty,
-                    status=status_map.get(order_data.get("status", "resting"), OrderStatus.SUBMITTED),
-                    fill_price=float(order_data.get("yes_price_dollars", order_data.get("no_price_dollars", order_data.get("avg_price", str(price)))) or str(price)),
-                    fill_qty=fill_qty,
-                    timestamp=now,
-                )
-        except Exception as exc:
-            return Order(
-                order_id=f"{arb_id}-{side.upper()}-KALSHI",
-                platform="kalshi",
-                market_id=market_id,
-                canonical_id=canonical_id,
-                side=side,
-                price=price,
-                quantity=qty,
-                status=OrderStatus.FAILED,
-                timestamp=now,
-                error=f"Kalshi request exception: {exc}",
-            )
 
     def _get_poly_clob_client(self):
         if self._poly_clob_client is not None:
@@ -970,82 +969,6 @@ class ExecutionEngine:
     def stop_heartbeat(self):
         """Stop the heartbeat loop."""
         self._heartbeat_running = False
-
-    async def _place_polymarket_order(self, arb_id: str, market_id: str, canonical_id: str, side: str, price: float, qty: int) -> Order:
-        now = time.time()
-        if not self.config.polymarket.private_key:
-            return Order(
-                order_id=f"{arb_id}-{side.upper()}-POLY",
-                platform="polymarket",
-                market_id=market_id,
-                canonical_id=canonical_id,
-                side=side,
-                price=price,
-                quantity=qty,
-                status=OrderStatus.FAILED,
-                timestamp=now,
-                error="Polymarket wallet not configured",
-            )
-
-        client = self._get_poly_clob_client()
-        if client is None:
-            return Order(
-                order_id=f"{arb_id}-{side.upper()}-POLY",
-                platform="polymarket",
-                market_id=market_id,
-                canonical_id=canonical_id,
-                side=side,
-                price=price,
-                quantity=qty,
-                status=OrderStatus.FAILED,
-                timestamp=now,
-                error="Unable to initialize Polymarket client",
-            )
-        try:
-            from py_clob_client.clob_types import OrderArgs
-
-            order_args = OrderArgs(price=round(price, 2), size=float(qty), side="BUY", token_id=market_id)
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(None, lambda: client.create_and_post_order(order_args))
-            if isinstance(response, dict) and not response.get("success", True):
-                return Order(
-                    order_id=f"{arb_id}-{side.upper()}-POLY",
-                    platform="polymarket",
-                    market_id=market_id,
-                    canonical_id=canonical_id,
-                    side=side,
-                    price=price,
-                    quantity=qty,
-                    status=OrderStatus.FAILED,
-                    timestamp=now,
-                    error=str(response.get("errorMsg", "Order rejected")),
-                )
-            return Order(
-                order_id=str(response.get("orderID", response.get("id", f"{arb_id}-{side.upper()}")) if isinstance(response, dict) else f"{arb_id}-{side.upper()}"),
-                platform="polymarket",
-                market_id=market_id,
-                canonical_id=canonical_id,
-                side=side,
-                price=price,
-                quantity=qty,
-                status=OrderStatus.SUBMITTED,
-                fill_price=price,
-                fill_qty=0,
-                timestamp=now,
-            )
-        except Exception as exc:
-            return Order(
-                order_id=f"{arb_id}-{side.upper()}-POLY",
-                platform="polymarket",
-                market_id=market_id,
-                canonical_id=canonical_id,
-                side=side,
-                price=price,
-                quantity=qty,
-                status=OrderStatus.FAILED,
-                timestamp=now,
-                error=f"Polymarket order exception: {exc}",
-            )
 
     @property
     def execution_history(self) -> List[ArbExecution]:
