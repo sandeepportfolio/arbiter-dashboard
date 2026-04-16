@@ -779,25 +779,21 @@ function buildManualEntry(position, index) {
 
 function buildIncidentEntry(incident, index) {
   const incidentStatus = incident.status || "open";
-  const incidentSeverity = incident.severity || "warning";
   return {
     id: `incident-${incident.incident_id}`,
     category: "incident",
-    tone: incidentStatus === "resolved" ? "tone-blue" : (incidentSeverity === "critical" ? "tone-rose" : "tone-amber"),
+    tone: incidentStatus === "resolved" ? "tone-blue" : (incident.severity === "critical" ? "tone-rose" : "tone-amber"),
     title: incident.message || incident.incident_id,
-    headline: `${titleCase(incidentStatus)} ${titleCase(incidentSeverity)} incident on ${incident.canonical_id || "execution flow"}`,
+    headline: `${titleCase(incidentStatus)} ${titleCase(incident.severity)} incident on ${incident.canonical_id || "execution flow"}`,
     narrative: `${summarizeIncidentMetadata(incident.metadata)}${incident.resolution_note ? ` Resolution: ${incident.resolution_note}.` : ""}`,
     tags: [
       `Status ${titleCase(incidentStatus)}`,
-      `Severity ${titleCase(incidentSeverity)}`,
+      `Severity ${titleCase(incident.severity)}`,
       incident.arb_id || "No arb id",
       incident.canonical_id || "No market id",
     ],
     footnote: "Published live + tracked",
     timestamp: incident.timestamp || 0,
-    status: incidentStatus,
-    severity: incidentSeverity,
-    statusLabel: `${titleCase(incidentStatus)} ${titleCase(incidentSeverity)}`,
     synthetic: false,
     rank: index,
   };
@@ -926,7 +922,7 @@ function renderDeskMenu(entries = buildLogEntries()) {
 function renderLogEntry(entry) {
   const category = LOG_DEFINITIONS[entry.category];
   const badgeLabel = entry.kind === "digest"
-    ? (entry.statusLabel || `${formatWhole.format(entry.count || 0)} event digest`)
+    ? `${formatWhole.format(entry.count || 0)} event digest`
     : category.label;
   const sourceLabel = entry.kind === "digest"
     ? "Digest mode"
@@ -1581,19 +1577,6 @@ function renderLegCard(label, platform, price, fee, marketId, feeRate) {
 
 function renderLogExperience(entries = buildLogEntries()) {
   const presentationMode = canUseDigestMode() ? state.logPresentationMode : "stream";
-  const digestView = canUseDigestMode()
-    ? buildActivityAtlasView({
-      entries,
-      activeScope: state.activeLogScope,
-      activeFilter: state.activeLogFilter,
-      query: state.logQuery,
-      scopeDefinitions: LOG_SCOPE_DEFINITIONS,
-      filterOrder: FILTER_ORDER,
-      categoryDefinitions: LOG_DEFINITIONS,
-      presentationMode: "digest",
-      nowTimestamp: state.lastQuoteAt || state.system?.timestamp || Date.now() / 1000,
-    })
-    : null;
   const activityView = buildActivityAtlasView({
     entries,
     activeScope: state.activeLogScope,
@@ -1611,7 +1594,6 @@ function renderLogExperience(entries = buildLogEntries()) {
   const scopedEntries = activityView.scopedEntries;
   const filteredEntries = activityView.filteredEntries;
   const displayItems = activityView.displayItems;
-  const digestItemCount = digestView?.displayItems.length || displayItems.length;
   const normalizedQuery = activityView.query;
   if (state.activeLogFilter !== activityView.activeFilter) {
     state.activeLogFilter = activityView.activeFilter;
@@ -1686,7 +1668,7 @@ function renderLogExperience(entries = buildLogEntries()) {
           aria-pressed="${presentationMode === key ? "true" : "false"}"
         >
           <span>${escapeHtml(config.label)}</span>
-          <strong>${escapeHtml(formatWhole.format(key === "digest" ? digestItemCount : filteredEntries.length))}</strong>
+          <strong>${escapeHtml(formatWhole.format(key === "digest" ? displayItems.length : filteredEntries.length))}</strong>
         </button>
       `).join("")
       : "";

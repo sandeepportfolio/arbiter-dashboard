@@ -1,23 +1,5 @@
 const DIGEST_MIN_ITEMS = 3;
 const DIGEST_WINDOW_SECONDS = 90;
-const SEVERITY_RANK = {
-  critical: 4,
-  high: 3,
-  error: 3,
-  warning: 2,
-  review: 1,
-  info: 0,
-  low: 0,
-};
-const TONE_RANK = {
-  "tone-rose": 4,
-  "tone-amber": 3,
-  "tone-plum": 2,
-  "tone-gold": 2,
-  "tone-blue": 1,
-  "tone-mint": 1,
-  "tone-slate": 0,
-};
 
 function titleCase(value) {
   return String(value || "")
@@ -110,46 +92,9 @@ function resolveDigestLabel(category, categoryDefinitions) {
   return categoryDefinitions?.[category]?.digestLabel || `${resolveCategoryLabel(category, categoryDefinitions).toLowerCase()} updates`;
 }
 
-function severityRank(value) {
-  return SEVERITY_RANK[String(value || "").toLowerCase()] ?? -1;
-}
-
-function toneRank(value) {
-  return TONE_RANK[String(value || "")] ?? -1;
-}
-
-function isResolvedStatus(value) {
-  return ["resolved", "closed", "filled", "confirmed", "manual_closed"].includes(String(value || "").toLowerCase());
-}
-
-function buildStatusLabel(status, severity) {
-  if (status && severity) return `${titleCase(status)} ${titleCase(severity)}`;
-  if (status) return titleCase(status);
-  if (severity) return titleCase(severity);
-  return "";
-}
-
-function compareDigestPriority(left, right) {
-  const unresolvedDelta = Number(!isResolvedStatus(right.status)) - Number(!isResolvedStatus(left.status));
-  if (unresolvedDelta !== 0) return unresolvedDelta;
-
-  const severityDelta = severityRank(right.severity) - severityRank(left.severity);
-  if (severityDelta !== 0) return severityDelta;
-
-  const toneDelta = toneRank(right.tone) - toneRank(left.tone);
-  if (toneDelta !== 0) return toneDelta;
-
-  return (right.timestamp || 0) - (left.timestamp || 0);
-}
-
-function selectDigestLead(group) {
-  return [...group].sort(compareDigestPriority)[0];
-}
-
 export function buildActivityAtlasRow(entry, { categoryDefinitions = {}, nowTimestamp = 0 } = {}) {
   const categoryLabel = resolveCategoryLabel(entry.category, categoryDefinitions);
   const metaLine = String(entry.headline || entry.narrative || `${categoryLabel} update`).trim();
-  const statusLabel = String(entry.statusLabel || buildStatusLabel(entry.status, entry.severity)).trim();
 
   return {
     kind: "entry",
@@ -161,24 +106,18 @@ export function buildActivityAtlasRow(entry, { categoryDefinitions = {}, nowTime
     metaLine,
     tags: compactTags([
       categoryLabel,
-      statusLabel,
       formatRelativeAge(entry.timestamp || 0, nowTimestamp),
       ...(entry.tags || []),
     ]),
     sourceLabel: entry.footnote || "",
-    status: entry.status || "",
-    severity: entry.severity || "",
-    statusLabel,
   };
 }
 
 function buildDigestItem(group, { categoryDefinitions = {} } = {}) {
-  const latestItem = [...group].sort((left, right) => (right.timestamp || 0) - (left.timestamp || 0))[0];
-  const lead = selectDigestLead(group);
-  const latestTimestamp = latestItem?.timestamp || 0;
-  const earliestTimestamp = group.reduce((minTimestamp, item) => Math.min(minTimestamp, item.timestamp || latestTimestamp), latestTimestamp);
+  const lead = group[0];
+  const latestTimestamp = lead.timestamp || 0;
+  const earliestTimestamp = group[group.length - 1].timestamp || latestTimestamp;
   const uniqueTitles = new Set(group.map((item) => item.titleLine).filter(Boolean)).size;
-  const leadPrefix = lead.id !== latestItem?.id && !isResolvedStatus(lead.status) ? "Urgent" : "Latest";
 
   return {
     kind: "digest",
@@ -188,18 +127,14 @@ function buildDigestItem(group, { categoryDefinitions = {} } = {}) {
     timestamp: latestTimestamp,
     count: group.length,
     titleLine: `${group.length} ${resolveDigestLabel(lead.category, categoryDefinitions)}`,
-    metaLine: `${leadPrefix} ${lead.titleLine} - ${lead.metaLine}`,
+    metaLine: `Latest ${lead.titleLine} - ${lead.metaLine}`,
     tags: compactTags([
       formatBurstSpan(Math.max(0, Math.round(latestTimestamp - earliestTimestamp))),
       `${group.length} events`,
-      lead.statusLabel,
       uniqueTitles > 1 ? `${uniqueTitles} routes` : lead.titleLine,
       resolveCategoryLabel(lead.category, categoryDefinitions),
     ]),
     sourceLabel: lead.sourceLabel,
-    status: lead.status,
-    severity: lead.severity,
-    statusLabel: lead.statusLabel || "",
   };
 }
 
@@ -208,32 +143,29 @@ function buildDisplayItems(entries, { presentationMode = "stream", categoryDefin
   if (presentationMode !== "digest") return compactRows;
 
   const items = [];
-  const consumed = new Set();
+  let index = 0;
 
-  for (let index = 0; index < compactRows.length; index += 1) {
-    if (consumed.has(index)) continue;
+  while (index < compactRows.length) {
     const seed = compactRows[index];
     const group = [seed];
+    let cursor = index + 1;
 
-    for (let cursor = index + 1; cursor < compactRows.length; cursor += 1) {
-      if (consumed.has(cursor)) continue;
+    while (cursor < compactRows.length) {
       const candidate = compactRows[cursor];
       const withinBurstWindow = (seed.timestamp || 0) - (candidate.timestamp || 0) <= DIGEST_WINDOW_SECONDS;
-      if (candidate.category !== seed.category || !withinBurstWindow) continue;
+      if (candidate.category !== seed.category || !withinBurstWindow) break;
       group.push(candidate);
+      cursor += 1;
     }
 
     if (group.length >= DIGEST_MIN_ITEMS) {
       items.push(buildDigestItem(group, { categoryDefinitions }));
-      group.forEach((item) => {
-        const position = compactRows.indexOf(item);
-        if (position >= 0) consumed.add(position);
-      });
+      index = cursor;
       continue;
     }
 
-    consumed.add(index);
     items.push(seed);
+    index += 1;
   }
 
   return items;

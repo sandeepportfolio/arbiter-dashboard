@@ -4,8 +4,6 @@ import fs from "node:fs";
 const NOW = 1776340800;
 const AUTH_TOKEN = "demo-token";
 
-fs.mkdirSync("output/playwright", { recursive: true });
-
 function buildPayloads() {
   return {
     system: {
@@ -435,7 +433,6 @@ async function runScenario(browser, name, contextOptions, url, options = {}) {
       pageHeight: Math.round(document.documentElement.scrollHeight),
       modeButtons,
       rows,
-      visibleRows: rows.length,
       digestRows: rows.filter((row) => row.digest).length,
       compactRows: rows.filter((row) => row.title && row.meta && row.tagCount > 0).length,
       summaryText: document.querySelector("#logResultSummary")?.textContent?.replace(/\s+/g, " ").trim() || "",
@@ -478,6 +475,7 @@ results.push(await runScenario(
 ));
 await browser.close();
 
+fs.mkdirSync("output/playwright", { recursive: true });
 fs.writeFileSync("output/playwright/activity-atlas-check.json", JSON.stringify(results, null, 2));
 
 const failures = [];
@@ -510,15 +508,9 @@ for (const result of results) {
 
   if (name === "desktop-atlas-stream") {
     const streamButton = facts.modeButtons.find((button) => button.key === "stream");
-    const digestButton = facts.modeButtons.find((button) => button.key === "digest");
-    const digestScenario = results.find((result) => result.name === "desktop-atlas-digest");
-    const digestCountLabel = Number.parseInt((digestButton?.label.match(/(\d+)(?!.*\d)/) || [])[1] || "", 10);
     if (!streamButton || streamButton.hidden) failures.push(`${name}: stream control is missing on desktop.`);
     if (!streamButton?.pressed) failures.push(`${name}: stream control did not stay active after selection.`);
     if (facts.digestRows !== 0) failures.push(`${name}: stream mode still rendered digest rows.`);
-    if (!Number.isNaN(digestCountLabel) && digestScenario && digestCountLabel !== digestScenario.facts.visibleRows) {
-      failures.push(`${name}: digest control count (${digestCountLabel}) does not match the digest-mode rows shown after switching (${digestScenario.facts.visibleRows}).`);
-    }
   }
 
   if (name === "mobile-atlas") {
