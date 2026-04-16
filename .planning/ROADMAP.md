@@ -59,6 +59,16 @@ Plans:
 - [x] 02-05-PLAN.md -- PolymarketAdapter extraction with two-phase FOK + reconcile-before-retry + stale-book guard (EXEC-01, EXEC-03, EXEC-04)
 - [x] 02-06-PLAN.md -- Engine refactor: strip platform code, inject adapters/store, asyncio.wait_for timeout, contextvars binding, recovery.py startup hook, main.py wiring (EXEC-02, EXEC-04, EXEC-05, OPS-01)
 
+### Phase 02.1: Remediate CR-01 cancel-on-timeout and CR-02 client_order_id persistence from Phase 2 review (INSERTED)
+
+**Goal:** Restore the EXEC-04 idempotency invariant (DB `execution_orders.client_order_id` column actually holds the engine-chosen `ARB-{n}-{SIDE}-{hex}` string, not Kalshi's server-assigned id) and the EXEC-05 timeout-recovery invariant (orphaned Kalshi orders are actually cancelled via `list_open_orders_by_client_id` lookup, not declared FAILED while leaking a live resting order). Surgical fix in 3 production files + 3 test files; no schema changes, no new dependencies.
+**Requirements**: EXEC-04, EXEC-05
+**Depends on:** Phase 2
+**Plans:** 1 plan
+
+Plans:
+- [ ] 02.1-01-PLAN.md -- Wave 0 regression tests + CR-02 dataclass+adapter fix + CR-01 timeout-branch rewrite (EXEC-04, EXEC-05)
+
 ### Phase 3: Safety Layer
 **Goal**: The system cannot lose money due to runaway execution, naked positions, rate limit bans, or uncontrolled shutdown -- every dangerous scenario has a safety mechanism
 **Depends on**: Phase 2
