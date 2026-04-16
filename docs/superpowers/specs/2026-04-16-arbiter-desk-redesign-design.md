@@ -118,7 +118,7 @@ The previous chip-heavy controls were too soft. The approved interaction languag
 - right rail becomes a compressed bottom sheet below the chart
 - metrics collapse into paired tiles
 - trade cards collapse into two smaller cards
-- secondary content becomes accordion sections
+- secondary content becomes modern disclosure tiles with leading icons, short summaries, and clear chevron affordance
 - primary section navigation moves to a bottom dock
 
 ### Responsive Rules
@@ -126,6 +126,7 @@ The previous chip-heavy controls were too soft. The approved interaction languag
 - no visible scrollbar chrome in horizontal control rows
 - no clipped text or vertically off-center pills/buttons
 - no overflowing cards or sheets
+- mobile disclosure tiles must feel premium, not generic: icon-led, summary-first, and easy to tap
 - all mobile content must fit within the mock device frame without accidental vertical overflow
 - gutters and padding should reduce proportionally, not abruptly
 
