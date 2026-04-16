@@ -251,6 +251,7 @@ class ExecutionEngine:
         self._collectors = collectors or {}
         self._own_session: Optional[aiohttp.ClientSession] = None
         self._poly_clob_client = None
+        self._heartbeat_running = False
         self._subscribers: List[asyncio.Queue] = []
         self._incident_subscribers: List[asyncio.Queue] = []
         self._incidents: Deque[ExecutionIncident] = deque(maxlen=200)
@@ -924,6 +925,51 @@ class ExecutionEngine:
         except Exception as exc:
             logger.error("Failed to initialize Polymarket CLOB client: %s", exc)
             return None
+
+    async def polymarket_heartbeat_loop(self):
+        """
+        Dedicated async task sending heartbeat every 5 seconds to prevent
+        Polymarket open order auto-cancellation (per D-04).
+
+        Must only start after ClobClient has L2 auth credentials.
+        Server cancels ALL open orders if no heartbeat received within 10s.
+        """
+        self._heartbeat_running = True
+        heartbeat_id = None
+
+        # Wait for ClobClient to be ready
+        while self._heartbeat_running:
+            client = self._get_poly_clob_client()
+            if client is not None:
+                break
+            logger.debug("Heartbeat waiting for ClobClient initialization...")
+            await asyncio.sleep(2)
+
+        if not self._heartbeat_running:
+            return
+
+        logger.info("Polymarket heartbeat started (interval=5s)")
+
+        while self._heartbeat_running:
+            try:
+                response = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: client.post_heartbeat(heartbeat_id)
+                )
+                if isinstance(response, dict):
+                    heartbeat_id = response.get("heartbeat_id", heartbeat_id)
+                logger.debug("Heartbeat sent (id=%s)", heartbeat_id)
+            except asyncio.CancelledError:
+                logger.info("Polymarket heartbeat cancelled")
+                break
+            except Exception as exc:
+                logger.error("Heartbeat failed: %s", exc)
+            await asyncio.sleep(5)
+
+        logger.info("Polymarket heartbeat stopped")
+
+    def stop_heartbeat(self):
+        """Stop the heartbeat loop."""
+        self._heartbeat_running = False
 
     async def _place_polymarket_order(self, arb_id: str, market_id: str, canonical_id: str, side: str, price: float, qty: int) -> Order:
         now = time.time()

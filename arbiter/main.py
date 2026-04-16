@@ -168,6 +168,7 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
             asyncio.create_task(monitor.run(alert_queue), name="balance-monitor"),
             asyncio.create_task(engine.run(arb_queue), name="execution-engine"),
             asyncio.create_task(portfolio.run(), name="portfolio-monitor"),
+            asyncio.create_task(engine.polymarket_heartbeat_loop(), name="poly-heartbeat"),
         ])
 
     tasks.append(asyncio.create_task(profitability.run(), name="profitability-validator"))
@@ -197,6 +198,7 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     await asyncio.gather(*tasks, return_exceptions=True)
 
     # Cleanup
+    engine.stop_heartbeat()
     await kalshi.stop()
     await polymarket.stop()
     await predictit.stop()
