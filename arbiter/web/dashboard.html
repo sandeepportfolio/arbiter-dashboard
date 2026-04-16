@@ -54,282 +54,310 @@
     </div>
   </div>
   <main class="shell">
-    <section class="utility-bar">
-      <div class="utility-group">
-        <span class="utility-mark">ARBITER</span>
-        <span id="deskModeTag" class="utility-pill">Public desk</span>
-        <span id="apiBasePill" class="utility-pill utility-pill-muted">API: same origin</span>
-      </div>
-      <div class="utility-actions">
-        <button id="apiConfigButton" type="button" class="ghost-button">API source</button>
-        <a id="opsShortcut" class="ghost-link" href="/ops">Open ops desk</a>
-        <button id="logoutButton" type="button" class="ghost-button hidden">Logout</button>
-      </div>
-    </section>
-    <section id="overviewSection" class="overview-shell">
-      <div class="overview-main">
-        <header class="hero">
+    <section class="desk-shell">
+      <header class="utility-bar app-topbar">
+        <div class="app-brand-lockup">
+          <span class="utility-mark brand-wordmark">arb<span>i</span>ter</span>
+          <nav class="primary-nav" aria-label="Primary navigation">
+            <a class="primary-nav-link" href="#overviewSection">Dashboard</a>
+            <a class="primary-nav-link" href="#performanceSection">Markets</a>
+            <a class="primary-nav-link" href="#opportunitiesSection">Scanner</a>
+            <a class="primary-nav-link" href="#opsSection">Trade</a>
+            <a class="primary-nav-link" href="#riskSection">Portfolio</a>
+            <a class="primary-nav-link" href="#infraSection">Infra</a>
+          </nav>
+        </div>
+        <div class="utility-actions app-actions">
+          <button id="apiConfigButton" type="button" class="icon-button" aria-label="Configure API">API</button>
+          <span id="deskModeTag" class="utility-pill app-identity-pill">Public desk</span>
+          <span id="apiBasePill" class="utility-pill utility-pill-muted app-api-pill">API: not configured</span>
+          <a id="opsShortcut" class="ghost-link app-ops-link" href="/ops">Open ops desk</a>
+          <button id="logoutButton" type="button" class="icon-button hidden" aria-label="Logout">Out</button>
+        </div>
+      </header>
+
+      <section id="overviewSection" class="overview-shell">
+        <article class="overview-main">
           <div class="overview-copy">
-            <p class="eyebrow">ARBITER LIVE</p>
             <div class="overview-value-row">
               <div class="overview-value-block">
-                <h1 id="heroTitle">Live trading desk</h1>
-                <p id="heroSubtitle" class="subtitle hero-subtitle">Fee-aware routes, live charts, manual PredictIt queue, and recovery state in one operator-first view.</p>
-                <div id="heroValue">$0.00</div>
+                <p class="eyebrow">Arbiter Live</p>
+                <p id="heroTitle" class="hero-kicker">Live trading desk</p>
+                <h1 id="heroValue">Loading</h1>
               </div>
               <div class="hero-delta-stack">
-                <span id="heroDelta" class="hero-delta">Waiting</span>
+                <span id="heroDelta" class="hero-delta value-muted">Waiting</span>
                 <span id="heroUpdated" class="hero-updated">Awaiting live data</span>
               </div>
             </div>
-          </div>
-          <div class="hero-status">
-            <div class="pill"><span class="label">Mode</span><span id="modePill" class="value">Loading</span></div>
-            <div class="pill"><span class="label">Access</span><span id="accessPill" class="value value-muted">Checking</span></div>
-            <div class="pill"><span class="label">WebSocket</span><span id="wsStatus" class="value value-muted">Connecting</span></div>
-            <div class="pill"><span class="label">Validator</span><span id="profitabilityPill" class="value value-muted">Loading</span></div>
-          </div>
-        </header>
-
-        <section id="statusBand" class="status-band status-band-overview"></section>
-
-        <section id="metricGrid" class="metric-grid metric-grid-overview"></section>
-
-        <nav id="deskMenu" class="desk-menu desk-menu-inline" aria-label="Desk sections"></nav>
-      </div>
-
-      <aside class="overview-side">
-        <article class="panel spotlight-panel">
-          <div class="spotlight-header">
-            <div>
-              <p class="panel-kicker">Risk</p>
-              <h2>Portfolio risk score</h2>
+            <p id="heroSubtitle" class="subtitle hero-subtitle">Fee-aware routes, live charts, manual PredictIt queue, and recovery state in one operator-first view.</p>
+            <div class="overview-toolbar">
+              <div class="range-pills" aria-label="Performance range">
+                <button type="button" class="range-pill">1h</button>
+                <button type="button" class="range-pill">8h</button>
+                <button type="button" class="range-pill">1d</button>
+                <button type="button" class="range-pill">1w</button>
+                <button type="button" class="range-pill">1m</button>
+                <button type="button" class="range-pill is-active">6m</button>
+                <button type="button" class="range-pill">1y</button>
+              </div>
+              <div class="hero-status">
+                <div class="pill"><span class="label">Mode</span><span id="modePill" class="value">Loading</span></div>
+                <div class="pill"><span class="label">Access</span><span id="accessPill" class="value value-muted">Checking</span></div>
+                <div class="pill"><span class="label">WebSocket</span><span id="wsStatus" class="value value-muted">Connecting</span></div>
+                <div class="pill"><span class="label">Validator</span><span id="profitabilityPill" class="value value-muted">Loading</span></div>
+              </div>
             </div>
-            <span id="riskUpdated" class="panel-badge">Updated<br>Waiting</span>
           </div>
-          <div class="risk-bar-track">
-            <div id="riskScoreBar" class="risk-bar-fill" style="width: 0%"></div>
+          <div class="hero-chart-card">
+            <div id="equityChartMeta" class="chart-meta-row"></div>
+            <div id="equityChart" class="chart-surface hero-chart-surface"></div>
           </div>
-          <div class="risk-scale">
-            <span>Low risk</span>
-            <span>High risk</span>
-          </div>
-          <p id="riskSummary" class="panel-copy">Risk posture is loading.</p>
-          <div id="riskSummaryList" class="stack-list compact-stack"></div>
         </article>
 
-        <article class="panel spotlight-panel">
-          <div class="spotlight-header">
-            <div>
-              <p class="panel-kicker">Transactions</p>
-              <h2>Recent trades</h2>
-            </div>
-            <span id="recentTradeCount" class="panel-badge">0</span>
-          </div>
-          <div id="recentTradesRail" class="recent-trades-grid"></div>
-        </article>
-      </aside>
-    </section>
-
-    <section id="performanceSection" class="panel-grid">
-      <article class="panel chart-panel">
-        <div class="panel-header">
-          <div>
-            <p class="panel-kicker">Live Edge</p>
-            <h2>Scanner edge curve</h2>
-          </div>
-          <span id="bestEdgeLabel" class="panel-badge">0.0¢</span>
-        </div>
-        <div id="edgeChartMeta" class="chart-meta-row"></div>
-        <div id="edgeChart" class="chart-surface"></div>
-      </article>
-
-      <article class="panel chart-panel">
-        <div class="panel-header">
-          <div>
-            <p class="panel-kicker">P&amp;L</p>
-            <h2>Execution equity</h2>
-          </div>
-          <span id="equityLabel" class="panel-badge">$0.00</span>
-        </div>
-        <div id="equityChartMeta" class="chart-meta-row"></div>
-        <div id="equityChart" class="chart-surface"></div>
-      </article>
-    </section>
-
-    <section id="riskSection" class="panel-grid panel-grid-tight">
-      <details class="panel panel-disclosure" data-dense-disclosure="profitability" open>
-        <summary class="panel-disclosure-trigger">
-          <div class="panel-disclosure-copy">
-            <div class="panel-header">
+        <aside class="overview-side">
+          <article class="panel spotlight-panel risk-spotlight-panel">
+            <div class="spotlight-header">
               <div>
-                <p class="panel-kicker">Validation</p>
-                <h2>Profitability verdict</h2>
+                <p class="panel-kicker">Portfolio</p>
+                <h2>Risk score</h2>
               </div>
-              <span id="profitabilityVerdictBadge" class="panel-badge">Loading</span>
+              <div id="riskUpdated" class="spotlight-updated">Updated<br>Waiting</div>
             </div>
-            <p id="profitabilitySummary" class="panel-copy panel-disclosure-summary-copy">Arbiter is collecting evidence before it can call the engine profitable.</p>
-          </div>
-          <span class="panel-disclosure-caret" aria-hidden="true"></span>
-        </summary>
-        <div class="panel-disclosure-body">
-          <div id="profitabilityReasons" class="stack-list compact-stack"></div>
-        </div>
-      </details>
-
-      <details class="panel panel-disclosure" data-dense-disclosure="portfolio" open>
-        <summary class="panel-disclosure-trigger">
-          <div class="panel-disclosure-copy">
-            <div class="panel-header">
-              <div>
-                <p class="panel-kicker">Guardrails</p>
-                <h2>Portfolio posture</h2>
-              </div>
-              <span id="portfolioExposureBadge" class="panel-badge">$0.00</span>
+            <div class="risk-bar-track" aria-hidden="true">
+              <div id="riskScoreBar" class="risk-bar-fill" style="width: 0%"></div>
             </div>
-            <p id="portfolioSummary" class="panel-copy panel-disclosure-summary-copy">Exposure, funding, and operator risk warnings appear here so production tests stay controlled.</p>
-          </div>
-          <span class="panel-disclosure-caret" aria-hidden="true"></span>
-        </summary>
-        <div class="panel-disclosure-body">
-          <div id="portfolioList" class="stack-list compact-stack"></div>
-        </div>
-      </details>
-    </section>
-
-    <section id="opportunitiesSection" class="panel-grid panel-grid-tight panel-grid-single">
-      <article class="panel">
-        <div class="panel-header">
-          <div>
-            <p class="panel-kicker">Opportunities</p>
-            <h2>Live trade candidates</h2>
-          </div>
-          <span id="opportunityCount" class="panel-badge">0</span>
-        </div>
-        <div id="opportunityList" class="opportunity-list"></div>
-      </article>
-    </section>
-
-    <section id="opsSection" class="panel-grid panel-grid-tight ops-only" data-ops-only="true">
-      <article class="panel">
-        <div class="panel-header">
-          <div>
-            <p class="panel-kicker">Manual Desk</p>
-            <h2>PredictIt operator queue</h2>
-          </div>
-          <span id="manualCount" class="panel-badge">0</span>
-        </div>
-        <p class="panel-copy">Manual venues stay visible here with exact entry and unwind steps, plus explicit confirmation controls for the operator.</p>
-        <div id="manualQueue" class="stack-list"></div>
-      </article>
-
-      <article class="panel">
-        <div class="panel-header">
-          <div>
-            <p class="panel-kicker">Recovery</p>
-            <h2>Incident queue</h2>
-          </div>
-          <span id="incidentCount" class="panel-badge">0</span>
-        </div>
-        <p class="panel-copy">Failures and one-leg risks are tracked separately so resolution is obvious, timestamped, and easy to verify.</p>
-        <div id="incidentList" class="stack-list"></div>
-      </article>
-    </section>
-
-    <section id="logsSection" class="log-stage">
-      <div class="log-stage-header">
-        <div>
-          <p class="panel-kicker">Log Atlas</p>
-          <h2>Every action, one elegant reading surface</h2>
-          <p class="log-stage-copy">Arbiter publishes live stream events for system state, quotes, opportunities, executions, incidents, and heartbeats. We also track a richer operating ledger across opportunities, trades, manual queue items, incidents, balances, collectors, and market mappings.</p>
-        </div>
-        <div class="log-stage-status">
-          <div class="log-status-pill">
-            <span class="label">Visible events</span>
-            <span id="logVisibleCount" class="value">0</span>
-          </div>
-          <div class="log-status-pill">
-            <span class="label">Last pulse</span>
-            <span id="logFreshnessLabel" class="value value-muted">Waiting</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="log-stage-layout">
-        <aside class="log-atlas">
-          <article class="log-brief">
-            <div class="log-brief-row">
-              <div>
-                <p class="log-brief-label">Published live</p>
-                <div id="publishedTypes" class="log-token-cloud"></div>
-              </div>
-              <div>
-                <p class="log-brief-label">Tracked ledger</p>
-                <div id="trackedTypes" class="log-token-cloud"></div>
-              </div>
+            <div class="risk-scale">
+              <span>Low Risk</span>
+              <span>High Risk</span>
             </div>
+            <p id="riskSummary" class="panel-copy compact-copy">Risk posture is loading.</p>
+            <div id="riskSummaryList" class="stack-list compact-stack"></div>
           </article>
 
-          <div class="log-section-heading">
-            <span>Categories</span>
-            <span id="logCategoryCount" class="panel-badge">0</span>
-          </div>
-          <div id="logCategoryAtlas" class="log-category-atlas"></div>
-        </aside>
-
-        <section class="log-console">
-          <div class="log-console-header">
-            <div class="log-toolbar">
-              <div id="logScopeTabs" class="log-scope-tabs" role="tablist" aria-label="Activity scopes"></div>
-              <label class="log-search" for="logSearchInput">
-                <span class="log-search-label">Search activity</span>
-                <input id="logSearchInput" name="logSearch" type="search" autocomplete="off" placeholder="Search market, arb id, venue, or status">
-              </label>
-            </div>
-            <p id="logResultSummary" class="log-result-summary">Showing the latest visible atlas events.</p>
-            <div id="logFilterBar" class="log-filter-bar"></div>
-            <p class="log-console-copy">Filter the timeline by category to understand what changed, why it matters, and whether the operator needs to act.</p>
-          </div>
-          <div id="logTimeline" class="log-timeline"></div>
-        </section>
-      </div>
-    </section>
-
-    <section id="infraSection" class="panel-grid panel-grid-tight">
-      <article class="panel">
-        <div class="panel-header">
-          <div>
-            <p class="panel-kicker">Mapping</p>
-            <h2>Canonical market map</h2>
-          </div>
-          <span id="mappingCount" class="panel-badge">0</span>
-        </div>
-        <div id="mappingList" class="stack-list mapping-list"></div>
-      </article>
-
-      <details class="panel panel-disclosure" data-dense-disclosure="collectors" open>
-        <summary class="panel-disclosure-trigger">
-          <div class="panel-disclosure-copy">
+          <article class="panel spotlight-panel trades-spotlight-panel">
             <div class="panel-header">
               <div>
-                <p class="panel-kicker">Collectors</p>
-                <h2>Platform health</h2>
+                <p class="panel-kicker">Transactions</p>
+                <h2>Recent trades</h2>
               </div>
-              <span id="collectorCount" class="panel-badge">0</span>
+              <span id="recentTradeCount" class="panel-badge">0</span>
             </div>
-            <p class="panel-copy panel-disclosure-summary-copy">Venue polling, circuit breakers, and feed stability stay visible while the detail list folds away.</p>
+            <div id="recentTradesRail" class="recent-trades-grid"></div>
+          </article>
+
+          <div class="mobile-disclosure-grid">
+            <a class="mobile-disclosure-card" href="#recentTradesRail">
+              <span class="mobile-disclosure-icon">RT</span>
+              <span class="mobile-disclosure-body">
+                <strong>Recent Trades</strong>
+                <small>Latest fills, failures, and pending updates</small>
+              </span>
+              <span class="mobile-disclosure-arrow">-&gt;</span>
+            </a>
+            <a class="mobile-disclosure-card" href="#opportunitiesSection">
+              <span class="mobile-disclosure-icon">SC</span>
+              <span class="mobile-disclosure-body">
+                <strong>Scanner Opportunities</strong>
+                <small>Live route candidates ranked by edge and freshness</small>
+              </span>
+              <span class="mobile-disclosure-arrow">-&gt;</span>
+            </a>
+            <a class="mobile-disclosure-card" href="#riskSection">
+              <span class="mobile-disclosure-icon">RX</span>
+              <span class="mobile-disclosure-body">
+                <strong>Risk and Exposure</strong>
+                <small>Portfolio posture, open notional, and guardrails</small>
+              </span>
+              <span class="mobile-disclosure-arrow">-&gt;</span>
+            </a>
           </div>
-          <span class="panel-disclosure-caret" aria-hidden="true"></span>
-        </summary>
-        <div class="panel-disclosure-body">
-          <div id="collectorList" class="stack-list"></div>
+        </aside>
+      </section>
+
+      <section id="metricGrid" class="metric-grid metric-grid-overview"></section>
+      <section id="statusBand" class="status-band status-band-overview"></section>
+
+      <nav id="deskMenu" class="desk-menu desk-menu-inline" aria-label="Desk sections"></nav>
+
+      <section id="performanceSection" class="panel-grid performance-grid">
+        <article class="panel chart-panel scanner-performance-panel">
+          <div class="panel-header">
+            <div>
+              <p class="panel-kicker">Market Pulse</p>
+              <h2>Scanner edge curve</h2>
+            </div>
+            <span id="bestEdgeLabel" class="panel-badge">0.0c</span>
+          </div>
+          <div id="edgeChartMeta" class="chart-meta-row"></div>
+          <div id="edgeChart" class="chart-surface"></div>
+        </article>
+
+        <article id="opportunitiesSection" class="panel blotter-panel">
+          <div class="panel-header blotter-header">
+            <div>
+              <p class="panel-kicker">Scanner</p>
+              <h2>Live trade candidates</h2>
+              <p class="panel-copy compact-copy">Action-first opportunity rows with live edge, freshness, and max-profit posture.</p>
+            </div>
+            <span id="opportunityCount" class="panel-badge">0</span>
+          </div>
+          <div class="blotter-toolbar">
+            <div class="filter-cluster">
+              <button type="button" class="filter-pill is-active">All routes</button>
+              <button type="button" class="filter-pill">Flagged</button>
+              <button type="button" class="filter-pill">Tradable</button>
+              <button type="button" class="filter-pill">Manual</button>
+            </div>
+            <div class="filter-cluster filter-cluster-secondary">
+              <button type="button" class="filter-pill">Venue</button>
+              <button type="button" class="filter-pill">Status</button>
+              <button type="button" class="filter-pill">Sort: edge</button>
+            </div>
+          </div>
+          <div id="opportunityList" class="opportunity-list opportunity-blotter"></div>
+        </article>
+      </section>
+
+      <section id="riskSection" class="panel-grid panel-grid-tight">
+        <article class="panel">
+          <div class="panel-header">
+            <div>
+              <p class="panel-kicker">Validation</p>
+              <h2>Profitability verdict</h2>
+            </div>
+            <span id="profitabilityVerdictBadge" class="panel-badge">Loading</span>
+          </div>
+          <p id="profitabilitySummary" class="panel-copy">Arbiter is collecting evidence before it can call the engine profitable.</p>
+          <div id="profitabilityReasons" class="stack-list compact-stack"></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-header">
+            <div>
+              <p class="panel-kicker">Guardrails</p>
+              <h2>Risk and exposure</h2>
+            </div>
+            <span id="portfolioExposureBadge" class="panel-badge">$0.00</span>
+          </div>
+          <p id="portfolioSummary" class="panel-copy">Exposure, funding, and operator risk warnings appear here so production tests stay controlled.</p>
+          <div id="portfolioList" class="stack-list compact-stack"></div>
+        </article>
+      </section>
+
+      <section id="opsSection" class="panel-grid panel-grid-tight ops-only" data-ops-only="true">
+        <article class="panel">
+          <div class="panel-header">
+            <div>
+              <p class="panel-kicker">Manual Desk</p>
+              <h2>PredictIt operator queue</h2>
+            </div>
+            <span id="manualCount" class="panel-badge">0</span>
+          </div>
+          <p class="panel-copy">Manual venues stay visible here with exact entry and unwind steps, plus explicit confirmation controls for the operator.</p>
+          <div id="manualQueue" class="stack-list"></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-header">
+            <div>
+              <p class="panel-kicker">Recovery</p>
+              <h2>Incident queue</h2>
+            </div>
+            <span id="incidentCount" class="panel-badge">0</span>
+          </div>
+          <p class="panel-copy">Failures and one-leg risks are tracked separately so resolution is obvious, timestamped, and easy to verify.</p>
+          <div id="incidentList" class="stack-list"></div>
+        </article>
+      </section>
+
+      <section id="logsSection" class="log-stage">
+        <div class="log-stage-header">
+          <div>
+            <p class="panel-kicker">Activity Atlas</p>
+            <h2>Every action, one elegant reading surface</h2>
+            <p class="log-stage-copy">Arbiter publishes live stream events for system state, quotes, opportunities, executions, incidents, and heartbeats. We also track a richer operating ledger across opportunities, trades, manual queue items, incidents, balances, collectors, and market mappings.</p>
+          </div>
+          <div class="log-stage-status">
+            <div class="log-status-pill">
+              <span class="label">Visible events</span>
+              <span id="logVisibleCount" class="value">0</span>
+            </div>
+            <div class="log-status-pill">
+              <span class="label">Last pulse</span>
+              <span id="logFreshnessLabel" class="value value-muted">Waiting</span>
+            </div>
+          </div>
         </div>
-      </details>
+
+        <div class="log-stage-layout">
+          <aside class="log-atlas">
+            <article class="log-brief">
+              <div class="log-brief-row">
+                <div>
+                  <p class="log-brief-label">Published live</p>
+                  <div id="publishedTypes" class="log-token-cloud"></div>
+                </div>
+                <div>
+                  <p class="log-brief-label">Tracked ledger</p>
+                  <div id="trackedTypes" class="log-token-cloud"></div>
+                </div>
+              </div>
+            </article>
+
+            <div class="log-section-heading">
+              <span>Categories</span>
+              <span id="logCategoryCount" class="panel-badge">0</span>
+            </div>
+            <div id="logCategoryAtlas" class="log-category-atlas"></div>
+          </aside>
+
+          <section class="log-console">
+            <div class="log-console-header">
+              <div class="log-toolbar">
+                <div id="logScopeTabs" class="log-scope-tabs" role="tablist" aria-label="Activity scopes"></div>
+                <label class="log-search" for="logSearchInput">
+                  <span class="log-search-label">Search activity</span>
+                  <input id="logSearchInput" name="logSearch" type="search" autocomplete="off" placeholder="Search market, arb id, venue, or status">
+                </label>
+              </div>
+              <p id="logResultSummary" class="log-result-summary">Showing the latest visible atlas events.</p>
+              <div id="logFilterBar" class="log-filter-bar"></div>
+              <p class="log-console-copy">Filter the timeline by category to understand what changed, why it matters, and whether the operator needs to act.</p>
+            </div>
+            <div id="logTimeline" class="log-timeline"></div>
+          </section>
+        </div>
+      </section>
+
+      <section id="infraSection" class="panel-grid panel-grid-tight">
+        <article class="panel">
+          <div class="panel-header">
+            <div>
+              <p class="panel-kicker">Mapping</p>
+              <h2>Canonical market map</h2>
+            </div>
+            <span id="mappingCount" class="panel-badge">0</span>
+          </div>
+          <div id="mappingList" class="stack-list mapping-list"></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-header">
+            <div>
+              <p class="panel-kicker">Collectors</p>
+              <h2>Platform health</h2>
+            </div>
+            <span id="collectorCount" class="panel-badge">0</span>
+          </div>
+          <div id="collectorList" class="stack-list"></div>
+        </article>
+      </section>
     </section>
   </main>
   <nav class="mobile-dock" aria-label="Quick navigation">
-    <a class="mobile-dock-link" href="#statusBand">Overview</a>
-    <a class="mobile-dock-link" href="#opportunitiesSection">Routes</a>
+    <a class="mobile-dock-link" href="#overviewSection">Desk</a>
+    <a class="mobile-dock-link" href="#opportunitiesSection">Scanner</a>
     <a id="dockOpsLink" class="mobile-dock-link" href="/ops">Ops desk</a>
     <a class="mobile-dock-link" href="#logsSection">Logs</a>
   </nav>
@@ -337,6 +365,7 @@
     window.ARBITER_BOOTSTRAP = {
       staticFrontend: false,
       defaultApiBase: "",
+      defaultApiPort: "8090",
       publicHref: "/",
       opsHref: "/ops"
     };
@@ -344,3 +373,4 @@
   <script type="module" src="/static/dashboard.js"></script>
 </body>
 </html>
+

@@ -68,6 +68,15 @@ async function auditScenario(browser, scenario) {
 
   const result = await page.evaluate((rectDataFn) => {
     const rectData = eval(`(${rectDataFn})`);
+    const atlas = document.querySelector('#logCategoryAtlas');
+    const atlasParent = document.querySelector('.log-atlas');
+    if (atlas) {
+      atlas.scrollTop = atlas.scrollHeight;
+    }
+    const atlasLastCard = atlas?.lastElementChild;
+    const opportunityPanel = document.querySelector('#opportunitiesSection');
+    const opportunityList = document.querySelector('#opportunityList');
+    const scannerPanel = document.querySelector('.scanner-performance-panel');
 
     return {
       hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
@@ -117,6 +126,22 @@ async function auditScenario(browser, scenario) {
         const entry = document.querySelector('.log-entry');
         return entry ? { clientHeight: entry.clientHeight, scrollHeight: entry.scrollHeight } : null;
       })(),
+      categoryAtlas: atlas ? {
+        overflowY: getComputedStyle(atlas).overflowY,
+        clientHeight: atlas.clientHeight,
+        scrollHeight: atlas.scrollHeight,
+        atlasRect: rectData(atlas),
+        parentRect: rectData(atlasParent),
+        lastCardRect: rectData(atlasLastCard),
+      } : null,
+      opportunityBlotter: opportunityList ? {
+        overflowY: getComputedStyle(opportunityList).overflowY,
+        clientHeight: opportunityList.clientHeight,
+        scrollHeight: opportunityList.scrollHeight,
+        listRect: rectData(opportunityList),
+        panelRect: rectData(opportunityPanel),
+        scannerRect: rectData(scannerPanel),
+      } : null,
     };
   }, rectData.toString());
 
@@ -160,6 +185,21 @@ const failures = [];
 for (const result of results) {
   const { name, audit } = result;
   if (audit.hasHorizontalOverflow) failures.push(`${name}: document overflows horizontally.`);
+  if (audit.categoryAtlas) {
+    const { parentRect, lastCardRect, scrollHeight, clientHeight } = audit.categoryAtlas;
+    if (scrollHeight > clientHeight + 1 && parentRect && lastCardRect && lastCardRect.bottom > parentRect.bottom + 1) {
+      failures.push(`${name}: category atlas clips the last category card inside the sticky rail.`);
+    }
+  }
+  if (audit.opportunityBlotter) {
+    const { overflowY, panelRect, scannerRect } = audit.opportunityBlotter;
+    if (!['auto', 'scroll'].includes(overflowY)) {
+      failures.push(`${name}: live trade candidates list is not internally scrollable.`);
+    }
+    if (panelRect && scannerRect && Math.abs(panelRect.height - scannerRect.height) > 24) {
+      failures.push(`${name}: live trade candidates panel height drifts from the scanner chart panel.`);
+    }
+  }
   for (const hoverCheck of audit.hoverChecks || []) {
     const delta = rectDelta(hoverCheck.before, hoverCheck.after);
     if (!delta) {
