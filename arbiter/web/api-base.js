@@ -53,3 +53,20 @@ export function inferStaticApiBase({ searchParams, boot = {}, storageValue = "",
     return "";
   }
 }
+
+export function mixedContentApiWarning(pageUrl, apiBase) {
+  const normalizedApiBase = normalizeApiBase(apiBase);
+  if (!normalizedApiBase) return "";
+
+  try {
+    const page = pageUrl instanceof URL ? pageUrl : new URL(pageUrl);
+    const api = new URL(normalizedApiBase);
+    if (page.protocol === "https:" && api.protocol === "http:") {
+      return "This HTTPS dashboard cannot call an HTTP API. Use an HTTPS API endpoint or open the backend-served desk directly.";
+    }
+  } catch {
+    return "";
+  }
+
+  return "";
+}

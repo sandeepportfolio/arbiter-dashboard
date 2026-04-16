@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { inferStaticApiBase, normalizeApiBase, shouldInferSameHostApi } from "./api-base.js";
+import { inferStaticApiBase, mixedContentApiWarning, normalizeApiBase, shouldInferSameHostApi } from "./api-base.js";
 
 describe("api base inference", () => {
   it("normalizes trailing slashes", () => {
@@ -69,5 +69,13 @@ describe("api base inference", () => {
       locationHref: "https://arbiter.example.com/",
     });
     expect(apiBase).toBe("https://arbiter.example.com:8090");
+  });
+
+  it("warns when an https dashboard tries to call an http api", () => {
+    expect(mixedContentApiWarning("https://sandeepportfolio.github.io/arbiter-dashboard/", "http://10.10.112.124:8090")).toContain(
+      "cannot call an HTTP API"
+    );
+    expect(mixedContentApiWarning("https://sandeepportfolio.github.io/arbiter-dashboard/", "https://api.example.com")).toBe("");
+    expect(mixedContentApiWarning("http://10.10.112.124:8092/", "http://10.10.112.124:8090")).toBe("");
   });
 });

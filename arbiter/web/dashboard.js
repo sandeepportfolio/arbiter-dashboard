@@ -1,4 +1,4 @@
-import { inferStaticApiBase, normalizeApiBase } from "./api-base.js";
+import { inferStaticApiBase, mixedContentApiWarning, normalizeApiBase } from "./api-base.js";
 
 const boot = window.ARBITER_BOOTSTRAP || {};
 const search = new URLSearchParams(window.location.search);
@@ -1790,6 +1790,23 @@ async function refreshAllData() {
     setWsLabel("API needed", true);
     render();
     showConnectionOverlay("Set the backend API source before using the static dashboard.");
+    return;
+  }
+
+  const connectionIssue = isStaticFrontend() ? mixedContentApiWarning(window.location.href, state.apiBase) : "";
+  if (connectionIssue) {
+    state.system = null;
+    state.portfolio = null;
+    state.profitability = null;
+    state.opportunities = [];
+    state.trades = [];
+    state.manualPositions = [];
+    state.incidents = [];
+    state.mappings = [];
+    state.wsConnected = false;
+    setWsLabel("HTTPS blocked", true);
+    render();
+    showConnectionOverlay(connectionIssue);
     return;
   }
 
