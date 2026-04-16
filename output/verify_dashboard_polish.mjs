@@ -142,6 +142,14 @@ async function auditScenario(browser, scenario) {
         panelRect: rectData(opportunityPanel),
         scannerRect: rectData(scannerPanel),
       } : null,
+      overviewAlignment: (() => {
+        const main = document.querySelector('.overview-main');
+        const side = document.querySelector('.overview-side');
+        return main && side ? {
+          mainRect: rectData(main),
+          sideRect: rectData(side),
+        } : null;
+      })(),
     };
   }, rectData.toString());
 
@@ -198,6 +206,12 @@ for (const result of results) {
     }
     if (panelRect && scannerRect && Math.abs(panelRect.height - scannerRect.height) > 24) {
       failures.push(`${name}: live trade candidates panel height drifts from the scanner chart panel.`);
+    }
+  }
+  if (name.startsWith('desktop') && audit.overviewAlignment) {
+    const { mainRect, sideRect } = audit.overviewAlignment;
+    if (mainRect && sideRect && Math.abs(mainRect.bottom - sideRect.bottom) > 8) {
+      failures.push(`${name}: overview left column does not align vertically with the right-side spotlight stack.`);
     }
   }
   for (const hoverCheck of audit.hoverChecks || []) {

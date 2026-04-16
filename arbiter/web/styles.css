@@ -2109,13 +2109,15 @@ h2,
   grid-template-columns: minmax(0, 1.72fr) minmax(360px, 0.92fr);
   gap: 24px;
   margin-bottom: 22px;
-  align-items: start;
+  align-items: stretch;
 }
 
 .overview-main {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 18px;
   min-width: 0;
+  min-height: 100%;
 }
 
 .overview-copy {
@@ -2329,12 +2331,15 @@ h2,
 
 .hero-chart-card {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 14px;
   padding: 18px;
   border-radius: 30px;
   background: #111111;
   border: 1px solid rgba(255, 255, 255, 0.08);
   min-width: 0;
+  min-height: 0;
+  height: 100%;
 }
 
 .chart-surface,
@@ -2344,6 +2349,12 @@ h2,
     repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.09) 0 1px, transparent 1px 9px),
     linear-gradient(180deg, rgba(32, 32, 32, 0.96), rgba(22, 22, 22, 0.98));
   border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.hero-chart-card .hero-chart-surface {
+  height: 100%;
+  min-height: 0;
+  max-height: none;
 }
 
 .hero-chart-surface {
