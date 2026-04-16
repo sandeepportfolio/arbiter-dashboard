@@ -2,6 +2,8 @@
 Tests for the Trade Execution Math Auditor (shadow calculator).
 Verifies that the auditor correctly flags discrepancies and passes clean opps.
 """
+import sys
+import os
 import pytest
 from .math_auditor import (
     MathAuditor,
@@ -11,6 +13,9 @@ from .math_auditor import (
     _predictit_simple_fee,
     DISCREPANCY_THRESHOLD,
 )
+
+# Import the primary fee calculator for cross-validation
+from arbiter.config.settings import polymarket_order_fee
 
 
 # ─── Fee Model Tests ──────────────────────────────────────────────────────
@@ -33,16 +38,37 @@ class TestFeeModels:
         assert _kalshi_fee(0.0) == 0.0
 
     def test_polymarket_fee_politics(self):
-        assert abs(_polymarket_fee(0.60, "politics") - 0.0048) < 1e-10
+        # 0.60 * 0.40 * 0.04 = 0.0096 (rate: 0.04 per 2026 schedule)
+        assert abs(_polymarket_fee(0.60, "politics") - 0.0096) < 1e-10
 
     def test_polymarket_fee_sports(self):
-        assert abs(_polymarket_fee(0.60, "sports") - 0.0048) < 1e-10
+        # 0.60 * 0.40 * 0.03 = 0.0072 (rate: 0.03 per 2026 schedule)
+        assert abs(_polymarket_fee(0.60, "sports") - 0.0072) < 1e-10
 
     def test_polymarket_fee_explicit_rate(self):
         assert abs(_polymarket_fee(0.60, "politics", fee_rate=0.01) - 0.0024) < 1e-10
 
     def test_polymarket_fee_unknown_category(self):
-        assert abs(_polymarket_fee(0.50, "unknown") - 0.005) < 1e-10
+        # Unknown categories fall back to default rate 0.05
+        # 0.50 * 0.50 * 0.05 = 0.0125
+        assert abs(_polymarket_fee(0.50, "unknown") - 0.0125) < 1e-10
+
+    def test_polymarket_fee_crypto(self):
+        # 0.60 * 0.40 * 0.072 = 0.01728 (rate: 0.072 per 2026 schedule)
+        assert abs(_polymarket_fee(0.60, "crypto") - 0.01728) < 1e-10
+
+    def test_polymarket_fee_geopolitics(self):
+        # geopolitics has 0% fee per 2026 schedule
+        assert _polymarket_fee(0.60, "geopolitics") == 0.0
+
+    def test_polymarket_fee_finance(self):
+        # 0.60 * 0.40 * 0.04 = 0.0096 (rate: 0.04 per 2026 schedule)
+        assert abs(_polymarket_fee(0.60, "finance") - 0.0096) < 1e-10
+
+    def test_polymarket_shadow_matches_settings(self):
+        # Shadow calculator and primary calculator must produce identical results
+        # polymarket_order_fee(price, quantity=1, category=cat) should equal _polymarket_fee(price, cat)
+        assert abs(polymarket_order_fee(0.60, category="politics") - _polymarket_fee(0.60, "politics")) < 1e-10
 
     def test_predictit_total_fee_profit(self):
         # buy at 0.40, settle at $1.00

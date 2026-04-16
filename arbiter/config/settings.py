@@ -45,7 +45,7 @@ _DOTENV_PATH = _load_project_dotenv()
 
 
 KALSHI_TAKER_FEE_RATE = 0.07
-POLYMARKET_DEFAULT_TAKER_FEE_RATE = 0.02
+POLYMARKET_DEFAULT_TAKER_FEE_RATE = 0.05
 # Backwards-compatible alias for older imports.
 POLYMAKET_DEFAULT_TAKER_FEE_RATE = POLYMARKET_DEFAULT_TAKER_FEE_RATE
 POLYMARKET_DEFAULT_MAKER_FEE_RATE = 0.0
@@ -93,9 +93,16 @@ def polymarket_order_fee(
         return 0.0
 
     fallback_rates = {
-        "politics": POLYMARKET_DEFAULT_TAKER_FEE_RATE,
-        "sports": 0.02,
-        "crypto": 0.015,
+        "crypto": 0.072,
+        "sports": 0.03,
+        "finance": 0.04,
+        "politics": 0.04,
+        "economics": 0.05,
+        "culture": 0.05,
+        "weather": 0.05,
+        "tech": 0.04,
+        "mentions": 0.04,
+        "geopolitics": 0.0,
         "default": POLYMARKET_DEFAULT_TAKER_FEE_RATE,
     }
     resolved_rate = fee_rate if fee_rate is not None else fallback_rates.get(category, fallback_rates["default"])
