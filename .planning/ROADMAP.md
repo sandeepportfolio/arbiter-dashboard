@@ -57,7 +57,7 @@ Plans:
 - [x] 02-03-PLAN.md -- PlatformAdapter Protocol + tenacity retry policy module (EXEC-04, OPS-03)
 - [x] 02-04-PLAN.md -- KalshiAdapter extraction with FOK + depth check + idempotent retry (EXEC-01, EXEC-03, EXEC-04, OPS-03)
 - [x] 02-05-PLAN.md -- PolymarketAdapter extraction with two-phase FOK + reconcile-before-retry + stale-book guard (EXEC-01, EXEC-03, EXEC-04)
-- [ ] 02-06-PLAN.md -- Engine refactor: strip platform code, inject adapters/store, asyncio.wait_for timeout, contextvars binding, recovery.py startup hook, main.py wiring (EXEC-02, EXEC-04, EXEC-05, OPS-01)
+- [x] 02-06-PLAN.md -- Engine refactor: strip platform code, inject adapters/store, asyncio.wait_for timeout, contextvars binding, recovery.py startup hook, main.py wiring (EXEC-02, EXEC-04, EXEC-05, OPS-01)
 
 ### Phase 3: Safety Layer
 **Goal**: The system cannot lose money due to runaway execution, naked positions, rate limit bans, or uncontrolled shutdown -- every dangerous scenario has a safety mechanism
