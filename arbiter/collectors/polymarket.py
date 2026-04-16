@@ -55,12 +55,75 @@ class PolymarketCollector:
         self._slug_map: Dict[str, list[tuple[str, str]]] = {}
         self._token_registry: Dict[str, dict] = {}
         self._token_to_market: Dict[str, tuple[str, str]] = {}
+        self._clob_client = None  # Set externally when ClobClient is available for fee lookup
 
         for canonical_id, mapping in MARKET_MAP.items():
             slug = str(mapping.get("polymarket", "") or "")
             question_match = str(mapping.get("polymarket_question", "") or "")
             if slug:
                 self._slug_map.setdefault(slug, []).append((canonical_id, question_match))
+
+    def set_clob_client(self, client):
+        """Inject ClobClient for dynamic fee rate lookups (per D-09)."""
+        self._clob_client = client
+        logger.info("PolymarketCollector: ClobClient injected for dynamic fee rate lookups")
+
+    def _get_market_category(self, market: dict) -> str:
+        """Extract market category from Gamma API market data."""
+        category = market.get("category", market.get("groupItemTitle", "")).lower()
+        if not category:
+            tags = market.get("tags", [])
+            category = tags[0].lower() if tags else "default"
+        return category
+
+    def _fetch_dynamic_fee_rate(self, token_id: str, category: str = "default") -> float:
+        """
+        Fetch per-token fee rate from Polymarket via ClobClient.get_fee_rate_bps().
+        Falls back to hardcoded category rates with a warning log (per D-10).
+
+        Args:
+            token_id: The CLOB token ID for the market outcome
+            category: Market category for fallback rate lookup
+
+        Returns:
+            Fee rate as a decimal (e.g., 0.04 for 4%)
+        """
+        FALLBACK_RATES = {
+            "crypto": 0.072,
+            "sports": 0.03,
+            "finance": 0.04,
+            "politics": 0.04,
+            "economics": 0.05,
+            "culture": 0.05,
+            "weather": 0.05,
+            "tech": 0.04,
+            "mentions": 0.04,
+            "geopolitics": 0.0,
+            "default": 0.05,
+        }
+        if not token_id or self._clob_client is None:
+            return FALLBACK_RATES.get(category, FALLBACK_RATES["default"])
+
+        try:
+            bps = self._clob_client.get_fee_rate_bps(token_id)
+            # T-01-11: Validate returned bps is non-negative and within reasonable range
+            if not isinstance(bps, (int, float)) or bps < 0 or bps > 10000:
+                fallback = FALLBACK_RATES.get(category, FALLBACK_RATES["default"])
+                logger.warning(
+                    "Fee rate bps out of range for token %s: %s -- using fallback rate %.4f",
+                    token_id[:12], bps, fallback,
+                )
+                return fallback
+            rate = bps / 10000.0
+            logger.debug("Dynamic fee rate for token %s: %.4f (from %d bps)", token_id[:12], rate, bps)
+            return rate
+        except Exception as exc:
+            fallback = FALLBACK_RATES.get(category, FALLBACK_RATES["default"])
+            logger.warning(
+                "Fee rate fetch failed for token %s (category=%s): %s -- using fallback rate %.4f",
+                token_id[:12], category, exc, fallback,
+            )
+            return fallback
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -105,7 +168,11 @@ class PolymarketCollector:
                     no_token_id = str(token_ids[1]) if len(token_ids) > 1 else ""
                     yes_price = _safe_float(prices[0]) if len(prices) > 0 else 0.0
                     no_price = _safe_float(prices[1]) if len(prices) > 1 else max(1.0 - yes_price, 0.0)
-                    fee_rate = self._extract_fee_rate(market)
+                    # Per D-09: Try dynamic fee fetch first, fall back to category-based rates (D-10)
+                    fee_rate = self._fetch_dynamic_fee_rate(
+                        token_id=yes_token_id,
+                        category=self._get_market_category(market),
+                    )
                     mapping = MARKET_MAP.get(canonical_id, {})
 
                     discovered[canonical_id] = {

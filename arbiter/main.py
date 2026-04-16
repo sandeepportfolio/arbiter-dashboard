@@ -121,6 +121,12 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     )
     engine.set_trade_gate(readiness.allow_execution)
 
+    # Wire ClobClient to collector for dynamic fee rate lookup (D-09)
+    # This happens lazily -- the collector will use fallback rates until ClobClient is ready
+    poly_clob = engine._get_poly_clob_client()
+    if poly_clob is not None:
+        polymarket.set_clob_client(poly_clob)
+
     if api_only and os.getenv("ARBITER_UI_SMOKE_SEED") == "1":
         await seed_dashboard_fixture(price_store, scanner, engine, monitor)
         sync_runtime_reconciliation(reconciler, monitor, engine)
