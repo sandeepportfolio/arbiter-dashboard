@@ -29,6 +29,29 @@ from .portfolio import PortfolioConfig, PortfolioMonitor
 from .profitability import ProfitabilityConfig, ProfitabilityValidator
 from .readiness import OperationalReadiness
 
+import sentry_sdk
+from sentry_sdk.integrations.aiohttp import AioHttpIntegration
+from sentry_sdk.integrations.asyncio import AsyncioIntegration
+from sentry_sdk.integrations.logging import LoggingIntegration
+
+
+def _init_sentry() -> None:
+    """Initialize sentry-sdk. No-op if SENTRY_DSN unset (sentry-sdk handles dsn=None)."""
+    sentry_sdk.init(
+        dsn=os.getenv("SENTRY_DSN") or None,
+        environment=os.getenv("ARBITER_ENV", "development"),
+        release=os.getenv("ARBITER_RELEASE", "unknown"),
+        integrations=[
+            AsyncioIntegration(),
+            AioHttpIntegration(),
+            LoggingIntegration(level=logging.INFO, event_level=logging.ERROR),
+        ],
+        traces_sample_rate=0.0,
+        sample_rate=1.0,
+        send_default_pii=False,
+        attach_stacktrace=True,
+    )
+
 
 def sync_runtime_reconciliation(
     reconciler: PnLReconciler,
@@ -364,6 +387,7 @@ def main():
     parser.add_argument("--log-file", default=None, help="Log file path")
     args = parser.parse_args()
 
+    _init_sentry()              # must be before setup_logging so LoggingIntegration sees the JSON formatter
     setup_logging(args.log_level, args.log_file)
 
     config = load_config()
