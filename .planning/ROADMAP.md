@@ -30,12 +30,14 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. Polymarket heartbeat manager runs as a dedicated async task sending keepalive every 5 seconds -- observable in logs during a 60-second session
   4. Fee calculations for all platforms match documented rates (Polymarket per-category, Kalshi per current schedule) -- unit tests pass with real rate values
   5. All three collectors successfully fetch and parse current market data from their respective live APIs without errors
-**Plans**: TBD
+**Plans:** 5 plans
 
 Plans:
-- [ ] 01-01: TBD
-- [ ] 01-02: TBD
-- [ ] 01-03: TBD
+- [ ] 01-01-PLAN.md -- Fix Polymarket fee rate constants and update tests
+- [ ] 01-02-PLAN.md -- Migrate Kalshi order format to dollar string pricing
+- [ ] 01-03-PLAN.md -- Remove PredictIt execution code (keep collector)
+- [ ] 01-04-PLAN.md -- Fix Polymarket ClobClient auth and add heartbeat task
+- [ ] 01-05-PLAN.md -- Verify all collectors against live APIs
 
 ### Phase 2: Execution & Operational Hardening
 **Goal**: The execution engine reliably places, monitors, and records orders with proper error handling, logging, and recovery from transient failures
@@ -106,7 +108,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. API Integration Fixes | 0/3 | Not started | - |
+| 1. API Integration Fixes | 0/5 | Planned | - |
 | 2. Execution & Operational Hardening | 0/3 | Not started | - |
 | 3. Safety Layer | 0/3 | Not started | - |
 | 4. Sandbox Validation | 0/2 | Not started | - |
