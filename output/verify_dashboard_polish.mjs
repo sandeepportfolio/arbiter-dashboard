@@ -25,20 +25,23 @@ function rectDelta(before, after) {
   };
 }
 
-async function hoverRect(page, selector) {
+async function hoverRects(page, selector) {
   const locator = page.locator(selector);
   const count = await locator.count();
+  const checks = [];
   for (let index = 0; index < count; index += 1) {
     const item = locator.nth(index);
+    if (!(await item.isVisible())) continue;
     const before = await item.boundingBox();
     if (!before) continue;
+    const text = (await item.textContent())?.replace(/\s+/g, ' ').trim() || '';
     await item.hover({ force: true });
     await page.waitForTimeout(80);
     const after = await item.boundingBox();
     await page.mouse.move(0, 0);
-    return { selector, index, before, after };
+    checks.push({ selector, index, text, before, after });
   }
-  return null;
+  return checks;
 }
 
 async function auditScenario(browser, scenario) {
@@ -58,8 +61,7 @@ async function auditScenario(browser, scenario) {
   const hoverSelectors = ['.filter-pill', '.action-button', '.log-filter-chip'];
   const hoverChecks = [];
   for (const selector of hoverSelectors) {
-    const result = await hoverRect(page, selector);
-    if (result) hoverChecks.push(result);
+    hoverChecks.push(...await hoverRects(page, selector));
   }
 
   const result = await page.evaluate((rectDataFn) => {
@@ -137,7 +139,7 @@ async function auditScenario(browser, scenario) {
           metricsBeforeSide: !metrics || !side || rectData(metrics).bottom <= rectData(side).top + 8,
         };
       }),
-      operatorCards: [...document.querySelectorAll('#manualQueue .operator-card, #incidentList .operator-card, #mappingList .operator-card')].slice(0, 10).map((card) => {
+      operatorCards: [...document.querySelectorAll('#manualQueue .operator-card, #incidentList .operator-card, #mappingList .operator-card')].map((card) => {
         const cardRect = rectData(card);
         const actionButtons = [...card.querySelectorAll('.action-button')].map((button) => {
           const buttonRect = rectData(button);
@@ -229,12 +231,12 @@ for (const result of results) {
   for (const hoverCheck of audit.hoverChecks || []) {
     const delta = rectDelta(hoverCheck.before, hoverCheck.after);
     if (!delta) {
-      failures.push(`${name}: ${hoverCheck.selector} hover target could not be measured.`);
+      failures.push(`${name}: ${hoverCheck.selector} hover target could not be measured: ${hoverCheck.text || hoverCheck.index}.`);
       continue;
     }
     const moved = Object.values(delta).some((value) => Math.abs(value) > 0.5);
     if (moved) {
-      failures.push(`${name}: ${hoverCheck.selector} hover geometry drifted: ${JSON.stringify(delta)}`);
+      failures.push(`${name}: ${hoverCheck.selector} hover geometry drifted: ${hoverCheck.text || hoverCheck.index} ${JSON.stringify(delta)}`);
     }
   }
   for (const gap of audit.chartGaps) {
