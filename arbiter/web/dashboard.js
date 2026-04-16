@@ -154,6 +154,7 @@ const apiBasePillEl = document.getElementById("apiBasePill");
 const apiConfigButtonEl = document.getElementById("apiConfigButton");
 const opsShortcutEl = document.getElementById("opsShortcut");
 const logoutButtonEl = document.getElementById("logoutButton");
+const dockOpsLinkEl = document.getElementById("dockOpsLink");
 const heroTitleEl = document.getElementById("heroTitle");
 const heroSubtitleEl = document.getElementById("heroSubtitle");
 const accessPillEl = document.getElementById("accessPill");
@@ -962,16 +963,36 @@ function renderChrome() {
       : "Public read-only mode streams live opportunities, risk posture, and profitability evidence from the core engine.";
   }
   if (accessPillEl) {
-    accessPillEl.textContent = hasOperatorAccess()
-      ? `Operator${state.operatorEmail ? ` • ${state.operatorEmail}` : ""}`
-      : isOpsMode()
-        ? "Sign in required"
-        : "Read only";
+    accessPillEl.parentElement?.classList.add("pill-access");
+    accessPillEl.title = "";
+    if (hasOperatorAccess() && state.operatorEmail) {
+      accessPillEl.innerHTML = `
+        <span class="value-stack">
+          <span class="value-primary">Operator</span>
+          <span class="value-secondary" title="${escapeHtml(state.operatorEmail)}">${escapeHtml(state.operatorEmail)}</span>
+        </span>
+      `;
+      accessPillEl.title = state.operatorEmail;
+    } else {
+      accessPillEl.textContent = isOpsMode() ? "Sign in required" : "Read only";
+    }
     accessPillEl.classList.toggle("value-muted", !hasOperatorAccess());
   }
   if (profitabilityPillEl) {
     profitabilityPillEl.textContent = profitability ? titleCase(profitability.verdict) : "Loading";
     profitabilityPillEl.classList.toggle("value-muted", !profitability || profitability.verdict === "collecting_evidence");
+  }
+  if (dockOpsLinkEl) {
+    if (!isOpsMode()) {
+      dockOpsLinkEl.href = opsHref;
+      dockOpsLinkEl.textContent = "Ops desk";
+    } else if (hasOperatorAccess()) {
+      dockOpsLinkEl.href = "#opsSection";
+      dockOpsLinkEl.textContent = "Manual";
+    } else {
+      dockOpsLinkEl.href = "#";
+      dockOpsLinkEl.textContent = "Sign in";
+    }
   }
 
   document.querySelectorAll("[data-ops-only]").forEach((element) => {
@@ -1693,6 +1714,12 @@ document.addEventListener("click", (event) => {
 
   if (event.target === apiConfigButtonEl) {
     showConnectionOverlay(state.connectionMessage);
+    return;
+  }
+
+  if (event.target === dockOpsLinkEl && isOpsMode() && !hasOperatorAccess()) {
+    event.preventDefault();
+    showAuthOverlay("Sign in to unlock the operator desk.");
     return;
   }
 

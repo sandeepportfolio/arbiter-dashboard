@@ -111,7 +111,7 @@
     </section>
 
     <section class="panel-grid panel-grid-tight">
-      <article class="panel">
+      <article id="opportunitiesSection" class="panel">
         <div class="panel-header">
           <div>
             <p class="panel-kicker">Validation</p>
@@ -149,7 +149,7 @@
       </article>
     </section>
 
-    <section class="panel-grid panel-grid-tight ops-only" data-ops-only="true">
+    <section id="opsSection" class="panel-grid panel-grid-tight ops-only" data-ops-only="true">
       <article class="panel">
         <div class="panel-header">
           <div>
@@ -175,7 +175,7 @@
       </article>
     </section>
 
-    <section class="log-stage">
+    <section id="logsSection" class="log-stage">
       <div class="log-stage-header">
         <div>
           <p class="panel-kicker">Log Atlas</p>
@@ -250,6 +250,12 @@
       </article>
     </section>
   </main>
+  <nav class="mobile-dock" aria-label="Quick navigation">
+    <a class="mobile-dock-link" href="#statusBand">Overview</a>
+    <a class="mobile-dock-link" href="#opportunitiesSection">Routes</a>
+    <a id="dockOpsLink" class="mobile-dock-link" href="/ops">Ops desk</a>
+    <a class="mobile-dock-link" href="#logsSection">Logs</a>
+  </nav>
   <script>
     window.ARBITER_BOOTSTRAP = {
       staticFrontend: false,
