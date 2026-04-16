@@ -35,7 +35,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 Plans:
 - [x] 01-01-PLAN.md -- Fix Polymarket fee rate constants and update tests
 - [x] 01-02-PLAN.md -- Migrate Kalshi order format to dollar string pricing
-- [ ] 01-03-PLAN.md -- Remove PredictIt execution code (keep collector)
+- [x] 01-03-PLAN.md -- Remove PredictIt execution code (keep collector)
 - [ ] 01-04-PLAN.md -- Fix Polymarket ClobClient auth and add heartbeat task
 - [ ] 01-05-PLAN.md -- Verify all collectors against live APIs
 
