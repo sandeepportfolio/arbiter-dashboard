@@ -68,7 +68,10 @@ def make_opportunity() -> ArbitrageOpportunity:
     )
 
 
-def test_startup_preflight_requires_verified_live_mappings_and_credentials():
+def test_startup_preflight_requires_verified_live_mappings_and_credentials(monkeypatch):
+    monkeypatch.delenv("KALSHI_API_KEY_ID", raising=False)
+    monkeypatch.delenv("KALSHI_PRIVATE_KEY_PATH", raising=False)
+    monkeypatch.delenv("POLY_PRIVATE_KEY", raising=False)
     readiness = OperationalReadiness(ArbiterConfig())
     failures = readiness.startup_failures()
 

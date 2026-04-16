@@ -18,11 +18,20 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from typing import Dict, List
 
-from ..config.settings import KalshiConfig, MARKET_MAP, KALSHI_TAKER_FEE_RATE
+from ..config.settings import KalshiConfig, MARKET_MAP, KALSHI_TAKER_FEE_RATE, similarity_score
 from ..utils.price_store import PricePoint, PriceStore
 from ..utils.retry import CircuitBreaker, RateLimiter, SessionManager, retry_with_backoff
 
 logger = logging.getLogger("arbiter.collector.kalshi")
+
+
+def _safe_float(value) -> float:
+    try:
+        if value in (None, ""):
+            return 0.0
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 class KalshiAuth:
@@ -119,66 +128,29 @@ class KalshiCollector:
 
                 # Use auth if available
                 if self.auth.is_authenticated:
-                    path = f"/trade-api/v2/markets?event_ticker={event_ticker}&limit=50"
+                    path = "/trade-api/v2/markets"
                     headers.update(self.auth.get_headers("GET", path))
 
                 async with session.get(url, params=params, headers=headers) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         markets = data.get("markets", [])
-                        for m in markets:
-                            yes_bid = m.get("yes_bid") or m.get("bid") or 0.0
-                            yes_ask = m.get("yes_ask") or m.get("ask") or m.get("last_price") or 0.0
-                            no_bid = m.get("no_bid") or 0.0
-                            no_ask = m.get("no_ask") or (1.0 - yes_bid) if yes_bid else 0.0
-
-                            yes_price = yes_ask or yes_bid or m.get("last_price") or 0.0
-                            no_price = no_ask or no_bid or (1.0 - yes_price) if yes_price else 0.0
-
-                            # Normalize to 0-1 range (Kalshi uses cents)
-                            yes_bid = yes_bid / 100.0 if yes_bid and yes_bid > 1 else yes_bid
-                            yes_ask = yes_ask / 100.0 if yes_ask and yes_ask > 1 else yes_ask
-                            no_bid = no_bid / 100.0 if no_bid and no_bid > 1 else no_bid
-                            no_ask = no_ask / 100.0 if no_ask and no_ask > 1 else no_ask
-                            yes_price = yes_price / 100.0 if yes_price and yes_price > 1 else yes_price
-                            no_price = no_price / 100.0 if no_price and no_price > 1 else no_price
-
-                            # Skip markets with no price data
-                            if yes_price == 0.0 and no_price == 0.0:
+                        for canonical_id in canonical_ids:
+                            market = self._select_market_for_canonical(canonical_id, event_ticker, markets)
+                            if not market:
                                 continue
-
-                            # Map to canonical IDs (use first one; Kalshi
-                            # sub-markets would need ticker-level matching)
-                            for canonical_id in canonical_ids:
-                                mapping = MARKET_MAP.get(canonical_id, {})
-                                price = PricePoint(
-                                    platform="kalshi",
-                                    canonical_id=canonical_id,
-                                    yes_price=yes_price,
-                                    no_price=no_price,
-                                    yes_volume=float(m.get("volume", 0) or 0),
-                                    no_volume=float(m.get("volume", 0) or 0),
-                                    timestamp=time.time(),
-                                    raw_market_id=m.get("ticker", event_ticker),
-                                    yes_market_id=m.get("ticker", event_ticker),
-                                    no_market_id=m.get("ticker", event_ticker),
-                                    yes_bid=float(yes_bid or 0),
-                                    yes_ask=float(yes_ask or yes_price or 0),
-                                    no_bid=float(no_bid or 0),
-                                    no_ask=float(no_ask or no_price or 0),
-                                    fee_rate=KALSHI_TAKER_FEE_RATE,
-                                    mapping_status=str(mapping.get("status", "candidate")),
-                                    mapping_score=float(mapping.get("mapping_score", 0.0)),
-                                    metadata={
-                                        "event_ticker": event_ticker,
-                                        "market_title": m.get("title", ""),
-                                    },
-                                )
-                                results.append(price)
-                                await self.store.put(price)
-                                logger.debug(
-                                    f"Kalshi {canonical_id}: YES={yes_price:.2f} NO={no_price:.2f}"
-                                )
+                            price = self._build_price_point(canonical_id, event_ticker, market)
+                            if price is None:
+                                continue
+                            results.append(price)
+                            await self.store.put(price)
+                            logger.debug(
+                                "Kalshi %s: YES=%.2f NO=%.2f (%s)",
+                                canonical_id,
+                                price.yes_price,
+                                price.no_price,
+                                price.raw_market_id,
+                            )
                     elif resp.status == 429:
                         delay = self.rate_limiter.apply_retry_after(
                             resp.headers.get("Retry-After"),
@@ -194,6 +166,105 @@ class KalshiCollector:
                 logger.error(f"Kalshi fetch error for {event_ticker}: {e}")
 
         return results
+
+    @staticmethod
+    def _normalize_price(value: float) -> float:
+        return value / 100.0 if value and value > 1 else value
+
+    @staticmethod
+    def _market_float(market: dict, *keys: str) -> float:
+        for key in keys:
+            value = _safe_float(market.get(key))
+            if value:
+                return value
+        return 0.0
+
+    def _select_market_for_canonical(self, canonical_id: str, event_ticker: str, markets: List[dict]) -> Optional[dict]:
+        if not markets:
+            return None
+
+        mapping = MARKET_MAP.get(canonical_id, {})
+        target = str(mapping.get("kalshi", "") or "").strip()
+        for market in markets:
+            if str(market.get("ticker", "") or "").strip() == target:
+                return market
+
+        if len(markets) == 1:
+            return markets[0]
+
+        candidate_text = " ".join(
+            part
+            for part in (
+                str(mapping.get("description", "") or ""),
+                " ".join(str(alias) for alias in mapping.get("aliases", ()) or ()),
+            )
+            if part
+        )
+        scored = [
+            (
+                similarity_score(
+                    candidate_text,
+                    " ".join(
+                        str(market.get(field, "") or "")
+                        for field in ("title", "yes_sub_title", "no_sub_title", "ticker")
+                    ),
+                ),
+                market,
+            )
+            for market in markets
+        ]
+        best_score, best_market = max(scored, key=lambda item: item[0])
+        if best_score >= 0.2:
+            return best_market
+
+        logger.debug(
+            "Kalshi skipped ambiguous event %s for %s; best match score %.3f was too low",
+            event_ticker,
+            canonical_id,
+            best_score,
+        )
+        return None
+
+    def _build_price_point(self, canonical_id: str, event_ticker: str, market: dict) -> Optional[PricePoint]:
+        yes_bid = self._normalize_price(self._market_float(market, "yes_bid", "bid", "yes_bid_dollars"))
+        yes_ask = self._normalize_price(self._market_float(market, "yes_ask", "ask", "yes_ask_dollars", "last_price", "last_price_dollars"))
+        no_bid = self._normalize_price(self._market_float(market, "no_bid", "no_bid_dollars"))
+        no_ask = self._normalize_price(self._market_float(market, "no_ask", "no_ask_dollars"))
+        yes_price = self._normalize_price(self._market_float(market, "last_price", "last_price_dollars")) or yes_ask or yes_bid
+        no_price = no_ask or no_bid or (1.0 - yes_price if yes_price else 0.0)
+
+        if yes_price == 0.0 and no_price == 0.0:
+            return None
+
+        yes_depth = self._market_float(market, "yes_ask_size_fp", "yes_bid_size_fp", "volume_fp", "volume")
+        no_depth = self._market_float(market, "no_ask_size_fp", "no_bid_size_fp", "volume_fp", "volume")
+        mapping = MARKET_MAP.get(canonical_id, {})
+        return PricePoint(
+            platform="kalshi",
+            canonical_id=canonical_id,
+            yes_price=yes_price,
+            no_price=no_price,
+            yes_volume=yes_depth,
+            no_volume=no_depth,
+            timestamp=time.time(),
+            raw_market_id=market.get("ticker", event_ticker),
+            yes_market_id=market.get("ticker", event_ticker),
+            no_market_id=market.get("ticker", event_ticker),
+            yes_bid=float(yes_bid or 0),
+            yes_ask=float(yes_ask or yes_price or 0),
+            no_bid=float(no_bid or 0),
+            no_ask=float(no_ask or no_price or 0),
+            fee_rate=KALSHI_TAKER_FEE_RATE,
+            mapping_status=str(mapping.get("status", "candidate")),
+            mapping_score=float(mapping.get("mapping_score", 0.0)),
+            metadata={
+                "event_ticker": event_ticker,
+                "market_title": market.get("title", ""),
+                "yes_sub_title": market.get("yes_sub_title", ""),
+                "no_sub_title": market.get("no_sub_title", ""),
+                "response_price_units": market.get("response_price_units", ""),
+            },
+        )
 
     async def fetch_balance(self) -> Optional[float]:
         """Fetch account balance (requires auth)."""

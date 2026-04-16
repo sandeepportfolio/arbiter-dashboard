@@ -11,17 +11,37 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, Tuple
 
-# Load .env file from arbiter root directory.
 try:
     from dotenv import load_dotenv
-
-    _config_dir = Path(__file__).resolve().parent
-    _arbiter_dir = _config_dir.parent
-    _env_file = _arbiter_dir / ".env"
-    if _env_file.exists():
-        load_dotenv(_env_file, override=True)
 except ImportError:
-    pass
+    load_dotenv = None
+
+
+def _load_project_dotenv(anchor_file: Path | None = None) -> Path | None:
+    """
+    Load the first .env file found in the project/package parents.
+
+    In local development the repo root contains `.env`, while some packaged
+    layouts keep it beside the Python package. We support both so runtime
+    config matches the developer shell.
+    """
+    if load_dotenv is None:
+        return None
+
+    anchor = (anchor_file or Path(__file__)).resolve()
+    config_dir = anchor.parent
+    candidate_paths = (
+        config_dir.parent.parent / ".env",
+        config_dir.parent / ".env",
+    )
+    for candidate in candidate_paths:
+        if candidate.exists():
+            load_dotenv(candidate, override=True)
+            return candidate
+    return None
+
+
+_DOTENV_PATH = _load_project_dotenv()
 
 
 KALSHI_TAKER_FEE_RATE = 0.07
@@ -387,6 +407,6 @@ class ArbiterConfig:
 def load_config() -> ArbiterConfig:
     cfg = ArbiterConfig()
     if cfg.kalshi.private_key_path and not os.path.isabs(cfg.kalshi.private_key_path):
-        arbiter_dir = Path(__file__).resolve().parent.parent
-        cfg.kalshi.private_key_path = str(arbiter_dir / cfg.kalshi.private_key_path)
+        config_root = _DOTENV_PATH.parent if _DOTENV_PATH else Path(__file__).resolve().parent.parent
+        cfg.kalshi.private_key_path = str((config_root / cfg.kalshi.private_key_path).resolve())
     return cfg
