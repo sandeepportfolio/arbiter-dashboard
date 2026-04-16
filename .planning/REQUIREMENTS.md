@@ -31,8 +31,8 @@ Requirements for production-ready live trading. Each maps to roadmap phases.
 - [ ] **EXEC-01**: FOK (fill-or-kill) order types used for both legs to eliminate partial fill risk
 - [ ] **EXEC-02**: Execution state (orders, fills, incidents) persisted to PostgreSQL -- survives process restart
 - [ ] **EXEC-03**: Pre-trade order book depth verification confirms sufficient liquidity before submission
-- [ ] **EXEC-04**: Per-platform execution adapters extracted from monolithic engine.py into execution/adapters/
-- [ ] **EXEC-05**: Execution timeout with automatic cancellation if fill not received within threshold
+- [x] **EXEC-04**: Per-platform execution adapters extracted from monolithic engine.py into execution/adapters/
+- [x] **EXEC-05**: Execution timeout with automatic cancellation if fill not received within threshold
 
 ### Validation & Testing
 
@@ -100,8 +100,8 @@ Deferred to after live trading is proven profitable.
 | EXEC-01 | Phase 2 | Pending |
 | EXEC-02 | Phase 2 | Pending |
 | EXEC-03 | Phase 2 | Pending |
-| EXEC-04 | Phase 2 | Pending |
-| EXEC-05 | Phase 2 | Pending |
+| EXEC-04 | Phase 2 | Complete |
+| EXEC-05 | Phase 2 | Complete |
 | TEST-01 | Phase 4 | Pending |
 | TEST-02 | Phase 4 | Pending |
 | TEST-03 | Phase 4 | Pending |

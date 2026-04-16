@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Phase 2 context gathered
-last_updated: "2026-04-16T20:51:29.754Z"
-last_activity: 2026-04-16 -- Phase 02 execution started
+status: verifying
+stopped_at: Completed 02.1-01-PLAN.md (CR-01 + CR-02 remediation)
+last_updated: "2026-04-16T22:32:52.855Z"
+last_activity: 2026-04-16
 progress:
-  total_phases: 5
-  completed_phases: 1
-  total_plans: 11
-  completed_plans: 8
-  percent: 73
+  total_phases: 6
+  completed_phases: 3
+  total_plans: 12
+  completed_plans: 12
+  percent: 100
 ---
 
 # Project State
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-16)
 
 **Core value:** Execute live arbitrage trades across all three platforms without losing money to bugs, stale prices, or partial fills.
-**Current focus:** Phase 02 — execution-operational-hardening
+**Current focus:** Phase 02.1 — remediate-cr-01-cancel-on-timeout-and-cr-02-client-order-id-
 
 ## Current Position
 
-Phase: 02 (execution-operational-hardening) — EXECUTING
-Plan: 1 of 6
-Status: Executing Phase 02
-Last activity: 2026-04-16 -- Phase 02 execution started
+Phase: 02.1 (remediate-cr-01-cancel-on-timeout-and-cr-02-client-order-id-) — EXECUTING
+Plan: 1 of 1
+Status: Phase complete — ready for verification
+Last activity: 2026-04-16
 
 Progress: [..........] 0%
 
@@ -52,6 +52,7 @@ Progress: [..........] 0%
 - Trend: -
 
 *Updated after each plan completion*
+| Phase 02.1 P01 | 14min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -63,6 +64,13 @@ Recent decisions affecting current work:
 - [Roadmap]: PredictIt scoped to read-only price signal -- no automated execution (no trading API exists)
 - [Roadmap]: Kalshi pricing format (API-01) and Polymarket auth (API-02, API-06) are hard blockers -- Phase 1 priority
 - [Roadmap]: Safety layer (Phase 3) must be complete before any sandbox validation (Phase 4)
+- [Phase 02.1]: Polymarket Order constructors set external_client_order_id=None explicitly (PATTERNS Option B) to document intentional omission for the platform that has no client_order_id concept.
+- [Phase 02.1]: Engine timeout branch threads external_client_order_id from first matched real order into synthetic partial Order so DB row carries the real idempotency key on timeout-CANCELLED path (Rule 1 deviation).
+- [Phase 02.1]: Kalshi _order_data_to_order populates external_client_order_id from API response client_order_id field (Rule 2) so production list_open_orders_by_client_id-returned Orders carry the engine-chosen key for engine-side recovery threading.
+
+### Roadmap Evolution
+
+- Phase 02.1 inserted after Phase 2: Remediate CR-01 cancel-on-timeout and CR-02 client_order_id persistence from Phase 2 review (URGENT)
 
 ### Pending Todos
 
@@ -75,6 +83,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-16T19:06:13.778Z
-Stopped at: Phase 2 context gathered
-Resume file: .planning/phases/02-execution-operational-hardening/02-CONTEXT.md
+Last session: 2026-04-16T22:32:52.851Z
+Stopped at: Completed 02.1-01-PLAN.md (CR-01 + CR-02 remediation)
+Resume file: None

@@ -64,10 +64,10 @@ Plans:
 **Goal:** Restore the EXEC-04 idempotency invariant (DB `execution_orders.client_order_id` column actually holds the engine-chosen `ARB-{n}-{SIDE}-{hex}` string, not Kalshi's server-assigned id) and the EXEC-05 timeout-recovery invariant (orphaned Kalshi orders are actually cancelled via `list_open_orders_by_client_id` lookup, not declared FAILED while leaking a live resting order). Surgical fix in 3 production files + 3 test files; no schema changes, no new dependencies.
 **Requirements**: EXEC-04, EXEC-05
 **Depends on:** Phase 2
-**Plans:** 1 plan
+**Plans:** 1/1 plans complete
 
 Plans:
-- [ ] 02.1-01-PLAN.md -- Wave 0 regression tests + CR-02 dataclass+adapter fix + CR-01 timeout-branch rewrite (EXEC-04, EXEC-05)
+- [x] 02.1-01-PLAN.md -- Wave 0 regression tests + CR-02 dataclass+adapter fix + CR-01 timeout-branch rewrite (EXEC-04, EXEC-05)
 
 ### Phase 3: Safety Layer
 **Goal**: The system cannot lose money due to runaway execution, naked positions, rate limit bans, or uncontrolled shutdown -- every dangerous scenario has a safety mechanism
