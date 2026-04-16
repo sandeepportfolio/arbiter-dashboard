@@ -37,7 +37,7 @@ Plans:
 - [x] 01-02-PLAN.md -- Migrate Kalshi order format to dollar string pricing
 - [x] 01-03-PLAN.md -- Remove PredictIt execution code (keep collector)
 - [x] 01-04-PLAN.md -- Fix Polymarket ClobClient auth and add heartbeat task
-- [ ] 01-05-PLAN.md -- Verify all collectors against live APIs
+- [x] 01-05-PLAN.md -- Verify all collectors against live APIs
 
 ### Phase 2: Execution & Operational Hardening
 **Goal**: The execution engine reliably places, monitors, and records orders with proper error handling, logging, and recovery from transient failures
