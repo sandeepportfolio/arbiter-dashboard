@@ -855,8 +855,7 @@ h2 {
 }
 
 .log-entry-body,
-.stack-item-header,
-.opportunity-top {
+.stack-item-header {
   display: flex;
   justify-content: space-between;
   gap: 14px;
@@ -954,7 +953,7 @@ h2 {
 
 .opportunity-card {
   display: grid;
-  gap: 14px;
+  gap: 16px;
   background:
     linear-gradient(180deg, rgba(12, 30, 39, 0.92), rgba(7, 18, 24, 0.98)),
     radial-gradient(circle at top right, rgba(140, 224, 207, 0.08), transparent 38%);
@@ -969,7 +968,8 @@ h2 {
 
 .opportunity-copy {
   display: grid;
-  gap: 10px;
+  gap: 12px;
+  align-content: start;
   min-width: 0;
 }
 
@@ -986,7 +986,7 @@ h2 {
 .route-market {
   display: inline-flex;
   align-items: center;
-  min-height: 34px;
+  min-height: 36px;
   padding: 0 12px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.06);
@@ -998,8 +998,10 @@ h2 {
 }
 
 .route-arrow {
+  align-self: center;
   color: var(--muted);
   font-size: 0.78rem;
+  line-height: 1;
   text-transform: uppercase;
   letter-spacing: 0.14em;
 }
@@ -1030,6 +1032,7 @@ h2 {
 }
 
 .signal-meta {
+  justify-self: end;
   color: rgba(237, 247, 244, 0.68);
   font-size: 0.86rem;
   line-height: 1.45;
@@ -1128,22 +1131,26 @@ h2 {
 }
 
 .opportunity-meta {
+  align-content: start;
   align-items: center;
-  row-gap: 10px;
+  gap: 10px 8px;
 }
 
 .opportunity-meta .badge {
-  min-height: 31px;
+  min-height: 36px;
+  padding-inline: 12px;
+  justify-content: center;
   line-height: 1;
 }
 
 .opportunity-route,
 .opportunity-insights {
   align-items: center;
+  row-gap: 10px;
 }
 
 .opportunity-insights .insight-chip {
-  min-height: 38px;
+  min-height: 36px;
 }
 
 .opportunity-legs {
@@ -1519,8 +1526,11 @@ h2 {
     text-align: left;
   }
 
+  .signal-meta {
+    justify-self: start;
+  }
+
   .panel-header,
-  .opportunity-top,
   .stack-item-header {
     flex-direction: column;
     align-items: start;
