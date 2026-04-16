@@ -338,7 +338,7 @@ class ExecutionEngine:
         instructions = (
             f"Manual workflow required. Buy YES on {opp.yes_platform.upper()} at ${opp.yes_price:.2f} "
             f"and buy NO on {opp.no_platform.upper()} at ${opp.no_price:.2f} for {opp.suggested_qty} contracts. "
-            "Confirm the PredictIt leg in the dashboard before hedging or unwinding."
+            "Confirm the manual leg in the dashboard before hedging or unwinding."
         )
         manual_position = ManualPosition(
             position_id=f"MANUAL-{arb_id}",
@@ -392,7 +392,7 @@ class ExecutionEngine:
             status="manual_pending",
             realized_pnl=0.0,
             timestamp=now,
-            notes=["PredictIt/manual workflow queued"],
+            notes=["Manual workflow queued"],
         )
         self._executions.append(execution)
         return execution

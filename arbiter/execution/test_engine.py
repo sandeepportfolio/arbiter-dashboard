@@ -23,13 +23,13 @@ def make_engine(price_store: PriceStore) -> ExecutionEngine:
     return engine
 
 
-def test_manual_predictit_opportunity_creates_manual_position():
+def test_manual_opportunity_creates_manual_position():
     async def runner():
         store = PriceStore(ttl=60)
         engine = make_engine(store)
         opportunity = ArbitrageOpportunity(
             canonical_id="TEST_MANUAL",
-            description="Manual PredictIt opportunity",
+            description="Manual opportunity",
             yes_platform="predictit",
             yes_price=0.34,
             yes_fee=0.116,
