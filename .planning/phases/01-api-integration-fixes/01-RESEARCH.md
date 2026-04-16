@@ -429,22 +429,25 @@ POLYMARKET_FEE_RATES = {
 | A3 | Polymarket `get_fee_rate_bps()` returns basis points that divide by 10000 for decimal rate | Pattern 4 | If it returns a decimal directly, fee calculations would be off by 10000x. Mitigated by the existing BPS-to-decimal conversion in `_extract_fee_rate`. |
 | A4 | `PredictItWorkflowManager` in `workflow/predictit_workflow.py` can be entirely removed without breaking imports elsewhere | Pitfall 5 | If other modules import from it, removal will cause ImportError. Need to grep for all imports. |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **What is the user's Polymarket signature_type?**
    - What we know: User is US-based with an active account (D-01). Most US accounts are GNOSIS_SAFE (2).
    - What's unclear: The exact wallet type -- could be EOA (0) if they imported a private key directly.
    - Recommendation: Add `POLY_SIGNATURE_TYPE` and `POLY_FUNDER` to `.env.template`. Default to 2, but validate at startup by attempting `create_or_derive_api_creds()`.
+   - RESOLVED: Plan 04 Task 1 adds `POLY_SIGNATURE_TYPE` (default=2) and `POLY_FUNDER` as configurable env vars in PolymarketConfig and .env.template. User sets their actual wallet type at runtime. ClobClient validates credentials at startup via `create_or_derive_api_creds()`, and 401 errors are logged clearly (per Plan 05 checkpoint verification).
 
 2. **Kalshi demo environment API compatibility**
    - What we know: Production requires `yes_price_dollars` format as of March 2026. Demo may still accept legacy format.
    - What's unclear: Whether demo has also migrated (STATE.md notes this concern).
    - Recommendation: Code for production format only. If demo rejects it, that's a demo-specific issue, not a code issue.
+   - RESOLVED: Plan 02 implements production format only (`yes_price_dollars` strings). Legacy integer fields are completely removed -- no dual-format fallback. If demo environment diverges from production, that is a demo-specific issue and does not affect code correctness. Plan 05 collector verification confirms the format works against live APIs.
 
 3. **Heartbeat lifecycle management**
    - What we know: Heartbeat must send every 5s. Missing it cancels ALL open orders.
    - What's unclear: Should heartbeat run continuously or only when orders are open? Continuous is safer but adds unnecessary API traffic.
    - Recommendation: Start heartbeat when first order is placed, stop when no orders are open. Add a configurable `heartbeat_enabled` flag.
+   - RESOLVED: Plan 04 Task 2 implements continuous heartbeat as a dedicated async task (per D-04). The heartbeat waits for ClobClient L2 auth before starting, then runs continuously at 5s intervals. Continuous mode chosen over order-triggered mode because: (a) safer -- no risk of missing the 10s timeout during startup of a new heartbeat, (b) simpler -- no race condition between order placement and heartbeat start, (c) API traffic is minimal (one small POST every 5s). The `stop_heartbeat()` method provides clean shutdown.
 
 ## Environment Availability
 
