@@ -910,11 +910,16 @@ class ExecutionEngine:
                 host=self.config.polymarket.clob_url,
                 key=self.config.polymarket.private_key,
                 chain_id=self.config.polymarket.chain_id,
+                signature_type=self.config.polymarket.signature_type,
+                funder=self.config.polymarket.funder,
             )
             if hasattr(self._poly_clob_client, "create_or_derive_api_creds"):
                 creds = self._poly_clob_client.create_or_derive_api_creds()
                 if hasattr(self._poly_clob_client, "set_api_creds"):
                     self._poly_clob_client.set_api_creds(creds)
+            logger.info("Polymarket ClobClient initialized (sig_type=%d, funder=%s)",
+                        self.config.polymarket.signature_type,
+                        self.config.polymarket.funder[:8] + "..." if self.config.polymarket.funder else "none")
             return self._poly_clob_client
         except Exception as exc:
             logger.error("Failed to initialize Polymarket CLOB client: %s", exc)

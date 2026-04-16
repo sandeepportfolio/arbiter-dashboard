@@ -349,6 +349,8 @@ class PolymarketConfig:
     poll_interval: float = 1.0
     ws_enabled: bool = True
     fee_category: str = "politics"
+    signature_type: int = field(default_factory=lambda: int(os.getenv("POLY_SIGNATURE_TYPE", "2")))
+    funder: str = field(default_factory=lambda: os.getenv("POLY_FUNDER", ""))
 
 
 @dataclass
