@@ -140,7 +140,7 @@ class PolymarketAdapter:
                     token_id=market_id,
                     price=round(price, 2),
                     size=float(qty),
-                    side=side.upper(),
+                    side=self._poly_side(side),
                 )
                 signed = await loop.run_in_executor(
                     None, lambda: client.create_order(order_args)
@@ -184,14 +184,31 @@ class PolymarketAdapter:
         )
 
     @staticmethod
+    def _poly_side(side: str) -> str:
+        """Map engine's side to Polymarket's CLOB side.
+
+        Engine represents an arb leg by which token it is buying ("yes" | "no");
+        the specific token is already encoded in `token_id`, so the CLOB side
+        for a buy leg is always "BUY". A "SELL" is only used for closing out
+        an existing position — pass-through if explicitly requested.
+        (Matches the hardcoded `side="BUY"` in engine.py:1007 before extraction.)
+        """
+        s = str(side).upper()
+        if s in ("BUY", "SELL"):
+            return s
+        if s in ("YES", "NO"):
+            return "BUY"
+        # Unknown — default to BUY (matches pre-extraction behavior)
+        return "BUY"
+
     def _match_existing(
-        existing: list, side: str, price: float, qty: int,
+        self, existing: list, side: str, price: float, qty: int,
     ) -> Optional[dict]:
         """Find an open order matching price (tolerance <0.01), size (exact),
         and side. Returns the order dict or None."""
         if not existing:
             return None
-        side_upper = side.upper()
+        side_normalized = self._poly_side(side)
         for o in existing:
             o_dict = o if isinstance(o, dict) else getattr(o, "__dict__", {})
             try:
@@ -203,7 +220,7 @@ class PolymarketAdapter:
             if (
                 abs(o_price - price) < 0.01
                 and o_size == float(qty)
-                and o_side == side_upper
+                and o_side == side_normalized
             ):
                 return o_dict
         return None
