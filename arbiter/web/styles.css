@@ -257,15 +257,17 @@ body {
 .hero {
   display: flex;
   justify-content: space-between;
-  gap: 18px;
-  align-items: end;
-  margin-bottom: 18px;
+  gap: 24px;
+  align-items: start;
+  margin-bottom: 22px;
   min-width: 0;
 }
 
 .hero-copy {
+  display: grid;
+  gap: 14px;
   min-width: 0;
-  max-width: 62ch;
+  max-width: 72ch;
 }
 
 .eyebrow,
@@ -290,7 +292,7 @@ h2,
 h1 {
   font-size: clamp(1.9rem, 3.2vw, 2.85rem);
   line-height: 0.96;
-  max-width: 10ch;
+  max-width: 12ch;
 }
 
 h2 {
@@ -309,8 +311,8 @@ h2 {
 }
 
 .subtitle {
-  margin: 10px 0 0;
-  max-width: 56ch;
+  margin: 0;
+  max-width: 44rem;
 }
 
 .log-stage-copy,
@@ -887,6 +889,15 @@ h2 {
 .stack-list,
 .opportunity-list {
   gap: 14px;
+}
+
+#mappingList,
+#collectorList,
+#manualQueue,
+#incidentList {
+  max-height: min(48vh, 560px);
+  overflow: auto;
+  padding-right: 4px;
 }
 
 .compact-stack {
@@ -3423,6 +3434,10 @@ h2,
   .overview-value-row {
     display: grid;
     gap: 14px;
+  }
+
+  #heroValue {
+    font-size: clamp(2.8rem, 14vw, 4.1rem);
   }
 
   .hero-status {
