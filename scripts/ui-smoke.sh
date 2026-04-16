@@ -46,6 +46,11 @@ SITE_STATE="$("${PWCLI[@]}" eval "(async () => {
     hero: document.getElementById('heroTitle')?.textContent?.trim(),
     access: document.getElementById('accessPill')?.textContent?.trim(),
     metrics: document.querySelectorAll('.metric-card').length,
+    menuItems: document.querySelectorAll('#deskMenu .desk-menu-link').length,
+    routesLink: Array.from(document.querySelectorAll('#deskMenu .desk-menu-link'))
+      .find((link) => link.getAttribute('href') === '#opportunitiesSection')
+      ?.querySelector('.desk-menu-link-label')
+      ?.textContent?.trim(),
     opportunities: document.getElementById('opportunityList')?.children.length || 0,
     collectors: document.getElementById('collectorList')?.children.length || 0,
     authHidden: document.getElementById('authOverlay')?.classList.contains('hidden') || false,
@@ -64,6 +69,14 @@ if ! grep -q '"access": "Read only"' <<<"$SITE_STATE"; then
 fi
 if ! grep -q '"metrics": ' <<<"$SITE_STATE" || grep -q '"metrics": 0' <<<"$SITE_STATE"; then
   echo "[ui-smoke] public metric cards did not render" >&2
+  exit 1
+fi
+if ! grep -q '"menuItems": 7' <<<"$SITE_STATE"; then
+  echo "[ui-smoke] desk menu did not render the expected section links" >&2
+  exit 1
+fi
+if ! grep -q '"routesLink": "Routes"' <<<"$SITE_STATE"; then
+  echo "[ui-smoke] desk menu routes link is missing or mislabelled" >&2
   exit 1
 fi
 if ! grep -q '"authHidden": true' <<<"$SITE_STATE"; then
@@ -154,19 +167,29 @@ fi
 echo "[ui-smoke] checking log filters"
 LOG_FILTER_STATE="$("${PWCLI[@]}" eval "(async () => {
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  document.querySelector('.log-scope-chip[data-log-scope=\"ops\"]')?.click();
+  await sleep(160);
   document.querySelector('.log-category-card[data-log-filter=\"manual\"]')?.click();
   await sleep(160);
+  const activeScope = document.querySelector('.log-scope-chip.is-active span')?.textContent?.trim();
   const activeCategory = document.querySelector('.log-category-card.is-active .log-category-name')?.textContent?.trim();
   const activeChip = document.querySelector('.log-filter-chip.is-active span')?.textContent?.trim();
   const activeCount = Number.parseInt(document.querySelector('.log-filter-chip.is-active strong')?.textContent || '0', 10);
   const timelineCount = document.querySelectorAll('#logTimeline .log-entry').length;
   const visibleCount = document.getElementById('logVisibleCount')?.textContent?.trim();
+  const searchReady = !!document.getElementById('logSearchInput');
   document.querySelector('.log-filter-chip[data-log-filter=\"all\"]')?.click();
+  document.querySelector('.log-scope-chip[data-log-scope=\"all\"]')?.click();
   await sleep(160);
   const resetChip = document.querySelector('.log-filter-chip.is-active span')?.textContent?.trim();
-  return { activeCategory, activeChip, activeCount, timelineCount, visibleCount, resetChip };
+  const resetScope = document.querySelector('.log-scope-chip.is-active span')?.textContent?.trim();
+  return { activeScope, activeCategory, activeChip, activeCount, timelineCount, visibleCount, searchReady, resetChip, resetScope };
 })()")"
 echo "$LOG_FILTER_STATE"
+if ! grep -q '"activeScope": "Ops workflow"' <<<"$LOG_FILTER_STATE"; then
+  echo "[ui-smoke] ops activity scope did not activate" >&2
+  exit 1
+fi
 if ! grep -q '"activeCategory": "Manual Flow"' <<<"$LOG_FILTER_STATE"; then
   echo "[ui-smoke] manual category filter did not activate" >&2
   exit 1
@@ -183,8 +206,16 @@ if ! grep -q '"visibleCount": "4 shown"' <<<"$LOG_FILTER_STATE"; then
   echo "[ui-smoke] visible count label is not consistent with the manual log feed" >&2
   exit 1
 fi
+if ! grep -q '"searchReady": true' <<<"$LOG_FILTER_STATE"; then
+  echo "[ui-smoke] log search input did not render" >&2
+  exit 1
+fi
 if ! grep -q '"resetChip": "All activity"' <<<"$LOG_FILTER_STATE"; then
   echo "[ui-smoke] all activity filter did not reactivate" >&2
+  exit 1
+fi
+if ! grep -q '"resetScope": "All activity"' <<<"$LOG_FILTER_STATE"; then
+  echo "[ui-smoke] all activity scope did not reactivate" >&2
   exit 1
 fi
 
@@ -254,12 +285,26 @@ MANUAL_ACTION_STATE="$("${PWCLI[@]}" eval "(async () => {
     .join(' | ');
   const timelineCount = document.querySelectorAll('#logTimeline .log-entry').length;
   const visibleCount = document.getElementById('logVisibleCount')?.textContent?.trim();
+  const searchInput = document.getElementById('logSearchInput');
+  searchInput.value = 'cancelled';
+  searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+  await sleep(160);
+  const searchCount = document.querySelectorAll('#logTimeline .log-entry').length;
+  const searchVisibleCount = document.getElementById('logVisibleCount')?.textContent?.trim();
+  const searchSummary = document.getElementById('logResultSummary')?.textContent?.trim().toLowerCase() || '';
+  searchInput.value = '';
+  searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+  await sleep(160);
   return {
     enteredStatus,
     closedStatus,
     cancelledStatus: statusText('GOP_SENATE_2026'),
     timelineCount,
     visibleCount,
+    searchCount,
+    searchVisibleCount,
+    searchSummaryIncludesCancelled: searchSummary.includes('cancelled'),
+    searchReducedResults: searchCount > 0 && searchCount < timelineCount,
     sawClosedWorkflow: manualLogText.includes('manual closed workflow'),
     sawCancelledWorkflow: manualLogText.includes('manual cancelled workflow'),
   };
@@ -283,6 +328,14 @@ if ! grep -q '"timelineCount": 4' <<<"$MANUAL_ACTION_STATE"; then
 fi
 if ! grep -q '"visibleCount": "4 shown"' <<<"$MANUAL_ACTION_STATE"; then
   echo "[ui-smoke] manual log visible count drifted after workflow actions" >&2
+  exit 1
+fi
+if ! grep -q '"searchSummaryIncludesCancelled": true' <<<"$MANUAL_ACTION_STATE"; then
+  echo "[ui-smoke] activity search did not summarize the cancelled workflow query" >&2
+  exit 1
+fi
+if ! grep -q '"searchReducedResults": true' <<<"$MANUAL_ACTION_STATE"; then
+  echo "[ui-smoke] activity search did not narrow the manual workflow log results" >&2
   exit 1
 fi
 if ! grep -q '"sawClosedWorkflow": true' <<<"$MANUAL_ACTION_STATE"; then

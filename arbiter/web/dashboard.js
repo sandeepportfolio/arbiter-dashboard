@@ -48,6 +48,8 @@ const state = {
   wsConnected: false,
   lastQuoteAt: null,
   activeLogFilter: "all",
+  activeLogScope: "all",
+  logQuery: "",
   apiBase: initialApiBase,
   authToken: initialAuthToken,
   operatorAuthenticated: false,
@@ -121,6 +123,31 @@ const LOG_ATLAS_LIMITS = {
   mapping: 6,
 };
 
+const LOG_SCOPE_DEFINITIONS = {
+  all: {
+    label: "All activity",
+    description: "Every visible atlas event across trading, ops, and infrastructure.",
+    categories: FILTER_ORDER.filter((key) => key !== "all"),
+  },
+  trading: {
+    label: "Trading flow",
+    description: "Pulse, scanner, and execution activity.",
+    categories: ["market", "opportunity", "execution"],
+  },
+  ops: {
+    label: "Ops workflow",
+    description: "Manual desk, recovery, and mapping review.",
+    categories: ["manual", "incident", "mapping"],
+  },
+  infrastructure: {
+    label: "Infrastructure",
+    description: "Funding posture and collector health.",
+    categories: ["balance", "collector"],
+  },
+};
+
+const LOG_SCOPE_ORDER = ["all", "trading", "ops", "infrastructure"];
+
 const PUBLISHED_TYPES = [
   { key: "system", label: "system", detail: "bootstrap + snapshot" },
   { key: "quote", label: "quote", detail: "market pulse" },
@@ -175,6 +202,10 @@ const profitabilityReasonsEl = document.getElementById("profitabilityReasons");
 const portfolioExposureBadgeEl = document.getElementById("portfolioExposureBadge");
 const portfolioSummaryEl = document.getElementById("portfolioSummary");
 const portfolioListEl = document.getElementById("portfolioList");
+const deskMenuEl = document.getElementById("deskMenu");
+const logScopeTabsEl = document.getElementById("logScopeTabs");
+const logSearchInputEl = document.getElementById("logSearchInput");
+const logResultSummaryEl = document.getElementById("logResultSummary");
 
 const formatUsd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
 const formatWhole = new Intl.NumberFormat("en-US");
@@ -510,6 +541,105 @@ function buildLogCategoryCounts(entries) {
   }, emptyLogCategoryCounts());
 }
 
+function currentLogScope() {
+  return LOG_SCOPE_DEFINITIONS[state.activeLogScope] || LOG_SCOPE_DEFINITIONS.all;
+}
+
+function scopeEntries(entries, scopeKey = state.activeLogScope) {
+  const scope = LOG_SCOPE_DEFINITIONS[scopeKey] || LOG_SCOPE_DEFINITIONS.all;
+  if (scopeKey === "all") return entries;
+  const allowedCategories = new Set(scope.categories);
+  return entries.filter((entry) => allowedCategories.has(entry.category));
+}
+
+function buildLogScopeCounts(entries) {
+  return LOG_SCOPE_ORDER.reduce((counts, key) => {
+    counts[key] = scopeEntries(entries, key).length;
+    return counts;
+  }, {});
+}
+
+function buildLogSearchText(entry) {
+  return [
+    entry.title,
+    entry.headline,
+    entry.narrative,
+    entry.footnote,
+    ...(entry.tags || []),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function matchesLogQuery(entry, query) {
+  if (!query) return true;
+  return buildLogSearchText(entry).includes(query);
+}
+
+function buildDeskMenuItems(entries) {
+  const profitability = state.profitability || state.system?.profitability;
+  const openIncidents = state.incidents.filter((incident) => incident.status !== "resolved").length;
+  const routeCount = state.opportunities.length;
+  const performanceTrades = state.system?.execution?.total_executions || state.trades.length;
+  const riskWarnings = state.portfolio?.violations?.length || 0;
+  const infraCount = Object.keys(state.system?.collectors || {}).length + state.mappings.length;
+  const opsCount = state.manualPositions.length + openIncidents;
+  const activityCount = entries.length;
+
+  return [
+    {
+      key: "overview",
+      href: "#statusBand",
+      label: "Overview",
+      value: state.wsConnected ? "Live" : (state.lastQuoteAt ? "Warm" : "Loading"),
+      copy: `${formatWhole.format(state.system?.counts?.prices || 0)} quotes streaming`,
+    },
+    {
+      key: "performance",
+      href: "#performanceSection",
+      label: "Performance",
+      value: formatWhole.format(performanceTrades),
+      copy: "edge curve and equity",
+    },
+    {
+      key: "risk",
+      href: "#riskSection",
+      label: "Guardrails",
+      value: riskWarnings ? formatWhole.format(riskWarnings) : "Clean",
+      copy: profitability ? titleCase(profitability.verdict) : "validator loading",
+    },
+    {
+      key: "routes",
+      href: "#opportunitiesSection",
+      label: "Routes",
+      value: formatWhole.format(routeCount),
+      copy: "live candidates by edge",
+    },
+    {
+      key: "ops",
+      href: hasOperatorAccess() ? "#opsSection" : getOpsHref(),
+      label: "Operations",
+      value: hasOperatorAccess() ? formatWhole.format(opsCount) : (isOpsMode() ? "Locked" : "Open"),
+      copy: hasOperatorAccess() ? "manual queue and incidents" : "operator desk and controls",
+    },
+    {
+      key: "activity",
+      href: "#logsSection",
+      label: "Activity",
+      value: formatWhole.format(activityCount),
+      copy: `${currentLogScope().label.toLowerCase()} in view`,
+    },
+    {
+      key: "infra",
+      href: "#infraSection",
+      label: "Infrastructure",
+      value: formatWhole.format(infraCount),
+      copy: "collectors and mappings",
+    },
+  ];
+}
+
 function buildMarketEntry() {
   if (!state.system) return null;
   const trackedMarketCount = Object.keys(state.system.tracked_markets || {}).length;
@@ -734,6 +864,17 @@ function buildLogEntries() {
     .slice(0, LOG_ATLAS_LIMITS.total);
 }
 
+function renderDeskMenu(entries = buildLogEntries()) {
+  if (!deskMenuEl) return;
+  deskMenuEl.innerHTML = buildDeskMenuItems(entries).map((item) => `
+    <a class="desk-menu-link" href="${escapeHtml(item.href)}" data-desk-section="${escapeHtml(item.key)}">
+      <span class="desk-menu-link-label">${escapeHtml(item.label)}</span>
+      <strong class="desk-menu-link-value">${escapeHtml(item.value)}</strong>
+      <span class="desk-menu-link-copy">${escapeHtml(item.copy)}</span>
+    </a>
+  `).join("");
+}
+
 function renderLogEntry(entry) {
   const category = LOG_DEFINITIONS[entry.category];
   return `
@@ -932,6 +1073,7 @@ function connectWebSocket() {
 }
 
 function render() {
+  const logEntries = buildLogEntries();
   renderChrome();
   renderStatusBand();
   renderMetrics();
@@ -940,7 +1082,8 @@ function render() {
   renderOpportunities();
   renderManualQueue();
   renderIncidentQueue();
-  renderLogExperience();
+  renderDeskMenu(logEntries);
+  renderLogExperience(logEntries);
   renderMappings();
   renderCollectors();
   renderCharts();
@@ -1335,15 +1478,19 @@ function renderLegCard(label, platform, price, fee, marketId, feeRate) {
   `;
 }
 
-function renderLogExperience() {
-  const entries = buildLogEntries();
-  const categoryCounts = buildLogCategoryCounts(entries);
+function renderLogExperience(entries = buildLogEntries()) {
+  const scope = currentLogScope();
+  const scopeCounts = buildLogScopeCounts(entries);
+  const scopedEntries = scopeEntries(entries, state.activeLogScope);
+  const categoryCounts = buildLogCategoryCounts(scopedEntries);
   if (state.activeLogFilter !== "all" && !(categoryCounts[state.activeLogFilter] > 0)) {
     state.activeLogFilter = "all";
   }
-  const filteredEntries = state.activeLogFilter === "all"
-    ? entries
-    : entries.filter((entry) => entry.category === state.activeLogFilter);
+  const scopeFilteredEntries = state.activeLogFilter === "all"
+    ? scopedEntries
+    : scopedEntries.filter((entry) => entry.category === state.activeLogFilter);
+  const query = state.logQuery.trim().toLowerCase();
+  const filteredEntries = scopeFilteredEntries.filter((entry) => matchesLogQuery(entry, query));
 
   const publishedTypes = document.getElementById("publishedTypes");
   const trackedTypes = document.getElementById("trackedTypes");
@@ -1361,13 +1508,34 @@ function renderLogExperience() {
     trackedTypes.innerHTML = renderLogTokens(TRACKED_TYPES, fetchTrackedCount);
   }
 
+  if (logScopeTabsEl) {
+    logScopeTabsEl.innerHTML = LOG_SCOPE_ORDER.map((key) => {
+      const scopeDefinition = LOG_SCOPE_DEFINITIONS[key];
+      return `
+        <button
+          type="button"
+          class="log-scope-chip ${state.activeLogScope === key ? "is-active" : ""}"
+          data-log-scope="${escapeHtml(key)}"
+          aria-pressed="${state.activeLogScope === key ? "true" : "false"}"
+        >
+          <span>${escapeHtml(scopeDefinition.label)}</span>
+          <strong>${escapeHtml(formatWhole.format(scopeCounts[key] || 0))}</strong>
+        </button>
+      `;
+    }).join("");
+  }
+
+  if (logSearchInputEl && logSearchInputEl.value !== state.logQuery) {
+    logSearchInputEl.value = state.logQuery;
+  }
+
   const activeCategories = Object.values(categoryCounts).filter((count) => count > 0).length;
   if (categoryCount) {
     categoryCount.textContent = formatWhole.format(activeCategories);
   }
 
   if (categoryAtlas) {
-    categoryAtlas.innerHTML = FILTER_ORDER.filter((key) => key !== "all").map((key) => {
+    categoryAtlas.innerHTML = scope.categories.map((key) => {
       const definition = LOG_DEFINITIONS[key];
       const count = categoryCounts[key] || 0;
       return `
@@ -1384,8 +1552,8 @@ function renderLogExperience() {
   }
 
   if (filterBar) {
-    filterBar.innerHTML = FILTER_ORDER.filter((key) => key === "all" || (categoryCounts[key] || 0) > 0).map((key) => {
-      const count = key === "all" ? entries.length : categoryCounts[key];
+    filterBar.innerHTML = FILTER_ORDER.filter((key) => key === "all" || (scope.categories.includes(key) && (categoryCounts[key] || 0) > 0)).map((key) => {
+      const count = key === "all" ? scopedEntries.length : categoryCounts[key];
       const label = key === "all" ? "All activity" : LOG_DEFINITIONS[key].label;
       return `
         <button type="button" class="log-filter-chip ${state.activeLogFilter === key ? "is-active" : ""}" data-log-filter="${escapeHtml(key)}">
@@ -1394,6 +1562,14 @@ function renderLogExperience() {
         </button>
       `;
     }).join("");
+  }
+
+  if (logResultSummaryEl) {
+    if (query) {
+      logResultSummaryEl.textContent = `Showing ${formatWhole.format(filteredEntries.length)} of ${formatWhole.format(scopeFilteredEntries.length)} ${scope.label.toLowerCase()} events for "${state.logQuery}".`;
+    } else {
+      logResultSummaryEl.textContent = `Showing ${formatWhole.format(filteredEntries.length)} ${scope.label.toLowerCase()} events in the current activity view.`;
+    }
   }
 
   if (visibleCount) {
@@ -1406,7 +1582,9 @@ function renderLogExperience() {
 
   if (!timeline) return;
   if (!filteredEntries.length) {
-    timeline.innerHTML = emptyState("No events match this category right now.");
+    timeline.innerHTML = emptyState(query
+      ? "No events match the current activity search."
+      : "No events match this activity view right now.");
     return;
   }
 
@@ -1682,6 +1860,16 @@ async function runAction(button, operation) {
 }
 
 document.addEventListener("click", (event) => {
+  const logScopeTarget = event.target.closest("[data-log-scope]");
+  if (logScopeTarget) {
+    const nextScope = logScopeTarget.getAttribute("data-log-scope");
+    if (!nextScope || nextScope === state.activeLogScope) return;
+    state.activeLogScope = nextScope;
+    state.activeLogFilter = "all";
+    render();
+    return;
+  }
+
   const logTarget = event.target.closest("[data-log-filter]");
   if (logTarget) {
     const nextFilter = logTarget.getAttribute("data-log-filter");
@@ -1758,6 +1946,13 @@ document.addEventListener("click", (event) => {
     })();
   }
 });
+
+if (logSearchInputEl) {
+  logSearchInputEl.addEventListener("input", (event) => {
+    state.logQuery = event.target.value || "";
+    renderLogExperience();
+  });
+}
 
 if (authFormEl) {
   authFormEl.addEventListener("submit", (event) => {

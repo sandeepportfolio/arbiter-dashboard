@@ -84,7 +84,9 @@
 
     <section id="metricGrid" class="metric-grid"></section>
 
-    <section class="panel-grid">
+    <nav id="deskMenu" class="desk-menu" aria-label="Desk sections"></nav>
+
+    <section id="performanceSection" class="panel-grid">
       <article class="panel chart-panel">
         <div class="panel-header">
           <div>
@@ -110,8 +112,8 @@
       </article>
     </section>
 
-    <section class="panel-grid panel-grid-tight">
-      <article id="opportunitiesSection" class="panel">
+    <section id="riskSection" class="panel-grid panel-grid-tight">
+      <article class="panel">
         <div class="panel-header">
           <div>
             <p class="panel-kicker">Validation</p>
@@ -136,7 +138,7 @@
       </article>
     </section>
 
-    <section class="panel-grid panel-grid-tight panel-grid-single">
+    <section id="opportunitiesSection" class="panel-grid panel-grid-tight panel-grid-single">
       <article class="panel">
         <div class="panel-header">
           <div>
@@ -218,6 +220,14 @@
 
         <section class="log-console">
           <div class="log-console-header">
+            <div class="log-toolbar">
+              <div id="logScopeTabs" class="log-scope-tabs" role="tablist" aria-label="Activity scopes"></div>
+              <label class="log-search" for="logSearchInput">
+                <span class="log-search-label">Search activity</span>
+                <input id="logSearchInput" name="logSearch" type="search" autocomplete="off" placeholder="Search market, arb id, venue, or status">
+              </label>
+            </div>
+            <p id="logResultSummary" class="log-result-summary">Showing the latest visible atlas events.</p>
             <div id="logFilterBar" class="log-filter-bar"></div>
             <p class="log-console-copy">Filter the timeline by category to understand what changed, why it matters, and whether the operator needs to act.</p>
           </div>
@@ -226,7 +236,7 @@
       </div>
     </section>
 
-    <section class="panel-grid panel-grid-tight">
+    <section id="infraSection" class="panel-grid panel-grid-tight">
       <article class="panel">
         <div class="panel-header">
           <div>
