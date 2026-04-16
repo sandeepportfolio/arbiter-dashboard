@@ -55,8 +55,8 @@ Plans:
 - [x] 02-01-PLAN.md -- Dependencies + structlog logger migration + Sentry SDK init (OPS-01, OPS-02, OPS-04)
 - [x] 02-02-PLAN.md -- SQL schema migration + ExecutionStore persistence layer (EXEC-02)
 - [x] 02-03-PLAN.md -- PlatformAdapter Protocol + tenacity retry policy module (EXEC-04, OPS-03)
-- [ ] 02-04-PLAN.md -- KalshiAdapter extraction with FOK + depth check + idempotent retry (EXEC-01, EXEC-03, EXEC-04, OPS-03)
-- [ ] 02-05-PLAN.md -- PolymarketAdapter extraction with two-phase FOK + reconcile-before-retry + stale-book guard (EXEC-01, EXEC-03, EXEC-04)
+- [x] 02-04-PLAN.md -- KalshiAdapter extraction with FOK + depth check + idempotent retry (EXEC-01, EXEC-03, EXEC-04, OPS-03)
+- [x] 02-05-PLAN.md -- PolymarketAdapter extraction with two-phase FOK + reconcile-before-retry + stale-book guard (EXEC-01, EXEC-03, EXEC-04)
 - [ ] 02-06-PLAN.md -- Engine refactor: strip platform code, inject adapters/store, asyncio.wait_for timeout, contextvars binding, recovery.py startup hook, main.py wiring (EXEC-02, EXEC-04, EXEC-05, OPS-01)
 
 ### Phase 3: Safety Layer
