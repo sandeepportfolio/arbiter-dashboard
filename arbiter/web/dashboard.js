@@ -758,6 +758,7 @@ async function requestJson(path, options = {}) {
   const response = await fetch(buildApiUrl(path), {
     method: options.method || "GET",
     cache: options.cache || "no-store",
+    credentials: options.credentials || "same-origin",
     headers,
     body: options.body,
   });
@@ -1757,6 +1758,10 @@ if (authFormEl) {
       try {
         const payload = await postJson("/api/auth/login", { email, password });
         persistAuthToken(payload.token || "");
+        const authenticated = await refreshOperatorSession();
+        if (!authenticated) {
+          throw new Error("Operator session was not confirmed by the API.");
+        }
         state.operatorAuthenticated = true;
         state.operatorEmail = payload.email || email;
         hideAuthOverlay();

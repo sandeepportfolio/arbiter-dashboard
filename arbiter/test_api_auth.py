@@ -7,6 +7,7 @@ import hmac
 import os
 import sys
 import time
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -98,6 +99,20 @@ class TestAllowedUsers:
             # SHA-256 hex digest is 64 characters
             assert len(hashed) == 64
             assert all(c in "0123456789abcdef" for c in hashed)
+
+
+class TestRequestSecurityDetection:
+    def test_prefers_x_forwarded_proto_https(self):
+        request = SimpleNamespace(headers={"X-Forwarded-Proto": "https"}, scheme="http")
+        assert api_module._request_is_secure(request) is True
+
+    def test_reads_forwarded_proto_when_present(self):
+        request = SimpleNamespace(headers={"Forwarded": 'for=1.2.3.4;proto="https";host=example.com'}, scheme="http")
+        assert api_module._request_is_secure(request) is True
+
+    def test_falls_back_to_request_scheme(self):
+        request = SimpleNamespace(headers={}, scheme="https")
+        assert api_module._request_is_secure(request) is True
 
 
 if __name__ == "__main__":

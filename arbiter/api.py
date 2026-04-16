@@ -54,6 +54,21 @@ def _get_secret() -> str:
     return UI_SESSION_SECRET
 
 
+def _request_is_secure(request: web.Request) -> bool:
+    """Respect reverse-proxy headers when deciding whether cookies must be secure."""
+    forwarded_proto = request.headers.get("X-Forwarded-Proto", "")
+    if forwarded_proto:
+        return forwarded_proto.split(",", 1)[0].strip().lower() == "https"
+
+    forwarded = request.headers.get("Forwarded", "")
+    for segment in forwarded.split(";"):
+        key, _, value = segment.partition("=")
+        if key.strip().lower() == "proto":
+            return value.strip().strip('"').lower() == "https"
+
+    return request.scheme == "https"
+
+
 def _generate_token(email: str) -> str:
     """HMAC-signed session token valid for 7 days."""
     ts = int(time.time())
@@ -135,6 +150,7 @@ class ArbiterAPI:
         workflow_manager: Optional[PredictItWorkflowManager] = None,
         profitability: Optional[ProfitabilityValidator] = None,
         readiness: Optional[OperationalReadiness] = None,
+        reconciler=None,
         host: str = "0.0.0.0",
         port: int = 8080,
     ):
@@ -148,6 +164,7 @@ class ArbiterAPI:
         self.workflow_manager = workflow_manager
         self.profitability = profitability
         self.readiness = readiness
+        self.reconciler = reconciler
         self.host = host
         self.port = port
         self.started_at = time.time()
@@ -179,6 +196,7 @@ class ArbiterAPI:
         app.router.add_post("/api/manual-positions/{position_id}", self.handle_manual_position_action)
         app.router.add_get("/api/profitability", self.handle_profitability)
         app.router.add_get("/api/readiness", self.handle_readiness)
+        app.router.add_get("/api/reconciliation", self.handle_reconciliation)
         app.router.add_get("/api/portfolio", self.handle_portfolio)
         app.router.add_get("/api/portfolio/positions", self.handle_portfolio_positions)
         app.router.add_get("/api/portfolio/violations", self.handle_portfolio_violations)
@@ -244,6 +262,7 @@ class ArbiterAPI:
                 "audit": self.engine.stats.get("audit", {}),
                 "profitability": self._profitability_snapshot(),
                 "readiness": self._readiness_snapshot(),
+                "reconciliation": self._reconciliation_snapshot(),
             }
         )
 
@@ -291,6 +310,9 @@ class ArbiterAPI:
 
     async def handle_readiness(self, request):
         return web.json_response(self._readiness_snapshot())
+
+    async def handle_reconciliation(self, request):
+        return web.json_response(self._reconciliation_snapshot())
 
     async def handle_market_mapping_action(self, request):
         await require_auth(request)
@@ -440,9 +462,9 @@ class ArbiterAPI:
             "arbiter_session",
             token,
             httponly=True,
-            secure=request.url.scheme == "https",
+            secure=_request_is_secure(request),
             max_age=7 * 86400,
-            samesite="strict",
+            samesite="lax",
         )
         return response
 
@@ -649,6 +671,7 @@ class ArbiterAPI:
             "audit": self.engine.stats.get("audit", {}),
             "profitability": self._profitability_snapshot(),
             "readiness": self._readiness_snapshot(),
+            "reconciliation": self._reconciliation_snapshot(),
             "collectors": self._collector_snapshot(),
             "balances": balances,
             "series": {
@@ -687,7 +710,29 @@ class ArbiterAPI:
                 "warnings": [],
                 "checks": [],
             }
-        return self.readiness.get_snapshot().to_dict()
+        return self.readiness.refresh().to_dict()
+
+    def _reconciliation_snapshot(self) -> dict:
+        if not self.reconciler:
+            return {
+                "configured": False,
+                "summary": "PnL reconciler is not configured",
+                "reconciliation_count": 0,
+                "flag_count": 0,
+                "starting_balances": {},
+                "recorded_pnl": {},
+                "latest_report": None,
+            }
+        stats = self.reconciler.stats
+        return {
+            "configured": True,
+            "summary": (
+                "PnL reconciliation is healthy"
+                if stats.get("latest_report")
+                else "PnL reconciliation is collecting its first report"
+            ),
+            **stats,
+        }
 
     def _portfolio_monitor_snapshot(self):
         if self.portfolio:
@@ -810,6 +855,7 @@ def create_api_server(
     workflow_manager=None,
     profitability=None,
     readiness=None,
+    reconciler=None,
     host="0.0.0.0",
     port=8080,
 ) -> ArbiterAPI:
@@ -824,6 +870,7 @@ def create_api_server(
         workflow_manager=workflow_manager,
         profitability=profitability,
         readiness=readiness,
+        reconciler=reconciler,
         host=host,
         port=port,
     )

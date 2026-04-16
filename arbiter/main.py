@@ -15,6 +15,7 @@ import signal
 import sys
 import time
 
+from .audit.pnl_reconciler import PnLReconciler
 from .config import ArbiterConfig, load_config
 from .utils.logger import setup_logging, TradeLogger
 from .utils.price_store import PricePoint, PriceStore
@@ -28,6 +29,46 @@ from .portfolio import PortfolioConfig, PortfolioMonitor
 from .profitability import ProfitabilityConfig, ProfitabilityValidator
 from .readiness import OperationalReadiness
 from .workflow import PredictItWorkflowManager
+
+
+def sync_runtime_reconciliation(
+    reconciler: PnLReconciler,
+    monitor: BalanceMonitor,
+    engine: ExecutionEngine,
+):
+    """Refresh the reconciler from the current balances and execution ledger."""
+    current_balances = {
+        platform: snapshot.balance
+        for platform, snapshot in monitor.current_balances.items()
+    }
+    if not current_balances:
+        return None
+
+    known_balances = reconciler.stats.get("starting_balances", {})
+    for platform, balance in current_balances.items():
+        if platform not in known_balances:
+            reconciler.set_starting_balance(platform, balance)
+
+    reconciler.load_execution_history(engine.execution_history)
+    return reconciler.reconcile(current_balances)
+
+
+async def run_reconciliation_loop(
+    reconciler: PnLReconciler,
+    monitor: BalanceMonitor,
+    engine: ExecutionEngine,
+):
+    """Continuously reconcile runtime balances against recorded execution P&L."""
+    logger = logging.getLogger("arbiter.main")
+    while True:
+        try:
+            sync_runtime_reconciliation(reconciler, monitor, engine)
+            await asyncio.sleep(reconciler.check_interval)
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            logger.error("PnL reconciliation loop error: %s", exc)
+            await asyncio.sleep(min(reconciler.check_interval, 10.0))
 
 
 async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = "0.0.0.0", port: int = 8080):
@@ -71,17 +112,20 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     )
     workflow = PredictItWorkflowManager(config.alerts)
     profitability = ProfitabilityValidator(ProfitabilityConfig(), scanner, engine)
+    reconciler = PnLReconciler(log_to_disk=not api_only)
     readiness = OperationalReadiness(
         config,
         engine=engine,
         monitor=monitor,
         profitability=profitability,
         collectors=collectors_dict,
+        reconciler=reconciler,
     )
     engine.set_trade_gate(readiness.allow_execution)
 
     if api_only and os.getenv("ARBITER_UI_SMOKE_SEED") == "1":
         await seed_dashboard_fixture(price_store, scanner, engine, monitor)
+        sync_runtime_reconciliation(reconciler, monitor, engine)
         profitability.refresh()
         readiness.refresh()
 
@@ -98,6 +142,7 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
         workflow_manager=workflow,
         profitability=profitability,
         readiness=readiness,
+        reconciler=reconciler,
         host=host,
         port=port,
     )
@@ -129,6 +174,7 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
         ])
 
     tasks.append(asyncio.create_task(profitability.run(), name="profitability-validator"))
+    tasks.append(asyncio.create_task(run_reconciliation_loop(reconciler, monitor, engine), name="pnl-reconciler"))
 
     # API server always runs
     tasks.append(asyncio.create_task(api.serve(), name="api-server"))

@@ -114,6 +114,30 @@ class PnLReconciler:
         self._recorded_pnl[yes_platform] = self._recorded_pnl.get(yes_platform, 0.0) + pnl / 2
         self._recorded_pnl[no_platform] = self._recorded_pnl.get(no_platform, 0.0) + pnl / 2
 
+    def load_execution_history(self, executions) -> None:
+        """
+        Rebuild recorded P&L from the current execution ledger.
+
+        This keeps reconciliation deterministic across restarts and avoids
+        double-counting when the runtime replays or rehydrates past executions.
+        """
+        self._recorded_pnl = {
+            platform: 0.0
+            for platform in self._starting_balances
+        }
+
+        for execution in executions or []:
+            pnl = float(getattr(execution, "realized_pnl", 0.0) or 0.0)
+            opportunity = getattr(execution, "opportunity", None)
+            yes_platform = getattr(opportunity, "yes_platform", None)
+            no_platform = getattr(opportunity, "no_platform", None)
+            if pnl == 0.0 or not yes_platform or not no_platform:
+                continue
+
+            split_pnl = pnl / 2.0
+            self._recorded_pnl[yes_platform] = self._recorded_pnl.get(yes_platform, 0.0) + split_pnl
+            self._recorded_pnl[no_platform] = self._recorded_pnl.get(no_platform, 0.0) + split_pnl
+
     def reconcile(self, current_balances: Dict[str, float]) -> ReconciliationReport:
         """
         Run reconciliation against current platform balances.

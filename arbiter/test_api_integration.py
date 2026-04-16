@@ -87,6 +87,7 @@ def test_api_and_dashboard_contracts():
         assert "audit" in health
         assert "profitability" in health
         assert "readiness" in health
+        assert "reconciliation" in health
 
         system = get_json("/api/system")
         assert system["mode"] == "dry-run"
@@ -95,6 +96,7 @@ def test_api_and_dashboard_contracts():
         assert "audit" in system
         assert "profitability" in system
         assert "readiness" in system
+        assert "reconciliation" in system
         assert "counts" in system
         assert "series" in system
         assert "profitability" in system["series"]
@@ -109,6 +111,11 @@ def test_api_and_dashboard_contracts():
         readiness = get_json("/api/readiness")
         assert "ready_for_live_trading" in readiness
         assert isinstance(readiness["checks"], list)
+        assert time.time() - readiness["timestamp"] < 5
+        reconciliation = get_json("/api/reconciliation")
+        assert reconciliation["configured"] is True
+        assert reconciliation["reconciliation_count"] >= 1
+        assert reconciliation["latest_report"] is not None
         assert len(get_json("/api/manual-positions")) >= 2
         assert len(get_json("/api/errors")) >= 1
 
@@ -128,6 +135,17 @@ def test_api_and_dashboard_contracts():
         assert login["email"] == "sparx.sandeep@gmail.com"
         assert login["token"]
         auth_headers = {"Authorization": f"Bearer {login['token']}"}
+
+        secure_request = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/auth/login",
+            data=json.dumps({"email": "sparx.sandeep@gmail.com", "password": "saibaba"}).encode("utf-8"),
+            headers={"Content-Type": "application/json", "X-Forwarded-Proto": "https"},
+            method="POST",
+        )
+        with urllib.request.urlopen(secure_request, timeout=5) as response:
+            set_cookie = response.headers.get("Set-Cookie", "")
+        assert "Secure" in set_cookie
+        assert "SameSite=lax" in set_cookie
 
         with urllib.request.urlopen(
             urllib.request.Request(f"http://127.0.0.1:{port}/api/auth/me", headers=auth_headers),
