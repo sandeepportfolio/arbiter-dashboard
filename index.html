@@ -66,25 +66,70 @@
         <button id="logoutButton" type="button" class="ghost-button hidden">Logout</button>
       </div>
     </section>
-    <header class="hero">
-      <div class="hero-copy">
-        <p class="eyebrow">ARBITER LIVE</p>
-        <h1 id="heroTitle">Live trading desk</h1>
-        <p id="heroSubtitle" class="subtitle">Fee-aware routes, live charts, manual PredictIt queue, and recovery state in one operator-first view.</p>
+    <section id="overviewSection" class="overview-shell">
+      <div class="overview-main">
+        <header class="hero">
+          <div class="overview-copy">
+            <p class="eyebrow">ARBITER LIVE</p>
+            <div class="overview-value-row">
+              <div class="overview-value-block">
+                <h1 id="heroTitle">Live trading desk</h1>
+                <p id="heroSubtitle" class="subtitle hero-subtitle">Fee-aware routes, live charts, manual PredictIt queue, and recovery state in one operator-first view.</p>
+                <div id="heroValue">$0.00</div>
+              </div>
+              <div class="hero-delta-stack">
+                <span id="heroDelta" class="hero-delta">Waiting</span>
+                <span id="heroUpdated" class="hero-updated">Awaiting live data</span>
+              </div>
+            </div>
+          </div>
+          <div class="hero-status">
+            <div class="pill"><span class="label">Mode</span><span id="modePill" class="value">Loading</span></div>
+            <div class="pill"><span class="label">Access</span><span id="accessPill" class="value value-muted">Checking</span></div>
+            <div class="pill"><span class="label">WebSocket</span><span id="wsStatus" class="value value-muted">Connecting</span></div>
+            <div class="pill"><span class="label">Validator</span><span id="profitabilityPill" class="value value-muted">Loading</span></div>
+          </div>
+        </header>
+
+        <section id="statusBand" class="status-band status-band-overview"></section>
+
+        <section id="metricGrid" class="metric-grid metric-grid-overview"></section>
+
+        <nav id="deskMenu" class="desk-menu desk-menu-inline" aria-label="Desk sections"></nav>
       </div>
-      <div class="hero-status">
-        <div class="pill"><span class="label">Mode</span><span id="modePill" class="value">Loading</span></div>
-        <div class="pill"><span class="label">Access</span><span id="accessPill" class="value value-muted">Checking</span></div>
-        <div class="pill"><span class="label">WebSocket</span><span id="wsStatus" class="value value-muted">Connecting</span></div>
-        <div class="pill"><span class="label">Validator</span><span id="profitabilityPill" class="value value-muted">Loading</span></div>
-      </div>
-    </header>
 
-    <section id="statusBand" class="status-band"></section>
+      <aside class="overview-side">
+        <article class="panel spotlight-panel">
+          <div class="spotlight-header">
+            <div>
+              <p class="panel-kicker">Risk</p>
+              <h2>Portfolio risk score</h2>
+            </div>
+            <span id="riskUpdated" class="panel-badge">Updated<br>Waiting</span>
+          </div>
+          <div class="risk-bar-track">
+            <div id="riskScoreBar" class="risk-bar-fill" style="width: 0%"></div>
+          </div>
+          <div class="risk-scale">
+            <span>Low risk</span>
+            <span>High risk</span>
+          </div>
+          <p id="riskSummary" class="panel-copy">Risk posture is loading.</p>
+          <div id="riskSummaryList" class="stack-list compact-stack"></div>
+        </article>
 
-    <section id="metricGrid" class="metric-grid"></section>
-
-    <nav id="deskMenu" class="desk-menu" aria-label="Desk sections"></nav>
+        <article class="panel spotlight-panel">
+          <div class="spotlight-header">
+            <div>
+              <p class="panel-kicker">Transactions</p>
+              <h2>Recent trades</h2>
+            </div>
+            <span id="recentTradeCount" class="panel-badge">0</span>
+          </div>
+          <div id="recentTradesRail" class="recent-trades-grid"></div>
+        </article>
+      </aside>
+    </section>
 
     <section id="performanceSection" class="panel-grid">
       <article class="panel chart-panel">
@@ -113,29 +158,43 @@
     </section>
 
     <section id="riskSection" class="panel-grid panel-grid-tight">
-      <article class="panel">
-        <div class="panel-header">
-          <div>
-            <p class="panel-kicker">Validation</p>
-            <h2>Profitability verdict</h2>
+      <details class="panel panel-disclosure" data-dense-disclosure="profitability" open>
+        <summary class="panel-disclosure-trigger">
+          <div class="panel-disclosure-copy">
+            <div class="panel-header">
+              <div>
+                <p class="panel-kicker">Validation</p>
+                <h2>Profitability verdict</h2>
+              </div>
+              <span id="profitabilityVerdictBadge" class="panel-badge">Loading</span>
+            </div>
+            <p id="profitabilitySummary" class="panel-copy panel-disclosure-summary-copy">Arbiter is collecting evidence before it can call the engine profitable.</p>
           </div>
-          <span id="profitabilityVerdictBadge" class="panel-badge">Loading</span>
+          <span class="panel-disclosure-caret" aria-hidden="true"></span>
+        </summary>
+        <div class="panel-disclosure-body">
+          <div id="profitabilityReasons" class="stack-list compact-stack"></div>
         </div>
-        <p id="profitabilitySummary" class="panel-copy">Arbiter is collecting evidence before it can call the engine profitable.</p>
-        <div id="profitabilityReasons" class="stack-list compact-stack"></div>
-      </article>
+      </details>
 
-      <article class="panel">
-        <div class="panel-header">
-          <div>
-            <p class="panel-kicker">Guardrails</p>
-            <h2>Portfolio posture</h2>
+      <details class="panel panel-disclosure" data-dense-disclosure="portfolio" open>
+        <summary class="panel-disclosure-trigger">
+          <div class="panel-disclosure-copy">
+            <div class="panel-header">
+              <div>
+                <p class="panel-kicker">Guardrails</p>
+                <h2>Portfolio posture</h2>
+              </div>
+              <span id="portfolioExposureBadge" class="panel-badge">$0.00</span>
+            </div>
+            <p id="portfolioSummary" class="panel-copy panel-disclosure-summary-copy">Exposure, funding, and operator risk warnings appear here so production tests stay controlled.</p>
           </div>
-          <span id="portfolioExposureBadge" class="panel-badge">$0.00</span>
+          <span class="panel-disclosure-caret" aria-hidden="true"></span>
+        </summary>
+        <div class="panel-disclosure-body">
+          <div id="portfolioList" class="stack-list compact-stack"></div>
         </div>
-        <p id="portfolioSummary" class="panel-copy">Exposure, funding, and operator risk warnings appear here so production tests stay controlled.</p>
-        <div id="portfolioList" class="stack-list compact-stack"></div>
-      </article>
+      </details>
     </section>
 
     <section id="opportunitiesSection" class="panel-grid panel-grid-tight panel-grid-single">
@@ -248,16 +307,24 @@
         <div id="mappingList" class="stack-list mapping-list"></div>
       </article>
 
-      <article class="panel">
-        <div class="panel-header">
-          <div>
-            <p class="panel-kicker">Collectors</p>
-            <h2>Platform health</h2>
+      <details class="panel panel-disclosure" data-dense-disclosure="collectors" open>
+        <summary class="panel-disclosure-trigger">
+          <div class="panel-disclosure-copy">
+            <div class="panel-header">
+              <div>
+                <p class="panel-kicker">Collectors</p>
+                <h2>Platform health</h2>
+              </div>
+              <span id="collectorCount" class="panel-badge">0</span>
+            </div>
+            <p class="panel-copy panel-disclosure-summary-copy">Venue polling, circuit breakers, and feed stability stay visible while the detail list folds away.</p>
           </div>
-          <span id="collectorCount" class="panel-badge">0</span>
+          <span class="panel-disclosure-caret" aria-hidden="true"></span>
+        </summary>
+        <div class="panel-disclosure-body">
+          <div id="collectorList" class="stack-list"></div>
         </div>
-        <div id="collectorList" class="stack-list"></div>
-      </article>
+      </details>
     </section>
   </main>
   <nav class="mobile-dock" aria-label="Quick navigation">
