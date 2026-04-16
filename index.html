@@ -259,7 +259,38 @@
           </div>
           <span id="mappingCount" class="panel-badge">0</span>
         </div>
-        <div id="mappingList" class="stack-list mapping-list"></div>
+        <div id="mappingWorkspace" class="mapping-workspace">
+          <aside class="mapping-queue-rail" aria-label="Mapping saved views">
+            <div class="mapping-pane-heading">
+              <p class="panel-kicker">Saved views</p>
+              <p class="mapping-pane-copy">Queue the highest-volume review lanes without stretching the page.</p>
+            </div>
+            <div id="mappingSavedViews" class="mapping-saved-views" role="tablist" aria-label="Mapping queues"></div>
+          </aside>
+
+          <section class="mapping-list-pane" aria-label="Mapping queue">
+            <div class="mapping-pane-heading">
+              <label class="mapping-search" for="mappingSearchInput">
+                <span class="mapping-search-label">Search mappings</span>
+                <input id="mappingSearchInput" name="mappingSearch" type="search" autocomplete="off" placeholder="Search market, canonical id, venue, or note">
+              </label>
+              <p id="mappingResultSummary" class="mapping-result-summary">Showing the saved mapping queue.</p>
+            </div>
+            <div id="mappingViewport" class="mapping-list-viewport" role="listbox" aria-label="Canonical mappings">
+              <div id="mappingTopSpacer" aria-hidden="true"></div>
+              <div id="mappingList" class="mapping-list"></div>
+              <div id="mappingBottomSpacer" aria-hidden="true"></div>
+            </div>
+          </section>
+
+          <aside class="mapping-inspector-pane" aria-label="Selected mapping inspector">
+            <div class="mapping-pane-heading">
+              <p class="panel-kicker">Inspector</p>
+              <p class="mapping-pane-copy">Selection stays pinned here while the queue scrolls inside its own lane.</p>
+            </div>
+            <div id="mappingInspector" class="mapping-inspector"></div>
+          </aside>
+        </div>
       </article>
 
       <details class="panel panel-disclosure" data-dense-disclosure="collectors" open>

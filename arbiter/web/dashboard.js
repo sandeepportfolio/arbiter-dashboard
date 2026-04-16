@@ -1,6 +1,7 @@
 import { inferStaticApiBase, mixedContentApiWarning, normalizeApiBase } from "./api-base.js";
 import { buildActivityAtlasView } from "./activity-atlas-model.js";
 import { buildDeskOverview, buildMetricCards, buildOpportunityRows } from "./dashboard-view-model.js";
+import { buildMappingWorkspaceModel, MAPPING_WORKSPACE_ROW_HEIGHT } from "./mapping-workspace-model.js";
 
 const boot = window.ARBITER_BOOTSTRAP || {};
 const search = new URLSearchParams(window.location.search);
@@ -53,6 +54,10 @@ const state = {
   activeLogScope: "all",
   logQuery: "",
   logPresentationMode: window.matchMedia && window.matchMedia("(min-width: 1121px)").matches ? "digest" : "stream",
+  mappingActiveView: "",
+  mappingQuery: "",
+  mappingSelectedId: "",
+  mappingScrollTop: 0,
   apiBase: initialApiBase,
   authToken: initialAuthToken,
   operatorAuthenticated: false,
@@ -236,9 +241,18 @@ const deskMenuEl = document.getElementById("deskMenu");
 const logScopeTabsEl = document.getElementById("logScopeTabs");
 const logSearchInputEl = document.getElementById("logSearchInput");
 const logResultSummaryEl = document.getElementById("logResultSummary");
+const mappingSavedViewsEl = document.getElementById("mappingSavedViews");
+const mappingSearchInputEl = document.getElementById("mappingSearchInput");
+const mappingResultSummaryEl = document.getElementById("mappingResultSummary");
+const mappingViewportEl = document.getElementById("mappingViewport");
+const mappingTopSpacerEl = document.getElementById("mappingTopSpacer");
+const mappingListEl = document.getElementById("mappingList");
+const mappingBottomSpacerEl = document.getElementById("mappingBottomSpacer");
+const mappingInspectorEl = document.getElementById("mappingInspector");
 const denseDisclosurePanels = Array.from(document.querySelectorAll("[data-dense-disclosure]"));
 const denseDisclosureQuery = window.matchMedia ? window.matchMedia("(max-width: 760px)") : null;
 const desktopDigestQuery = window.matchMedia ? window.matchMedia("(min-width: 1121px)") : null;
+let mappingScrollFrame = 0;
 
 const formatUsd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
 const formatWhole = new Intl.NumberFormat("en-US");
@@ -1741,36 +1755,48 @@ function renderLogExperience(entries = buildLogEntries()) {
 }
 
 function renderMappings() {
-  const container = document.getElementById("mappingList");
   document.getElementById("mappingCount").textContent = formatWhole.format(state.mappings.length);
-  if (!container) return;
-  if (!state.mappings.length) {
-    container.innerHTML = emptyState("No canonical mappings are loaded.");
+  if (!mappingListEl || !mappingInspectorEl || !mappingSavedViewsEl) return;
+
+  const model = buildMappingWorkspaceModel({
+    mappings: state.mappings,
+    activeView: state.mappingActiveView,
+    query: state.mappingQuery,
+    selectedId: state.mappingSelectedId,
+    scrollTop: state.mappingScrollTop,
+    viewportHeight: mappingViewportEl?.clientHeight || (MAPPING_WORKSPACE_ROW_HEIGHT * 5),
+    rowHeight: MAPPING_WORKSPACE_ROW_HEIGHT,
+  });
+
+  state.mappingActiveView = model.activeView.key;
+  state.mappingSelectedId = model.selectedId;
+
+  if (mappingSearchInputEl && mappingSearchInputEl.value !== state.mappingQuery) {
+    mappingSearchInputEl.value = state.mappingQuery;
+  }
+  if (mappingResultSummaryEl) {
+    mappingResultSummaryEl.textContent = mappingResultSummary(model);
+  }
+
+  mappingSavedViewsEl.innerHTML = model.views
+    .map((view) => renderMappingViewButton(view, view.key === model.activeView.key))
+    .join("");
+
+  if (mappingTopSpacerEl) {
+    mappingTopSpacerEl.style.height = `${model.topSpacerHeight}px`;
+  }
+  if (mappingBottomSpacerEl) {
+    mappingBottomSpacerEl.style.height = `${model.bottomSpacerHeight}px`;
+  }
+
+  if (!model.filteredCount) {
+    mappingListEl.innerHTML = emptyState(model.emptyMessage);
+    mappingInspectorEl.innerHTML = renderMappingInspector(null);
     return;
   }
 
-  container.innerHTML = state.mappings.slice(0, 8).map((mapping) => `
-    <article class="stack-item ${mappingTone(mappingStatus(mapping))} operator-card" data-mapping-id="${escapeHtml(mapping.canonical_id)}">
-      <div class="stack-item-header">
-        <div class="stack-item-title">${escapeHtml(mapping.description || mapping.canonical_id)}</div>
-        <span class="${statusClass(mappingStatus(mapping))}" data-mapping-status>${escapeHtml(mappingStatus(mapping))}</span>
-      </div>
-      <div class="mapping-platforms">
-        ${mapping.kalshi ? `<span>${escapeHtml(`Kalshi ${mapping.kalshi}`)}</span>` : ""}
-        ${mapping.polymarket ? `<span>${escapeHtml(`Polymarket ${mapping.polymarket}`)}</span>` : ""}
-        ${mapping.predictit ? `<span>${escapeHtml(`PredictIt ${mapping.predictit}`)}</span>` : ""}
-      </div>
-      <div class="stack-item-meta">${escapeHtml(mapping.review_note || mapping.notes || "Confirmed mappings are the only auto-tradable candidates.")}</div>
-      <div class="operator-meta-row">
-        <span>${escapeHtml(mapping.allow_auto_trade ? "Auto-trade allowed" : "Held for review before auto-trade")}</span>
-      </div>
-      ${hasOperatorAccess() ? `<div class="action-row">
-        ${mappingStatus(mapping) !== "confirmed" ? renderActionButton("Confirm match", "confirm", "mapping", mapping.canonical_id, mapping.canonical_id) : ""}
-        ${mapping.allow_auto_trade ? renderActionButton("Hold auto-trade", "disable_auto_trade", "mapping", mapping.canonical_id, mapping.canonical_id, true) : renderActionButton("Enable auto-trade", "enable_auto_trade", "mapping", mapping.canonical_id, mapping.canonical_id)}
-        ${mappingStatus(mapping) !== "review" ? renderActionButton("Mark review", "review", "mapping", mapping.canonical_id, mapping.canonical_id, true) : ""}
-      </div>` : ""}
-    </article>
-  `).join("");
+  mappingListEl.innerHTML = model.listRows.map(renderMappingRow).join("");
+  mappingInspectorEl.innerHTML = renderMappingInspector(model.selectedMapping);
 }
 
 function renderCollectors() {
@@ -2002,6 +2028,132 @@ function renderActionButton(label, action, scope, targetId, canonicalId, seconda
   `;
 }
 
+function resetMappingViewport() {
+  state.mappingScrollTop = 0;
+  if (mappingViewportEl) {
+    mappingViewportEl.scrollTop = 0;
+  }
+}
+
+function mappingResultSummary(model) {
+  const viewLabel = model.activeView.label.toLowerCase();
+  if (state.mappingQuery.trim()) {
+    return `Showing ${formatWhole.format(model.filteredCount)} of ${formatWhole.format(model.totalCount)} mappings in ${viewLabel} for "${state.mappingQuery}".`;
+  }
+  return `Showing ${formatWhole.format(model.filteredCount)} mappings in ${viewLabel}.`;
+}
+
+function renderMappingViewButton(view, isActive) {
+  return `
+    <button
+      type="button"
+      class="mapping-view-button ${isActive ? "is-active" : ""}"
+      data-mapping-view="${escapeHtml(view.key)}"
+      role="tab"
+      aria-selected="${isActive ? "true" : "false"}"
+    >
+      <span class="mapping-view-label">${escapeHtml(view.label)}</span>
+      <strong class="mapping-view-count">${escapeHtml(formatWhole.format(view.count))}</strong>
+      <span class="mapping-view-copy">${escapeHtml(view.description)}</span>
+    </button>
+  `;
+}
+
+function renderMappingRow(row) {
+  return `
+    <button
+      type="button"
+      class="mapping-row ${mappingTone(row.status)} ${row.isSelected ? "is-selected" : ""}"
+      data-mapping-select="${escapeHtml(row.canonicalId)}"
+      role="option"
+      aria-selected="${row.isSelected ? "true" : "false"}"
+    >
+      <span class="mapping-row-copy">
+        <span class="mapping-row-header">
+          <span class="mapping-row-title">${escapeHtml(row.title)}</span>
+          <span class="${statusClass(row.status)}">${escapeHtml(row.statusLabel)}</span>
+        </span>
+        <span class="mapping-row-id">${escapeHtml(row.canonicalId)}</span>
+        <span class="mapping-row-note">${escapeHtml(`${row.coverageLabel} • ${row.allowAutoTradeLabel}`)}</span>
+      </span>
+    </button>
+  `;
+}
+
+function renderMappingInspector(mapping) {
+  if (!mapping) {
+    return emptyState("Choose a mapping from the queue to inspect its venue coverage and operator controls.");
+  }
+
+  const presentVenueCopy = mapping.platforms.length
+    ? mapping.platforms.map((platform) => `<span>${escapeHtml(platform.chipLabel)}</span>`).join("")
+    : "<span>No venue ids loaded</span>";
+  const missingVenueCopy = mapping.missingPlatforms.length
+    ? `Still missing ${mapping.missingPlatforms.join(", ")} before the route is fully aligned.`
+    : "All tracked venues have a canonical id and can stay aligned across the desk.";
+  const noteCopy = mapping.reviewNote || mapping.notes || "No extra review note is attached to this mapping yet.";
+
+  return `
+    <article class="mapping-inspector-card ${mappingTone(mapping.status)}" data-mapping-id="${escapeHtml(mapping.canonicalId)}">
+      <div class="mapping-inspector-header">
+        <div>
+          <p class="mapping-inspector-kicker">${escapeHtml(mapping.canonicalId)}</p>
+          <h3>${escapeHtml(mapping.title)}</h3>
+        </div>
+        <span class="${statusClass(mapping.status)}">${escapeHtml(mapping.statusLabel)}</span>
+      </div>
+      <p class="mapping-inspector-summary">${escapeHtml(mapping.operatorNote)}</p>
+      <div class="mapping-inspector-pill-row">
+        <span class="mapping-inspector-pill">${escapeHtml(mapping.coverageLabel)}</span>
+        <span class="mapping-inspector-pill">${escapeHtml(mapping.allowAutoTradeLabel)}</span>
+      </div>
+      <details class="mapping-disclosure" open>
+        <summary>
+          <div>
+            <strong>Venue coverage</strong>
+            <small>Keep venue ids aligned before the desk depends on automatic routing.</small>
+          </div>
+          <span class="mapping-disclosure-caret" aria-hidden="true"></span>
+        </summary>
+        <div class="mapping-disclosure-body">
+          <div class="mapping-platforms">${presentVenueCopy}</div>
+          <p class="mapping-disclosure-copy">${escapeHtml(missingVenueCopy)}</p>
+        </div>
+      </details>
+      <details class="mapping-disclosure" open>
+        <summary>
+          <div>
+            <strong>Operator review</strong>
+            <small>Notes and holds stay close to the selected mapping instead of stretching the queue.</small>
+          </div>
+          <span class="mapping-disclosure-caret" aria-hidden="true"></span>
+        </summary>
+        <div class="mapping-disclosure-body">
+          <p class="mapping-disclosure-copy">${escapeHtml(noteCopy)}</p>
+        </div>
+      </details>
+      <details class="mapping-disclosure" open>
+        <summary>
+          <div>
+            <strong>Operator controls</strong>
+            <small>Use the same mapping actions without leaving the inspector pane.</small>
+          </div>
+          <span class="mapping-disclosure-caret" aria-hidden="true"></span>
+        </summary>
+        <div class="mapping-disclosure-body">
+          ${hasOperatorAccess()
+            ? `<div class="action-row mapping-action-row">
+                ${mapping.status !== "confirmed" ? renderActionButton("Confirm match", "confirm", "mapping", mapping.canonicalId, mapping.canonicalId) : ""}
+                ${mapping.allowAutoTrade ? renderActionButton("Hold auto-trade", "disable_auto_trade", "mapping", mapping.canonicalId, mapping.canonicalId, true) : renderActionButton("Enable auto-trade", "enable_auto_trade", "mapping", mapping.canonicalId, mapping.canonicalId)}
+                ${mapping.status !== "review" ? renderActionButton("Mark review", "review", "mapping", mapping.canonicalId, mapping.canonicalId, true) : ""}
+              </div>`
+            : `<p class="mapping-disclosure-copy">Sign in to change mapping state from the inspector.</p>`}
+        </div>
+      </details>
+    </article>
+  `;
+}
+
 async function runAction(button, operation) {
   if (!button || button.disabled) return;
   const labelEl = button.querySelector(".action-button-label");
@@ -2057,6 +2209,25 @@ document.addEventListener("click", (event) => {
     if (!nextFilter || nextFilter === state.activeLogFilter) return;
     state.activeLogFilter = nextFilter;
     renderLogExperience();
+    return;
+  }
+
+  const mappingViewTarget = event.target.closest("[data-mapping-view]");
+  if (mappingViewTarget) {
+    const nextView = mappingViewTarget.getAttribute("data-mapping-view");
+    if (!nextView || nextView === state.mappingActiveView) return;
+    state.mappingActiveView = nextView;
+    resetMappingViewport();
+    renderMappings();
+    return;
+  }
+
+  const mappingSelectTarget = event.target.closest("[data-mapping-select]");
+  if (mappingSelectTarget) {
+    const nextSelection = mappingSelectTarget.getAttribute("data-mapping-select");
+    if (!nextSelection || nextSelection === state.mappingSelectedId) return;
+    state.mappingSelectedId = nextSelection;
+    renderMappings();
     return;
   }
 
@@ -2135,6 +2306,25 @@ if (logSearchInputEl) {
   });
 }
 
+if (mappingSearchInputEl) {
+  mappingSearchInputEl.addEventListener("input", (event) => {
+    state.mappingQuery = event.target.value || "";
+    resetMappingViewport();
+    renderMappings();
+  });
+}
+
+if (mappingViewportEl) {
+  mappingViewportEl.addEventListener("scroll", () => {
+    state.mappingScrollTop = mappingViewportEl.scrollTop;
+    if (mappingScrollFrame) return;
+    mappingScrollFrame = window.requestAnimationFrame(() => {
+      mappingScrollFrame = 0;
+      renderMappings();
+    });
+  }, { passive: true });
+}
+
 if (authFormEl) {
   authFormEl.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -2195,6 +2385,11 @@ if (edgeChartEl && equityChartEl) {
   const resizeObserver = new ResizeObserver(() => renderCharts());
   resizeObserver.observe(edgeChartEl);
   resizeObserver.observe(equityChartEl);
+}
+
+if (mappingViewportEl) {
+  const mappingResizeObserver = new ResizeObserver(() => renderMappings());
+  mappingResizeObserver.observe(mappingViewportEl);
 }
 
 document.addEventListener("visibilitychange", () => {

@@ -71,7 +71,7 @@ async function auditScenario(browser, scenario) {
 
     return {
       hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
-      operatorCards: [...document.querySelectorAll('#manualQueue .operator-card, #incidentList .operator-card, #mappingList .operator-card')].map((card) => {
+      operatorCards: [...document.querySelectorAll('#manualQueue .operator-card, #incidentList .operator-card, #mappingInspector .mapping-inspector-card')].map((card) => {
         const cardRect = rectData(card);
         const actionButtons = [...card.querySelectorAll('.action-button')].map((button) => {
           const buttonRect = rectData(button);
@@ -102,6 +102,36 @@ async function auditScenario(browser, scenario) {
           actionButtons,
         };
       }),
+      mappingWorkspace: (() => {
+        const workspace = document.querySelector('#mappingWorkspace');
+        const viewport = document.querySelector('#mappingViewport');
+        const inspector = document.querySelector('#mappingInspector');
+        return {
+          exists: !!workspace,
+          workspaceHeight: workspace?.clientHeight || 0,
+          workspaceScrollHeight: workspace?.scrollHeight || 0,
+          viewport: viewport ? {
+            clientWidth: viewport.clientWidth,
+            scrollWidth: viewport.scrollWidth,
+            clientHeight: viewport.clientHeight,
+            scrollHeight: viewport.scrollHeight,
+          } : null,
+          inspector: inspector ? {
+            clientWidth: inspector.clientWidth,
+            scrollWidth: inspector.scrollWidth,
+            clientHeight: inspector.clientHeight,
+            scrollHeight: inspector.scrollHeight,
+          } : null,
+          selectedCount: document.querySelectorAll('.mapping-row.is-selected').length,
+          rowOverflow: [...document.querySelectorAll('.mapping-row')].map((row) => ({
+            text: row.textContent.replace(/\s+/g, ' ').trim(),
+            clientWidth: row.clientWidth,
+            scrollWidth: row.scrollWidth,
+            clientHeight: row.clientHeight,
+            scrollHeight: row.scrollHeight,
+          })),
+        };
+      })(),
       mobileDisclosures: [...document.querySelectorAll('.mobile-disclosure-card')].map((el) => ({
         text: el.textContent.replace(/\s+/g, ' ').trim(),
         clientWidth: el.clientWidth,
@@ -160,6 +190,27 @@ const failures = [];
 for (const result of results) {
   const { name, audit } = result;
   if (audit.hasHorizontalOverflow) failures.push(`${name}: document overflows horizontally.`);
+  if (!audit.mappingWorkspace?.exists) {
+    failures.push(`${name}: mapping workspace is missing.`);
+  } else {
+    if (audit.mappingWorkspace.workspaceScrollHeight > audit.mappingWorkspace.workspaceHeight + 1) {
+      failures.push(`${name}: mapping workspace escapes its bounded height.`);
+    }
+    if (audit.mappingWorkspace.viewport && audit.mappingWorkspace.viewport.scrollWidth > audit.mappingWorkspace.viewport.clientWidth + 1) {
+      failures.push(`${name}: mapping queue overflows horizontally.`);
+    }
+    if (audit.mappingWorkspace.inspector && audit.mappingWorkspace.inspector.scrollWidth > audit.mappingWorkspace.inspector.clientWidth + 1) {
+      failures.push(`${name}: mapping inspector overflows horizontally.`);
+    }
+    if (audit.mappingWorkspace.selectedCount > 1) {
+      failures.push(`${name}: multiple mapping rows are selected at once.`);
+    }
+    for (const row of audit.mappingWorkspace.rowOverflow || []) {
+      if (row.scrollWidth > row.clientWidth + 1 || row.scrollHeight > row.clientHeight + 1) {
+        failures.push(`${name}: mapping row overflow: ${row.text}`);
+      }
+    }
+  }
   for (const hoverCheck of audit.hoverChecks || []) {
     const delta = rectDelta(hoverCheck.before, hoverCheck.after);
     if (!delta) {
