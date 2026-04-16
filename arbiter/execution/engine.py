@@ -798,7 +798,7 @@ class ExecutionEngine:
             self._own_session = aiohttp.ClientSession()
         return self._own_session
 
-    async def _place_kalshi_order(self, arb_id: str, market_id: str, canonical_id: str, side: str, price: float, qty: int) -> Order:
+    async def _place_kalshi_order(self, arb_id: str, market_id: str, canonical_id: str, side: str, price: float, qty: int | float) -> Order:
         now = time.time()
         collector = self._collectors.get("kalshi")
         if not collector or not collector.auth.is_authenticated:
@@ -815,20 +815,33 @@ class ExecutionEngine:
                 error="Kalshi auth not configured",
             )
 
+        if not (0 < price < 1):
+            return Order(
+                order_id=f"{arb_id}-{side.upper()}-KALSHI",
+                platform="kalshi",
+                market_id=market_id,
+                canonical_id=canonical_id,
+                side=side,
+                price=price,
+                quantity=qty,
+                status=OrderStatus.FAILED,
+                timestamp=now,
+                error=f"Invalid price {price}: must be between 0 and 1 exclusive",
+            )
+
         session = await self._get_session()
-        price_cents = max(1, min(99, int(round(price * 100))))
         order_body = {
             "ticker": market_id,
             "client_order_id": f"{arb_id}-{side.upper()}-{uuid.uuid4().hex[:8]}",
             "action": "buy",
             "side": side,
             "type": "limit",
-            "count": qty,
+            "count_fp": f"{float(qty):.2f}",
         }
         if side == "yes":
-            order_body["yes_price"] = price_cents
+            order_body["yes_price_dollars"] = f"{price:.4f}"
         else:
-            order_body["no_price"] = price_cents
+            order_body["no_price_dollars"] = f"{price:.4f}"
 
         path = "/trade-api/v2/portfolio/orders"
         url = f"{self.config.kalshi.base_url}/portfolio/orders"
@@ -857,7 +870,7 @@ class ExecutionEngine:
                     "executed": OrderStatus.FILLED,
                     "canceled": OrderStatus.CANCELLED,
                 }
-                fill_qty = int(order_data.get("count_filled", 0) or 0)
+                fill_qty = float(order_data.get("fill_count_fp", order_data.get("count_filled", "0")) or "0")
                 return Order(
                     order_id=str(order_data.get("order_id", f"{arb_id}-{side.upper()}")),
                     platform="kalshi",
@@ -867,7 +880,7 @@ class ExecutionEngine:
                     price=price,
                     quantity=qty,
                     status=status_map.get(order_data.get("status", "resting"), OrderStatus.SUBMITTED),
-                    fill_price=float(order_data.get("avg_price", price_cents)) / 100.0,
+                    fill_price=float(order_data.get("yes_price_dollars", order_data.get("no_price_dollars", order_data.get("avg_price", str(price)))) or str(price)),
                     fill_qty=fill_qty,
                     timestamp=now,
                 )
