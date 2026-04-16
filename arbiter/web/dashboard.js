@@ -1,3 +1,5 @@
+import { inferStaticApiBase, normalizeApiBase } from "./api-base.js";
+
 const boot = window.ARBITER_BOOTSTRAP || {};
 const search = new URLSearchParams(window.location.search);
 const API_BASE_STORAGE_KEY = "arbiter.apiBase";
@@ -24,31 +26,13 @@ function writeStorage(storage, key, value) {
   }
 }
 
-function normalizeApiBase(value) {
-  return String(value || "").trim().replace(/\/+$/, "");
-}
-
-function inferStaticApiBase() {
-  const explicit = normalizeApiBase(
-    search.get("api") || boot.defaultApiBase || readStorage(window.localStorage, API_BASE_STORAGE_KEY)
-  );
-  if (explicit) return explicit;
-  if (!Boolean(boot.staticFrontend)) return "";
-
-  const hintedPort = String(search.get("apiPort") || boot.defaultApiPort || "").trim();
-  if (!hintedPort) return "";
-
-  try {
-    const current = new URL(window.location.href);
-    if (!/^https?:$/.test(current.protocol)) return "";
-    return normalizeApiBase(`${current.protocol}//${current.hostname}:${hintedPort}`);
-  } catch {
-    return "";
-  }
-}
-
 const initialRoute = search.get("route") || boot.routeMode || window.location.pathname || "/";
-const initialApiBase = inferStaticApiBase();
+const initialApiBase = inferStaticApiBase({
+  searchParams: search,
+  boot,
+  storageValue: readStorage(window.localStorage, API_BASE_STORAGE_KEY),
+  locationHref: window.location.href,
+});
 const initialAuthToken = readStorage(window.sessionStorage, AUTH_TOKEN_STORAGE_KEY);
 const normalizedInitialRoute = initialRoute.replace(/\/+$/, "");
 
