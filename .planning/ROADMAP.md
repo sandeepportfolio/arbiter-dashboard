@@ -49,12 +49,15 @@ Plans:
   3. Structured JSON logs (via structlog) are emitted for every trading operation -- log output is parseable by standard JSON tools
   4. Transient API failures (timeout, 503) trigger automatic retry with exponential backoff -- observable in logs during a simulated failure
   5. Per-platform execution adapters exist as separate modules under execution/adapters/ -- no platform-specific logic remains in engine.py
-**Plans**: TBD
+**Plans:** 6 plans
 
 Plans:
-- [ ] 02-01: TBD
-- [ ] 02-02: TBD
-- [ ] 02-03: TBD
+- [ ] 02-01-PLAN.md -- Dependencies + structlog logger migration + Sentry SDK init (OPS-01, OPS-02, OPS-04)
+- [ ] 02-02-PLAN.md -- SQL schema migration + ExecutionStore persistence layer (EXEC-02)
+- [ ] 02-03-PLAN.md -- PlatformAdapter Protocol + tenacity retry policy module (EXEC-04, OPS-03)
+- [ ] 02-04-PLAN.md -- KalshiAdapter extraction with FOK + depth check + idempotent retry (EXEC-01, EXEC-03, EXEC-04, OPS-03)
+- [ ] 02-05-PLAN.md -- PolymarketAdapter extraction with two-phase FOK + reconcile-before-retry + stale-book guard (EXEC-01, EXEC-03, EXEC-04)
+- [ ] 02-06-PLAN.md -- Engine refactor: strip platform code, inject adapters/store, asyncio.wait_for timeout, contextvars binding, recovery.py startup hook, main.py wiring (EXEC-02, EXEC-04, EXEC-05, OPS-01)
 
 ### Phase 3: Safety Layer
 **Goal**: The system cannot lose money due to runaway execution, naked positions, rate limit bans, or uncontrolled shutdown -- every dangerous scenario has a safety mechanism
@@ -109,7 +112,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. API Integration Fixes | 0/5 | Planned | - |
-| 2. Execution & Operational Hardening | 0/3 | Not started | - |
+| 2. Execution & Operational Hardening | 0/6 | Planned | - |
 | 3. Safety Layer | 0/3 | Not started | - |
 | 4. Sandbox Validation | 0/2 | Not started | - |
 | 5. Live Trading | 0/1 | Not started | - |
