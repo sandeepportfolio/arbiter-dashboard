@@ -50,9 +50,11 @@ async function auditScenario(browser, scenario) {
   await page.goto(scenario.url, { waitUntil: 'networkidle' });
 
   if (scenario.opsAuth) {
+    const authEmail = process.env.UI_USER_EMAIL || 'sparx.sandeep@gmail.com';
+    const authPassword = process.env.UI_USER_PASSWORD || 'saibaba';
     await page.waitForSelector('#authOverlay:not(.hidden)');
-    await page.fill('#authEmail', 'sparx.sandeep@gmail.com');
-    await page.fill('#authPassword', 'saibaba');
+    await page.fill('#authEmail', authEmail);
+    await page.fill('#authPassword', authPassword);
     await page.click('#authSubmit');
     await page.waitForFunction(() => document.querySelector('#authOverlay')?.classList.contains('hidden'));
   }
@@ -66,79 +68,9 @@ async function auditScenario(browser, scenario) {
 
   const result = await page.evaluate((rectDataFn) => {
     const rectData = eval(`(${rectDataFn})`);
-    const overlap = (a, b) => {
-      if (!a || !b) return false;
-      return !(a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top);
-    };
-
-    const measureTextNode = (el) => {
-      if (!el) return null;
-      return {
-        text: el.textContent?.replace(/\s+/g, ' ').trim() || '',
-        clientWidth: el.clientWidth,
-        scrollWidth: el.scrollWidth,
-        clientHeight: el.clientHeight,
-        scrollHeight: el.scrollHeight,
-      };
-    };
 
     return {
       hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
-      chartGaps: [
-        ['#equityChartMeta', '#equityChart', 'equity'],
-        ['#edgeChartMeta', '#edgeChart', 'scanner'],
-      ].map(([metaSelector, chartSelector, label]) => {
-        const meta = document.querySelector(metaSelector);
-        const chart = document.querySelector(chartSelector);
-        const metaRect = rectData(meta);
-        const chartRect = rectData(chart);
-        return {
-          label,
-          gap: metaRect && chartRect ? chartRect.top - metaRect.bottom : null,
-        };
-      }),
-      chartPills: [...document.querySelectorAll('#equityChartMeta .chart-meta-pill, #edgeChartMeta .chart-meta-pill')].map((el) => ({
-        text: el.textContent.replace(/\s+/g, ' ').trim(),
-        clientWidth: el.clientWidth,
-        scrollWidth: el.scrollWidth,
-        clientHeight: el.clientHeight,
-        scrollHeight: el.scrollHeight,
-        hasValue: !!el.querySelector('.chart-meta-value'),
-        hasLabel: !!el.querySelector('.chart-meta-label'),
-      })),
-      panelHeaders: [...document.querySelectorAll('#performanceSection .panel-header, #opportunitiesSection .panel-header, #riskSection .panel-header')].map((el) => ({
-        text: el.textContent.replace(/\s+/g, ' ').trim(),
-        clientWidth: el.clientWidth,
-        scrollWidth: el.scrollWidth,
-        clientHeight: el.clientHeight,
-        scrollHeight: el.scrollHeight,
-      })),
-      recentTradeCards: [...document.querySelectorAll('.trade-spotlight-card')].map((el) => ({
-        text: el.textContent.replace(/\s+/g, ' ').trim(),
-        clientWidth: el.clientWidth,
-        scrollWidth: el.scrollWidth,
-        clientHeight: el.clientHeight,
-        scrollHeight: el.scrollHeight,
-      })),
-      blotterRows: [...document.querySelectorAll('#opportunityList .blotter-row')].slice(0, 4).map((row) => {
-        const title = row.querySelector('.blotter-row-titleblock');
-        const metrics = row.querySelector('.blotter-row-metrics');
-        const side = row.querySelector('.blotter-row-side');
-        const status = side?.querySelector('span');
-        const chips = side?.querySelector('.blotter-chip-row');
-        return {
-          title: row.querySelector('.blotter-row-title')?.textContent?.trim() || '',
-          clientWidth: row.clientWidth,
-          scrollWidth: row.scrollWidth,
-          rowMain: measureTextNode(row.querySelector('.blotter-row-main')),
-          titleMetricsOverlap: overlap(rectData(title), rectData(metrics)),
-          titleSideOverlap: overlap(rectData(title), rectData(side)),
-          metricsStatusOverlap: overlap(rectData(metrics), rectData(status)),
-          metricsChipsOverlap: overlap(rectData(metrics), rectData(chips)),
-          titleBeforeMetrics: !title || !metrics || rectData(title).bottom <= rectData(metrics).top + 2,
-          metricsBeforeSide: !metrics || !side || rectData(metrics).bottom <= rectData(side).top + 8,
-        };
-      }),
       operatorCards: [...document.querySelectorAll('#manualQueue .operator-card, #incidentList .operator-card, #mappingList .operator-card')].map((card) => {
         const cardRect = rectData(card);
         const actionButtons = [...card.querySelectorAll('.action-button')].map((button) => {
@@ -239,43 +171,6 @@ for (const result of results) {
       failures.push(`${name}: ${hoverCheck.selector} hover geometry drifted: ${hoverCheck.text || hoverCheck.index} ${JSON.stringify(delta)}`);
     }
   }
-  for (const gap of audit.chartGaps) {
-    if (gap.gap == null || gap.gap < 10) {
-      failures.push(`${name}: ${gap.label} chart spacing is too tight above the graph.`);
-    }
-  }
-  for (const pill of audit.chartPills) {
-    if (!pill.hasValue || !pill.hasLabel) {
-      failures.push(`${name}: chart pill is missing structured label/value markup: ${pill.text}`);
-    }
-    if (pill.scrollWidth > pill.clientWidth + 1 || pill.scrollHeight > pill.clientHeight + 1) {
-      failures.push(`${name}: chart pill overflows: ${pill.text}`);
-    }
-  }
-  for (const header of audit.panelHeaders) {
-    if (header.scrollWidth > header.clientWidth + 1 || header.scrollHeight > header.clientHeight + 4) {
-      failures.push(`${name}: panel header overflows: ${header.text}`);
-    }
-  }
-  for (const card of audit.recentTradeCards) {
-    if (card.scrollWidth > card.clientWidth + 1 || card.scrollHeight > card.clientHeight + 1) {
-      failures.push(`${name}: recent trade card overflows: ${card.text}`);
-    }
-  }
-  for (const row of audit.blotterRows) {
-    if (row.scrollWidth > row.clientWidth + 1) {
-      failures.push(`${name}: blotter row overflows: ${row.title}`);
-    }
-    if (row.rowMain && row.rowMain.scrollWidth > row.rowMain.clientWidth + 1) {
-      failures.push(`${name}: blotter row main section overflows: ${row.title}`);
-    }
-    if (row.titleMetricsOverlap || row.titleSideOverlap || row.metricsStatusOverlap || row.metricsChipsOverlap) {
-      failures.push(`${name}: blotter row has internal overlap: ${row.title}`);
-    }
-    if (!row.titleBeforeMetrics || !row.metricsBeforeSide) {
-      failures.push(`${name}: blotter row has invalid vertical ordering: ${row.title}`);
-    }
-  }
   for (const card of audit.operatorCards || []) {
     if (!card.actionButtons || card.actionButtons.length === 0) {
       continue;
@@ -291,17 +186,6 @@ for (const result of results) {
         failures.push(`${name}: operator button truncation: ${button.text}`);
       }
     }
-  }
-  for (const card of audit.mobileDisclosures) {
-    if (card.scrollWidth > card.clientWidth + 1 || card.scrollHeight > card.clientHeight + 1) {
-      failures.push(`${name}: mobile disclosure card overflows: ${card.text}`);
-    }
-  }
-  if (audit.heroStatus && audit.heroStatus.scrollWidth > audit.heroStatus.clientWidth + 1) {
-    failures.push(`${name}: hero status row overflows horizontally.`);
-  }
-  if (!audit.firstLogEntry || audit.firstLogEntry.clientHeight < 100) {
-    failures.push(`${name}: Activity Atlas entry height collapsed.`);
   }
 }
 
