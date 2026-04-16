@@ -52,6 +52,7 @@ const state = {
   activeLogFilter: "all",
   activeLogScope: "all",
   logQuery: "",
+  logPresentationMode: window.matchMedia && window.matchMedia("(min-width: 1121px)").matches ? "digest" : "stream",
   apiBase: initialApiBase,
   authToken: initialAuthToken,
   operatorAuthenticated: false,
@@ -67,48 +68,56 @@ const LOG_DEFINITIONS = {
     label: "Market Pulse",
     description: "Quote heartbeats, tracked markets, and stream freshness.",
     source: "Published live",
+    digestLabel: "market pulses",
     tone: "tone-mint",
   },
   opportunity: {
     label: "Scanner",
     description: "Fee-positive opportunity evaluations and readiness states.",
     source: "Published live + tracked",
+    digestLabel: "scanner updates",
     tone: "tone-mint",
   },
   execution: {
     label: "Execution",
     description: "Simulated, submitted, filled, and failed hedge attempts.",
     source: "Published live + tracked",
+    digestLabel: "execution events",
     tone: "tone-gold",
   },
   manual: {
     label: "Manual Flow",
     description: "PredictIt-assisted workflows that need operator attention.",
     source: "Tracked",
+    digestLabel: "manual queue updates",
     tone: "tone-plum",
   },
   incident: {
     label: "Recovery",
     description: "Slippage, stale quotes, and one-leg risk handling.",
     source: "Published live + tracked",
+    digestLabel: "recovery events",
     tone: "tone-rose",
   },
   balance: {
     label: "Balance",
     description: "Funding posture and low-balance trade blockers.",
     source: "Tracked",
+    digestLabel: "balance checks",
     tone: "tone-amber",
   },
   collector: {
     label: "Collectors",
     description: "Venue polling, circuit breakers, and data feed stability.",
     source: "Tracked",
+    digestLabel: "collector updates",
     tone: "tone-blue",
   },
   mapping: {
     label: "Mapping",
     description: "Cross-market identity and auto-trade readiness.",
     source: "Tracked",
+    digestLabel: "mapping updates",
     tone: "tone-slate",
   },
 };
@@ -149,6 +158,16 @@ const LOG_SCOPE_DEFINITIONS = {
 };
 
 const LOG_SCOPE_ORDER = ["all", "trading", "ops", "infrastructure"];
+const LOG_PRESENTATION_MODES = {
+  stream: {
+    label: "Latest",
+    noun: "rows",
+  },
+  digest: {
+    label: "Digest",
+    noun: "digest rows",
+  },
+};
 
 const PUBLISHED_TYPES = [
   { key: "system", label: "system", detail: "bootstrap + snapshot" },
@@ -219,6 +238,7 @@ const logSearchInputEl = document.getElementById("logSearchInput");
 const logResultSummaryEl = document.getElementById("logResultSummary");
 const denseDisclosurePanels = Array.from(document.querySelectorAll("[data-dense-disclosure]"));
 const denseDisclosureQuery = window.matchMedia ? window.matchMedia("(max-width: 760px)") : null;
+const desktopDigestQuery = window.matchMedia ? window.matchMedia("(min-width: 1121px)") : null;
 
 const formatUsd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
 const formatWhole = new Intl.NumberFormat("en-US");
@@ -229,6 +249,10 @@ function syncDenseDisclosures() {
   denseDisclosurePanels.forEach((panel) => {
     panel.open = !shouldCollapse;
   });
+}
+
+function canUseDigestMode() {
+  return desktopDigestQuery ? desktopDigestQuery.matches : true;
 }
 
 function isStaticFrontend() {
@@ -897,11 +921,18 @@ function renderDeskMenu(entries = buildLogEntries()) {
 
 function renderLogEntry(entry) {
   const category = LOG_DEFINITIONS[entry.category];
+  const badgeLabel = entry.kind === "digest"
+    ? `${formatWhole.format(entry.count || 0)} event digest`
+    : category.label;
+  const sourceLabel = entry.kind === "digest"
+    ? "Digest mode"
+    : (entry.sourceLabel || category.source);
+
   return `
-    <article class="log-entry ${entry.tone}">
+    <article class="log-entry ${entry.tone} ${entry.kind === "digest" ? "is-digest" : ""}">
       <div class="log-entry-head">
         <div class="log-entry-kicker">
-          <span class="log-entry-source">${escapeHtml(entry.footnote)}</span>
+          <span class="log-entry-source">${escapeHtml(sourceLabel)}</span>
           <span class="log-entry-dot"></span>
           <span>${escapeHtml(category.label)}</span>
         </div>
@@ -909,14 +940,13 @@ function renderLogEntry(entry) {
       </div>
       <div class="log-entry-body">
         <div>
-          <h3>${escapeHtml(entry.title)}</h3>
-          <p class="log-entry-headline">${escapeHtml(entry.headline)}</p>
+          <h3 class="log-entry-title">${escapeHtml(entry.titleLine)}</h3>
+          <p class="log-entry-meta" title="${escapeHtml(entry.metaLine)}">${escapeHtml(entry.metaLine)}</p>
         </div>
-        <span class="log-entry-badge">${escapeHtml(category.label)}</span>
+        <span class="log-entry-badge">${escapeHtml(badgeLabel)}</span>
       </div>
-      <p class="log-entry-narrative" title="${escapeHtml(entry.narrative)}">${escapeHtml(entry.narrative)}</p>
       <div class="log-entry-tags">
-        ${entry.tags.slice(0, 3).map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}
+        ${entry.tags.slice(0, 4).map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}
       </div>
     </article>
   `;
@@ -1546,6 +1576,7 @@ function renderLegCard(label, platform, price, fee, marketId, feeRate) {
 }
 
 function renderLogExperience(entries = buildLogEntries()) {
+  const presentationMode = canUseDigestMode() ? state.logPresentationMode : "stream";
   const activityView = buildActivityAtlasView({
     entries,
     activeScope: state.activeLogScope,
@@ -1553,12 +1584,16 @@ function renderLogExperience(entries = buildLogEntries()) {
     query: state.logQuery,
     scopeDefinitions: LOG_SCOPE_DEFINITIONS,
     filterOrder: FILTER_ORDER,
+    categoryDefinitions: LOG_DEFINITIONS,
+    presentationMode,
+    nowTimestamp: state.lastQuoteAt || state.system?.timestamp || Date.now() / 1000,
   });
   const scope = activityView.scope;
   const scopeCounts = activityView.scopeCounts;
   const categoryCounts = activityView.categoryCounts;
   const scopedEntries = activityView.scopedEntries;
   const filteredEntries = activityView.filteredEntries;
+  const displayItems = activityView.displayItems;
   const normalizedQuery = activityView.query;
   if (state.activeLogFilter !== activityView.activeFilter) {
     state.activeLogFilter = activityView.activeFilter;
@@ -1624,29 +1659,52 @@ function renderLogExperience(entries = buildLogEntries()) {
   }
 
   if (filterBar) {
-    filterBar.innerHTML = activityView.filterItems.map((item) => {
-      const key = item.key;
-      const count = item.count;
-      const label = key === "all" ? "All activity" : LOG_DEFINITIONS[key].label;
-      return `
-        <button type="button" class="log-filter-chip ${state.activeLogFilter === key ? "is-active" : ""}" data-log-filter="${escapeHtml(key)}">
-          <span>${escapeHtml(label)}</span>
-          <strong>${escapeHtml(formatWhole.format(count || 0))}</strong>
+    const presentationControls = canUseDigestMode()
+      ? Object.entries(LOG_PRESENTATION_MODES).map(([key, config]) => `
+        <button
+          type="button"
+          class="log-filter-chip log-presentation-chip ${presentationMode === key ? "is-active" : ""}"
+          data-log-presentation="${escapeHtml(key)}"
+          aria-pressed="${presentationMode === key ? "true" : "false"}"
+        >
+          <span>${escapeHtml(config.label)}</span>
+          <strong>${escapeHtml(formatWhole.format(key === "digest" ? displayItems.length : filteredEntries.length))}</strong>
         </button>
-      `;
-    }).join("");
+      `).join("")
+      : "";
+
+    filterBar.innerHTML = `
+      ${presentationControls ? `<div class="log-presentation-controls" role="group" aria-label="Activity presentation">${presentationControls}</div>` : ""}
+      ${activityView.filterItems.map((item) => {
+        const key = item.key;
+        const count = item.count;
+        const label = key === "all" ? "All activity" : LOG_DEFINITIONS[key].label;
+        return `
+          <button type="button" class="log-filter-chip ${state.activeLogFilter === key ? "is-active" : ""}" data-log-filter="${escapeHtml(key)}">
+            <span>${escapeHtml(label)}</span>
+            <strong>${escapeHtml(formatWhole.format(count || 0))}</strong>
+          </button>
+        `;
+      }).join("")}
+    `;
   }
 
   if (logResultSummaryEl) {
     if (normalizedQuery) {
-      logResultSummaryEl.textContent = `Compact console showing ${formatWhole.format(filteredEntries.length)} of ${formatWhole.format(scopedEntries.length)} events in ${scope.label.toLowerCase()} for "${state.logQuery}".`;
+      logResultSummaryEl.textContent = presentationMode === "digest"
+        ? `Digest console showing ${formatWhole.format(displayItems.length)} rows from ${formatWhole.format(filteredEntries.length)} events in ${scope.label.toLowerCase()} for "${state.logQuery}".`
+        : `Compact console showing ${formatWhole.format(filteredEntries.length)} of ${formatWhole.format(scopedEntries.length)} events in ${scope.label.toLowerCase()} for "${state.logQuery}".`;
     } else {
-      logResultSummaryEl.textContent = `Compact console showing ${formatWhole.format(filteredEntries.length)} events in ${scope.label.toLowerCase()}.`;
+      logResultSummaryEl.textContent = presentationMode === "digest"
+        ? `Digest console showing ${formatWhole.format(displayItems.length)} rows from ${formatWhole.format(filteredEntries.length)} events in ${scope.label.toLowerCase()}.`
+        : `Compact console showing ${formatWhole.format(filteredEntries.length)} events in ${scope.label.toLowerCase()}.`;
     }
   }
 
   if (visibleCount) {
-    visibleCount.textContent = `${formatWhole.format(filteredEntries.length)} shown`;
+    visibleCount.textContent = presentationMode === "digest"
+      ? `${formatWhole.format(displayItems.length)} digest rows`
+      : `${formatWhole.format(displayItems.length)} shown`;
   }
   if (freshness) {
     freshness.textContent = state.lastQuoteAt ? relTime(state.lastQuoteAt) : (state.system ? relTime(state.system.timestamp) : "Waiting");
@@ -1654,14 +1712,14 @@ function renderLogExperience(entries = buildLogEntries()) {
   }
 
   if (!timeline) return;
-  if (!filteredEntries.length) {
-    timeline.innerHTML = emptyState(query
+  if (!displayItems.length) {
+    timeline.innerHTML = emptyState(normalizedQuery
       ? "No events match the current activity search."
       : "No events match this activity view right now.");
     return;
   }
 
-  timeline.innerHTML = filteredEntries.map(renderLogEntry).join("");
+  timeline.innerHTML = displayItems.map(renderLogEntry).join("");
 }
 
 function renderMappings() {
@@ -1966,6 +2024,15 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  const presentationTarget = event.target.closest("[data-log-presentation]");
+  if (presentationTarget) {
+    const nextMode = presentationTarget.getAttribute("data-log-presentation");
+    if (!nextMode || nextMode === state.logPresentationMode || !canUseDigestMode()) return;
+    state.logPresentationMode = nextMode;
+    renderLogExperience();
+    return;
+  }
+
   const logTarget = event.target.closest("[data-log-filter]");
   if (logTarget) {
     const nextFilter = logTarget.getAttribute("data-log-filter");
@@ -2192,6 +2259,11 @@ if (denseDisclosureQuery?.addEventListener) {
   denseDisclosureQuery.addEventListener("change", syncDenseDisclosures);
 } else if (denseDisclosureQuery?.addListener) {
   denseDisclosureQuery.addListener(syncDenseDisclosures);
+}
+if (desktopDigestQuery?.addEventListener) {
+  desktopDigestQuery.addEventListener("change", () => renderLogExperience());
+} else if (desktopDigestQuery?.addListener) {
+  desktopDigestQuery.addListener(() => renderLogExperience());
 }
 startPolling();
 void refreshAllData();
