@@ -45,7 +45,19 @@ def _polymarket_fee(
     fee_rate: Optional[float] = None,
 ) -> float:
     """Polymarket: fee rate × price × (1-price), amortized per contract."""
-    rates = {"politics": 0.02, "sports": 0.02, "crypto": 0.015, "default": 0.02}
+    rates = {
+        "crypto": 0.072,
+        "sports": 0.03,
+        "finance": 0.04,
+        "politics": 0.04,
+        "economics": 0.05,
+        "culture": 0.05,
+        "weather": 0.05,
+        "tech": 0.04,
+        "mentions": 0.04,
+        "geopolitics": 0.0,
+        "default": 0.05,
+    }
     rate = rates.get(category, rates["default"])
     if fee_rate is not None:
         rate = max(float(fee_rate), 0.0)
