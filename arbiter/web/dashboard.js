@@ -1,4 +1,6 @@
 import { inferStaticApiBase, mixedContentApiWarning, normalizeApiBase } from "./api-base.js";
+import { buildActivityAtlasView } from "./activity-atlas-model.js";
+import { buildDeskOverview, buildMetricCards, buildOpportunityRows } from "./dashboard-view-model.js";
 
 const boot = window.ARBITER_BOOTSTRAP || {};
 const search = new URLSearchParams(window.location.search);
@@ -194,7 +196,16 @@ const logoutButtonEl = document.getElementById("logoutButton");
 const dockOpsLinkEl = document.getElementById("dockOpsLink");
 const heroTitleEl = document.getElementById("heroTitle");
 const heroSubtitleEl = document.getElementById("heroSubtitle");
+const heroValueEl = document.getElementById("heroValue");
+const heroDeltaEl = document.getElementById("heroDelta");
+const heroUpdatedEl = document.getElementById("heroUpdated");
 const accessPillEl = document.getElementById("accessPill");
+const riskUpdatedEl = document.getElementById("riskUpdated");
+const riskScoreBarEl = document.getElementById("riskScoreBar");
+const riskSummaryEl = document.getElementById("riskSummary");
+const riskSummaryListEl = document.getElementById("riskSummaryList");
+const recentTradeCountEl = document.getElementById("recentTradeCount");
+const recentTradesRailEl = document.getElementById("recentTradesRail");
 const profitabilityPillEl = document.getElementById("profitabilityPill");
 const profitabilityVerdictBadgeEl = document.getElementById("profitabilityVerdictBadge");
 const profitabilitySummaryEl = document.getElementById("profitabilitySummary");
@@ -894,9 +905,9 @@ function renderLogEntry(entry) {
         </div>
         <span class="log-entry-badge">${escapeHtml(category.label)}</span>
       </div>
-      <p class="log-entry-narrative">${escapeHtml(entry.narrative)}</p>
+      <p class="log-entry-narrative" title="${escapeHtml(entry.narrative)}">${escapeHtml(entry.narrative)}</p>
       <div class="log-entry-tags">
-        ${entry.tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}
+        ${entry.tags.slice(0, 3).map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}
       </div>
     </article>
   `;
@@ -1065,7 +1076,7 @@ function connectWebSocket() {
   socket.addEventListener("close", () => {
     if (state.websocket !== socket) return;
     state.wsConnected = false;
-    setWsLabel("Reconnecting", true);
+    setWsLabel(state.system ? "Polling" : "Reconnecting", true);
     window.setTimeout(connectWebSocket, 1500);
   });
 
@@ -1075,6 +1086,7 @@ function connectWebSocket() {
 function render() {
   const logEntries = buildLogEntries();
   renderChrome();
+  renderOverview();
   renderStatusBand();
   renderMetrics();
   renderProfitabilityPanel();
@@ -1158,6 +1170,84 @@ function renderChrome() {
   });
 }
 
+function renderOverview() {
+  if (!state.system) {
+    if (heroValueEl) heroValueEl.textContent = "Loading";
+    if (heroDeltaEl) {
+      heroDeltaEl.textContent = "Waiting";
+      heroDeltaEl.classList.remove("is-negative");
+    }
+    if (heroUpdatedEl) heroUpdatedEl.textContent = "Awaiting live data";
+    if (riskUpdatedEl) riskUpdatedEl.innerHTML = "Updated<br>Waiting";
+    if (riskScoreBarEl) riskScoreBarEl.style.width = "0%";
+    if (riskSummaryEl) riskSummaryEl.textContent = "Risk posture is loading.";
+    if (riskSummaryListEl) riskSummaryListEl.innerHTML = emptyState("Portfolio and incident context will appear once the API responds.");
+    if (recentTradeCountEl) recentTradeCountEl.textContent = "0";
+    if (recentTradesRailEl) recentTradesRailEl.innerHTML = emptyState("No recent trades have been published yet.");
+    return;
+  }
+
+  const overview = buildDeskOverview({
+    system: state.system,
+    portfolio: state.portfolio,
+    profitability: state.profitability || state.system?.profitability,
+    trades: state.trades,
+    incidents: state.incidents,
+    manualPositions: state.manualPositions,
+    opportunities: state.opportunities,
+    lastQuoteAt: state.lastQuoteAt,
+    wsConnected: state.wsConnected,
+  }, {
+    nowTimestamp: Date.now() / 1000,
+  });
+
+  if (heroValueEl) heroValueEl.textContent = overview.heroValue;
+  if (heroDeltaEl) {
+    heroDeltaEl.textContent = overview.heroDelta;
+    heroDeltaEl.classList.toggle("is-negative", overview.heroDelta.startsWith("-"));
+  }
+  if (heroUpdatedEl) heroUpdatedEl.textContent = overview.heroUpdated;
+
+  if (riskUpdatedEl) riskUpdatedEl.innerHTML = overview.risk.updatedLabel.replace("\n", "<br>");
+  if (riskScoreBarEl) riskScoreBarEl.style.width = `${overview.risk.percent}%`;
+  if (riskSummaryEl) riskSummaryEl.textContent = overview.risk.summary;
+  if (riskSummaryListEl) {
+    riskSummaryListEl.innerHTML = overview.risk.items
+      .map((item) => compactPanelItem(item.label, item.copy))
+      .join("");
+  }
+
+  if (recentTradeCountEl) {
+    recentTradeCountEl.textContent = formatWhole.format(overview.recentTrades.length);
+  }
+  if (recentTradesRailEl) {
+    recentTradesRailEl.innerHTML = overview.recentTrades.length
+      ? overview.recentTrades.map(renderRecentTradeCard).join("")
+      : emptyState("No recent trades have settled yet.");
+  }
+}
+
+function renderRecentTradeCard(trade) {
+  const [sizeValue, ...sizeUnits] = String(trade.copy || "").split(" ");
+  return `
+    <article class="trade-spotlight-card trade-spotlight-card-${escapeHtml(trade.accent)}">
+      <div class="trade-spotlight-head">
+        <div class="trade-spotlight-dot trade-spotlight-dot-${escapeHtml(trade.accent)}"></div>
+        <div>
+          <div class="trade-spotlight-status">${escapeHtml(trade.status)}</div>
+          <div class="trade-spotlight-time">${escapeHtml(trade.timestampLabel)}</div>
+        </div>
+      </div>
+      <div class="trade-spotlight-title">${escapeHtml(trade.title)}</div>
+      <div class="trade-spotlight-route">${escapeHtml(trade.route)}</div>
+      <div class="trade-spotlight-footer">
+        <strong>${escapeHtml(trade.value)}</strong>
+        <span>${escapeHtml(sizeValue)} ${escapeHtml(sizeUnits.join(" "))}</span>
+      </div>
+    </article>
+  `;
+}
+
 function renderProfitabilityPanel() {
   const profitability = state.profitability || state.system?.profitability;
   if (!profitabilityVerdictBadgeEl || !profitabilitySummaryEl || !profitabilityReasonsEl) return;
@@ -1229,7 +1319,9 @@ function renderStatusBand() {
       tone: "tone-mint",
       label: "Last pulse",
       value: state.lastQuoteAt ? relTime(lastPulse) : "Waiting",
-      copy: state.wsConnected ? "WebSocket is hot and streaming fresh market events." : "Realtime link is reconnecting, so the desk is watching for the next pulse.",
+      copy: state.wsConnected
+        ? "WebSocket is hot and streaming fresh market events."
+        : "Realtime streaming is unavailable, so the desk is falling back to timed refreshes.",
     },
     {
       tone: auditRate >= 0.99 ? "tone-blue" : "tone-amber",
@@ -1269,33 +1361,12 @@ function renderMetrics() {
 
   modePillEl.textContent = system.mode === "live" ? "Live" : "Dry Run";
 
-  const cards = [
-    {
-      label: "Tradable opportunities",
-      value: formatWhole.format(system.scanner?.tradable_opportunities || 0),
-      meta: `${formatWhole.format(system.scanner?.active_opportunities || 0)} active across the watchlist`,
-    },
-    {
-      label: "Best live edge",
-      value: cents(system.scanner?.best_edge_cents || 0),
-      meta: `Persistence gate: ${formatWhole.format(system.scanner?.persistence_scans || 0)} scans`,
-    },
-    {
-      label: "Realized P&L",
-      value: formatUsd.format(system.execution?.total_pnl || 0),
-      meta: `${formatWhole.format(system.execution?.total_executions || 0)} tracked executions`,
-    },
-    {
-      label: "Audit pass rate",
-      value: pct(auditPassRate()),
-      meta: `${formatWhole.format(system.audit?.audits_run || 0)} independent checks against scanner and execution math`,
-    },
-    {
-      label: "Feed posture",
-      value: state.lastQuoteAt ? relTime(state.lastQuoteAt) : "Waiting",
-      meta: `${formatWhole.format(system.counts?.prices || 0)} quotes, ${formatWhole.format(activeCooldownCount())} cooldowns, ${formatWhole.format(system.counts?.incidents || 0)} incidents`,
-    },
-  ];
+  const cards = buildMetricCards({
+    system: state.system,
+    portfolio: state.portfolio,
+    profitability: state.profitability || state.system?.profitability,
+    trades: state.trades,
+  });
 
   metrics.innerHTML = cards
     .map((card) => `
@@ -1307,8 +1378,10 @@ function renderMetrics() {
     `)
     .join("");
 
-  document.getElementById("bestEdgeLabel").textContent = cents(system.scanner?.best_edge_cents || 0);
-  document.getElementById("equityLabel").textContent = formatUsd.format(system.execution?.total_pnl || 0);
+  const bestEdgeLabelEl = document.getElementById("bestEdgeLabel");
+  if (bestEdgeLabelEl) {
+    bestEdgeLabelEl.textContent = cents(system.scanner?.best_edge_cents || 0);
+  }
 }
 
 function renderOpportunities() {
@@ -1320,64 +1393,49 @@ function renderOpportunities() {
     return;
   }
 
-  container.innerHTML = state.opportunities.slice(0, 10).map((opp) => {
-    const gross = Math.max(opp.gross_edge || 0, 0.0001);
-    const fees = Math.max(opp.total_fees || 0, 0.0001);
-    const net = Math.max(opp.net_edge || 0, 0.0001);
-    const freshness = clamp01(1 - ((opp.quote_age_seconds || 0) / (state.system?.scanner?.max_quote_age_seconds || 15)));
-    const confidence = clamp01(opp.confidence || 0);
-    return `
-      <article class="opportunity-card">
-        <div class="opportunity-top">
-          <div class="opportunity-copy">
-            <div class="opportunity-title">${escapeHtml(opp.description)}</div>
-            <div class="opportunity-meta">
-              <span class="${statusClass(opp.status)}">${escapeHtml(opp.status)}</span>
-              <span class="badge badge-review">${escapeHtml(`${opp.persistence_count || 0}/${state.system?.scanner?.persistence_scans || 3} scans`)}</span>
-              <span class="badge badge-review">${escapeHtml(relTime(opp.timestamp))}</span>
-              <span class="badge badge-review">${escapeHtml(`Freshness ${pct(freshness)}`)}</span>
-            </div>
+  const rows = buildOpportunityRows({
+    opportunities: state.opportunities.slice(0, 12),
+    system: state.system,
+    nowTimestamp: Date.now() / 1000,
+  });
+
+  container.innerHTML = rows.map((row) => `
+    <article class="blotter-row blotter-row-${escapeHtml(row.status)}">
+      <div class="blotter-row-main">
+        <div class="blotter-row-titleblock">
+          <div class="blotter-row-title">${escapeHtml(row.title)}</div>
+          <div class="blotter-row-subtitle">${escapeHtml(row.route)}</div>
+        </div>
+        <div class="blotter-row-metrics">
+          <div class="blotter-cell">
+            <span class="blotter-cell-label">Edge</span>
+            <strong>${escapeHtml(row.netEdgeLabel)}</strong>
           </div>
-          <div class="opportunity-signal">
-            <span class="signal-label">Net edge</span>
-            <span class="signal-value">${escapeHtml(cents(opp.net_edge_cents))}</span>
-            <span class="signal-meta">${escapeHtml(`${formatUsd.format(opp.max_profit_usd || 0)} est. max P&L`)}</span>
+          <div class="blotter-cell">
+            <span class="blotter-cell-label">Max P&L</span>
+            <strong>${escapeHtml(row.maxProfitLabel)}</strong>
           </div>
-        </div>
-        <div class="opportunity-route">
-          <span class="route-node">${escapeHtml(`${platformLabel(opp.yes_platform)} YES`)}</span>
-          <span class="route-arrow">paired with</span>
-          <span class="route-node">${escapeHtml(`${platformLabel(opp.no_platform)} NO`)}</span>
-          <span class="route-market">${escapeHtml(opp.canonical_id)}</span>
-        </div>
-        <div class="opportunity-insights">
-          <span class="insight-chip"><strong>${escapeHtml(pct(confidence))}</strong> confidence</span>
-          <span class="insight-chip"><strong>${escapeHtml(formatWhole.format(opp.suggested_qty || 0))}</strong> suggested qty</span>
-          <span class="insight-chip"><strong>${escapeHtml(formatWhole.format(Math.round(opp.min_available_liquidity || 0)))}</strong> contracts liquid</span>
-          <span class="insight-chip"><strong>${escapeHtml(titleCase(opp.mapping_status || "candidate"))}</strong> mapping</span>
-        </div>
-        <div class="confidence-meter" style="--meter-fill:${(confidence * 100).toFixed(1)}%">
-          <span></span>
-        </div>
-        <div class="opportunity-legs">
-          ${renderLegCard("Buy YES", opp.yes_platform, opp.yes_price, opp.yes_fee, opp.yes_market_id, opp.yes_fee_rate)}
-          ${renderLegCard("Buy NO", opp.no_platform, opp.no_price, opp.no_fee, opp.no_market_id, opp.no_fee_rate)}
-        </div>
-        <div class="waterfall">
-          <div class="waterfall-track" style="--gross:${gross}; --fees:${fees}; --net:${net};">
-            <div class="segment-gross"></div>
-            <div class="segment-fees"></div>
-            <div class="segment-net"></div>
+          <div class="blotter-cell">
+            <span class="blotter-cell-label">Confidence</span>
+            <strong>${escapeHtml(row.confidenceLabel)}</strong>
           </div>
-          <div class="waterfall-labels">
-            <span>${escapeHtml(`Gross ${cents((opp.gross_edge || 0) * 100)}`)}</span>
-            <span>${escapeHtml(`Fees ${cents((opp.total_fees || 0) * 100)}`)}</span>
-            <span>${escapeHtml(`Net ${cents(opp.net_edge_cents || 0)}`)}</span>
+          <div class="blotter-cell">
+            <span class="blotter-cell-label">Freshness</span>
+            <strong>${escapeHtml(row.freshnessLabel)}</strong>
           </div>
         </div>
-      </article>
-    `;
-  }).join("");
+      </div>
+      <div class="blotter-row-side">
+        <span class="${statusClass(row.status)}">${escapeHtml(row.statusLabel)}</span>
+        <div class="blotter-chip-row">
+          <span class="blotter-chip">${escapeHtml(`${row.scansLabel} scans`)}</span>
+          <span class="blotter-chip">${escapeHtml(`${row.quantityLabel} qty`)}</span>
+          <span class="blotter-chip">${escapeHtml(`${row.liquidityLabel} liquid`)}</span>
+          <span class="blotter-chip">${escapeHtml(row.updatedLabel)}</span>
+        </div>
+      </div>
+    </article>
+  `).join("");
 }
 
 function renderManualQueue() {
@@ -1479,18 +1537,23 @@ function renderLegCard(label, platform, price, fee, marketId, feeRate) {
 }
 
 function renderLogExperience(entries = buildLogEntries()) {
-  const scope = currentLogScope();
-  const scopeCounts = buildLogScopeCounts(entries);
-  const scopedEntries = scopeEntries(entries, state.activeLogScope);
-  const categoryCounts = buildLogCategoryCounts(scopedEntries);
-  if (state.activeLogFilter !== "all" && !(categoryCounts[state.activeLogFilter] > 0)) {
-    state.activeLogFilter = "all";
+  const activityView = buildActivityAtlasView({
+    entries,
+    activeScope: state.activeLogScope,
+    activeFilter: state.activeLogFilter,
+    query: state.logQuery,
+    scopeDefinitions: LOG_SCOPE_DEFINITIONS,
+    filterOrder: FILTER_ORDER,
+  });
+  const scope = activityView.scope;
+  const scopeCounts = activityView.scopeCounts;
+  const categoryCounts = activityView.categoryCounts;
+  const scopedEntries = activityView.scopedEntries;
+  const filteredEntries = activityView.filteredEntries;
+  const normalizedQuery = activityView.query;
+  if (state.activeLogFilter !== activityView.activeFilter) {
+    state.activeLogFilter = activityView.activeFilter;
   }
-  const scopeFilteredEntries = state.activeLogFilter === "all"
-    ? scopedEntries
-    : scopedEntries.filter((entry) => entry.category === state.activeLogFilter);
-  const query = state.logQuery.trim().toLowerCase();
-  const filteredEntries = scopeFilteredEntries.filter((entry) => matchesLogQuery(entry, query));
 
   const publishedTypes = document.getElementById("publishedTypes");
   const trackedTypes = document.getElementById("trackedTypes");
@@ -1552,8 +1615,9 @@ function renderLogExperience(entries = buildLogEntries()) {
   }
 
   if (filterBar) {
-    filterBar.innerHTML = FILTER_ORDER.filter((key) => key === "all" || (scope.categories.includes(key) && (categoryCounts[key] || 0) > 0)).map((key) => {
-      const count = key === "all" ? scopedEntries.length : categoryCounts[key];
+    filterBar.innerHTML = activityView.filterItems.map((item) => {
+      const key = item.key;
+      const count = item.count;
       const label = key === "all" ? "All activity" : LOG_DEFINITIONS[key].label;
       return `
         <button type="button" class="log-filter-chip ${state.activeLogFilter === key ? "is-active" : ""}" data-log-filter="${escapeHtml(key)}">
@@ -1565,10 +1629,10 @@ function renderLogExperience(entries = buildLogEntries()) {
   }
 
   if (logResultSummaryEl) {
-    if (query) {
-      logResultSummaryEl.textContent = `Showing ${formatWhole.format(filteredEntries.length)} of ${formatWhole.format(scopeFilteredEntries.length)} ${scope.label.toLowerCase()} events for "${state.logQuery}".`;
+    if (normalizedQuery) {
+      logResultSummaryEl.textContent = `Compact console showing ${formatWhole.format(filteredEntries.length)} of ${formatWhole.format(scopedEntries.length)} events in ${scope.label.toLowerCase()} for "${state.logQuery}".`;
     } else {
-      logResultSummaryEl.textContent = `Showing ${formatWhole.format(filteredEntries.length)} ${scope.label.toLowerCase()} events in the current activity view.`;
+      logResultSummaryEl.textContent = `Compact console showing ${formatWhole.format(filteredEntries.length)} events in ${scope.label.toLowerCase()}.`;
     }
   }
 
@@ -1667,17 +1731,17 @@ function renderCharts() {
   renderChartMeta(equityChartMetaEl, equitySeries, "equity", "$");
   drawLineChart(edgeChartEl, scannerSeries, {
     valueKey: "best_edge_cents",
-    color: "#8ce0cf",
-    fill: "rgba(140, 224, 207, 0.28)",
+    color: "#8b8f97",
+    fill: "rgba(139, 143, 151, 0.16)",
     axisSuffix: "\u00a2",
-    focusColor: "#8ce0cf",
+    focusColor: "#8b8f97",
   });
   drawLineChart(equityChartEl, equitySeries, {
     valueKey: "equity",
-    color: "#ffd178",
-    fill: "rgba(255, 209, 120, 0.22)",
+    color: "#d7ff1f",
+    fill: "rgba(215, 255, 31, 0.18)",
     axisPrefix: "$",
-    focusColor: "#ffd178",
+    focusColor: "#d7ff1f",
   });
 }
 
@@ -1701,12 +1765,17 @@ function renderChartMeta(target, series, valueKey, unitPrefix = "") {
 
   target.innerHTML = [
     { label: "Latest", value: formatter(latest) },
-    { label: "Range high", value: formatter(high) },
-    { label: "Range low", value: formatter(low) },
+    { label: "High", value: formatter(high) },
+    { label: "Low", value: formatter(low) },
     { label: "Average", value: formatter(average) },
     { label: "Updated", value: lastTimestamp ? relTime(lastTimestamp) : "Waiting" },
   ]
-    .map((item) => `<span class="chart-meta-pill"><strong>${escapeHtml(item.value)}</strong><span>${escapeHtml(item.label)}</span></span>`)
+    .map((item) => `
+      <span class="chart-meta-pill">
+        <strong class="chart-meta-value">${escapeHtml(item.value)}</strong>
+        <span class="chart-meta-label">${escapeHtml(item.label)}</span>
+      </span>
+    `)
     .join("");
 }
 
@@ -1727,7 +1796,7 @@ function drawLineChart(target, points, options) {
     return;
   }
 
-  const padding = { top: 16, right: 20, bottom: 24, left: 16 };
+  const padding = { top: 18, right: 28, bottom: 28, left: 20 };
   const innerWidth = width - padding.left - padding.right;
   const innerHeight = height - padding.top - padding.bottom;
   const values = points.map((point) => Number(point[options.valueKey] || 0));
@@ -1754,8 +1823,17 @@ function drawLineChart(target, points, options) {
   const [lastX, lastY] = coords[coords.length - 1];
   const latestValue = Number(values[values.length - 1] || 0);
   const latestText = formatChartAxisValue(latestValue, options);
-  const labelX = Math.max(padding.left + 40, Math.min(lastX - 12, padding.left + innerWidth - 48));
-  const labelY = Math.max(padding.top + 14, lastY - 12);
+  const focusLabelWidth = Math.max(78, latestText.length * 7 + 18);
+  const focusLabelHeight = 24;
+  const preferLeft = lastX > padding.left + innerWidth - focusLabelWidth - 12;
+  const labelCenterX = preferLeft
+    ? Math.max(padding.left + focusLabelWidth / 2, lastX - 18 - focusLabelWidth / 2)
+    : Math.min(padding.left + innerWidth - focusLabelWidth / 2, lastX + 18 + focusLabelWidth / 2);
+  const labelCenterY = lastY < padding.top + focusLabelHeight + 8
+    ? Math.min(padding.top + innerHeight - focusLabelHeight / 2, lastY + 20)
+    : Math.max(padding.top + focusLabelHeight / 2, lastY - 20);
+  const labelRectX = labelCenterX - focusLabelWidth / 2;
+  const labelRectY = labelCenterY - focusLabelHeight / 2;
 
   target.innerHTML = `
     <svg class="chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="Live chart">
@@ -1770,10 +1848,11 @@ function drawLineChart(target, points, options) {
       <path class="chart-line" d="${linePath}" stroke="${options.color}"></path>
       <circle class="chart-focus-halo" cx="${lastX.toFixed(2)}" cy="${lastY.toFixed(2)}" r="9"></circle>
       <circle class="chart-focus-core" cx="${lastX.toFixed(2)}" cy="${lastY.toFixed(2)}" r="4.5" style="--chart-focus:${options.focusColor || options.color}"></circle>
-      <text class="chart-focus-label" x="${labelX.toFixed(2)}" y="${labelY.toFixed(2)}">${escapeHtml(latestText)}</text>
+      <rect class="chart-focus-pill" x="${labelRectX.toFixed(2)}" y="${labelRectY.toFixed(2)}" width="${focusLabelWidth.toFixed(2)}" height="${focusLabelHeight}" rx="12"></rect>
+      <text class="chart-focus-label" x="${labelCenterX.toFixed(2)}" y="${labelCenterY.toFixed(2)}" text-anchor="middle" dominant-baseline="middle">${escapeHtml(latestText)}</text>
       <text class="chart-axis-label" x="${padding.left}" y="${padding.top + 12}">${escapeHtml(maxLabel)}</text>
       <text class="chart-axis-label" x="${padding.left}" y="${padding.top + innerHeight - 6}">${escapeHtml(minLabel)}</text>
-      <text class="chart-axis-label" x="${padding.left + innerWidth - 36}" y="${height - 8}">${escapeHtml(lastLabel)}</text>
+      <text class="chart-axis-label" x="${padding.left + innerWidth}" y="${height - 10}" text-anchor="end">${escapeHtml(lastLabel)}</text>
     </svg>
   `;
 }
@@ -1833,7 +1912,7 @@ function renderActionButton(label, action, scope, targetId, canonicalId, seconda
       data-target-id="${escapeHtml(targetId)}"
       data-canonical-id="${escapeHtml(canonicalId || "")}"
     >
-      ${escapeHtml(label)}
+      <span class="action-button-label">${escapeHtml(label)}</span>
     </button>
   `;
 }
