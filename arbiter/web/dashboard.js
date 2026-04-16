@@ -110,6 +110,16 @@ const LOG_DEFINITIONS = {
 };
 
 const FILTER_ORDER = ["all", "market", "opportunity", "execution", "manual", "incident", "balance", "collector", "mapping"];
+const LOG_ATLAS_LIMITS = {
+  total: 48,
+  opportunity: 12,
+  execution: 10,
+  manual: 8,
+  incident: 10,
+  balance: 6,
+  collector: 6,
+  mapping: 6,
+};
 
 const PUBLISHED_TYPES = [
   { key: "system", label: "system", detail: "bootstrap + snapshot" },
@@ -483,19 +493,21 @@ function renderLogTokens(items, getCount) {
     .join("");
 }
 
-function buildLogCategoryCounts() {
-  const collectors = state.system?.collectors || {};
-  const balances = state.system?.balances || {};
-  return {
-    market: state.system ? 1 : 0,
-    opportunity: state.opportunities.length,
-    execution: state.trades.filter((trade) => !String(trade.status || "").startsWith("manual_")).length,
-    manual: state.manualPositions.length + state.trades.filter((trade) => String(trade.status || "").startsWith("manual_")).length,
-    incident: state.incidents.length,
-    balance: Object.keys(balances).length,
-    collector: Object.keys(collectors).length,
-    mapping: state.mappings.length,
-  };
+function emptyLogCategoryCounts() {
+  return FILTER_ORDER
+    .filter((key) => key !== "all")
+    .reduce((counts, key) => {
+      counts[key] = 0;
+      return counts;
+    }, {});
+}
+
+function buildLogCategoryCounts(entries) {
+  return entries.reduce((counts, entry) => {
+    if (!entry?.category || !(entry.category in counts)) return counts;
+    counts[entry.category] += 1;
+    return counts;
+  }, emptyLogCategoryCounts());
 }
 
 function buildMarketEntry() {
@@ -694,21 +706,23 @@ function buildLogEntries() {
   const marketEntry = buildMarketEntry();
   if (marketEntry) entries.push(marketEntry);
 
-  state.opportunities.slice(0, 12).forEach((opp, index) => entries.push(buildOpportunityEntry(opp, index)));
-  state.trades.slice(0, 10).forEach((trade, index) => entries.push(buildTradeEntry(trade, index)));
-  state.manualPositions.slice(0, 8).forEach((position, index) => entries.push(buildManualEntry(position, index)));
-  state.incidents.slice(0, 10).forEach((incident, index) => entries.push(buildIncidentEntry(incident, index)));
+  state.opportunities.slice(0, LOG_ATLAS_LIMITS.opportunity).forEach((opp, index) => entries.push(buildOpportunityEntry(opp, index)));
+  state.trades.slice(0, LOG_ATLAS_LIMITS.execution).forEach((trade, index) => entries.push(buildTradeEntry(trade, index)));
+  state.manualPositions.slice(0, LOG_ATLAS_LIMITS.manual).forEach((position, index) => entries.push(buildManualEntry(position, index)));
+  state.incidents.slice(0, LOG_ATLAS_LIMITS.incident).forEach((incident, index) => entries.push(buildIncidentEntry(incident, index)));
 
-  Object.entries(state.system?.balances || {}).forEach(([platform, snapshot], index) => {
+  Object.entries(state.system?.balances || {}).slice(0, LOG_ATLAS_LIMITS.balance).forEach(([platform, snapshot], index) => {
     entries.push(buildBalanceEntry(platform, snapshot, index));
   });
 
-  Object.entries(state.system?.collectors || {}).forEach(([name, collector], index) => {
+  Object.entries(state.system?.collectors || {}).slice(0, LOG_ATLAS_LIMITS.collector).forEach(([name, collector], index) => {
     entries.push(buildCollectorEntry(name, collector, index));
   });
 
   const nonConfirmedMappings = state.mappings.filter((mapping) => mappingStatus(mapping) !== "confirmed");
-  const visibleMappings = nonConfirmedMappings.length ? nonConfirmedMappings.slice(0, 6) : state.mappings.slice(0, 3);
+  const visibleMappings = nonConfirmedMappings.length
+    ? nonConfirmedMappings.slice(0, LOG_ATLAS_LIMITS.mapping)
+    : state.mappings.slice(0, LOG_ATLAS_LIMITS.mapping);
   visibleMappings.forEach((mapping, index) => entries.push(buildMappingEntry(mapping, index)));
 
   return entries
@@ -717,7 +731,7 @@ function buildLogEntries() {
       if (right.timestamp !== left.timestamp) return right.timestamp - left.timestamp;
       return left.rank - right.rank;
     })
-    .slice(0, 32);
+    .slice(0, LOG_ATLAS_LIMITS.total);
 }
 
 function renderLogEntry(entry) {
@@ -1322,8 +1336,11 @@ function renderLegCard(label, platform, price, fee, marketId, feeRate) {
 }
 
 function renderLogExperience() {
-  const categoryCounts = buildLogCategoryCounts();
   const entries = buildLogEntries();
+  const categoryCounts = buildLogCategoryCounts(entries);
+  if (state.activeLogFilter !== "all" && !(categoryCounts[state.activeLogFilter] > 0)) {
+    state.activeLogFilter = "all";
+  }
   const filteredEntries = state.activeLogFilter === "all"
     ? entries
     : entries.filter((entry) => entry.category === state.activeLogFilter);

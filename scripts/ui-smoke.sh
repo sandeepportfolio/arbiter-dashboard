@@ -158,15 +158,29 @@ LOG_FILTER_STATE="$("${PWCLI[@]}" eval "(async () => {
   await sleep(160);
   const activeCategory = document.querySelector('.log-category-card.is-active .log-category-name')?.textContent?.trim();
   const activeChip = document.querySelector('.log-filter-chip.is-active span')?.textContent?.trim();
+  const activeCount = Number.parseInt(document.querySelector('.log-filter-chip.is-active strong')?.textContent || '0', 10);
   const timelineCount = document.querySelectorAll('#logTimeline .log-entry').length;
+  const visibleCount = document.getElementById('logVisibleCount')?.textContent?.trim();
   document.querySelector('.log-filter-chip[data-log-filter=\"all\"]')?.click();
   await sleep(160);
   const resetChip = document.querySelector('.log-filter-chip.is-active span')?.textContent?.trim();
-  return { activeCategory, activeChip, timelineCount, resetChip };
+  return { activeCategory, activeChip, activeCount, timelineCount, visibleCount, resetChip };
 })()")"
 echo "$LOG_FILTER_STATE"
 if ! grep -q '"activeCategory": "Manual Flow"' <<<"$LOG_FILTER_STATE"; then
   echo "[ui-smoke] manual category filter did not activate" >&2
+  exit 1
+fi
+if ! grep -q '"activeCount": 4' <<<"$LOG_FILTER_STATE"; then
+  echo "[ui-smoke] manual filter chip count drifted from the seeded dataset" >&2
+  exit 1
+fi
+if ! grep -q '"timelineCount": 4' <<<"$LOG_FILTER_STATE"; then
+  echo "[ui-smoke] manual timeline count is not consistent with the active filter" >&2
+  exit 1
+fi
+if ! grep -q '"visibleCount": "4 shown"' <<<"$LOG_FILTER_STATE"; then
+  echo "[ui-smoke] visible count label is not consistent with the manual log feed" >&2
   exit 1
 fi
 if ! grep -q '"resetChip": "All activity"' <<<"$LOG_FILTER_STATE"; then
@@ -233,7 +247,22 @@ MANUAL_ACTION_STATE="$("${PWCLI[@]}" eval "(async () => {
     if (statusText('GOP_SENATE_2026') === 'cancelled') break;
     await sleep(120);
   }
-  return { enteredStatus, closedStatus, cancelledStatus: statusText('GOP_SENATE_2026') };
+  document.querySelector('.log-filter-chip[data-log-filter=\"manual\"]')?.click();
+  await sleep(160);
+  const manualLogText = Array.from(document.querySelectorAll('#logTimeline .log-entry'))
+    .map((entry) => entry.textContent?.trim().toLowerCase() || '')
+    .join(' | ');
+  const timelineCount = document.querySelectorAll('#logTimeline .log-entry').length;
+  const visibleCount = document.getElementById('logVisibleCount')?.textContent?.trim();
+  return {
+    enteredStatus,
+    closedStatus,
+    cancelledStatus: statusText('GOP_SENATE_2026'),
+    timelineCount,
+    visibleCount,
+    sawClosedWorkflow: manualLogText.includes('manual closed workflow'),
+    sawCancelledWorkflow: manualLogText.includes('manual cancelled workflow'),
+  };
 })()")"
 echo "$MANUAL_ACTION_STATE"
 if ! grep -q '"enteredStatus": "entered"' <<<"$MANUAL_ACTION_STATE"; then
@@ -246,6 +275,22 @@ if ! grep -q '"closedStatus": "closed"' <<<"$MANUAL_ACTION_STATE"; then
 fi
 if ! grep -q '"cancelledStatus": "cancelled"' <<<"$MANUAL_ACTION_STATE"; then
   echo "[ui-smoke] manual cancel button failed" >&2
+  exit 1
+fi
+if ! grep -q '"timelineCount": 4' <<<"$MANUAL_ACTION_STATE"; then
+  echo "[ui-smoke] manual log timeline count drifted after workflow actions" >&2
+  exit 1
+fi
+if ! grep -q '"visibleCount": "4 shown"' <<<"$MANUAL_ACTION_STATE"; then
+  echo "[ui-smoke] manual log visible count drifted after workflow actions" >&2
+  exit 1
+fi
+if ! grep -q '"sawClosedWorkflow": true' <<<"$MANUAL_ACTION_STATE"; then
+  echo "[ui-smoke] manual closed workflow did not surface in the log atlas" >&2
+  exit 1
+fi
+if ! grep -q '"sawCancelledWorkflow": true' <<<"$MANUAL_ACTION_STATE"; then
+  echo "[ui-smoke] manual cancelled workflow did not surface in the log atlas" >&2
   exit 1
 fi
 
