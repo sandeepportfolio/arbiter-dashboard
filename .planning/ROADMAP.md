@@ -104,11 +104,11 @@ Plans:
 Plans:
 - [x] 04-01-PLAN.md -- Sandbox package scaffold + @pytest.mark.live opt-in + guard-railed fixtures + evidence/reconcile helpers + operator README
 - [x] 04-02-PLAN.md -- settings.py env-var URLs + PolymarketAdapter PHASE4_MAX_ORDER_USD hard-lock + docker-compose multi-DB + .env.sandbox.template + .gitignore
-- [ ] 04-03-PLAN.md -- Kalshi demo scenarios: happy path (TEST-01+TEST-04 fee_cost), FOK rejection (EXEC-01), timeout-cancel (Phase 2.1 CR-01 live)
-- [ ] 04-04-PLAN.md -- Polymarket real-$1 scenarios: happy path with get_trades fee reconstruction (TEST-02+TEST-04 Pitfall 2), FOK rejection (EXEC-01)
-- [ ] 04-05-PLAN.md -- Kill-switch live-fire against Kalshi demo (SAFE-01): trip_kill + platform-confirmed cancel + 5s budget
-- [ ] 04-06-PLAN.md -- Injected safety scenarios: one-leg exposure (SAFE-03) + rate-limit burst (SAFE-04)
-- [ ] 04-07-PLAN.md -- Graceful-shutdown subprocess test with SIGINT + platform cancel verification (SAFE-05)
+- [x] 04-03-PLAN.md -- Kalshi demo scenarios: happy path (TEST-01+TEST-04 fee_cost), FOK rejection (EXEC-01), timeout-cancel (Phase 2.1 CR-01 live)
+- [x] 04-04-PLAN.md -- Polymarket real-$1 scenarios: happy path with get_trades fee reconstruction (TEST-02+TEST-04 Pitfall 2), FOK rejection (EXEC-01)
+- [x] 04-05-PLAN.md -- Kill-switch live-fire against Kalshi demo (SAFE-01): trip_kill + platform-confirmed cancel + 5s budget
+- [x] 04-06-PLAN.md -- Injected safety scenarios: one-leg exposure (SAFE-03) + rate-limit burst (SAFE-04)
+- [x] 04-07-PLAN.md -- Graceful-shutdown subprocess test with SIGINT + platform cancel verification (SAFE-05)
 - [ ] 04-08-PLAN.md -- Aggregator library + terminal reconciliation test + 04-VALIDATION.md population (TEST-03+TEST-04 hard-gate per D-19)
 
 ### Phase 5: Live Trading
