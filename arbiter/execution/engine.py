@@ -777,25 +777,38 @@ class ExecutionEngine:
         )
         leg_yes, leg_no = await asyncio.gather(yes_task, no_task)
 
-        status = "submitted"
-        notes: List[str] = []
-        if leg_yes.status in {OrderStatus.FAILED, OrderStatus.CANCELLED, OrderStatus.ABORTED} or leg_no.status in {
+        # Plan 03-08 (SAFE-02 gap closure — closes the
+        # 03-VERIFICATION.md "Per-platform exposure tracking fires on
+        # filled status only" gap):
+        # We must decide status AND record per-platform exposure BEFORE
+        # dispatching to _recover_one_leg_risk, because the recovery
+        # path mutates leg.status to CANCELLED on success and also
+        # (post Task 2) releases the reservation. If we recorded after
+        # recovery, the release would fire against an empty reservation
+        # and the record would follow — creating a net mis-accounting.
+        surviving_statuses = {
+            OrderStatus.FILLED,
+            OrderStatus.PARTIAL,
+            OrderStatus.SUBMITTED,
+        }
+        terminal_failed = {
             OrderStatus.FAILED,
             OrderStatus.CANCELLED,
             OrderStatus.ABORTED,
-        }:
-            if leg_yes.status in {OrderStatus.FILLED, OrderStatus.PARTIAL, OrderStatus.SUBMITTED} or leg_no.status in {
-                OrderStatus.FILLED,
-                OrderStatus.PARTIAL,
-                OrderStatus.SUBMITTED,
-            }:
+        }
+
+        status = "submitted"
+        notes: List[str] = []
+        needs_recovery = False
+        if leg_yes.status in terminal_failed or leg_no.status in terminal_failed:
+            if leg_yes.status in surviving_statuses or leg_no.status in surviving_statuses:
                 status = "recovering"
-                notes.extend(await self._recover_one_leg_risk(arb_id, opp, leg_yes, leg_no))
+                needs_recovery = True
             else:
                 status = "failed"
         elif leg_yes.status == OrderStatus.PARTIAL or leg_no.status == OrderStatus.PARTIAL:
             status = "recovering"
-            notes.extend(await self._recover_one_leg_risk(arb_id, opp, leg_yes, leg_no))
+            needs_recovery = True
         elif leg_yes.status == OrderStatus.FILLED and leg_no.status == OrderStatus.FILLED:
             status = "filled"
 
@@ -811,19 +824,16 @@ class ExecutionEngine:
         )
         self._executions.append(execution)
 
-        # Plan 03-08 (SAFE-02 gap closure — closes the
-        # 03-VERIFICATION.md "Per-platform exposure tracking fires on
-        # filled status only" gap):
-        #   * "submitted" or "filled" → both legs have real exposure
-        #     (in-flight or confirmed); record the full split. This
-        #     mirrors _simulate_execution at line ~759 verbatim.
-        #   * "recovering" → exactly one leg holds exposure (the
-        #     survivor — the other was rejected/cancelled by the venue
-        #     or is mid-cancel via _recover_one_leg_risk). Record only
-        #     that leg using the single-platform `platform=` kwarg so
-        #     we don't double-count the rejected side.
-        #   * "failed" → both legs rejected by venue; no resting order;
-        #     do not record (no exposure exists to track).
+        # Plan 03-08 (SAFE-02): per-platform exposure recording.
+        #   * "submitted"/"filled" → both legs have real exposure; record
+        #     full split (mirrors _simulate_execution verbatim).
+        #   * "recovering" → exactly one leg is the survivor (the other
+        #     side is FAILED/CANCELLED/ABORTED); record ONLY the
+        #     survivor's exposure via single-platform `platform=` kwarg.
+        #     Task 2's release_trade hook inside _recover_one_leg_risk
+        #     will free this reservation if the survivor is then
+        #     successfully cancelled (SUBMITTED→CANCELLED transition).
+        #   * "failed" → both rejected; no exposure to track.
         if status in {"submitted", "filled"}:
             self.risk.record_trade(
                 opp.canonical_id,
@@ -835,15 +845,8 @@ class ExecutionEngine:
                 no_exposure=opp.suggested_qty * opp.no_price,
             )
         elif status == "recovering":
-            # Identify the surviving leg — whichever side reached
-            # FILLED, PARTIAL, or SUBMITTED (the other side is
-            # FAILED/CANCELLED/ABORTED per the status decision tree
-            # above at lines ~780-798).
-            surviving_statuses = {
-                OrderStatus.FILLED,
-                OrderStatus.PARTIAL,
-                OrderStatus.SUBMITTED,
-            }
+            # Determine the survivor PRE-recovery (recovery mutates
+            # leg.status to CANCELLED on success, destroying this info).
             surviving_platform: Optional[str] = None
             surviving_exposure: float = 0.0
             if leg_yes.status in surviving_statuses and leg_no.status not in surviving_statuses:
@@ -853,10 +856,10 @@ class ExecutionEngine:
                 surviving_platform = opp.no_platform
                 surviving_exposure = opp.suggested_qty * opp.no_price
             else:
-                # Edge case: both legs partially-filled or both
-                # submitted with one in PARTIAL — record the full
-                # split, the recovery loop below will issue cancels
-                # and Task 2's release_trade hook will rebalance.
+                # Edge case: both legs in a surviving state (e.g. both
+                # PARTIAL or one PARTIAL + one SUBMITTED) — record the
+                # full split; the recovery loop's release_trade hook will
+                # rebalance per leg as each cancel confirms.
                 self.risk.record_trade(
                     opp.canonical_id,
                     opp.suggested_qty * (opp.yes_price + opp.no_price),
@@ -873,6 +876,11 @@ class ExecutionEngine:
                     execution.realized_pnl,
                     platform=surviving_platform,
                 )
+
+        # Recovery runs AFTER recording so Task 2's release_trade hook
+        # can free the survivor's reservation if its cancel succeeds.
+        if needs_recovery:
+            notes.extend(await self._recover_one_leg_risk(arb_id, opp, leg_yes, leg_no))
 
         # EXEC-02 / D-16: persist the completed arb execution.
         if self.store is not None:
@@ -1095,8 +1103,37 @@ class ExecutionEngine:
 
         for leg in (leg_yes, leg_no):
             if leg.status in {OrderStatus.SUBMITTED, OrderStatus.PENDING, OrderStatus.PARTIAL}:
+                # Snapshot pre-cancel status: _cancel_order mutates leg.status
+                # to OrderStatus.CANCELLED on success (engine.py:1063), so we
+                # must capture what the leg WAS before deciding whether the
+                # Task 1 _live_execution edit booked a per-platform
+                # reservation for it.
+                original_status = leg.status
                 cancelled = await self._cancel_order(leg)
                 notes.append(f"cancel-{leg.side}:{'ok' if cancelled else 'failed'}")
+                # Plan 03-08 (SAFE-02 gap closure): if a previously
+                # SUBMITTED or PARTIAL leg's cancel succeeded, release
+                # the per-platform reservation that Task 1's
+                # _live_execution edit booked. PENDING legs were never
+                # recorded (place_fok had not returned), so they have
+                # nothing to release. Failed cancels (cancelled=False)
+                # mean the resting order may still exist at the venue
+                # — the exposure is still real, do not release.
+                if cancelled and original_status in {
+                    OrderStatus.SUBMITTED,
+                    OrderStatus.PARTIAL,
+                }:
+                    # Release the unfilled notional. For PARTIAL legs
+                    # the filled portion stays booked (this is a known
+                    # simplification — full PARTIAL accounting is
+                    # outside the SAFE-02 gap-closure scope).
+                    unfilled_qty = max(leg.quantity - leg.fill_qty, 0)
+                    if unfilled_qty > 0:
+                        self.risk.release_trade(
+                            opp.canonical_id,
+                            unfilled_qty * leg.price,
+                            platform=leg.platform,
+                        )
         return notes
 
     async def _cancel_order(self, order: Order) -> bool:
