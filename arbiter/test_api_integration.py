@@ -363,3 +363,238 @@ def test_system_endpoint_includes_rate_limits():
             assert "polymarket" in body["rate_limits"]
 
     asyncio.run(_run())
+
+
+# ─── SAFE-06: resolution_criteria on /api/market-mappings + mapping_state WS ──
+
+
+async def _make_mapping_api():
+    """Build a minimal in-process ArbiterAPI for market-mapping endpoints.
+
+    Uses the real MARKET_MAP dict so tests exercise the actual persistence
+    path through update_market_mapping.
+    """
+    from types import SimpleNamespace
+
+    from arbiter.api import ArbiterAPI
+    from arbiter.config.settings import ArbiterConfig
+
+    config = ArbiterConfig()
+
+    async def _noop_get_all_prices():
+        return {}
+
+    price_store = SimpleNamespace(get_all_prices=_noop_get_all_prices)
+    scanner = SimpleNamespace(current_opportunities=[], stats={}, history=[])
+    engine = SimpleNamespace(
+        stats={"audit": {}},
+        execution_history=[],
+        manual_positions=[],
+        incidents=[],
+        equity_curve=[],
+        adapters={},
+    )
+    monitor = SimpleNamespace(current_balances={})
+
+    api = ArbiterAPI(
+        price_store=price_store,
+        scanner=scanner,
+        engine=engine,
+        monitor=monitor,
+        config=config,
+        safety=None,
+    )
+    return api
+
+
+def test_market_mappings_returns_resolution_criteria():
+    """SAFE-06 truth: GET /api/market-mappings includes resolution_criteria
+    and resolution_match_status keys on every mapping (even when unset).
+    """
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async def _run():
+        api = await _make_mapping_api()
+        app = web.Application()
+        app.router.add_get("/api/market-mappings", api.handle_market_mappings)
+        async with TestClient(TestServer(app)) as client:
+            response = await client.get("/api/market-mappings")
+            assert response.status == 200
+            payload = await response.json()
+            assert isinstance(payload, list)
+            assert len(payload) >= 1
+            for row in payload:
+                assert "resolution_criteria" in row, (
+                    f"mapping {row.get('canonical_id')} missing resolution_criteria"
+                )
+                assert "resolution_match_status" in row, (
+                    f"mapping {row.get('canonical_id')} missing resolution_match_status"
+                )
+
+    asyncio.run(_run())
+
+
+def test_market_mapping_update_accepts_criteria(monkeypatch):
+    """SAFE-06 truth: POST /api/market-mappings/{id} accepts a
+    resolution_criteria body and persists it, returning the stored payload.
+    """
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from arbiter import api as api_mod
+
+    # Auth fixture — allow a single test operator.
+    test_email = "test-op@arbiter.local"
+    test_password_hash = api_mod._hash_password("letmein")
+    monkeypatch.setattr(api_mod, "UI_ALLOWED_USERS", {test_email: test_password_hash})
+
+    async def _run():
+        api = await _make_mapping_api()
+        app = web.Application()
+        app.router.add_post(
+            "/api/market-mappings/{canonical_id}", api.handle_market_mapping_action,
+        )
+        app.router.add_post("/api/auth/login", api.handle_login)
+
+        async with TestClient(TestServer(app)) as client:
+            # Login to get a session cookie.
+            login_resp = await client.post(
+                "/api/auth/login",
+                json={"email": test_email, "password": "letmein"},
+            )
+            assert login_resp.status == 200
+
+            criteria = {
+                "kalshi": {"rule": "X"},
+                "polymarket": {"rule": "Y"},
+                "criteria_match": "similar",
+                "operator_note": "verified manually",
+            }
+            resp = await client.post(
+                "/api/market-mappings/DEM_HOUSE_2026",
+                json={"action": "review", "resolution_criteria": criteria},
+            )
+            assert resp.status == 200, (await resp.text())
+            body = await resp.json()
+            assert body.get("resolution_criteria", {}).get("criteria_match") == "similar"
+            assert body.get("resolution_match_status") == "similar"
+
+    asyncio.run(_run())
+
+
+def test_market_mapping_update_rejects_invalid_criteria_match(monkeypatch):
+    """Threat T-3-06-B: criteria_match outside the allowed enum returns 400."""
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from arbiter import api as api_mod
+
+    test_email = "test-op@arbiter.local"
+    test_password_hash = api_mod._hash_password("letmein")
+    monkeypatch.setattr(api_mod, "UI_ALLOWED_USERS", {test_email: test_password_hash})
+
+    async def _run():
+        api = await _make_mapping_api()
+        app = web.Application()
+        app.router.add_post(
+            "/api/market-mappings/{canonical_id}", api.handle_market_mapping_action,
+        )
+        app.router.add_post("/api/auth/login", api.handle_login)
+
+        async with TestClient(TestServer(app)) as client:
+            login_resp = await client.post(
+                "/api/auth/login",
+                json={"email": test_email, "password": "letmein"},
+            )
+            assert login_resp.status == 200
+
+            resp = await client.post(
+                "/api/market-mappings/DEM_HOUSE_2026",
+                json={
+                    "action": "review",
+                    "resolution_criteria": {
+                        "criteria_match": "DROP TABLE mappings",
+                    },
+                },
+            )
+            assert resp.status == 400
+
+    asyncio.run(_run())
+
+
+def test_mapping_state_ws_event_fires_on_update(monkeypatch):
+    """SAFE-06 truth: WebSocket mapping_state event fires within 2s after a
+    POST update to a mapping's resolution_criteria.
+    """
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from arbiter import api as api_mod
+
+    test_email = "test-op@arbiter.local"
+    test_password_hash = api_mod._hash_password("letmein")
+    monkeypatch.setattr(api_mod, "UI_ALLOWED_USERS", {test_email: test_password_hash})
+
+    async def _run():
+        api = await _make_mapping_api()
+        app = web.Application()
+        app.router.add_get("/ws", api.handle_websocket)
+        app.router.add_post(
+            "/api/market-mappings/{canonical_id}", api.handle_market_mapping_action,
+        )
+        app.router.add_post("/api/auth/login", api.handle_login)
+
+        async with TestClient(TestServer(app)) as client:
+            # Login.
+            login_resp = await client.post(
+                "/api/auth/login",
+                json={"email": test_email, "password": "letmein"},
+            )
+            assert login_resp.status == 200
+
+            async with client.ws_connect("/ws") as ws:
+                # Drain bootstrap.
+                first = await ws.receive(timeout=3.0)
+                assert first.type == aiohttp.WSMsgType.TEXT
+                first_payload = json.loads(first.data)
+                assert first_payload["type"] == "bootstrap"
+
+                # Trigger a mapping update.
+                update_resp = await client.post(
+                    "/api/market-mappings/DEM_HOUSE_2026",
+                    json={
+                        "action": "review",
+                        "resolution_criteria": {
+                            "kalshi": {"rule": "A"},
+                            "polymarket": {"rule": "B"},
+                            "criteria_match": "divergent",
+                            "operator_note": "ws test",
+                        },
+                    },
+                )
+                assert update_resp.status == 200
+
+                # Poll for mapping_state within 2s.
+                deadline = time.time() + 2.5
+                got_event = None
+                while time.time() < deadline:
+                    try:
+                        msg = await ws.receive(timeout=2.0)
+                    except asyncio.TimeoutError:
+                        break
+                    if msg.type != aiohttp.WSMsgType.TEXT:
+                        continue
+                    data = json.loads(msg.data)
+                    if data.get("type") == "mapping_state":
+                        got_event = data
+                        break
+                assert got_event is not None, "mapping_state event not received"
+                payload = got_event["payload"]
+                assert payload["canonical_id"] == "DEM_HOUSE_2026"
+                assert (
+                    payload["resolution_criteria"]["criteria_match"] == "divergent"
+                )
+                assert payload["resolution_match_status"] == "divergent"
+
+    asyncio.run(_run())
