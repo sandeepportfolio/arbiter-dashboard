@@ -16,11 +16,13 @@ services:
       POSTGRES_DB: ${PG_DATABASE:-arbiter_dev}
       POSTGRES_USER: ${PG_USER:-arbiter}
       POSTGRES_PASSWORD: ${PG_PASSWORD:-arbiter_secret}
+      POSTGRES_MULTIPLE_DATABASES: arbiter_sandbox
     ports:
       - "${PG_PORT:-5432}:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
       - ./arbiter/sql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./arbiter/sql/init-sandbox.sh:/docker-entrypoint-initdb.d/init-sandbox.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-arbiter}"]
       interval: 10s

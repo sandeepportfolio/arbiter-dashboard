@@ -7,3 +7,8 @@ trade-logs/
 .pytest_cache/
 __pycache__/
 output/playwright/
+
+# Phase 4 sandbox credentials + evidence
+.env.sandbox
+evidence/04/
+keys/kalshi_demo_private.pem
