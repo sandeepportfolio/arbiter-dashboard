@@ -88,7 +88,7 @@ Plans:
 - [x] 03-04-PLAN.md -- Per-adapter rate-limit acquire + 429 retry-after + periodic rate_limit_state WS broadcast (SAFE-04)
 - [x] 03-05-PLAN.md -- Graceful shutdown re-ordering + full KalshiAdapter/PolymarketAdapter cancel_all + prepare_shutdown (SAFE-05)
 - [x] 03-06-PLAN.md -- MARKET_MAP resolution_criteria schema + mapping_state WS event + SQL ALTER migration (SAFE-06)
-- [ ] 03-07-PLAN.md -- Dashboard UI consolidation: safety section + rate-limit pills + one-leg hero alert + shutdown banner + resolution comparison (SAFE-01..06 UI)
+- [x] 03-07-PLAN.md -- Dashboard UI consolidation: safety section + rate-limit pills + one-leg hero alert + shutdown banner + resolution comparison (SAFE-01..06 UI)
 
 ### Phase 4: Sandbox Validation
 **Goal**: The full pipeline (collect -> scan -> execute -> monitor -> reconcile) is validated end-to-end against real platform APIs in sandbox/demo mode with no real money at risk
