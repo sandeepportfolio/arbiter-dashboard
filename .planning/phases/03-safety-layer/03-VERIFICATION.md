@@ -1,18 +1,16 @@
 ---
 phase: 03-safety-layer
-verified: 2026-04-16T21:25:00Z
-status: gaps_found
-score: 17/18
+verified: 2026-04-16T23:00:00Z
+status: human_needed
+score: 18/18
 overrides_applied: 0
-gaps:
-  - truth: "Per-platform exposure tracking fires on filled status only — submitted live orders do not register exposure until both legs confirm"
-    status: partial
-    reason: "In _live_execution (engine.py line 814-824), record_trade is called only when status == 'filled'. When status == 'submitted' (both orders dispatched but confirmation pending), per-platform exposure accumulates zero. A burst of 'submitted' in-flight orders can allow a subsequent check_trade to pass the per-platform ceiling check before prior fills land. Dry-run path (_simulate_execution line 759) correctly calls record_trade unconditionally."
-    artifacts:
-      - path: "arbiter/execution/engine.py"
-        issue: "Lines 814-824: record_trade guarded by `if status == 'filled':` inside the `if status in {'submitted', 'filled'}:` block. The outer condition is correct; the inner guard is too strict for live-mode per-platform accounting."
-    missing:
-      - "Either (a) add record_trade call for the 'submitted' state with the same leg-split kwargs, or (b) add a parallel _platform_exposures increment at order-submission time (before confirmation) and decrement it on fill/cancel — whichever matches the intended accounting model."
+re_verification:
+  previous_status: gaps_found
+  previous_score: 17/18
+  gaps_closed:
+    - "Per-platform exposure tracking fires on filled status only — SAFE-02 live-mode gap closed by plan 03-08"
+  gaps_remaining: []
+  regressions: []
 human_verification:
   - test: "Operator kill-switch ARM + RESET end-to-end"
     expected: "ARM button triggers window.confirm + prompt; badge flips to ARMED (red); Reset appears with 30s cooldown; after cooldown Reset resets to Disarmed. Backend logs show trip_kill + adapter.cancel_all."
@@ -23,14 +21,36 @@ human_verification:
   - test: "Rate-limit pills color transition under load"
     expected: "Dashboard pills transition from green (.ok) to amber (.warn) when adapters are throttled"
     why_human: "Requires generating real throttle state under load; cannot assert color without a browser session"
+notes:
+  - id: UI-CONTRACT-DRIFT
+    severity: warning
+    description: "test_api_integration.py::test_api_and_dashboard_contracts FAILs because the test asserts 'ARBITER LIVE' in the /ops page HTML body, but commit e4c3411 (plan 03-07 UI consolidation) restructured dashboard.html so the literal 'ARBITER LIVE' no longer appears in the ops variant. The test was written (commit 26ef529) when that string existed in the pre-03-07 dashboard. This failure is pre-existing as of plan 03-07 and is NOT caused by plan 03-08. It is NOT a SAFE-01..SAFE-06 regression — it is a cross-phase UI contract drift between the test suite and the consolidated dashboard markup."
+    affected_file: "arbiter/test_api_integration.py"
+    affected_test: "test_api_and_dashboard_contracts (line 82)"
+    introduced_by_commit: "e4c3411 feat(03-07): consolidate Phase 3 safety layer into operator dashboard UI"
+    recommended_fix: "Update the assertion on line 82 of arbiter/test_api_integration.py to match the actual heading text present in the /ops HTML (e.g., change to assert 'ARBITER' in ops_html or assert 'Live Desk' in ops_html to match the <title> 'ARBITER Live Desk')."
 ---
 
-# Phase 3: Safety Layer — Verification Report
+# Phase 3: Safety Layer — Verification Report (Re-verification)
 
-**Phase Goal:** Safety Layer — implement kill-switch (SafetySupervisor + POST /api/kill-switch + audit), per-platform exposure limits + order_rejected incidents, one-leg exposure hero alerting, per-adapter rate limiting with 429 handling + periodic broadcast, graceful shutdown ordering (cancel_all before task cancel), market-mapping resolution-criteria schema, and operator-facing dashboard consolidation for all of the above.
-**Verified:** 2026-04-16T21:25:00Z
-**Status:** gaps_found
-**Re-verification:** No — initial verification
+**Phase Goal:** The system cannot lose money due to runaway execution, naked positions, rate limit bans, or uncontrolled shutdown — every dangerous scenario has a safety mechanism.
+**Verified:** 2026-04-16T23:00:00Z
+**Status:** human_needed
+**Re-verification:** Yes — after gap closure (plan 03-08 closed SAFE-02 submitted-state gap)
+
+---
+
+## Re-verification Summary
+
+Previous verification (2026-04-16T21:25:00Z): **gaps_found** (17/18 — SAFE-02 partial)
+
+Plan 03-08 closed the SAFE-02 gap by:
+- Removing the `if status == "filled":` inner guard in `_live_execution` so `record_trade` fires on both `"submitted"` and `"filled"` states.
+- Adding a `elif status == "recovering":` branch that records only the surviving leg's exposure.
+- Adding `release_trade` in `_recover_one_leg_risk` after a successful cancel, freeing the per-platform reservation.
+- Adding 4 new pytest tests that prove the burst-window is closed, recovering-only-surviving-leg accounting, and release-on-cancel symmetry.
+
+Current test suite: **137 passed, 3 skipped** (`arbiter/execution/ arbiter/safety/ arbiter/test_api_safety.py arbiter/test_main_shutdown.py`).
 
 ---
 
@@ -40,26 +60,28 @@ human_verification:
 
 | # | Truth | Status | Evidence |
 |---|-------|--------|----------|
-| 1 | SafetySupervisor.trip_kill() cancels all open orders across adapters within 5 seconds and emits kill_switch WS event | VERIFIED | supervisor.py asyncio.gather with wait_for(5.0) per adapter; _publish({"type": "kill_switch"}) at end of trip_kill; test_supervisor.py 13/13 passing |
-| 2 | Once armed, ExecutionEngine.execute_opportunity rejects every new opportunity until reset | VERIFIED | allow_execution returns (False, "Kill switch armed: ...", state.to_dict()) when _state.armed; chained_gate wired in main.py line 300; test_allow_execution_armed passes |
-| 3 | POST /api/kill-switch with action=arm requires operator auth (401 unauthenticated) and a reason body field (400 when empty) | VERIFIED | api.py line 589: await require_auth(request) as first call; line 603: returns 400 when not reason; test_api_safety.py 4 passing |
-| 4 | POST /api/kill-switch with action=reset respects min_cooldown_seconds — 400 while cooldown not elapsed | VERIFIED | supervisor.py reset_kill lines 212-215: raises ValueError("Kill switch cooldown: ...") when now < cooldown_until; api.py line 619-620: except ValueError returns 400 |
-| 5 | Telegram notifier sends kill_armed message when trip_kill succeeds; send failures do NOT abort trip_kill | VERIFIED | supervisor.py lines 155-163: try/except around notifier.send; test_telegram_failure_does_not_abort_trip passes |
-| 6 | safety_events Postgres table captures one INSERT per arm/reset (append-only, never UPDATE/DELETE) | VERIFIED | safety_events.sql CREATE TABLE confirmed; persistence.py exposes only insert_safety_event + list_events (no UPDATE/DELETE); SafetyEventStore INSERT-only |
-| 7 | Concurrent arm attempts — exactly one trip goes through; others see armed state and no-op | VERIFIED | supervisor.py asyncio.Lock serializes trip_kill; if self._state.armed: return early at line 136; test_concurrent_arm_serializes passes |
-| 8 | Dashboard WS client receives kill_switch payload and does not throw on the new type | VERIFIED | dashboard.js line 1136: else if (message.type === "kill_switch") { state.safety = {..., killSwitch: message.payload}; }; node --check passes |
-| 9 | Per-platform exposure limits check both legs before order submission and emit order_rejected incidents | PARTIAL — gap on submitted state | check_trade (engine.py lines 248-267) correctly checks both legs at pre-trade time; order_rejected incident emitted via _emit_rejection_incident (line 413). However record_trade only fires on 'filled' not 'submitted' — exposure register is incomplete for in-flight live orders (CR-02). Dry-run path correct. |
-| 10 | One-leg exposure: when exactly one leg fills, structured one_leg_exposure incident emitted + Telegram + dedicated WS event | VERIFIED | engine.py _recover_one_leg_risk lines 996-1032: emits incident with event_type="one_leg_exposure" metadata; self._safety.handle_one_leg_exposure called; supervisor.py handle_one_leg_exposure fires Telegram + _publish({"type": "one_leg_exposure", "payload": ...}) |
-| 11 | Every outbound call from KalshiAdapter and PolymarketAdapter acquires rate_limiter token before HTTP/SDK I/O | VERIFIED | kalshi.py: 5 acquire() calls across all outbound methods; polymarket.py: 4 acquire() calls; all outbound methods covered; execution tests 113 passing |
-| 12 | On HTTP 429, adapter invokes apply_retry_after + records circuit failure + returns FAILED Order; FOK never retries | VERIFIED | kalshi.py lines 128-144: 429 branch with apply_retry_after; circuit.record_failure(); returns _failed_order with "rate_limited"; polymarket.py lines 172-177: same pattern; no retry after 429 for FOK |
-| 13 | api.py runs periodic _rate_limit_broadcast_loop emitting rate_limit_state WS event every 2 seconds; stats expose available_tokens/max_requests/remaining_penalty_seconds | VERIFIED | api.py line 826: _rate_limit_broadcast_loop method exists; line 230: task created; retry.py lines 325/329/331: all three stats fields present |
-| 14 | On SIGINT/SIGTERM, main.py calls safety.trip_kill BEFORE any task.cancel(); second SIGINT triggers os._exit(1) | VERIFIED | main.py line 417: await run_shutdown_sequence(safety, tasks); run_shutdown_sequence lines 131-144: prepare_shutdown before task.cancel loop; line 396: os._exit(1) on second signal; test_graceful_shutdown_cancels_orders_before_tasks passes (3/3) |
-| 15 | KalshiAdapter.cancel_all chunks orders in 20-sized slices with one rate-limit token per chunk; PolymarketAdapter.cancel_all uses run_in_executor(client.cancel_all) | VERIFIED | kalshi.py: CANCEL_ALL_CHUNK_SIZE=20 line 274; chunking loop lines 298-404; per-chunk acquire() line 310; batched DELETE path; polymarket.py: run_in_executor(client.cancel_all()) line 422; acquire() line 418 |
-| 16 | safety.prepare_shutdown() broadcasts shutdown_state with phase='shutting_down' BEFORE trip_kill; phase='complete' in finally | VERIFIED | supervisor.py lines 285-308: _publish shutdown_state before trip_kill; finally block publishes phase=complete; test_prepare_shutdown_broadcasts_before_trip passes |
-| 17 | MARKET_MAP schema accepts optional resolution_criteria dict; MarketMapping dataclass exposes it; GET + POST /api/market-mappings handles it; idempotent SQL migration; mapping_state WS event fires on update; dashboard state captures event | VERIFIED | settings.py: resolution_criteria field on MarketMappingRecord; market_map.py: resolution_criteria_json + resolution_match_status on dataclass; init.sql: ADD COLUMN IF NOT EXISTS; api.py line 435: _broadcast_json mapping_state on update; dashboard.js line 1145: else if (message.type === "mapping_state") { state.mappingUpdates...}; 3 config tests passing |
-| 18 | Dashboard renders kill-switch panel (ARM/RESET/cooldown/badge) + rate-limit pills + one-leg alert + shutdown banner + mapping resolution comparison; index.html and dashboard.html in parity; textContent XSS guard | VERIFIED | dashboard.html lines 178-212: safetySection, killSwitchArm, oneLegAlertPanel, shutdownBanner; same selectors in index.html confirmed by grep; dashboard.js: renderSafetyPanel, renderRateLimitBadges, renderOneLegAlert, renderShutdownBanner all defined; buildSafetyView/buildRateLimitView/buildMappingComparison exported from dashboard-view-model.js; 11/12 vitest pass (1 pre-existing label-drift failure unrelated to Phase 3 — see deferred-items.md) |
+| 1 | SafetySupervisor.trip_kill() cancels all open orders across adapters within 5 seconds and emits kill_switch WS event | VERIFIED | supervisor.py asyncio.gather with wait_for(5.0) per adapter; _publish({"type": "kill_switch"}) at end of trip_kill; all supervisor tests passing |
+| 2 | Once armed, ExecutionEngine.execute_opportunity rejects every new opportunity until reset | VERIFIED | allow_execution returns (False, "Kill switch armed: ...", state.to_dict()) when _state.armed; chained_gate wired in main.py; test_allow_execution_armed passes |
+| 3 | POST /api/kill-switch with action=arm requires operator auth (401 unauthenticated) and a reason body field (400 when empty) | VERIFIED | api.py: await require_auth(request) as first call; returns 400 when reason empty; test_api_safety.py 4/4 passing |
+| 4 | POST /api/kill-switch with action=reset respects min_cooldown_seconds — 400 while cooldown not elapsed | VERIFIED | supervisor.py reset_kill: raises ValueError("Kill switch cooldown: ...") when now < cooldown_until; api.py except ValueError returns 400 |
+| 5 | Telegram notifier sends kill_armed message when trip_kill succeeds; send failures do NOT abort trip_kill | VERIFIED | supervisor.py: try/except around notifier.send; test_telegram_failure_does_not_abort_trip passes |
+| 6 | safety_events Postgres table captures one INSERT per arm/reset (append-only, never UPDATE/DELETE) | VERIFIED | safety_events.sql CREATE TABLE confirmed; persistence.py exposes only insert_safety_event + list_events (no UPDATE/DELETE) |
+| 7 | Concurrent arm attempts — exactly one trip goes through; others see armed state and no-op | VERIFIED | supervisor.py asyncio.Lock serializes trip_kill; if self._state.armed: return early; test_concurrent_arm_serializes passes |
+| 8 | Dashboard WS client receives kill_switch payload and does not throw on the new type | VERIFIED | dashboard.js: else if (message.type === "kill_switch") { state.safety = {...}; }; node --check passes |
+| 9 | Per-platform exposure limits: check_trade enforces both legs before submission; record_trade tracks in-flight submitted orders; order_rejected incident emitted on rejection | VERIFIED | check_trade lines 248-267 checks both legs pre-trade; _emit_rejection_incident fires on rejection. SAFE-02 gap CLOSED by plan 03-08: inner `if status == "filled":` guard removed (grep confirms NO MATCHES); `elif status == "recovering":` branch added (exactly 1 match at line 847); release_trade added in _recover_one_leg_risk (3 release_trade calls total in engine.py); 4 new tests pass: test_live_burst_submitted_rejected_at_per_platform_ceiling, test_live_recovering_records_only_surviving_leg, test_live_recovery_cancellation_releases_reservation, test_dry_run_record_trade_unchanged_after_fix |
+| 10 | One-leg exposure: when exactly one leg fills, structured one_leg_exposure incident emitted + Telegram + dedicated WS event | VERIFIED | engine.py _recover_one_leg_risk emits incident with event_type="one_leg_exposure" metadata; self._safety.handle_one_leg_exposure called; supervisor.py fires Telegram + _publish({"type": "one_leg_exposure"}) |
+| 11 | Every outbound call from KalshiAdapter and PolymarketAdapter acquires rate_limiter token before HTTP/SDK I/O | VERIFIED | kalshi.py: 5 acquire() calls across all outbound methods; polymarket.py: 4 acquire() calls; 137 tests passing |
+| 12 | On HTTP 429, adapter invokes apply_retry_after + records circuit failure + returns FAILED Order; FOK never retries | VERIFIED | kalshi.py: 429 branch with apply_retry_after; circuit.record_failure(); returns _failed_order("rate_limited"); polymarket.py: same pattern; no retry for FOK |
+| 13 | api.py runs periodic _rate_limit_broadcast_loop emitting rate_limit_state WS every 2 seconds; stats expose available_tokens/max_requests/remaining_penalty_seconds | VERIFIED | api.py _rate_limit_broadcast_loop method exists; task created; retry.py: all three stats fields present |
+| 14 | On SIGINT/SIGTERM, main.py calls safety.trip_kill BEFORE any task.cancel(); second SIGINT triggers os._exit(1) | VERIFIED | main.py: await run_shutdown_sequence(safety, tasks); run_shutdown_sequence: prepare_shutdown before task.cancel loop; os._exit(1) on second signal; test_graceful_shutdown_cancels_orders_before_tasks passes (3/3) |
+| 15 | KalshiAdapter.cancel_all chunks in 20-sized slices with one rate-limit token per chunk; PolymarketAdapter.cancel_all uses run_in_executor(client.cancel_all) | VERIFIED | kalshi.py: CANCEL_ALL_CHUNK_SIZE=20; per-chunk acquire(); batched DELETE; polymarket.py: run_in_executor(client.cancel_all()) with acquire() before SDK call |
+| 16 | safety.prepare_shutdown() broadcasts shutdown_state with phase='shutting_down' BEFORE trip_kill; phase='complete' in finally | VERIFIED | supervisor.py: _publish shutdown_state before trip_kill; finally block publishes phase=complete; test_prepare_shutdown_broadcasts_before_trip passes |
+| 17 | MARKET_MAP schema accepts optional resolution_criteria dict; MarketMapping dataclass exposes it; GET + POST /api/market-mappings handles it; idempotent SQL migration; mapping_state WS event fires on update; dashboard state captures event | VERIFIED | settings.py: resolution_criteria field on MarketMappingRecord; market_map.py: resolution_criteria_json + resolution_match_status; init.sql: ADD COLUMN IF NOT EXISTS; api.py: _broadcast_json mapping_state on update; dashboard.js: else if (message.type === "mapping_state") { state.mappingUpdates... } |
+| 18 | Dashboard renders kill-switch panel (ARM/RESET/cooldown/badge) + rate-limit pills + one-leg alert + shutdown banner + mapping resolution comparison; index.html and dashboard.html in parity; textContent XSS guard | VERIFIED | dashboard.html (committed HEAD): safetySection, killSwitchArm, oneLegAlertPanel, shutdownBanner all present (grep confirmed 1 each); index.html: same selectors present (grep confirmed 1 each); dashboard.js: renderSafetyPanel, renderRateLimitBadges, renderOneLegAlert, renderShutdownBanner all defined; buildSafetyView/buildRateLimitView/buildMappingComparison exported; node --check dashboard.js exits 0 |
 
-**Score:** 17/18 truths verified (1 partial gap on SAFE-02 live-mode exposure tracking)
+**Score:** 18/18 truths verified
+
+**Note on working tree:** The working tree has uncommitted modifications to arbiter/web/dashboard.html, dashboard.js, styles.css, and index.html that are NOT part of any committed plan. These WIP changes are ignored — verification is against committed HEAD (the 03-08 gap-closure commit 57a6234 + 577bd97 and the 03-07 UI commit e4c3411).
 
 ---
 
@@ -74,22 +96,24 @@ None — all items addressed within Phase 3 scope.
 | Artifact | Expected | Status | Details |
 |----------|----------|--------|---------|
 | `arbiter/safety/__init__.py` | Safety package namespace; exports SafetySupervisor, SafetyState, SafetyAlertTemplates, SafetyEventStore | VERIFIED | Exists; imports confirmed working |
-| `arbiter/safety/supervisor.py` | SafetySupervisor class + SafetyState + SafetyConfig wiring; allow_execution, trip_kill, reset_kill, subscribe, prepare_shutdown, handle_one_leg_exposure | VERIFIED | 442 lines; all required methods present |
-| `arbiter/safety/alerts.py` | SafetyAlertTemplates with kill_armed/kill_reset/one_leg_exposure static methods | VERIFIED | 59 lines; all three static methods present |
-| `arbiter/safety/persistence.py` | SafetyEventStore (asyncpg INSERT-only) + RedisStateShim | VERIFIED | 159 lines; INSERT-only confirmed; no UPDATE/DELETE methods |
-| `arbiter/sql/safety_events.sql` | CREATE TABLE safety_events (append-only) + index | VERIFIED | CREATE TABLE IF NOT EXISTS safety_events + CREATE INDEX |
-| `arbiter/execution/adapters/base.py` | PlatformAdapter Protocol with async def cancel_all | VERIFIED | cancel_all in Protocol with docstring at lines 72-83 |
-| `arbiter/execution/adapters/kalshi.py` | Full cancel_all with chunking + rate_limiter.acquire per chunk | VERIFIED | CANCEL_ALL_CHUNK_SIZE=20; chunking loop; per-chunk acquire; 429 handling |
-| `arbiter/execution/adapters/polymarket.py` | Full cancel_all via run_in_executor(client.cancel_all) | VERIFIED | Lines 399-456; acquire before SDK call; rate-limit error detection |
-| `arbiter/utils/retry.py` | RateLimiter.stats exposes available_tokens/max_requests/remaining_penalty_seconds | VERIFIED | Lines 325/329/331: all three fields confirmed |
-| `arbiter/api.py` | POST /api/kill-switch + GET /api/safety/status + GET /api/safety/events + _rate_limit_broadcast_loop + mapping_state broadcast + rate_limits in _build_system_snapshot | VERIFIED | All routes registered; loop at line 826; snapshot includes safety + rate_limits keys |
-| `arbiter/main.py` | run_shutdown_sequence helper + chained_gate + os._exit(1) | VERIFIED | run_shutdown_sequence at line 106; chained_gate at line 289; os._exit(1) at line 396 |
-| `arbiter/sql/init.sql` | ALTER TABLE market_mappings ADD COLUMN IF NOT EXISTS resolution_criteria JSONB + resolution_match_status | VERIFIED | Lines 65-66 confirmed |
-| `arbiter/web/dashboard.html` | safetySection + shutdownBanner + oneLegAlertPanel markup | VERIFIED | Lines 178-212 |
-| `arbiter/web/dashboard.js` | renderSafetyPanel + renderRateLimitBadges + renderOneLegAlert + renderShutdownBanner + all 5 WS tolerance branches + click handlers | VERIFIED | All render functions at lines 1341/1374/1388/1437; WS branches at lines 1136-1148 |
-| `arbiter/web/dashboard-view-model.js` | buildSafetyView + buildRateLimitView + buildMappingComparison exported | VERIFIED | Lines 213/234/264 |
-| `arbiter/web/styles.css` | kill-switch-controls, rate-limit-pill (.ok/.warn/.crit), one-leg-pulse animation, shutdown-banner, criteria-chip | VERIFIED | All selectors present; @keyframes one-leg-pulse at line 4267 |
-| `index.html` | Safety markup parity with dashboard.html | VERIFIED | safetySection/killSwitchArm/shutdownBanner/oneLegAlertPanel all confirmed present at same line numbers as dashboard.html |
+| `arbiter/safety/supervisor.py` | SafetySupervisor + SafetyState + SafetyConfig wiring; all safety methods including prepare_shutdown + handle_one_leg_exposure | VERIFIED | All required methods present |
+| `arbiter/safety/alerts.py` | SafetyAlertTemplates with kill_armed/kill_reset/one_leg_exposure static methods | VERIFIED | All three static methods; NAKED POSITION string present |
+| `arbiter/safety/persistence.py` | SafetyEventStore (asyncpg INSERT-only) + RedisStateShim | VERIFIED | INSERT-only confirmed; no UPDATE/DELETE methods |
+| `arbiter/sql/safety_events.sql` | CREATE TABLE safety_events (append-only) + index | VERIFIED | CREATE TABLE IF NOT EXISTS safety_events + CREATE INDEX confirmed |
+| `arbiter/execution/adapters/base.py` | PlatformAdapter Protocol with async def cancel_all | VERIFIED | cancel_all in Protocol with docstring |
+| `arbiter/execution/adapters/kalshi.py` | Full cancel_all with chunking + rate_limiter.acquire per chunk | VERIFIED | CANCEL_ALL_CHUNK_SIZE=20; per-chunk acquire; 429 handling |
+| `arbiter/execution/adapters/polymarket.py` | Full cancel_all via run_in_executor(client.cancel_all) | VERIFIED | acquire before SDK call; rate-limit error detection |
+| `arbiter/utils/retry.py` | RateLimiter.stats exposes available_tokens/max_requests/remaining_penalty_seconds | VERIFIED | All three fields confirmed |
+| `arbiter/api.py` | POST /api/kill-switch + GET /api/safety/status + GET /api/safety/events + _rate_limit_broadcast_loop + mapping_state broadcast + rate_limits in _build_system_snapshot | VERIFIED | All routes registered; loop present; snapshot includes safety + rate_limits keys |
+| `arbiter/main.py` | run_shutdown_sequence helper + chained_gate + os._exit(1) | VERIFIED | All three confirmed present |
+| `arbiter/sql/init.sql` | ALTER TABLE market_mappings ADD COLUMN IF NOT EXISTS resolution_criteria JSONB + resolution_match_status | VERIFIED | Both ADD COLUMN IF NOT EXISTS lines confirmed |
+| `arbiter/web/dashboard.html` | safetySection + shutdownBanner + oneLegAlertPanel markup | VERIFIED | All selectors present in committed HEAD |
+| `arbiter/web/dashboard.js` | renderSafetyPanel + renderRateLimitBadges + renderOneLegAlert + renderShutdownBanner + all 5 WS tolerance branches + click handlers | VERIFIED | All render functions present; node --check passes |
+| `arbiter/web/dashboard-view-model.js` | buildSafetyView + buildRateLimitView + buildMappingComparison exported | VERIFIED | All three exported functions confirmed |
+| `arbiter/web/styles.css` | kill-switch-controls, rate-limit-pill (.ok/.warn/.crit), one-leg-pulse animation, shutdown-banner, criteria-chip | VERIFIED | All selectors present in committed HEAD |
+| `index.html` | Safety markup parity with dashboard.html | VERIFIED | safetySection/killSwitchArm/shutdownBanner/oneLegAlertPanel all confirmed present in committed HEAD |
+| `arbiter/execution/engine.py` | SAFE-02 gap closed: no inner `if status == "filled":` guard; elif status == "recovering": branch; release_trade in _recover_one_leg_risk | VERIFIED | grep confirms: 0 matches for `if status == "filled":`, exactly 1 match for `elif status == "recovering":`, 3 matches for `self.risk.release_trade` |
+| `arbiter/execution/test_engine.py` | 4 new SAFE-02 gap tests | VERIFIED | All 4 tests present and passing: test_live_burst_submitted_rejected_at_per_platform_ceiling, test_live_recovering_records_only_surviving_leg, test_live_recovery_cancellation_releases_reservation, test_dry_run_record_trade_unchanged_after_fix |
 
 ---
 
@@ -97,18 +121,21 @@ None — all items addressed within Phase 3 scope.
 
 | From | To | Via | Status | Details |
 |------|----|----|--------|---------|
-| arbiter/main.py | SafetySupervisor.allow_execution | chained_gate wiring engine.set_trade_gate(chained_gate) | VERIFIED | Lines 289-300 in main.py |
-| arbiter/execution/engine.py::execute_opportunity | SafetySupervisor.allow_execution | existing _check_trade_gate hook | VERIFIED | Line 437: gate_allowed, gate_reason, gate_context = await self._check_trade_gate(opp) |
-| arbiter/api.py::_broadcast_loop | SafetySupervisor.subscribe() | safety_queue task in asyncio.wait | VERIFIED | Line 764: safety_queue = self.safety.subscribe() if self.safety is not None else None; line 780: asyncio tasks |
-| arbiter/web/dashboard.js WS handler | state.safety.killSwitch | else if branch for message.type === "kill_switch" | VERIFIED | Line 1136 |
-| arbiter/execution/adapters/kalshi.py | arbiter/utils/retry.py::RateLimiter.acquire | await self.rate_limiter.acquire() before HTTP I/O | VERIFIED | 5 acquire() calls; place_fok calls it in _post_order at line 223; cancel_order at 241; get_order at 519; list_open_orders_by_client_id at 587; cancel_all per-chunk at 310 |
-| arbiter/execution/adapters/kalshi.py | RateLimiter.apply_retry_after | on resp.status == 429 | VERIFIED | Lines 130-134: 429 branch with apply_retry_after; reason="kalshi_429" |
-| arbiter/api.py::_rate_limit_broadcast_loop | arbiter/web/dashboard.js state.safety.rateLimits | rate_limit_state WS event every 2 seconds | VERIFIED | Loop at line 826; dashboard.js line 1139 captures payload into state.safety.rateLimits |
-| arbiter/api.py::_build_system_snapshot | /api/system JSON response | adds rate_limits top-level key | VERIFIED | Lines 907-913: rate_limits dict comprehension over engine.adapters |
-| arbiter/main.py::run_shutdown_sequence | SafetySupervisor.prepare_shutdown → trip_kill | asyncio.wait_for(prepare_shutdown(), timeout=5.0) before task.cancel | VERIFIED | Line 131: await asyncio.wait_for(safety.prepare_shutdown(), timeout=timeout) |
-| arbiter/safety/supervisor.py::trip_kill | adapter.cancel_all across all adapters | asyncio.gather with per-adapter wait_for(5.0) | VERIFIED | Lines 437-441: asyncio.gather; _cancel_one wraps wait_for(adapter.cancel_all(), timeout=5.0) |
-| arbiter/api.py::handle_market_mapping_action | update_market_mapping with resolution_criteria kwarg | resolution_criteria kwarg passed through; mapping_state broadcast on success | VERIFIED | Lines 361-438: resolution_criteria extracted from payload; update_kwargs["resolution_criteria"] assigned; _broadcast_json mapping_state |
-| arbiter/web/dashboard.js WS handler | state.mappingUpdates | else if branch for message.type === "mapping_state" | VERIFIED | Lines 1145-1147 |
+| arbiter/main.py | SafetySupervisor.allow_execution | chained_gate wiring engine.set_trade_gate(chained_gate) | VERIFIED | chained_gate defined and registered in main.py |
+| arbiter/execution/engine.py::execute_opportunity | SafetySupervisor.allow_execution | existing _check_trade_gate hook | VERIFIED | _check_trade_gate returns gate_allowed, gate_reason, gate_context |
+| arbiter/api.py::_broadcast_loop | SafetySupervisor.subscribe() | safety_queue task in asyncio.wait | VERIFIED | safety_queue = self.safety.subscribe() if self.safety is not None else None |
+| arbiter/web/dashboard.js WS handler | state.safety.killSwitch | else if branch for message.type === "kill_switch" | VERIFIED | Line present; node --check passes |
+| arbiter/execution/adapters/kalshi.py | RateLimiter.acquire | await self.rate_limiter.acquire() before HTTP I/O | VERIFIED | 5 acquire() calls in outbound methods |
+| arbiter/execution/adapters/kalshi.py | RateLimiter.apply_retry_after | on resp.status == 429 | VERIFIED | 429 branch with apply_retry_after; reason="kalshi_429" |
+| arbiter/api.py::_rate_limit_broadcast_loop | dashboard.js state.safety.rateLimits | rate_limit_state WS event every 2 seconds | VERIFIED | Loop present; dashboard.js captures payload |
+| arbiter/api.py::_build_system_snapshot | /api/system JSON response | adds rate_limits top-level key | VERIFIED | rate_limits dict comprehension present |
+| arbiter/main.py::run_shutdown_sequence | SafetySupervisor.prepare_shutdown → trip_kill | asyncio.wait_for(prepare_shutdown(), timeout=5.0) before task.cancel | VERIFIED | wait_for(safety.prepare_shutdown(), timeout=timeout) before task.cancel loop |
+| arbiter/safety/supervisor.py::trip_kill | adapter.cancel_all across all adapters | asyncio.gather with per-adapter wait_for(5.0) | VERIFIED | asyncio.gather; _cancel_one wraps wait_for(adapter.cancel_all(), timeout=5.0) |
+| arbiter/api.py::handle_market_mapping_action | update_market_mapping with resolution_criteria kwarg | resolution_criteria kwarg passed through; mapping_state broadcast on success | VERIFIED | resolution_criteria extracted from payload; _broadcast_json mapping_state |
+| arbiter/web/dashboard.js WS handler | state.mappingUpdates | else if branch for message.type === "mapping_state" | VERIFIED | Present in committed HEAD |
+| arbiter/execution/engine.py::_live_execution | RiskManager.record_trade (submitted + filled branches) | `if status in {"submitted", "filled"}:` — no inner guard | VERIFIED (plan 03-08) | grep: 0 matches for inner `if status == "filled":` guard; record_trade now fires for both branches |
+| arbiter/execution/engine.py::_live_execution | RiskManager.record_trade (recovering branch — surviving leg only) | `elif status == "recovering":` with surviving_platform logic | VERIFIED (plan 03-08) | Exactly 1 match at line 847 |
+| arbiter/execution/engine.py::_recover_one_leg_risk | RiskManager.release_trade | after successful _cancel_order for SUBMITTED/PARTIAL leg | VERIFIED (plan 03-08) | release_trade call confirmed inside _recover_one_leg_risk |
 
 ---
 
@@ -122,6 +149,7 @@ None — all items addressed within Phase 3 scope.
 | dashboard.js renderShutdownBanner | state.shutdown | shutdown_state WS event → prepare_shutdown → _publish | Yes — real shutdown phases from process signal handler | FLOWING |
 | api.py _build_system_snapshot / safety key | self.safety._state.to_dict() | SafetyState populated by trip_kill/reset_kill | Yes — live SafetyState object | FLOWING |
 | api.py _build_system_snapshot / rate_limits key | adapter.rate_limiter.stats | RateLimiter instances on KalshiAdapter/PolymarketAdapter | Yes — live token bucket state | FLOWING |
+| RiskManager._platform_exposures | submitted/filled/recovering exposure | _live_execution record_trade (plan 03-08 fix) | Yes — fires on submission, not just fill confirmation | FLOWING |
 
 ---
 
@@ -129,15 +157,13 @@ None — all items addressed within Phase 3 scope.
 
 | Behavior | Command | Result | Status |
 |----------|---------|--------|--------|
-| Python imports (safety module) | `python -c "from arbiter.safety import SafetySupervisor, SafetyState, SafetyAlertTemplates, SafetyEventStore; from arbiter.config.settings import SafetyConfig; print('OK')"` | imports OK | PASS |
-| main.py syntax valid | `python -c "import ast; ast.parse(open('arbiter/main.py').read())"` | exits 0 | PASS |
-| Safety unit tests | `pytest arbiter/safety/ -x -q` | 13 passed, 1 skipped | PASS |
-| API safety tests | `pytest arbiter/test_api_safety.py -x -q` | 4 passed | PASS |
-| Adapter tests (rate limiting + cancel_all) | `pytest arbiter/execution/ -x -q` | 113 passed, 2 skipped | PASS |
-| Shutdown sequence test | `pytest arbiter/test_main_shutdown.py -x -q` | 3 passed (5.5s — includes 5s timeout test) | PASS |
-| Config loading (resolution_criteria) | `pytest arbiter/test_config_loading.py -k resolution_criteria -q` | 3 passed | PASS |
+| Python imports (safety + execution modules) | `python -c "from arbiter.safety import SafetySupervisor, SafetyState, SafetyAlertTemplates, SafetyEventStore; from arbiter.config.settings import SafetyConfig; from arbiter.execution.engine import RiskManager, ExecutionEngine; print('OK')"` | OK | PASS |
+| Full Phase 3 test suite | `pytest arbiter/execution/ arbiter/safety/ arbiter/test_api_safety.py arbiter/test_main_shutdown.py -q` | 137 passed, 3 skipped | PASS |
+| SAFE-02 gap closed — inner guard removed | `grep -nE 'if status == "filled":' arbiter/execution/engine.py` | NO OUTPUT (0 matches) | PASS |
+| SAFE-02 recovering branch added | `grep -nE 'elif status == "recovering":' arbiter/execution/engine.py` | 1 match at line 847 | PASS |
+| SAFE-02 release_trade in recovery path | `grep -nE 'self\.risk\.release_trade' arbiter/execution/engine.py` | 3 matches (line 1132 in recovery loop + lines 1497/1507 in update_manual_position) | PASS |
 | Dashboard JS syntax | `node --check arbiter/web/dashboard.js` | exits 0 | PASS |
-| Vitest view-model helpers | `npx vitest run arbiter/web/dashboard-view-model.test.js` | 11/12 passed (1 pre-existing failure: buildMetricCards label drift — not a Phase 3 item; documented in deferred-items.md) | PASS (Phase 3 tests) |
+| API integration test | `pytest arbiter/test_api_integration.py -q` | 6 passed, 1 FAILED (test_api_and_dashboard_contracts — pre-existing UI-contract drift, see notes section) | FAIL (pre-existing) |
 
 ---
 
@@ -145,11 +171,11 @@ None — all items addressed within Phase 3 scope.
 
 | Requirement | Source Plan | Description | Status | Evidence |
 |-------------|------------|-------------|--------|---------|
-| SAFE-01 | 03-01 | Kill switch cancels open orders, halts execution, Telegram alert, dashboard + programmatic trigger | SATISFIED | SafetySupervisor + POST /api/kill-switch + safety_events table + WS kill_switch event all present and tested |
-| SAFE-02 | 03-02 (inferred from engine.py) | Position limits enforced per-platform and per-market before order submission | PARTIAL | check_trade enforces per-platform ceiling correctly at pre-trade time; order_rejected incidents emitted. GAP: record_trade only fires on 'filled' not 'submitted' in live execution — in-flight submitted orders escape exposure accounting |
-| SAFE-03 | 03-03 (inferred from engine.py, supervisor.py) | One-leg recovery detects naked positions and executes automated or operator-assisted unwind | SATISFIED | _recover_one_leg_risk emits structured incident; handle_one_leg_exposure fires Telegram + WS; dashboard hero alert present |
-| SAFE-04 | 03-04 | Per-platform API rate limiting prevents throttling/bans; Kalshi 10 writes/sec | SATISFIED | RateLimiter.acquire() in all outbound methods; 429 handling with apply_retry_after; _rate_limit_broadcast_loop; /api/system rate_limits key |
-| SAFE-05 | 03-05 | Graceful shutdown cancels all open orders before process exit (SIGINT/SIGTERM) | SATISFIED | run_shutdown_sequence; prepare_shutdown publishes shutdown_state before trip_kill; KalshiAdapter cancel_all chunked; PolymarketAdapter cancel_all via SDK; second-signal os._exit(1) |
+| SAFE-01 | 03-01 | Kill switch cancels open orders, halts execution, Telegram alert, dashboard + programmatic trigger | SATISFIED | SafetySupervisor + POST /api/kill-switch + safety_events table + WS kill_switch event all present and tested; 137 tests passing |
+| SAFE-02 | 03-02 + 03-08 | Position limits enforced per-platform and per-market before order submission; in-flight submitted orders register exposure immediately | SATISFIED | check_trade enforces per-platform ceiling at pre-trade time; order_rejected incidents emitted; plan 03-08 closed the live-mode gap — record_trade fires on submitted + filled (not just filled); recovery cancel releases reservation; 4 new tests prove all invariants |
+| SAFE-03 | 03-03 | One-leg recovery detects naked directional positions and executes automated or operator-assisted unwind | SATISFIED | _recover_one_leg_risk emits structured incident; handle_one_leg_exposure fires Telegram + dedicated WS event; dashboard hero alert renders |
+| SAFE-04 | 03-04 | Per-platform API rate limiting prevents throttling/bans | SATISFIED | RateLimiter.acquire() in all outbound methods; 429 handling with apply_retry_after; _rate_limit_broadcast_loop; /api/system rate_limits key |
+| SAFE-05 | 03-05 | Graceful shutdown cancels all open orders before process exit (SIGINT/SIGTERM) | SATISFIED | run_shutdown_sequence; prepare_shutdown publishes shutdown_state before trip_kill; KalshiAdapter cancel_all chunked (CHUNK_SIZE=20); PolymarketAdapter cancel_all via SDK; second-signal os._exit(1) |
 | SAFE-06 | 03-06 | Market mapping resolution criteria comparison — operator must verify both platforms resolve identically | SATISFIED | MarketMappingRecord + MarketMapping both have resolution_criteria; ALTER TABLE migration; POST handler accepts and broadcasts; mapping_state WS event; dashboard state captures it |
 
 ---
@@ -158,18 +184,19 @@ None — all items addressed within Phase 3 scope.
 
 | File | Line | Pattern | Severity | Impact |
 |------|------|---------|----------|--------|
-| arbiter/execution/engine.py | 815 | record_trade guarded by `if status == 'filled':` only — submitted live orders bypass per-platform exposure accumulation | Blocker (SAFE-02) | In live mode, two rapid arb trades on the same platform can both pass check_trade if the first is in 'submitted' state when the second pre-trade check runs. In dry-run mode this is not an issue (simulate path calls record_trade unconditionally). |
-| arbiter/web/dashboard-view-model.test.js | 123 | Pre-existing test expects 'Validator progress' but buildMetricCards returns 'Validator state' | Warning | 1 vitest failure on every run; pre-dates Phase 3 and is documented in deferred-items.md. Not blocking. |
-| arbiter/web/styles.css | — | .mapping-compare-grid CSS selector not found | Info | Plan 03-07 PLAN.md specifies the selector but the styles.css implementation appears to use different class names (possibly .mapping-compare-column and grid via inline rendering). Dashboard visually correct per operator approval signal. |
+| arbiter/test_api_integration.py | 82 | `assert "ARBITER LIVE" in ops_html` — literal no longer present in /ops dashboard.html after plan 03-07 UI consolidation (commit e4c3411) | Warning | 1 integration test failure on every run (pre-existing, introduced by 03-07); not a SAFE-* regression; see notes section for recommended fix |
+| arbiter/web/* (working tree) | — | Uncommitted WIP modifications to dashboard.html/js/css and index.html | Info | Not part of any committed plan; ignored for this verification; carry forward to whatever phase these changes belong to |
 
 ---
 
 ### Human Verification Required
 
+These 3 items were deferred from the initial verification and remain pending operator UAT. They cannot be automated with pytest and require a running server + browser session.
+
 ### 1. Kill-Switch ARM/RESET End-to-End
 
-**Test:** Open index.html in browser, sign in as operator. Click "ARM KILL SWITCH" button, confirm modal, enter reason. Verify badge flips to ARMED (red), cooldown label appears. Wait 30s, verify Reset enables. Click Reset, confirm; verify badge flips to Disarmed (green).
-**Expected:** Full ARM→cooldown→RESET cycle completes without errors. Backend /api/safety/status reflects state changes. Telegram alert fired (if token configured).
+**Test:** Open index.html in browser, sign in as operator. Click "ARM KILL SWITCH" button, confirm modal, enter reason. Verify badge flips to ARMED (red), cooldown label appears. Wait 30 seconds, verify Reset button enables. Click Reset, confirm; verify badge flips to Disarmed (green).
+**Expected:** Full ARM → cooldown → RESET cycle completes without errors. Backend /api/safety/status reflects state changes. Telegram alert fired (if token configured) or logs "Telegram disabled, would send..." otherwise.
 **Why human:** Browser confirm/prompt dialogs + WebSocket round-trip + visual badge state not assertable in pytest.
 
 ### 2. Shutdown Banner Sequence
@@ -180,25 +207,35 @@ None — all items addressed within Phase 3 scope.
 
 ### 3. Rate-Limit Pill Color Transitions
 
-**Test:** Run system under high load to trigger rate-limiter penalty state. Observe rate-limit pill colors on dashboard.
-**Expected:** Pills transition from green (.ok) to amber (.warn) as penalty_seconds > 0; return to green when penalty clears.
-**Why human:** Requires generating real throttle state by hammering venue API limits; not producible in unit tests.
+**Test:** Run system under high load (or mock throttle state) to trigger rate-limiter penalty state. Observe rate-limit pill colors on dashboard.
+**Expected:** Pills transition from green (.ok) to amber (.warn) as remaining_penalty_seconds > 0; return to green when penalty clears.
+**Why human:** Requires generating real throttle state; cannot assert color CSS class without a browser session.
 
 ---
 
-### Gaps Summary
+### Cross-Phase Note: UI Contract Drift in test_api_integration.py
 
-**1 gap blocking SAFE-02 full satisfaction (live-mode per-platform exposure tracking):**
+**This is a separate finding, not a SAFE-* gap.**
 
-The per-platform exposure ceiling check runs correctly at pre-trade time in `RiskManager.check_trade` — both legs' dollar exposure is compared against `SafetyConfig.max_platform_exposure_usd` before any order is placed. The `order_rejected` incident is emitted correctly when the check fails.
+`arbiter/test_api_integration.py::test_api_and_dashboard_contracts` FAILs with:
+```
+AssertionError: assert 'ARBITER LIVE' in '...' (the /ops page HTML)
+```
 
-However, `record_trade` (which accumulates `_platform_exposures` for subsequent checks) only fires when `status == "filled"` inside `_live_execution`. A trade that reaches `status == "submitted"` (both orders dispatched and awaiting fill confirmation) does not register its exposure. During the window between submission and fill confirmation — typically seconds for FOK orders but potentially longer under latency — a concurrent opportunity on the same platform can pass the check_trade guard with stale exposure data.
+**Root cause:** The test at line 82 asserts the literal string `"ARBITER LIVE"` in the `/ops` page HTML. This assertion was written (commit `26ef529`) when the string existed in the dashboard. Plan 03-07 (commit `e4c3411`) restructured `dashboard.html` during UI consolidation; the resulting `/ops` page title is `"ARBITER Live Desk"` (not `"ARBITER LIVE"`). The 6 other tests in `test_api_integration.py` pass.
 
-**Risk assessment:** For the current small-capital phase ($300 max per platform), FOK orders fill or cancel quickly. The window is narrow. However it is a real gap that should be addressed before higher volume operation.
+**Status:** Pre-existing regression as of plan 03-07. NOT caused by plan 03-08. NOT a SAFE-01..SAFE-06 failure. The safety layer goals are unaffected.
 
-**Fix:** Add `record_trade` call in `_live_execution` for the `submitted` state (using the same leg-split kwargs), or alternatively register exposure at order-submission time in `_place_order_for_leg` and release on cancellation.
+**Recommended fix (not part of this phase):** Update `arbiter/test_api_integration.py` line 82 to match the actual heading text:
+```python
+# Before (broken):
+assert "ARBITER LIVE" in ops_html
+# After (fixed — matches <title>ARBITER Live Desk</title>):
+assert "ARBITER Live Desk" in ops_html
+```
+This is a 1-line change in the test file, no production code change required. Assign to whoever owns the next planned UI-related task or create a quick-fix plan in Phase 4.
 
 ---
 
-_Verified: 2026-04-16T21:25:00Z_
-_Verifier: Claude (gsd-verifier)_
+_Verified: 2026-04-16T23:00:00Z_
+_Verifier: Claude (gsd-verifier) — Re-verification after plan 03-08 gap closure_
