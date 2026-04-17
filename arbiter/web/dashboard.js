@@ -1076,6 +1076,13 @@ function connectWebSocket() {
       state.oneLegExposures = [message.payload, ...(state.oneLegExposures || [])].slice(0, 8);
     } else if (message.type === "shutdown_state") {
       state.shutdown = message.payload;
+    } else if (message.type === "mapping_state") {
+      // SAFE-06 (plan 03-06): state mutation only. Plan 03-07 adds the
+      // side-by-side comparison UI renderer on top of state.mappingUpdates.
+      state.mappingUpdates = state.mappingUpdates || {};
+      if (message.payload && message.payload.canonical_id) {
+        state.mappingUpdates[message.payload.canonical_id] = message.payload;
+      }
     } else if (message.type === "heartbeat") {
       state.lastQuoteAt = message.payload.timestamp;
     }

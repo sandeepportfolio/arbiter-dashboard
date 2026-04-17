@@ -48,9 +48,20 @@ CREATE TABLE IF NOT EXISTS alerts (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Indexes for fast queries
-CREATE INDEX idx_trades_canonical ON trades(canonical_id);
-CREATE INDEX idx_trades_created ON trades(created_at);
-CREATE INDEX idx_prices_platform_market ON price_snapshots(platform, canonical_id);
-CREATE INDEX idx_prices_captured ON price_snapshots(captured_at);
-CREATE INDEX idx_balance_platform ON balance_history(platform);
+-- Indexes for fast queries (idempotent so init.sql can re-run at startup;
+-- SAFE-06 migration below requires the whole file to be safely re-runnable).
+CREATE INDEX IF NOT EXISTS idx_trades_canonical ON trades(canonical_id);
+CREATE INDEX IF NOT EXISTS idx_trades_created ON trades(created_at);
+CREATE INDEX IF NOT EXISTS idx_prices_platform_market ON price_snapshots(platform, canonical_id);
+CREATE INDEX IF NOT EXISTS idx_prices_captured ON price_snapshots(captured_at);
+CREATE INDEX IF NOT EXISTS idx_balance_platform ON balance_history(platform);
+
+-- SAFE-06 (plan 03-06): market-mapping resolution criteria columns. The
+-- canonical market_mappings table is defined in arbiter/mapping/market_map.py
+-- (SQL_INIT constant). This block is an idempotent migration that runs from
+-- main.py on startup so existing deployments pick up the new columns.
+-- Postgres supports `ADD COLUMN IF NOT EXISTS` since 9.6.
+ALTER TABLE market_mappings
+    ADD COLUMN IF NOT EXISTS resolution_criteria JSONB,
+    ADD COLUMN IF NOT EXISTS resolution_match_status VARCHAR(40)
+        DEFAULT 'pending_operator_review';

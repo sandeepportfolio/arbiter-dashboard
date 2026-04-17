@@ -320,6 +320,12 @@ class ArbiterAPI:
         for canonical_id, mapping in MARKET_MAP.items():
             row = {"canonical_id": canonical_id}
             row.update(mapping)
+            # SAFE-06 (plan 03-06): every mapping row exposes resolution_criteria
+            # and resolution_match_status so the dashboard can render the
+            # side-by-side comparison (plan 03-07). Entries without the new
+            # fields fall back to sane defaults — never raise KeyError.
+            row.setdefault("resolution_criteria", None)
+            row.setdefault("resolution_match_status", "pending_operator_review")
             payload.append(row)
         return web.json_response(payload)
 
@@ -348,11 +354,50 @@ class ArbiterAPI:
         action = str(payload.get("action", "")).strip().lower()
         note = str(payload.get("note", "")).strip()
 
+        # SAFE-06 (plan 03-06, threat T-3-06-B): resolution_criteria rides any
+        # action (confirm / review / enable_auto_trade / disable_auto_trade).
+        # Validate criteria_match enum before accepting the payload so the
+        # UI can't smuggle arbitrary strings into downstream renderers.
+        resolution_criteria = payload.get("resolution_criteria")
+        resolution_match_status = payload.get("resolution_match_status")
+        _ALLOWED_CRITERIA_MATCH = {
+            None, "identical", "similar", "divergent", "pending_operator_review",
+        }
+        if resolution_criteria is not None:
+            if not isinstance(resolution_criteria, dict):
+                return web.json_response(
+                    {"error": "resolution_criteria must be an object"}, status=400,
+                )
+            criteria_match_value = resolution_criteria.get("criteria_match")
+            if criteria_match_value not in _ALLOWED_CRITERIA_MATCH:
+                return web.json_response(
+                    {
+                        "error": (
+                            "Invalid criteria_match; expected one of "
+                            "identical, similar, divergent, pending_operator_review"
+                        )
+                    },
+                    status=400,
+                )
+        if resolution_match_status is not None and resolution_match_status not in (
+            "identical", "similar", "divergent", "pending_operator_review",
+        ):
+            return web.json_response(
+                {"error": "Invalid resolution_match_status"}, status=400,
+            )
+
+        update_kwargs: dict = {}
+        if resolution_criteria is not None:
+            update_kwargs["resolution_criteria"] = resolution_criteria
+        if resolution_match_status is not None:
+            update_kwargs["resolution_match_status"] = resolution_match_status
+
         if action == "confirm":
             mapping = update_market_mapping(
                 canonical_id,
                 status="confirmed",
                 note=note or "Confirmed from the operator desk.",
+                **update_kwargs,
             )
         elif action == "review":
             mapping = update_market_mapping(
@@ -360,6 +405,7 @@ class ArbiterAPI:
                 status="review",
                 allow_auto_trade=False,
                 note=note or "Returned to review from the operator desk.",
+                **update_kwargs,
             )
         elif action == "enable_auto_trade":
             mapping = update_market_mapping(
@@ -367,15 +413,38 @@ class ArbiterAPI:
                 status="confirmed",
                 allow_auto_trade=True,
                 note=note or "Auto-trade enabled from the operator desk.",
+                **update_kwargs,
             )
         elif action == "disable_auto_trade":
             mapping = update_market_mapping(
                 canonical_id,
                 allow_auto_trade=False,
                 note=note or "Auto-trade held from the operator desk.",
+                **update_kwargs,
             )
         else:
             return web.json_response({"error": f"Unsupported mapping action: {action or 'unknown'}"}, status=400)
+
+        # SAFE-06: emit a `mapping_state` WS event whenever the criteria or
+        # match status changed so dashboards can refresh without polling.
+        if mapping is not None and (
+            resolution_criteria is not None or resolution_match_status is not None
+        ):
+            await self._broadcast_json(
+                {
+                    "type": "mapping_state",
+                    "payload": {
+                        "canonical_id": canonical_id,
+                        "resolution_criteria": mapping.get("resolution_criteria"),
+                        "resolution_match_status": mapping.get(
+                            "resolution_match_status",
+                            "pending_operator_review",
+                        ),
+                        "status": mapping.get("status"),
+                        "updated_at": mapping.get("updated_at"),
+                    },
+                }
+            )
 
         return web.json_response(mapping)
 

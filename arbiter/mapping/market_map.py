@@ -5,6 +5,7 @@ Replaces the in-memory MARKET_MAP dict from settings.py.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 import uuid
@@ -51,8 +52,28 @@ class MarketMapping:
     last_validated_at: Optional[datetime] = None
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
+    # SAFE-06 (plan 03-06): JSONB-serialized resolution-criteria payload and
+    # a denormalized match-status column. Both land idempotently via the
+    # ALTER TABLE migration in arbiter/sql/init.sql. Storing the criteria
+    # payload as a JSON string (not a dict) keeps the dataclass hashable /
+    # immutable-ish and lines up 1:1 with the JSONB column.
+    resolution_criteria_json: str = ""
+    resolution_match_status: str = "pending_operator_review"
 
     def to_dict(self) -> dict:
+        # T-3-06-F: malformed JSON in resolution_criteria_json must not crash
+        # serialization. Fall back to None on parse failure so callers can
+        # render a "pending review" state.
+        resolution_criteria: Optional[dict] = None
+        if self.resolution_criteria_json:
+            try:
+                resolution_criteria = json.loads(self.resolution_criteria_json)
+            except (ValueError, TypeError) as exc:
+                logger.warning(
+                    "MarketMapping %s has malformed resolution_criteria JSON: %s",
+                    self.canonical_id, exc,
+                )
+                resolution_criteria = None
         return {
             "canonical_id": self.canonical_id,
             "description": self.description,
@@ -73,6 +94,9 @@ class MarketMapping:
             "last_validated_at": self.last_validated_at.isoformat() if self.last_validated_at else None,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
+            # SAFE-06: expose resolution-criteria side-by-side with core fields.
+            "resolution_criteria": resolution_criteria,
+            "resolution_match_status": self.resolution_match_status,
         }
 
     @classmethod
@@ -141,6 +165,14 @@ CREATE TABLE IF NOT EXISTS mapping_candidates (
 
 CREATE INDEX IF NOT EXISTS idx_candidates_status ON mapping_candidates(status);
 CREATE INDEX IF NOT EXISTS idx_candidates_canonical ON mapping_candidates(canonical_id);
+
+-- SAFE-06 (plan 03-06): idempotent migration adding resolution-criteria columns.
+-- Kept inside SQL_INIT so existing init_schema() calls pick it up. Postgres
+-- supports `ADD COLUMN IF NOT EXISTS` since 9.6.
+ALTER TABLE market_mappings
+    ADD COLUMN IF NOT EXISTS resolution_criteria JSONB,
+    ADD COLUMN IF NOT EXISTS resolution_match_status VARCHAR(40)
+        DEFAULT 'pending_operator_review';
 """
 
 
@@ -290,6 +322,14 @@ class MarketMappingStore:
         conn = await self.acquire()
         try:
             now = utc_now()
+            # SAFE-06 / T-3-06-E: resolution_criteria flows in as the dataclass
+            # JSON string. Cast to JSONB via ::jsonb parameterized binding so
+            # asyncpg cannot be confused into string-interpolation.
+            criteria_value = (
+                mapping.resolution_criteria_json
+                if mapping.resolution_criteria_json
+                else None
+            )
             await conn.execute(
                 """
                 INSERT INTO market_mappings (
@@ -297,8 +337,10 @@ class MarketMappingStore:
                     aliases, tags, kalshi_market_id, polymarket_slug,
                     polymarket_question, predictit_id, predictit_contract_keywords,
                     notes, review_note, mapping_score, confidence,
-                    expires_at, last_validated_at, created_at, updated_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
+                    expires_at, last_validated_at, created_at, updated_at,
+                    resolution_criteria, resolution_match_status
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
+                    $20::jsonb, $21
                 ) ON CONFLICT (canonical_id) DO UPDATE SET
                     description = EXCLUDED.description,
                     status = EXCLUDED.status,
@@ -316,7 +358,9 @@ class MarketMappingStore:
                     confidence = EXCLUDED.confidence,
                     expires_at = EXCLUDED.expires_at,
                     last_validated_at = EXCLUDED.last_validated_at,
-                    updated_at = NOW()
+                    updated_at = NOW(),
+                    resolution_criteria = EXCLUDED.resolution_criteria,
+                    resolution_match_status = EXCLUDED.resolution_match_status
                 """,
                 mapping.canonical_id,
                 mapping.description,
@@ -337,6 +381,8 @@ class MarketMappingStore:
                 mapping.last_validated_at,
                 mapping.created_at,
                 now,
+                criteria_value,
+                mapping.resolution_match_status or "pending_operator_review",
             )
             mapping.updated_at = now
             return mapping
@@ -593,6 +639,19 @@ class MarketMappingStore:
     def _row_to_mapping(self, row: asyncpg.Record) -> Optional[MarketMapping]:
         if row is None:
             return None
+        # SAFE-06: resolution_criteria may not exist on rows read before the
+        # ALTER TABLE migration ran in older deployments. Use .get-style
+        # access via dict() so missing columns default to None.
+        row_dict = dict(row)
+        criteria_raw = row_dict.get("resolution_criteria")
+        # asyncpg may deliver JSONB as a dict (when json_codec set) or as a
+        # str (default). Normalize to a JSON string for the dataclass field.
+        if criteria_raw is None:
+            criteria_json = ""
+        elif isinstance(criteria_raw, (dict, list)):
+            criteria_json = json.dumps(criteria_raw)
+        else:
+            criteria_json = str(criteria_raw)
         return MarketMapping(
             canonical_id=row["canonical_id"],
             description=row["description"],
@@ -613,4 +672,7 @@ class MarketMappingStore:
             last_validated_at=row["last_validated_at"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+            resolution_criteria_json=criteria_json,
+            resolution_match_status=row_dict.get("resolution_match_status")
+                or "pending_operator_review",
         )

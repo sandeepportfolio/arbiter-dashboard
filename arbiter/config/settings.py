@@ -9,7 +9,7 @@ import re
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, Tuple
+from typing import Any, Dict, Iterable, Optional, Tuple
 
 try:
     from dotenv import load_dotenv
@@ -180,10 +180,28 @@ class MarketMappingRecord:
     predictit: str = ""
     predictit_contract_keywords: Tuple[str, ...] = ()
     notes: str = ""
+    # SAFE-06 (plan 03-06): Optional resolution-criteria payload. Structure:
+    #   {
+    #     "kalshi":       {"source": str, "rule": str, "settlement_date": str},
+    #     "polymarket":   {"source": str, "rule": str, "settlement_date": str},
+    #     "criteria_match": "identical" | "similar" | "divergent" | "pending_operator_review",
+    #     "operator_note": str,
+    #   }
+    # Left optional so existing MARKET_SEEDS + downstream consumers never
+    # raise KeyError (Pitfall 6 of 03-RESEARCH.md).
+    resolution_criteria: Optional[Dict[str, Any]] = None
+    # Mirror of resolution_criteria["criteria_match"] when present; stored at
+    # the top level so API clients and the dashboard can read status without
+    # inspecting the criteria dict.
+    resolution_match_status: str = "pending_operator_review"
 
     def to_dict(self) -> dict:
         payload = asdict(self)
         payload["mapping_score"] = similarity_score(self.description, " ".join(self.aliases))
+        # Always emit the SAFE-06 keys (None when unset) so API consumers
+        # can safely .get() them without branching.
+        payload["resolution_criteria"] = self.resolution_criteria
+        payload["resolution_match_status"] = self.resolution_match_status
         return payload
 
 
@@ -305,6 +323,8 @@ def update_market_mapping(
     status: str | None = None,
     note: str | None = None,
     allow_auto_trade: bool | None = None,
+    resolution_criteria: dict | None = None,
+    resolution_match_status: str | None = None,
 ) -> dict | None:
     mapping = MARKET_MAP.get(canonical_id)
     if not mapping:
@@ -316,6 +336,17 @@ def update_market_mapping(
         mapping["allow_auto_trade"] = bool(allow_auto_trade)
     if note:
         mapping["review_note"] = str(note).strip()
+    # SAFE-06 (plan 03-06): optional resolution-criteria persistence. When the
+    # caller provides a criteria dict we store it verbatim. The top-level
+    # resolution_match_status mirrors criteria.criteria_match unless the
+    # caller passes an explicit status (explicit kwarg wins).
+    if resolution_criteria is not None:
+        mapping["resolution_criteria"] = resolution_criteria
+        criteria_match = resolution_criteria.get("criteria_match")
+        if criteria_match and resolution_match_status is None:
+            mapping["resolution_match_status"] = criteria_match
+    if resolution_match_status is not None:
+        mapping["resolution_match_status"] = resolution_match_status
     mapping["updated_at"] = time.time()
     return mapping
 

@@ -227,16 +227,20 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     )
     engine._safety = safety  # late injection for plan 03-03 one-leg hook
 
-    # Apply safety_events DDL when a Postgres pool is available.
+    # Apply safety_events DDL when a Postgres pool is available. Additionally
+    # re-run init.sql idempotently so schema migrations (SAFE-06 ALTER TABLE
+    # market_mappings columns, etc.) land on restart. Every statement in
+    # init.sql uses IF NOT EXISTS / IF NOT EXISTS forms so reruns are safe.
     if store is not None and getattr(store, "_pool", None) is not None:
-        try:
-            sql_path = Path(__file__).parent / "sql" / "safety_events.sql"
-            ddl = sql_path.read_text()
-            async with store._pool.acquire() as conn:
-                await conn.execute(ddl)
-            logger.info("safety_events table ensured")
-        except Exception as exc:
-            logger.warning("safety_events migration skipped: %s", exc)
+        for sql_name in ("safety_events.sql", "init.sql"):
+            try:
+                sql_path = Path(__file__).parent / "sql" / sql_name
+                ddl = sql_path.read_text()
+                async with store._pool.acquire() as conn:
+                    await conn.execute(ddl)
+                logger.info("%s schema ensured", sql_name)
+            except Exception as exc:
+                logger.warning("%s migration skipped: %s", sql_name, exc)
 
     # Chain trade gate: readiness first, safety second. Denials from either
     # layer short-circuit and preserve the tuple shape returned by the denier.
