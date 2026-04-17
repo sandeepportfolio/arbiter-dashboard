@@ -4,13 +4,13 @@ Out-of-scope discoveries logged during plan execution. These are NOT fixed in th
 
 ## From Plan 03-02 Execution
 
-### `test_complete_stub_satisfies_protocol` fails on base commit
+### `test_complete_stub_satisfies_protocol` fails on base commit — RESOLVED in plan 03-05
 
 - **File:** `arbiter/execution/adapters/test_protocol_conformance.py::test_complete_stub_satisfies_protocol`
-- **Symptom:** `isinstance(_StubAdapter(), PlatformAdapter)` returns False even though the stub declares every Protocol method.
-- **Root cause (suspected):** After plan 03-01 added `cancel_all` to `PlatformAdapter`, the test's `_StubAdapter` was updated but the `@runtime_checkable` Protocol metadata disagreement with Python 3.13 typing semantics causes `isinstance` to fail. This is a Protocol-conformance plumbing issue, not a plan-03-02 regression.
-- **Verification it's pre-existing:** Reproduced by running `pytest arbiter/execution/adapters/test_protocol_conformance.py::test_complete_stub_satisfies_protocol` after `git stash` of the plan 03-02 worktree changes.
-- **Scope:** Belongs to plan 03-05 (cancel_all full implementation) or a targeted protocol-conformance fix plan.
+- **Symptom (was):** `isinstance(_StubAdapter(), PlatformAdapter)` returned False even though the stub declared every Protocol method.
+- **Actual root cause:** The `_StubAdapter` in the test file was missing `async def cancel_all` after plan 03-01 added `cancel_all` to the `PlatformAdapter` Protocol. (Not a Python 3.13 typing issue — the Protocol runtime check worked correctly and flagged a genuinely incomplete stub.)
+- **Resolution (plan 03-05):** Added `async def cancel_all(self) -> list[str]: return []` to `_StubAdapter` and `_MissingAttributeAdapter`. Extended `test_protocol_lists_expected_methods` to include `cancel_all` in the expected-methods set. All 4 protocol conformance tests now pass.
+- **Commit:** See plan 03-05 Task 1 commit.
 
 ## From Plan 03-04 Execution
 
