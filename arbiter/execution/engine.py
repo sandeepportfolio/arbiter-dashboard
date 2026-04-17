@@ -811,8 +811,52 @@ class ExecutionEngine:
         )
         self._executions.append(execution)
 
+        # Plan 03-08 (SAFE-02 gap closure — closes the
+        # 03-VERIFICATION.md "Per-platform exposure tracking fires on
+        # filled status only" gap):
+        #   * "submitted" or "filled" → both legs have real exposure
+        #     (in-flight or confirmed); record the full split. This
+        #     mirrors _simulate_execution at line ~759 verbatim.
+        #   * "recovering" → exactly one leg holds exposure (the
+        #     survivor — the other was rejected/cancelled by the venue
+        #     or is mid-cancel via _recover_one_leg_risk). Record only
+        #     that leg using the single-platform `platform=` kwarg so
+        #     we don't double-count the rejected side.
+        #   * "failed" → both legs rejected by venue; no resting order;
+        #     do not record (no exposure exists to track).
         if status in {"submitted", "filled"}:
-            if status == "filled":
+            self.risk.record_trade(
+                opp.canonical_id,
+                opp.suggested_qty * (opp.yes_price + opp.no_price),
+                execution.realized_pnl,
+                yes_platform=opp.yes_platform,
+                no_platform=opp.no_platform,
+                yes_exposure=opp.suggested_qty * opp.yes_price,
+                no_exposure=opp.suggested_qty * opp.no_price,
+            )
+        elif status == "recovering":
+            # Identify the surviving leg — whichever side reached
+            # FILLED, PARTIAL, or SUBMITTED (the other side is
+            # FAILED/CANCELLED/ABORTED per the status decision tree
+            # above at lines ~780-798).
+            surviving_statuses = {
+                OrderStatus.FILLED,
+                OrderStatus.PARTIAL,
+                OrderStatus.SUBMITTED,
+            }
+            surviving_platform: Optional[str] = None
+            surviving_exposure: float = 0.0
+            if leg_yes.status in surviving_statuses and leg_no.status not in surviving_statuses:
+                surviving_platform = opp.yes_platform
+                surviving_exposure = opp.suggested_qty * opp.yes_price
+            elif leg_no.status in surviving_statuses and leg_yes.status not in surviving_statuses:
+                surviving_platform = opp.no_platform
+                surviving_exposure = opp.suggested_qty * opp.no_price
+            else:
+                # Edge case: both legs partially-filled or both
+                # submitted with one in PARTIAL — record the full
+                # split, the recovery loop below will issue cancels
+                # and Task 2's release_trade hook will rebalance.
                 self.risk.record_trade(
                     opp.canonical_id,
                     opp.suggested_qty * (opp.yes_price + opp.no_price),
@@ -821,6 +865,13 @@ class ExecutionEngine:
                     no_platform=opp.no_platform,
                     yes_exposure=opp.suggested_qty * opp.yes_price,
                     no_exposure=opp.suggested_qty * opp.no_price,
+                )
+            if surviving_platform is not None:
+                self.risk.record_trade(
+                    opp.canonical_id,
+                    surviving_exposure,
+                    execution.realized_pnl,
+                    platform=surviving_platform,
                 )
 
         # EXEC-02 / D-16: persist the completed arb execution.
