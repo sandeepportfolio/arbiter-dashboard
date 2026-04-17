@@ -16,6 +16,10 @@ def make_engine(price_store: PriceStore) -> ExecutionEngine:
     config.scanner.confidence_threshold = 0.1
     config.scanner.min_edge_cents = 1.0
     config.scanner.slippage_tolerance = 0.01
+    # Plan 03-02: loosen SafetyConfig for bulk/stress tests — the real
+    # production default is $300/platform, but the unit tests here run
+    # 120 consecutive simulated opportunities against a shared engine.
+    config.safety.max_platform_exposure_usd = 1_000_000.0
     monitor = BalanceMonitor(config.alerts, {"kalshi": object(), "polymarket": object(), "predictit": object()})
     engine = ExecutionEngine(config, monitor, price_store=price_store, collectors={})
     engine.risk._max_daily_trades = 250

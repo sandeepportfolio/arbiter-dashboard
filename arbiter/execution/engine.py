@@ -23,6 +23,7 @@ from ..scanner.arbitrage import ArbitrageOpportunity, compute_fee
 from ..utils.price_store import PricePoint, PriceStore
 
 if TYPE_CHECKING:
+    from ..config.settings import SafetyConfig
     from ..safety.supervisor import SafetySupervisor
     from .adapters.base import PlatformAdapter
     from .store import ExecutionStore
@@ -199,9 +200,26 @@ class ArbExecution:
 
 
 class RiskManager:
-    def __init__(self, config: ScannerConfig):
+    def __init__(
+        self,
+        config: ScannerConfig,
+        safety_config: Optional["SafetyConfig"] = None,
+    ):
         self.config = config
+        self._safety_config = safety_config
+        # Plan 03-02 (SAFE-02): per-platform exposure ceiling. When no
+        # SafetyConfig is supplied (legacy callers / tests), fall back to
+        # +inf so existing behaviour is preserved.
+        self._max_platform_exposure: float = (
+            safety_config.max_platform_exposure_usd
+            if safety_config is not None
+            else float("inf")
+        )
         self._open_positions: Dict[str, float] = {}
+        # Plan 03-02: aggregate exposure by platform (keyed by platform name,
+        # e.g. "kalshi", "polymarket"). Populated via record_trade when
+        # callers supply a platform kwarg; unused by legacy callers.
+        self._platform_exposures: Dict[str, float] = {}
         self._daily_pnl: float = 0.0
         self._daily_trades: int = 0
         self._max_daily_trades: int = 100
@@ -226,23 +244,104 @@ class RiskManager:
         existing = self._open_positions.get(opp.canonical_id, 0.0)
         if existing + exposure > self.config.max_position_usd:
             return False, "Per-market exposure limit exceeded"
+
+        # Plan 03-02 (SAFE-02): per-platform exposure ceiling. Each leg
+        # of a cross-platform arb lands on a different venue; we check
+        # BOTH legs independently against SafetyConfig.max_platform_exposure_usd.
+        # Fires after per-market so the most-specific limit rules first.
+        yes_leg_exposure = opp.suggested_qty * opp.yes_price
+        no_leg_exposure = opp.suggested_qty * opp.no_price
+        leg_plan = [
+            (opp.yes_platform, yes_leg_exposure),
+            (opp.no_platform, no_leg_exposure),
+        ]
+        # Aggregate same-platform legs (defensive — cross-platform arbs
+        # shouldn't land on the same venue, but the scanner filter might
+        # evolve).
+        platform_add: Dict[str, float] = {}
+        for platform, leg_exposure in leg_plan:
+            platform_add[platform] = platform_add.get(platform, 0.0) + leg_exposure
+        for platform, add in platform_add.items():
+            existing_platform = self._platform_exposures.get(platform, 0.0)
+            if existing_platform + add > self._max_platform_exposure:
+                return False, f"Per-platform exposure limit exceeded on {platform}"
+
         total_exposure = sum(self._open_positions.values()) + exposure
         if total_exposure > self._max_total_exposure:
             return False, "Total exposure limit exceeded"
         return True, "approved"
 
-    def record_trade(self, canonical_id: str, exposure: float, pnl: float = 0.0):
+    def record_trade(
+        self,
+        canonical_id: str,
+        exposure: float,
+        pnl: float = 0.0,
+        *,
+        platform: Optional[str] = None,
+        yes_platform: Optional[str] = None,
+        no_platform: Optional[str] = None,
+        yes_exposure: float = 0.0,
+        no_exposure: float = 0.0,
+    ):
         self._open_positions[canonical_id] = self._open_positions.get(canonical_id, 0.0) + exposure
         self._daily_pnl += pnl
         self._daily_trades += 1
+        # Plan 03-02: per-platform accounting. Two modes:
+        #   (A) single platform + full exposure (test helper / simple cases):
+        #       record_trade(id, 250.0, platform="kalshi")
+        #   (B) cross-platform arb leg split:
+        #       record_trade(id, total, yes_platform=..., no_platform=...,
+        #                    yes_exposure=..., no_exposure=...)
+        # Legacy callers pass none → no per-platform side effect.
+        if platform is not None:
+            self._platform_exposures[platform] = (
+                self._platform_exposures.get(platform, 0.0) + exposure
+            )
+        if yes_platform is not None and yes_exposure:
+            self._platform_exposures[yes_platform] = (
+                self._platform_exposures.get(yes_platform, 0.0) + yes_exposure
+            )
+        if no_platform is not None and no_exposure:
+            self._platform_exposures[no_platform] = (
+                self._platform_exposures.get(no_platform, 0.0) + no_exposure
+            )
 
-    def release_trade(self, canonical_id: str, exposure: float, pnl: float = 0.0):
+    def release_trade(
+        self,
+        canonical_id: str,
+        exposure: float,
+        pnl: float = 0.0,
+        *,
+        platform: Optional[str] = None,
+        yes_platform: Optional[str] = None,
+        no_platform: Optional[str] = None,
+        yes_exposure: float = 0.0,
+        no_exposure: float = 0.0,
+    ):
         remaining = max(self._open_positions.get(canonical_id, 0.0) - exposure, 0.0)
         if remaining > 0:
             self._open_positions[canonical_id] = remaining
         else:
             self._open_positions.pop(canonical_id, None)
         self._daily_pnl += pnl
+        # Plan 03-02: mirror per-platform subtraction; pop key when it drops
+        # to zero or below (negatives should not linger in accounting).
+        def _decrement(platform_name: str, amount: float) -> None:
+            if not platform_name or not amount:
+                return
+            current = self._platform_exposures.get(platform_name, 0.0)
+            new_value = current - amount
+            if new_value > 0:
+                self._platform_exposures[platform_name] = new_value
+            else:
+                self._platform_exposures.pop(platform_name, None)
+
+        if platform is not None:
+            _decrement(platform, exposure)
+        if yes_platform is not None and yes_exposure:
+            _decrement(yes_platform, yes_exposure)
+        if no_platform is not None and no_exposure:
+            _decrement(no_platform, no_exposure)
 
 
 class ExecutionEngine:
@@ -262,7 +361,7 @@ class ExecutionEngine:
         self.scanner_config = config.scanner
         self.balance_monitor = balance_monitor
         self.price_store = price_store
-        self.risk = RiskManager(config.scanner)
+        self.risk = RiskManager(config.scanner, safety_config=getattr(config, "safety", None))
         self._running = False
         self._executions: List[ArbExecution] = []
         self._execution_count = 0
@@ -307,7 +406,12 @@ class ExecutionEngine:
     async def execute_opportunity(self, opp: ArbitrageOpportunity) -> Optional[ArbExecution]:
         approved, reason = self.risk.check_trade(opp)
         if not approved:
-            logger.debug("Trade rejected by risk manager: %s", reason)
+            # Plan 03-02 (SAFE-02): surface every risk-rejection as a
+            # structured `order_rejected` ExecutionIncident so operators
+            # can see safety decisions in real time via the existing
+            # incident WebSocket event (no new event type).
+            await self._emit_rejection_incident(opp, reason)
+            logger.info("Trade rejected by risk manager: %s", reason)
             return None
 
         signature = f"{opp.key()}:{opp.status}"
@@ -652,7 +756,15 @@ class ExecutionEngine:
             timestamp=now,
         )
         self._executions.append(execution)
-        self.risk.record_trade(opp.canonical_id, opp.suggested_qty * (opp.yes_price + opp.no_price), execution.realized_pnl)
+        self.risk.record_trade(
+            opp.canonical_id,
+            opp.suggested_qty * (opp.yes_price + opp.no_price),
+            execution.realized_pnl,
+            yes_platform=opp.yes_platform,
+            no_platform=opp.no_platform,
+            yes_exposure=opp.suggested_qty * opp.yes_price,
+            no_exposure=opp.suggested_qty * opp.no_price,
+        )
         return execution
 
     async def _live_execution(self, arb_id: str, opp: ArbitrageOpportunity) -> ArbExecution:
@@ -705,6 +817,10 @@ class ExecutionEngine:
                     opp.canonical_id,
                     opp.suggested_qty * (opp.yes_price + opp.no_price),
                     execution.realized_pnl,
+                    yes_platform=opp.yes_platform,
+                    no_platform=opp.no_platform,
+                    yes_exposure=opp.suggested_qty * opp.yes_price,
+                    no_exposure=opp.suggested_qty * opp.no_price,
                 )
 
         # EXEC-02 / D-16: persist the completed arb execution.
@@ -949,6 +1065,65 @@ class ExecutionEngine:
             metadata=metadata,
         )
 
+    async def _emit_rejection_incident(
+        self,
+        opp: ArbitrageOpportunity,
+        reason: str,
+    ) -> ExecutionIncident:
+        """Plan 03-02 (SAFE-02): emit a structured ``order_rejected``
+        ExecutionIncident whenever RiskManager.check_trade denies an
+        opportunity. Incidents flow through the existing incident
+        subscription queue to the dashboard's generic ``incident`` WS
+        event — plan 03-07 will add a filtered "Rejected orders" sub-view
+        without needing a new event type.
+        """
+        r = reason.lower()
+        platform: Optional[str] = None
+        if "per-market" in r:
+            rejection_type = "per_market"
+        elif "per-platform" in r:
+            rejection_type = "per_platform"
+            # Reason format: "Per-platform exposure limit exceeded on {platform}"
+            if " on " in reason:
+                platform = reason.rsplit(" on ", 1)[-1].strip() or None
+        elif "total exposure" in r:
+            rejection_type = "total_exposure"
+        elif "daily" in r and "loss" in r:
+            rejection_type = "daily_loss"
+        elif "daily" in r and "trade" in r:
+            rejection_type = "daily_trades"
+        elif "stale" in r:
+            rejection_type = "stale_quote"
+        elif "confidence" in r:
+            rejection_type = "low_confidence"
+        elif "edge" in r:
+            rejection_type = "thin_edge"
+        elif "not ready" in r:
+            rejection_type = "not_ready"
+        else:
+            rejection_type = "unknown"
+
+        metadata: Dict[str, Any] = {
+            "event_type": "order_rejected",
+            "rejection_type": rejection_type,
+            "reason": reason,
+            "yes_platform": opp.yes_platform,
+            "no_platform": opp.no_platform,
+            "canonical_id": opp.canonical_id,
+            "suggested_qty": opp.suggested_qty,
+        }
+        if platform:
+            metadata["platform"] = platform
+
+        arb_id = f"REJ-{int(time.time() * 1000)}-{uuid.uuid4().hex[:4]}"
+        return await self._record_incident(
+            arb_id,
+            opp,
+            severity="info",
+            message=f"Order rejected: {reason}",
+            metadata=metadata,
+        )
+
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._own_session is None or self._own_session.closed:
             self._own_session = aiohttp.ClientSession()
@@ -1146,8 +1321,25 @@ class ExecutionEngine:
             exposure = execution.opportunity.suggested_qty * (
                 execution.opportunity.yes_price + execution.opportunity.no_price
             )
+            # Plan 03-02: thread per-platform exposure splits through the
+            # manual-position lifecycle so both open_positions and
+            # _platform_exposures stay in sync.
+            yes_leg_exposure = (
+                execution.opportunity.suggested_qty * execution.opportunity.yes_price
+            )
+            no_leg_exposure = (
+                execution.opportunity.suggested_qty * execution.opportunity.no_price
+            )
             if position.status == "entered" and previous_status != "manual_entered":
-                self.risk.record_trade(execution.opportunity.canonical_id, exposure, 0.0)
+                self.risk.record_trade(
+                    execution.opportunity.canonical_id,
+                    exposure,
+                    0.0,
+                    yes_platform=execution.opportunity.yes_platform,
+                    no_platform=execution.opportunity.no_platform,
+                    yes_exposure=yes_leg_exposure,
+                    no_exposure=no_leg_exposure,
+                )
             if position.status == "closed" and execution.realized_pnl == 0.0:
                 execution.realized_pnl = round(
                     execution.opportunity.net_edge * execution.opportunity.suggested_qty,
@@ -1158,8 +1350,20 @@ class ExecutionEngine:
                     execution.opportunity.canonical_id,
                     exposure,
                     execution.realized_pnl,
+                    yes_platform=execution.opportunity.yes_platform,
+                    no_platform=execution.opportunity.no_platform,
+                    yes_exposure=yes_leg_exposure,
+                    no_exposure=no_leg_exposure,
                 )
             elif position.status == "cancelled":
-                self.risk.release_trade(execution.opportunity.canonical_id, exposure, 0.0)
+                self.risk.release_trade(
+                    execution.opportunity.canonical_id,
+                    exposure,
+                    0.0,
+                    yes_platform=execution.opportunity.yes_platform,
+                    no_platform=execution.opportunity.no_platform,
+                    yes_exposure=yes_leg_exposure,
+                    no_exposure=no_leg_exposure,
+                )
             return execution
         return None
