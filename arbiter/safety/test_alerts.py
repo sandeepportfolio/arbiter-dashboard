@@ -9,7 +9,6 @@ except Exception:  # pragma: no cover
     SafetyAlertTemplates = None  # type: ignore
 
 
-@pytest.mark.skip(reason="implementation pending (Task 1)")
 def test_kill_armed_template_html():
     message = SafetyAlertTemplates.kill_armed(
         by="operator:x",
@@ -21,7 +20,6 @@ def test_kill_armed_template_html():
     assert "polymarket:2" in message
 
 
-@pytest.mark.skip(reason="implementation pending (Task 1)")
 def test_kill_reset_template():
     message = SafetyAlertTemplates.kill_reset(by="operator:x", note="recovered")
     assert "Kill switch RESET" in message

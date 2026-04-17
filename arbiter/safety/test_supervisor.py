@@ -45,7 +45,6 @@ def _build_supervisor(adapters, notifier, config=None):
     )
 
 
-@pytest.mark.skip(reason="implementation pending (Task 1)")
 async def test_trip_kill_cancels_all(fake_notifier, fake_adapter_factory):
     adapters = {
         "kalshi": fake_adapter_factory("kalshi", ["k1", "k2", "k3"]),
@@ -61,7 +60,6 @@ async def test_trip_kill_cancels_all(fake_notifier, fake_adapter_factory):
     adapters["polymarket"].cancel_all.assert_awaited_once()
 
 
-@pytest.mark.skip(reason="implementation pending (Task 1)")
 async def test_allow_execution_armed(fake_notifier, fake_adapter_factory):
     adapters = {"kalshi": fake_adapter_factory("kalshi", [])}
     supervisor = _build_supervisor(adapters, fake_notifier)
@@ -73,7 +71,6 @@ async def test_allow_execution_armed(fake_notifier, fake_adapter_factory):
     assert ctx.get("armed") is True
 
 
-@pytest.mark.skip(reason="implementation pending (Task 1)")
 async def test_reset_respects_cooldown(fake_notifier, fake_adapter_factory, monkeypatch):
     adapters = {"kalshi": fake_adapter_factory("kalshi", [])}
     cfg = SafetyConfig()
@@ -93,7 +90,6 @@ async def test_reset_respects_cooldown(fake_notifier, fake_adapter_factory, monk
     assert state.armed is False
 
 
-@pytest.mark.skip(reason="implementation pending (Task 1)")
 async def test_trip_kill_publishes_event(fake_notifier, fake_adapter_factory):
     adapters = {"kalshi": fake_adapter_factory("kalshi", [])}
     supervisor = _build_supervisor(adapters, fake_notifier)
@@ -105,7 +101,6 @@ async def test_trip_kill_publishes_event(fake_notifier, fake_adapter_factory):
     assert event.get("payload", {}).get("armed") is True
 
 
-@pytest.mark.skip(reason="implementation pending (Task 1)")
 async def test_concurrent_arm_serializes(fake_notifier, fake_adapter_factory):
     adapters = {"kalshi": fake_adapter_factory("kalshi", ["k1"])}
     supervisor = _build_supervisor(adapters, fake_notifier)
@@ -127,7 +122,6 @@ async def test_concurrent_arm_serializes(fake_notifier, fake_adapter_factory):
     assert supervisor._state.armed is True
 
 
-@pytest.mark.skip(reason="implementation pending (Task 1)")
 async def test_telegram_failure_does_not_abort_trip(fake_adapter_factory):
     broken_notifier = AsyncMock()
     broken_notifier.send = AsyncMock(side_effect=RuntimeError("telegram down"))

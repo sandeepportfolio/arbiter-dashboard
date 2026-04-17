@@ -386,6 +386,26 @@ class ScannerConfig:
 
 
 @dataclass
+class SafetyConfig:
+    """Phase 3 safety-layer knobs.
+
+    Owned by ``arbiter.safety.SafetySupervisor``. Extended in plans 03-02
+    (per-platform exposure), 03-04 (rate limits), and 03-05 (shutdown).
+    """
+    min_cooldown_seconds: float = 30.0
+    max_platform_exposure_usd: float = 300.0
+    rate_limits: Dict[str, Dict[str, float]] = field(
+        default_factory=lambda: {
+            "kalshi": {"write_rps": 10.0, "read_rps": 100.0},
+            "polymarket": {"write_rps": 5.0, "read_rps": 50.0},
+        }
+    )
+    enable_redis_state: bool = field(
+        default_factory=lambda: os.getenv("SAFETY_REDIS_STATE", "false").lower() == "true"
+    )
+
+
+@dataclass
 class RedisConfig:
     host: str = field(default_factory=lambda: os.getenv("REDIS_HOST", "localhost"))
     port: int = 6379
@@ -409,6 +429,7 @@ class ArbiterConfig:
     predictit: PredictItConfig = field(default_factory=PredictItConfig)
     alerts: AlertConfig = field(default_factory=AlertConfig)
     scanner: ScannerConfig = field(default_factory=ScannerConfig)
+    safety: SafetyConfig = field(default_factory=SafetyConfig)
     redis: RedisConfig = field(default_factory=RedisConfig)
     postgres: PostgresConfig = field(default_factory=PostgresConfig)
 

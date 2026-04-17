@@ -23,6 +23,7 @@ from ..scanner.arbitrage import ArbitrageOpportunity, compute_fee
 from ..utils.price_store import PricePoint, PriceStore
 
 if TYPE_CHECKING:
+    from ..safety.supervisor import SafetySupervisor
     from .adapters.base import PlatformAdapter
     from .store import ExecutionStore
 
@@ -254,6 +255,8 @@ class ExecutionEngine:
         adapters: Optional[Dict[str, "PlatformAdapter"]] = None,
         store: Optional["ExecutionStore"] = None,
         execution_timeout_s: float = 10.0,
+        *,
+        safety: Optional["SafetySupervisor"] = None,
     ):
         self.config = config
         self.scanner_config = config.scanner
@@ -284,6 +287,9 @@ class ExecutionEngine:
         self.adapters: Dict[str, "PlatformAdapter"] = adapters or {}
         self.store: Optional["ExecutionStore"] = store
         self.execution_timeout_s: float = execution_timeout_s
+        # Plan 03-01: late-injected reference to SafetySupervisor for the
+        # one-leg hook (plan 03-03) and shutdown trip (plan 03-05).
+        self._safety: Optional["SafetySupervisor"] = safety
 
     def set_trade_gate(self, gate) -> None:
         self._trade_gate = gate

@@ -19,7 +19,6 @@ async def test_insert_safety_event_writes_row():
     pass
 
 
-@pytest.mark.skip(reason="implementation pending (Task 1)")
 async def test_redis_optional_no_op_when_client_none():
     shim = RedisStateShim(redis_client=None)
     # No exception even without a client:
@@ -28,7 +27,6 @@ async def test_redis_optional_no_op_when_client_none():
     assert armed is False
 
 
-@pytest.mark.skip(reason="implementation pending (Task 1)")
 async def test_safety_event_store_none_pool_is_noop():
     store = SafetyEventStore(pool=None)
     # Should not raise — return early with a warning
