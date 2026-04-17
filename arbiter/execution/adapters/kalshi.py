@@ -11,6 +11,7 @@ Retry safety: Kalshi accepts ``client_order_id`` as an idempotency key, so the
 from __future__ import annotations
 
 import json
+import os
 import time
 import uuid
 from typing import Any
@@ -31,6 +32,12 @@ _FOK_STATUS_MAP: dict[str, OrderStatus] = {
     "pending": OrderStatus.PENDING,
     "resting": OrderStatus.SUBMITTED,    # unexpected for FOK — emit warning event
 }
+
+# place_resting_limit uses the same wire-status → internal mapping. The
+# only semantic difference vs place_fok is that "resting" is the EXPECTED
+# steady state (not a warning-emitting anomaly), so this variant does not
+# log kalshi.fok.unexpected_resting when it sees that status.
+_RESTING_STATUS_MAP: dict[str, OrderStatus] = dict(_FOK_STATUS_MAP)
 
 
 class KalshiAdapter:
@@ -230,6 +237,202 @@ class KalshiAdapter:
             # reference to the aiohttp response after context exit.
             resp_headers = dict(response.headers) if response.headers else {}
             return response.status, payload, resp_headers
+
+    # ─── place_resting_limit (Plan 04-02.1 scope expansion) ──────────────
+
+    async def place_resting_limit(
+        self,
+        arb_id: str,
+        market_id: str,
+        canonical_id: str,
+        side: str,
+        price: float,
+        qty: int,
+    ) -> Order:
+        """Place a resting limit order (NOT FOK) — order stays on the book
+        until filled, cancelled, or the market closes.
+
+        Enables Plan 04-05 SAFE-01 kill-switch live-fire (which needs a
+        resting order that survives >=5 seconds so the kill-switch can trip
+        and cancel it mid-life). Structure mirrors ``place_fok`` with two
+        differences:
+
+        1. ``time_in_force`` is OMITTED from the order body (absence = GTC/resting).
+        2. Kalshi's ``status="resting"`` response is the EXPECTED happy-path
+           terminal response (SUBMITTED), not an anomaly that needs a warning.
+
+        The PHASE4_MAX_ORDER_USD adapter-layer hard-lock from Plan 04-02
+        (D-02) applies identically — notional ``qty * price`` above the cap
+        returns FAILED WITHOUT any HTTP call.
+
+        Always returns an Order; never raises across this boundary. On a
+        successful resting placement, ``Order.order_id`` is the real Kalshi
+        order id (usable directly by ``cancel_order``).
+        """
+        now = time.time()
+
+        if not self.auth or not getattr(self.auth, "is_authenticated", False):
+            return self._failed_order(
+                arb_id, market_id, canonical_id, side, price, qty, now,
+                "Kalshi auth not configured",
+            )
+
+        if not (0 < price < 1):
+            return self._failed_order(
+                arb_id, market_id, canonical_id, side, price, qty, now,
+                f"Invalid price {price}: must be between 0 and 1 exclusive",
+            )
+
+        # Phase 4 blast-radius hard-lock (D-02), mirroring Plan 04-02's
+        # PolymarketAdapter belt. When PHASE4_MAX_ORDER_USD is unset, this
+        # is a no-op. When set, rejects any notional (qty * price) > cap
+        # BEFORE any HTTP call. Unparseable env → 0.0 cap → maximally
+        # restrictive (safe-default failure mode; T-04-02-08 parity).
+        max_order_usd_raw = os.getenv("PHASE4_MAX_ORDER_USD")
+        if max_order_usd_raw:
+            try:
+                max_order_usd = float(max_order_usd_raw)
+            except (TypeError, ValueError):
+                max_order_usd = 0.0
+            notional_usd = float(qty) * float(price)
+            if notional_usd > max_order_usd:
+                log.warning(
+                    "kalshi.phase4_hardlock.rejected",
+                    arb_id=arb_id,
+                    notional=notional_usd,
+                    max=max_order_usd,
+                    qty=qty,
+                    price=price,
+                    op="place_resting_limit",
+                )
+                return self._failed_order(
+                    arb_id, market_id, canonical_id, side, price, qty, now,
+                    f"PHASE4_MAX_ORDER_USD hard-lock: notional ${notional_usd:.2f} > ${max_order_usd:.2f}",
+                )
+
+        if not self.circuit.can_execute():
+            return self._failed_order(
+                arb_id, market_id, canonical_id, side, price, qty, now,
+                "kalshi circuit open",
+            )
+
+        client_order_id = f"{arb_id}-{side.upper()}-{uuid.uuid4().hex[:8]}"
+        order_body: dict[str, Any] = {
+            "ticker": market_id,
+            "client_order_id": client_order_id,
+            "action": "buy",
+            "side": side,
+            "type": "limit",
+            "count_fp": f"{float(qty):.2f}",
+            # NB: NO time_in_force — absence = GTC/resting at Kalshi.
+        }
+        if side == "yes":
+            order_body["yes_price_dollars"] = f"{price:.4f}"
+        else:
+            order_body["no_price_dollars"] = f"{price:.4f}"
+
+        try:
+            response_status, payload, response_headers = await self._post_order(order_body)
+        except TRANSIENT_EXCEPTIONS as exc:
+            self.circuit.record_failure()
+            return self._failed_order(
+                arb_id, market_id, canonical_id, side, price, qty, now,
+                f"Kalshi transient (retries exhausted): {exc}",
+            )
+        except Exception as exc:
+            self.circuit.record_failure()
+            return self._failed_order(
+                arb_id, market_id, canonical_id, side, price, qty, now,
+                f"Kalshi request exception: {exc}",
+            )
+
+        # SAFE-04: 429 → apply Retry-After, record circuit failure, return
+        # FAILED. NEVER retry — a second POST could place a duplicate
+        # resting order (Kalshi's client_order_id dedup helps but we do NOT
+        # rely on it for safety across 429s).
+        if response_status == 429:
+            retry_after = response_headers.get("Retry-After", "1") if response_headers else "1"
+            delay = self.rate_limiter.apply_retry_after(
+                retry_after, fallback_delay=2.0, reason="kalshi_429",
+            )
+            delay = min(float(delay or 0.0), 60.0)
+            log.warning(
+                "kalshi.rate_limited",
+                penalty_seconds=delay,
+                client_order_id=client_order_id,
+                op="place_resting_limit",
+            )
+            self.circuit.record_failure()
+            return self._failed_order(
+                arb_id, market_id, canonical_id, side, price, qty, now,
+                f"rate_limited ({delay:.1f}s)",
+            )
+
+        if response_status not in (200, 201):
+            self.circuit.record_failure()
+            log.error(
+                "kalshi.resting_order.rejected",
+                status=response_status,
+                body=payload[:200],
+                client_order_id=client_order_id,
+            )
+            return self._failed_order(
+                arb_id, market_id, canonical_id, side, price, qty, now,
+                f"Kalshi API {response_status}: {payload[:200]}",
+            )
+
+        self.circuit.record_success()
+        try:
+            data = json.loads(payload)
+        except Exception as exc:
+            log.error(
+                "kalshi.resting_order.parse_failed",
+                body=payload[:200], err=str(exc),
+            )
+            return self._failed_order(
+                arb_id, market_id, canonical_id, side, price, qty, now,
+                f"Kalshi response parse: {exc}",
+            )
+
+        order_data = data.get("order", data) if isinstance(data, dict) else {}
+        api_status = order_data.get("status", "resting")
+        # Resting is the EXPECTED outcome for this variant — no warning
+        # emitted when we see it (unlike place_fok, where resting is an
+        # anomaly worth logging).
+        mapped_status = _RESTING_STATUS_MAP.get(api_status, OrderStatus.SUBMITTED)
+
+        fill_qty = float(
+            order_data.get("fill_count_fp", order_data.get("count_filled", "0")) or "0"
+        )
+        fill_price_raw = order_data.get(
+            "yes_price_dollars",
+            order_data.get(
+                "no_price_dollars",
+                order_data.get("avg_price", str(price)),
+            ),
+        )
+        try:
+            fill_price = float(fill_price_raw) if fill_price_raw is not None else price
+        except (TypeError, ValueError):
+            fill_price = price
+
+        return Order(
+            order_id=str(order_data.get("order_id", client_order_id)),
+            platform="kalshi",
+            market_id=market_id,
+            canonical_id=canonical_id,
+            side=side,
+            price=price,
+            quantity=qty,
+            status=mapped_status,
+            fill_price=fill_price,
+            fill_qty=fill_qty,
+            timestamp=now,
+            # CR-02 parity with place_fok: carry the engine-chosen
+            # client_order_id back to the engine so ExecutionStore persists
+            # the real idempotency key, not the Kalshi server id.
+            external_client_order_id=client_order_id,
+        )
 
     # ─── cancel_order (verbatim from engine.py:717-730 + retry) ────────────
 
