@@ -880,4 +880,237 @@ def test_timeout_recovery_end_to_end():
         # picked up from the real order returned by the lookup.
         assert kwargs["client_order_id"] == "ARB-42-YES-abcd1234"
 
+
+# ─────────────────────────────────────────────────────────────────────────
+# Plan 03-02 (SAFE-02): Per-platform RiskManager exposure + order_rejected
+# incident emission. The RiskManager gains:
+#   - optional safety_config kwarg carrying SafetyConfig.max_platform_exposure_usd
+#   - _platform_exposures dict tracked alongside _open_positions
+#   - check_trade adds a per-platform aggregate check BEFORE total-exposure
+#     check but AFTER per-market
+#   - record_trade / release_trade accept yes/no platform + exposure kwargs
+#     (backward-compatible — legacy callers pass nothing)
+# ExecutionEngine emits an ExecutionIncident on every risk-rejection with
+# metadata.event_type == "order_rejected" and a structured rejection_type.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def _make_safety_opp(
+    canonical_id: str = "MKT1",
+    yes_platform: str = "kalshi",
+    no_platform: str = "polymarket",
+    yes_price: float = 0.60,
+    no_price: float = 0.40,
+    suggested_qty: int = 100,
+    quote_age_seconds: float = 1.0,
+) -> ArbitrageOpportunity:
+    """Build an ArbitrageOpportunity suitable for RiskManager.check_trade
+    exercises. Edge/confidence/status defaults are 'approvable'."""
+    return ArbitrageOpportunity(
+        canonical_id=canonical_id,
+        description="Safety limit test opp",
+        yes_platform=yes_platform,
+        yes_price=yes_price,
+        yes_fee=0.02,
+        yes_market_id=f"{yes_platform[:1].upper()}-{canonical_id}",
+        no_platform=no_platform,
+        no_price=no_price,
+        no_fee=0.01,
+        no_market_id=f"{no_platform[:1].upper()}-{canonical_id}",
+        gross_edge=0.10,
+        total_fees=0.03,
+        net_edge=0.07,
+        net_edge_cents=7.0,
+        suggested_qty=suggested_qty,
+        max_profit_usd=7.0,
+        timestamp=time.time(),
+        confidence=0.9,
+        status="tradable",
+        persistence_count=3,
+        quote_age_seconds=quote_age_seconds,
+        min_available_liquidity=500.0,
+        mapping_status="confirmed",
+        mapping_score=0.95,
+        requires_manual=False,
+        yes_fee_rate=0.07,
+        no_fee_rate=0.01,
+    )
+
+
+def test_risk_per_platform_limit():
+    """Per-platform aggregated exposure REJECTS when a new leg would push
+    the platform over SafetyConfig.max_platform_exposure_usd."""
+    from arbiter.execution.engine import RiskManager
+
+    config = ArbiterConfig()
+    config.safety.max_platform_exposure_usd = 300.0
+    config.scanner.max_position_usd = 1_000.0  # large so per-market does not fire
+    config.scanner.confidence_threshold = 0.1
+    config.scanner.min_edge_cents = 1.0
+
+    risk = RiskManager(config.scanner, safety_config=config.safety)
+    risk._max_total_exposure = 50_000.0
+
+    # Pre-existing $250 Kalshi exposure on some other market.
+    risk.record_trade(
+        "OTHER_MKT",
+        exposure=250.0,
+        platform="kalshi",
+    )
+
+    # New opp: 100 qty × $0.60 on Kalshi = $60 → Kalshi aggregate 310 > 300 limit.
+    opp = _make_safety_opp(
+        canonical_id="MKT1",
+        yes_platform="kalshi",
+        no_platform="polymarket",
+        yes_price=0.60,
+        no_price=0.40,
+        suggested_qty=100,
+    )
+
+    ok, reason = risk.check_trade(opp)
+    assert ok is False
+    assert "Per-platform" in reason
+    assert "kalshi" in reason.lower()
+
+
+def test_risk_per_platform_allows_within_limit():
+    """Same shape as per-platform test but prior exposure leaves headroom."""
+    from arbiter.execution.engine import RiskManager
+
+    config = ArbiterConfig()
+    config.safety.max_platform_exposure_usd = 300.0
+    config.scanner.max_position_usd = 1_000.0
+    config.scanner.confidence_threshold = 0.1
+    config.scanner.min_edge_cents = 1.0
+
+    risk = RiskManager(config.scanner, safety_config=config.safety)
+    risk._max_total_exposure = 50_000.0
+
+    # Prior Kalshi exposure $100 — new $60 leg keeps Kalshi at $160 < $300.
+    risk.record_trade(
+        "OTHER_MKT",
+        exposure=100.0,
+        platform="kalshi",
+    )
+
+    opp = _make_safety_opp(
+        canonical_id="MKT1",
+        yes_platform="kalshi",
+        no_platform="polymarket",
+        yes_price=0.60,
+        no_price=0.40,
+        suggested_qty=100,
+    )
+
+    ok, reason = risk.check_trade(opp)
+    assert ok is True, f"expected approval, got: {reason}"
+
+
+def test_risk_per_market_limit_still_fires():
+    """Regression guard: legacy per-market exposure check still fires when
+    breached, even with the new per-platform check layered on top."""
+    from arbiter.execution.engine import RiskManager
+
+    config = ArbiterConfig()
+    config.scanner.max_position_usd = 500.0
+    config.safety.max_platform_exposure_usd = 10_000.0  # disable per-platform
+    config.scanner.confidence_threshold = 0.1
+    config.scanner.min_edge_cents = 1.0
+
+    risk = RiskManager(config.scanner, safety_config=config.safety)
+    risk._max_total_exposure = 100_000.0
+
+    # Prior $400 exposure on MKT1.
+    risk.record_trade("MKT1", exposure=400.0)
+
+    # New opp on MKT1 adds 100 qty × (0.60 + 0.90) = $150 → total $550 > $500.
+    opp = _make_safety_opp(
+        canonical_id="MKT1",
+        yes_platform="kalshi",
+        no_platform="polymarket",
+        yes_price=0.60,
+        no_price=0.90,
+        suggested_qty=100,
+    )
+
+    ok, reason = risk.check_trade(opp)
+    assert ok is False
+    assert "Per-market" in reason
+
+
+def test_rejected_order_emits_incident():
+    """Any RiskManager rejection during execute_opportunity emits a
+    structured ExecutionIncident with metadata.event_type='order_rejected'."""
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+
+        # Force rejection via stale quote (post-safety wiring this is still
+        # a RiskManager rejection path).
+        opp = _make_safety_opp(
+            canonical_id="REJ_STALE",
+            quote_age_seconds=999.0,
+        )
+
+        queue = engine.subscribe_incidents()
+        execution = await engine.execute_opportunity(opp)
+        assert execution is None
+
+        # One incident should have been dispatched to the subscriber queue.
+        incident = await asyncio.wait_for(queue.get(), timeout=1.0)
+        assert incident.severity == "info"
+        assert incident.metadata.get("event_type") == "order_rejected"
+        assert "reason" in incident.metadata
+        assert incident.metadata["reason"]  # non-empty
+
+    asyncio.run(runner())
+
+
+def test_rejected_order_incident_per_platform():
+    """When the per-platform limit fires, the incident carries
+    rejection_type='per_platform' and the offending platform name."""
+    async def runner():
+        store = PriceStore(ttl=60)
+        config = ArbiterConfig()
+        config.scanner.dry_run = True
+        config.scanner.confidence_threshold = 0.1
+        config.scanner.min_edge_cents = 1.0
+        config.scanner.max_position_usd = 1_000.0
+        config.safety.max_platform_exposure_usd = 300.0
+        monitor = BalanceMonitor(
+            config.alerts,
+            {"kalshi": object(), "polymarket": object(), "predictit": object()},
+        )
+        engine = ExecutionEngine(config, monitor, price_store=store, collectors={})
+        engine.risk._max_daily_trades = 250
+        engine.risk._max_total_exposure = 50_000.0
+
+        # Pre-load $290 Kalshi exposure — new $60 leg pushes to $350 > $300.
+        engine.risk.record_trade(
+            "OTHER_MKT",
+            exposure=290.0,
+            platform="kalshi",
+        )
+
+        opp = _make_safety_opp(
+            canonical_id="REJ_PER_PLATFORM",
+            yes_platform="kalshi",
+            no_platform="polymarket",
+            yes_price=0.60,
+            no_price=0.40,
+            suggested_qty=100,
+        )
+
+        queue = engine.subscribe_incidents()
+        execution = await engine.execute_opportunity(opp)
+        assert execution is None
+
+        incident = await asyncio.wait_for(queue.get(), timeout=1.0)
+        assert incident.metadata.get("event_type") == "order_rejected"
+        assert incident.metadata.get("rejection_type") == "per_platform"
+        assert incident.metadata.get("platform") == "kalshi"
+
+    asyncio.run(runner())
+
     asyncio.run(runner())
