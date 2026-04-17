@@ -323,6 +323,11 @@ class RateLimiter:
         return {
             "name": self.name,
             "available_tokens": self.available_tokens,
+            # SAFE-04: max_requests + time_window let the dashboard render the
+            # "tokens available / cap" pill (plan 03-07) without hardcoding the
+            # per-platform config.
+            "max_requests": float(self.max_requests),
+            "time_window": float(self.window_seconds),
             "remaining_penalty_seconds": round(self.remaining_penalty_seconds, 3),
             "penalty_count": self._penalty_count,
             "last_wait_seconds": round(self._last_wait_seconds, 3),

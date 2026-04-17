@@ -177,6 +177,9 @@ class ArbiterAPI:
         self._ws_clients: list[web.WebSocketResponse] = []
         self._site_index = Path(__file__).resolve().parent.parent / "index.html"
         self._dashboard_dir = Path(__file__).resolve().parent / "web"
+        # SAFE-04: periodic broadcaster task for rate_limit_state events.
+        # Started in serve(); cancelled on shutdown.
+        self._rate_limit_task: Optional[asyncio.Task] = None
 
     async def serve(self):
         app = web.Application(middlewares=[self._cors_middleware])
@@ -223,9 +226,21 @@ class ArbiterAPI:
 
         logger.info("ARBITER API listening at http://%s:%s", self.host, self.port)
         asyncio.create_task(self._broadcast_loop())
+        # SAFE-04: launch the periodic rate_limit_state broadcaster.
+        self._rate_limit_task = asyncio.create_task(self._rate_limit_broadcast_loop())
 
-        while True:
-            await asyncio.sleep(3600)
+        try:
+            while True:
+                await asyncio.sleep(3600)
+        finally:
+            # Cancel the rate-limit broadcaster on shutdown so the asyncio loop
+            # doesn't report a pending task on exit.
+            if self._rate_limit_task is not None and not self._rate_limit_task.done():
+                self._rate_limit_task.cancel()
+                try:
+                    await self._rate_limit_task
+                except (asyncio.CancelledError, BaseException):
+                    pass
 
     @web.middleware
     async def _cors_middleware(self, request, handler):
@@ -739,6 +754,45 @@ class ArbiterAPI:
                 logger.error("Broadcast error: %s", exc)
                 await asyncio.sleep(1.0)
 
+    async def _rate_limit_broadcast_loop(self):
+        """SAFE-04: Emit ``rate_limit_state`` WS events every 2 seconds.
+
+        Payload shape::
+
+            {"type": "rate_limit_state",
+             "payload": {platform_name: RateLimiter.stats dict}}
+
+        Only platforms whose adapter carries a ``rate_limiter`` attribute are
+        included. Cancelled cleanly on shutdown.
+        """
+        while True:
+            try:
+                await asyncio.sleep(2.0)
+                if not self._ws_clients:
+                    continue
+                adapters = getattr(self.engine, "adapters", {}) or {}
+                snapshot: dict = {}
+                for platform, adapter in adapters.items():
+                    rl = getattr(adapter, "rate_limiter", None)
+                    if rl is None:
+                        continue
+                    try:
+                        snapshot[platform] = rl.stats
+                    except Exception as stats_exc:
+                        logger.debug(
+                            "rate_limit_broadcast stats failure for %s: %s",
+                            platform, stats_exc,
+                        )
+                if snapshot:
+                    await self._broadcast_json(
+                        {"type": "rate_limit_state", "payload": snapshot}
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.error("rate_limit_broadcast error: %s", exc)
+                await asyncio.sleep(1.0)
+
     async def _broadcast_json(self, payload: dict):
         for client in list(self._ws_clients):
             try:
@@ -778,6 +832,16 @@ class ArbiterAPI:
                 if self.safety is not None
                 else {"armed": False, "available": False}
             ),
+            # SAFE-04: per-adapter RateLimiter.stats so GET /api/system and the
+            # WebSocket bootstrap carry the same rate-limit payload as the
+            # periodic rate_limit_state events.
+            "rate_limits": {
+                platform: adapter.rate_limiter.stats
+                for platform, adapter in (
+                    getattr(self.engine, "adapters", {}) or {}
+                ).items()
+                if getattr(adapter, "rate_limiter", None) is not None
+            },
             "series": {
                 "scanner": self.scanner.history,
                 "equity": self.engine.equity_curve,
