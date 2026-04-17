@@ -84,10 +84,10 @@ Plans:
 Plans:
 - [x] 03-01-PLAN.md -- SafetySupervisor + SafetyConfig + /api/kill-switch + WebSocket safety event plumbing + cancel_all stubs (SAFE-01)
 - [x] 03-02-PLAN.md -- RiskManager per-platform exposure limit + order_rejected structured incident (SAFE-02)
-- [ ] 03-03-PLAN.md -- One-leg exposure structured metadata + Telegram alert + dedicated one_leg_exposure WS event (SAFE-03)
-- [ ] 03-04-PLAN.md -- Per-adapter rate-limit acquire + 429 retry-after + periodic rate_limit_state WS broadcast (SAFE-04)
+- [x] 03-03-PLAN.md -- One-leg exposure structured metadata + Telegram alert + dedicated one_leg_exposure WS event (SAFE-03)
+- [x] 03-04-PLAN.md -- Per-adapter rate-limit acquire + 429 retry-after + periodic rate_limit_state WS broadcast (SAFE-04)
 - [ ] 03-05-PLAN.md -- Graceful shutdown re-ordering + full KalshiAdapter/PolymarketAdapter cancel_all + prepare_shutdown (SAFE-05)
-- [ ] 03-06-PLAN.md -- MARKET_MAP resolution_criteria schema + mapping_state WS event + SQL ALTER migration (SAFE-06)
+- [x] 03-06-PLAN.md -- MARKET_MAP resolution_criteria schema + mapping_state WS event + SQL ALTER migration (SAFE-06)
 - [ ] 03-07-PLAN.md -- Dashboard UI consolidation: safety section + rate-limit pills + one-leg hero alert + shutdown banner + resolution comparison (SAFE-01..06 UI)
 
 ### Phase 4: Sandbox Validation
