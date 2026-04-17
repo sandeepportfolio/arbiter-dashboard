@@ -164,25 +164,39 @@ export function buildMetricCards(state) {
   const totalExecutions = Number(state.system?.execution?.total_executions || 0);
   const activeRoutes = Number(state.system?.scanner?.tradable_opportunities || 0);
   const bestEdge = Number(state.system?.scanner?.best_edge_cents || 0);
+  const validatorVerdict = titleCase(state.profitability?.verdict || state.system?.profitability?.verdict || "collecting_evidence");
+  const positionCount = Number(state.portfolio?.total_open_positions || 0);
 
   return [
     {
+      eyebrow: "Outcome",
+      tag: totalPnl >= 0 ? "In range" : "Drawdown",
+      tone: "tone-mint",
       label: "Realized P&L",
       value: formatUsd.format(totalPnl),
       meta: `${signedPercent((totalPnl / Math.max(totalExposure || 1, 1)) * 100)} vs open notional`,
     },
     {
+      eyebrow: "Risk",
+      tag: positionCount ? `${formatWhole.format(positionCount)} open` : "Idle",
+      tone: "tone-blue",
       label: "Open exposure",
       value: formatUsd.format(totalExposure),
-      meta: `${formatWhole.format(state.portfolio?.total_open_positions || 0)} active positions across venues`,
+      meta: `${formatWhole.format(positionCount)} active positions across venues`,
     },
     {
-      label: "Validator progress",
+      eyebrow: "Readiness",
+      tag: validatorVerdict,
+      tone: "tone-gold",
+      label: "Validator state",
       value: `${Math.round(progress * 100)}%`,
-      meta: `${titleCase(state.profitability?.verdict || state.system?.profitability?.verdict || "collecting_evidence")} with ${formatWhole.format(activeRoutes)} tradable routes`,
+      meta: `${validatorVerdict} with ${formatWhole.format(activeRoutes)} tradable routes`,
     },
     {
-      label: "Trade throughput",
+      eyebrow: "Flow",
+      tag: bestEdge > 0 ? cents(bestEdge) : "Scanning",
+      tone: "tone-plum",
+      label: "Execution flow",
       value: formatWhole.format(totalExecutions),
       meta: `${cents(bestEdge)} best live edge in the current scan window`,
     },

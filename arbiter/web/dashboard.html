@@ -175,10 +175,18 @@
         </aside>
       </section>
 
-      <section id="metricGrid" class="metric-grid metric-grid-overview"></section>
-      <section id="statusBand" class="status-band status-band-overview"></section>
-
-      <nav id="deskMenu" class="desk-menu desk-menu-inline" aria-label="Desk sections"></nav>
+      <section id="commandCenter" class="command-center-shell" aria-label="Desk command center">
+        <div class="command-center-header">
+          <div>
+            <p class="panel-kicker">Command center</p>
+            <h2>Desk state at a glance</h2>
+          </div>
+          <p class="panel-copy compact-copy">Outcome, readiness, route quality, and section health in one compact cockpit.</p>
+        </div>
+        <section id="metricGrid" class="metric-grid metric-grid-overview"></section>
+        <section id="statusBand" class="status-band status-band-overview"></section>
+        <nav id="deskMenu" class="desk-menu desk-menu-inline" aria-label="Desk sections"></nav>
+      </section>
 
       <section id="performanceSection" class="panel-grid performance-grid">
         <article class="panel chart-panel scanner-performance-panel">
@@ -220,7 +228,7 @@
       </section>
 
       <section id="riskSection" class="panel-grid panel-grid-tight">
-        <article class="panel">
+        <article class="panel infra-panel">
           <div class="panel-header">
             <div>
               <p class="panel-kicker">Validation</p>
@@ -232,7 +240,7 @@
           <div id="profitabilityReasons" class="stack-list compact-stack"></div>
         </article>
 
-        <article class="panel">
+        <article class="panel infra-panel">
           <div class="panel-header">
             <div>
               <p class="panel-kicker">Guardrails</p>
@@ -246,7 +254,7 @@
       </section>
 
       <section id="opsSection" class="panel-grid panel-grid-tight ops-only" data-ops-only="true">
-        <article class="panel">
+        <article class="panel infra-panel">
           <div class="panel-header">
             <div>
               <p class="panel-kicker">Manual Desk</p>
@@ -306,7 +314,7 @@
             </article>
 
             <div class="log-section-heading">
-              <span>Categories</span>
+              <span>Atlas summary</span>
               <span id="logCategoryCount" class="panel-badge">0</span>
             </div>
             <div id="logCategoryAtlas" class="log-category-atlas"></div>
@@ -331,7 +339,7 @@
       </section>
 
       <section id="infraSection" class="panel-grid panel-grid-tight">
-        <article class="panel">
+        <article class="panel infra-panel">
           <div class="panel-header">
             <div>
               <p class="panel-kicker">Mapping</p>
@@ -339,10 +347,10 @@
             </div>
             <span id="mappingCount" class="panel-badge">0</span>
           </div>
-          <div id="mappingList" class="stack-list mapping-list"></div>
+          <div id="mappingList" class="stack-list mapping-list infra-panel-list"></div>
         </article>
 
-        <article class="panel">
+        <article class="panel infra-panel">
           <div class="panel-header">
             <div>
               <p class="panel-kicker">Collectors</p>
@@ -350,7 +358,7 @@
             </div>
             <span id="collectorCount" class="panel-badge">0</span>
           </div>
-          <div id="collectorList" class="stack-list"></div>
+          <div id="collectorList" class="stack-list infra-panel-list"></div>
         </article>
       </section>
     </section>

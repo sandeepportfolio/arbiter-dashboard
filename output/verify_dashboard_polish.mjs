@@ -141,6 +141,11 @@ async function auditScenario(browser, scenario) {
         listRect: rectData(opportunityList),
         panelRect: rectData(opportunityPanel),
         scannerRect: rectData(scannerPanel),
+        rowRects: [...opportunityList.querySelectorAll('.blotter-row')].slice(0, 3).map(rectData).filter(Boolean),
+        toolbarPosition: (() => {
+          const toolbar = opportunityPanel?.querySelector('.blotter-toolbar');
+          return toolbar ? getComputedStyle(toolbar).position : null;
+        })(),
       } : null,
       overviewAlignment: (() => {
         const main = document.querySelector('.overview-main');
@@ -148,6 +153,58 @@ async function auditScenario(browser, scenario) {
         return main && side ? {
           mainRect: rectData(main),
           sideRect: rectData(side),
+        } : null;
+      })(),
+      chartTypography: (() => {
+        const pick = (node) => node ? {
+          text: node.textContent?.trim() || '',
+          fontFamily: getComputedStyle(node).fontFamily,
+          fontSize: getComputedStyle(node).fontSize,
+          fontWeight: getComputedStyle(node).fontWeight,
+          fontVariantNumeric: getComputedStyle(node).fontVariantNumeric,
+        } : null;
+        return {
+          axis: [...document.querySelectorAll('.chart-axis-label')].slice(0, 3).map(pick).filter(Boolean),
+          focus: [...document.querySelectorAll('.chart-focus-label')].slice(0, 1).map(pick).filter(Boolean),
+        };
+      })(),
+      commandCenter: (() => {
+        const commandCenter = document.querySelector('#commandCenter');
+        const metrics = [...document.querySelectorAll('#metricGrid .metric-card')].map(rectData).filter(Boolean);
+        const statusCards = [...document.querySelectorAll('#statusBand .status-strip')].map(rectData).filter(Boolean);
+        const menuCards = [...document.querySelectorAll('#deskMenu .desk-menu-link')].map(rectData).filter(Boolean);
+        const deskMenu = document.querySelector('#deskMenu');
+        const statusBand = document.querySelector('#statusBand');
+        return commandCenter ? {
+          rect: rectData(commandCenter),
+          metricRects: metrics,
+          statusRects: statusCards,
+          menuRects: menuCards,
+          deskMenuDisplay: deskMenu ? getComputedStyle(deskMenu).display : null,
+          statusBandDisplay: statusBand ? getComputedStyle(statusBand).display : null,
+        } : null;
+      })(),
+      activityAtlas: (() => {
+        const categoryAtlas = document.querySelector('#logCategoryAtlas');
+        const filterBar = document.querySelector('#logFilterBar');
+        const firstEntry = document.querySelector('#logTimeline .log-entry');
+        return categoryAtlas ? {
+          categoryInteractive: Boolean(categoryAtlas.querySelector('button, [role="button"], a[href]')),
+          categoryCardCount: categoryAtlas.children.length,
+          filterButtonCount: filterBar ? filterBar.querySelectorAll('button').length : 0,
+          firstEntryRect: rectData(firstEntry),
+        } : null;
+      })(),
+      infraPanels: (() => {
+        const infraPanels = [...document.querySelectorAll('#infraSection > article')];
+        const mappingList = document.querySelector('#mappingList');
+        const collectorList = document.querySelector('#collectorList');
+        return infraPanels.length ? {
+          panelRects: infraPanels.map(rectData).filter(Boolean),
+          mappingOverflowY: mappingList ? getComputedStyle(mappingList).overflowY : null,
+          collectorOverflowY: collectorList ? getComputedStyle(collectorList).overflowY : null,
+          mappingScrollHeight: mappingList?.scrollHeight || 0,
+          mappingClientHeight: mappingList?.clientHeight || 0,
         } : null;
       })(),
     };
@@ -200,18 +257,84 @@ for (const result of results) {
     }
   }
   if (audit.opportunityBlotter) {
-    const { overflowY, panelRect, scannerRect } = audit.opportunityBlotter;
+    const { overflowY, panelRect, scannerRect, rowRects, toolbarPosition } = audit.opportunityBlotter;
     if (!['auto', 'scroll'].includes(overflowY)) {
       failures.push(`${name}: live trade candidates list is not internally scrollable.`);
     }
     if (panelRect && scannerRect && Math.abs(panelRect.height - scannerRect.height) > 24) {
       failures.push(`${name}: live trade candidates panel height drifts from the scanner chart panel.`);
     }
+    if (name.startsWith('desktop') && rowRects?.some((row) => row.height > 172)) {
+      failures.push(`${name}: live trade candidate rows are still too tall for dense scanning.`);
+    }
+    if (name.startsWith('desktop') && toolbarPosition !== 'sticky') {
+      failures.push(`${name}: live trade candidate controls are not sticky inside the bounded panel.`);
+    }
   }
   if (name.startsWith('desktop') && audit.overviewAlignment) {
     const { mainRect, sideRect } = audit.overviewAlignment;
     if (mainRect && sideRect && Math.abs(mainRect.bottom - sideRect.bottom) > 8) {
       failures.push(`${name}: overview left column does not align vertically with the right-side spotlight stack.`);
+    }
+  }
+  for (const label of [...(audit.chartTypography?.axis || []), ...(audit.chartTypography?.focus || [])]) {
+    if (/manrope/i.test(label.fontFamily)) {
+      failures.push(`${name}: chart label still uses the elongated Manrope face: ${label.text}`);
+    }
+    if (Number.parseFloat(label.fontSize) < 12) {
+      failures.push(`${name}: chart label font is still too small: ${label.text} (${label.fontSize}).`);
+    }
+    if (!/tabular-nums/i.test(label.fontVariantNumeric)) {
+      failures.push(`${name}: chart label is not using tabular numerals: ${label.text}.`);
+    }
+  }
+  if (audit.commandCenter) {
+    const metricRows = [...new Set((audit.commandCenter.metricRects || []).map((rect) => Math.round(rect.top)))];
+    const statusRows = [...new Set((audit.commandCenter.statusRects || []).map((rect) => Math.round(rect.top)))];
+    const menuRows = [...new Set((audit.commandCenter.menuRects || []).map((rect) => Math.round(rect.top)))];
+    if (name.startsWith('desktop') && metricRows.length !== 1) {
+      failures.push(`${name}: command center primary metrics are not arranged as a single cockpit row.`);
+    }
+    if (name.startsWith('desktop') && statusRows.length !== 1) {
+      failures.push(`${name}: command center readiness cards are not arranged as a single cockpit row.`);
+    }
+    if (name.startsWith('desktop') && menuRows.length !== 1) {
+      failures.push(`${name}: command center section map is no longer a compact single-row strip.`);
+    }
+    if (name.startsWith('desktop') && audit.commandCenter.rect?.height > 680) {
+      failures.push(`${name}: command center is still too tall for a cockpit surface (${audit.commandCenter.rect.height}px).`);
+    }
+    if (name === 'mobile-public' && audit.commandCenter.rect?.height > 760) {
+      failures.push(`${name}: command center is still too tall on mobile (${audit.commandCenter.rect.height}px).`);
+    }
+    if (name === 'mobile-public' && audit.commandCenter.statusBandDisplay === 'none') {
+      failures.push(`${name}: command center hides readiness cards on mobile.`);
+    }
+    if (name === 'mobile-public' && audit.commandCenter.deskMenuDisplay === 'none') {
+      failures.push(`${name}: command center hides the section map on mobile.`);
+    }
+  }
+  if (audit.activityAtlas) {
+    if (audit.activityAtlas.categoryInteractive) {
+      failures.push(`${name}: activity atlas summary rail is still interactive, duplicating the filter controls.`);
+    }
+    if (audit.activityAtlas.filterButtonCount < 2) {
+      failures.push(`${name}: activity atlas filter rail is missing category controls.`);
+    }
+    if (name.startsWith('desktop') && audit.activityAtlas.firstEntryRect?.height > 140) {
+      failures.push(`${name}: activity atlas rows are still too tall for desktop density.`);
+    }
+  }
+  if (audit.infraPanels) {
+    const heights = audit.infraPanels.panelRects.map((rect) => rect.height);
+    if (heights.length >= 2 && Math.abs(heights[0] - heights[1]) > 8) {
+      failures.push(`${name}: canonical market map and platform health panels are not height-matched.`);
+    }
+    if (!['auto', 'scroll'].includes(audit.infraPanels.mappingOverflowY)) {
+      failures.push(`${name}: canonical market map list is not internally scrollable.`);
+    }
+    if (!['auto', 'scroll'].includes(audit.infraPanels.collectorOverflowY)) {
+      failures.push(`${name}: platform health list is not internally scrollable.`);
     }
   }
   for (const hoverCheck of audit.hoverChecks || []) {

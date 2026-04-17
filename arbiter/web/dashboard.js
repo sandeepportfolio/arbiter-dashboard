@@ -899,15 +899,16 @@ function renderLogEntry(entry) {
         <div class="log-entry-time">${escapeHtml(relTime(entry.timestamp))}</div>
       </div>
       <div class="log-entry-body">
-        <div>
+        <div class="log-entry-main">
           <h3>${escapeHtml(entry.title)}</h3>
           <p class="log-entry-headline">${escapeHtml(entry.headline)}</p>
         </div>
-        <span class="log-entry-badge">${escapeHtml(category.label)}</span>
       </div>
-      <p class="log-entry-narrative" title="${escapeHtml(entry.narrative)}">${escapeHtml(entry.narrative)}</p>
-      <div class="log-entry-tags">
-        ${entry.tags.slice(0, 3).map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}
+      <div class="log-entry-detail-row">
+        <p class="log-entry-narrative" title="${escapeHtml(entry.narrative)}">${escapeHtml(entry.narrative)}</p>
+        <div class="log-entry-tags">
+          ${entry.tags.slice(0, 2).map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}
+        </div>
       </div>
     </article>
   `;
@@ -1333,7 +1334,8 @@ function renderStatusBand() {
   const strips = [
     {
       tone: "tone-mint",
-      label: "Last pulse",
+      label: "Feed health",
+      tag: state.wsConnected ? "Live feed" : "Fallback",
       value: state.lastQuoteAt ? relTime(lastPulse) : "Waiting",
       copy: state.wsConnected
         ? "WebSocket is hot and streaming fresh market events."
@@ -1342,18 +1344,21 @@ function renderStatusBand() {
     {
       tone: auditRate >= 0.99 ? "tone-blue" : "tone-amber",
       label: "Math audit",
+      tag: auditRate >= 0.99 ? "Trusted" : "Watch",
       value: pct(auditRate),
       copy: `${formatWhole.format(state.system?.audit?.audits_run || 0)} shadow checks compare scanner math, fee totals, and sizing before trust is granted.`,
     },
     {
       tone: openIncidents ? "tone-rose" : "tone-mint",
-      label: "Recovery load",
+      label: "Incidents",
+      tag: openIncidents ? "Review" : "Clear",
       value: formatWhole.format(openIncidents),
       copy: openIncidents ? "Open incidents still need operator review before the route is comfortable." : "No active recovery incidents are pressuring the trading surface right now.",
     },
     {
       tone: opportunity?.status === "tradable" ? "tone-gold" : "tone-plum",
-      label: "Best route",
+      label: "Lead route",
+      tag: opportunity?.status ? titleCase(opportunity.status) : "Scanning",
       value: opportunity ? cents(opportunity.net_edge_cents) : "No route",
       copy: opportunity
         ? `${platformLabel(opportunity.yes_platform)} YES paired with ${platformLabel(opportunity.no_platform)} NO. ${cooldowns ? `${formatWhole.format(cooldowns)} collector cooldowns active.` : "Collectors are flowing cleanly."}`
@@ -1362,8 +1367,11 @@ function renderStatusBand() {
   ];
 
   statusBandEl.innerHTML = strips.map((strip) => `
-    <article class="status-strip ${strip.tone}">
-      <div class="status-strip-label">${escapeHtml(strip.label)}</div>
+    <article class="status-strip status-strip-command ${strip.tone}">
+      <div class="status-strip-head">
+        <div class="status-strip-label">${escapeHtml(strip.label)}</div>
+        <span class="status-strip-chip">${escapeHtml(strip.tag || "")}</span>
+      </div>
       <div class="status-strip-value">${escapeHtml(strip.value)}</div>
       <div class="status-strip-copy">${escapeHtml(strip.copy)}</div>
     </article>
@@ -1386,8 +1394,14 @@ function renderMetrics() {
 
   metrics.innerHTML = cards
     .map((card) => `
-      <article class="metric-card">
-        <div class="metric-label">${escapeHtml(card.label)}</div>
+      <article class="metric-card metric-card-command ${escapeHtml(card.tone || "")}">
+        <div class="metric-card-head">
+          <div class="metric-card-title-group">
+            <div class="metric-kicker">${escapeHtml(card.eyebrow || "Metric")}</div>
+            <div class="metric-label">${escapeHtml(card.label)}</div>
+          </div>
+          <span class="metric-chip">${escapeHtml(card.tag || "")}</span>
+        </div>
         <div class="metric-value">${escapeHtml(card.value)}</div>
         <div class="metric-meta">${escapeHtml(card.meta)}</div>
       </article>
@@ -1410,43 +1424,45 @@ function renderOpportunities() {
   }
 
   const rows = buildOpportunityRows({
-    opportunities: state.opportunities.slice(0, 12),
+    opportunities: state.opportunities.slice(0, 24),
     system: state.system,
     nowTimestamp: Date.now() / 1000,
   });
 
   container.innerHTML = rows.map((row) => `
     <article class="blotter-row blotter-row-${escapeHtml(row.status)}">
-      <div class="blotter-row-main">
+      <div class="blotter-row-top">
         <div class="blotter-row-titleblock">
           <div class="blotter-row-title">${escapeHtml(row.title)}</div>
           <div class="blotter-row-subtitle">${escapeHtml(row.route)}</div>
         </div>
-        <div class="blotter-row-metrics">
-          <div class="blotter-cell">
-            <span class="blotter-cell-label">Edge</span>
+        <div class="blotter-row-primary">
+          <div class="blotter-edge-block">
+            <span class="blotter-inline-label">Edge</span>
             <strong>${escapeHtml(row.netEdgeLabel)}</strong>
           </div>
-          <div class="blotter-cell">
-            <span class="blotter-cell-label">Max P&L</span>
-            <strong>${escapeHtml(row.maxProfitLabel)}</strong>
-          </div>
-          <div class="blotter-cell">
-            <span class="blotter-cell-label">Confidence</span>
-            <strong>${escapeHtml(row.confidenceLabel)}</strong>
-          </div>
-          <div class="blotter-cell">
-            <span class="blotter-cell-label">Freshness</span>
-            <strong>${escapeHtml(row.freshnessLabel)}</strong>
-          </div>
+          <span class="${statusClass(row.status)} blotter-status-pill">${escapeHtml(row.statusLabel)}</span>
         </div>
       </div>
-      <div class="blotter-row-side">
-        <span class="${statusClass(row.status)}">${escapeHtml(row.statusLabel)}</span>
+      <div class="blotter-row-bottom">
+        <div class="blotter-row-facts">
+          <span class="blotter-inline-stat">
+            <span class="blotter-inline-label">Profit</span>
+            <strong>${escapeHtml(row.maxProfitLabel)}</strong>
+          </span>
+          <span class="blotter-inline-stat">
+            <span class="blotter-inline-label">Conf</span>
+            <strong>${escapeHtml(row.confidenceLabel)}</strong>
+          </span>
+          <span class="blotter-inline-stat">
+            <span class="blotter-inline-label">Fresh</span>
+            <strong>${escapeHtml(row.freshnessLabel)}</strong>
+          </span>
+        </div>
         <div class="blotter-chip-row">
-          <span class="blotter-chip">${escapeHtml(`${row.scansLabel} scans`)}</span>
+          <span class="blotter-chip">${escapeHtml(`Persist ${row.scansLabel}`)}</span>
           <span class="blotter-chip">${escapeHtml(`${row.quantityLabel} qty`)}</span>
-          <span class="blotter-chip">${escapeHtml(`${row.liquidityLabel} liquid`)}</span>
+          <span class="blotter-chip">${escapeHtml(`${row.liquidityLabel} liq`)}</span>
           <span class="blotter-chip">${escapeHtml(row.updatedLabel)}</span>
         </div>
       </div>
@@ -1618,14 +1634,17 @@ function renderLogExperience(entries = buildLogEntries()) {
       const definition = LOG_DEFINITIONS[key];
       const count = categoryCounts[key] || 0;
       return `
-        <button type="button" class="log-category-card ${state.activeLogFilter === key ? "is-active" : ""}" data-log-filter="${escapeHtml(key)}">
+        <article class="log-category-card log-category-summary ${state.activeLogFilter === key ? "is-active" : ""}" aria-current="${state.activeLogFilter === key ? "true" : "false"}">
           <div class="log-category-top">
             <span class="log-category-name">${escapeHtml(definition.label)}</span>
             <span class="log-category-count">${escapeHtml(formatWhole.format(count))}</span>
           </div>
           <p>${escapeHtml(definition.description)}</p>
-          <div class="log-category-source">${escapeHtml(definition.source)}</div>
-        </button>
+          <div class="log-category-footer">
+            <span class="log-category-source">${escapeHtml(definition.source)}</span>
+            <span class="log-category-state">${escapeHtml(state.activeLogFilter === key ? "Active in timeline" : "Use filter rail")}</span>
+          </div>
+        </article>
       `;
     }).join("");
   }
@@ -1646,9 +1665,9 @@ function renderLogExperience(entries = buildLogEntries()) {
 
   if (logResultSummaryEl) {
     if (normalizedQuery) {
-      logResultSummaryEl.textContent = `Compact console showing ${formatWhole.format(filteredEntries.length)} of ${formatWhole.format(scopedEntries.length)} events in ${scope.label.toLowerCase()} for "${state.logQuery}".`;
+      logResultSummaryEl.textContent = `${formatWhole.format(filteredEntries.length)} of ${formatWhole.format(scopedEntries.length)} ${scope.label.toLowerCase()} events match "${state.logQuery}".`;
     } else {
-      logResultSummaryEl.textContent = `Compact console showing ${formatWhole.format(filteredEntries.length)} events in ${scope.label.toLowerCase()}.`;
+      logResultSummaryEl.textContent = `${formatWhole.format(filteredEntries.length)} ${scope.label.toLowerCase()} events in view.`;
     }
   }
 
