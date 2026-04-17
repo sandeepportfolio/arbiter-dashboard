@@ -99,11 +99,17 @@ Plans:
   2. A minimum-size order ($1-5) on Polymarket completes the full lifecycle -- order placed, fill confirmed, position reflected in dashboard
   3. Recorded PnL for test trades matches actual platform balance changes within acceptable rounding tolerance
   4. Fee amounts charged by platforms on real trades match the system's fee calculations -- discrepancies are zero or explained
-**Plans**: TBD
+**Plans**: 8 plans
 
 Plans:
-- [ ] 04-01: TBD
-- [ ] 04-02: TBD
+- [ ] 04-01-PLAN.md -- Sandbox package scaffold + @pytest.mark.live opt-in + guard-railed fixtures + evidence/reconcile helpers + operator README
+- [ ] 04-02-PLAN.md -- settings.py env-var URLs + PolymarketAdapter PHASE4_MAX_ORDER_USD hard-lock + docker-compose multi-DB + .env.sandbox.template + .gitignore
+- [ ] 04-03-PLAN.md -- Kalshi demo scenarios: happy path (TEST-01+TEST-04 fee_cost), FOK rejection (EXEC-01), timeout-cancel (Phase 2.1 CR-01 live)
+- [ ] 04-04-PLAN.md -- Polymarket real-$1 scenarios: happy path with get_trades fee reconstruction (TEST-02+TEST-04 Pitfall 2), FOK rejection (EXEC-01)
+- [ ] 04-05-PLAN.md -- Kill-switch live-fire against Kalshi demo (SAFE-01): trip_kill + platform-confirmed cancel + 5s budget
+- [ ] 04-06-PLAN.md -- Injected safety scenarios: one-leg exposure (SAFE-03) + rate-limit burst (SAFE-04)
+- [ ] 04-07-PLAN.md -- Graceful-shutdown subprocess test with SIGINT + platform cancel verification (SAFE-05)
+- [ ] 04-08-PLAN.md -- Aggregator library + terminal reconciliation test + 04-VALIDATION.md population (TEST-03+TEST-04 hard-gate per D-19)
 
 ### Phase 5: Live Trading
 **Goal**: The first real cross-platform arbitrage trade executes successfully with small capital under operator supervision, proving the system works end-to-end with real money
@@ -128,5 +134,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 1. API Integration Fixes | 0/5 | Planned | - |
 | 2. Execution & Operational Hardening | 0/6 | Planned | - |
 | 3. Safety Layer | 0/7 | Planned | - |
-| 4. Sandbox Validation | 0/2 | Not started | - |
+| 4. Sandbox Validation | 0/8 | Planned | - |
 | 5. Live Trading | 0/1 | Not started | - |
