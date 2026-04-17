@@ -14,6 +14,7 @@ import os
 import signal
 import sys
 import time
+from pathlib import Path
 from typing import Optional
 
 import aiohttp
@@ -34,6 +35,8 @@ from .execution.store import ExecutionStore
 from .portfolio import PortfolioConfig, PortfolioMonitor
 from .profitability import ProfitabilityConfig, ProfitabilityValidator
 from .readiness import OperationalReadiness
+from .safety.persistence import SafetyEventStore
+from .safety.supervisor import SafetySupervisor
 from .utils.retry import CircuitBreaker, RateLimiter
 
 import sentry_sdk
@@ -208,7 +211,47 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
         collectors=collectors_dict,
         reconciler=reconciler,
     )
-    engine.set_trade_gate(readiness.allow_execution)
+
+    # ── Safety supervisor (SAFE-01, plan 03-01) ────────────────────
+    safety_events_store = SafetyEventStore(
+        pool=store._pool if store is not None else None
+    )
+    safety = SafetySupervisor(
+        config=config.safety,
+        engine=engine,
+        adapters=adapters,
+        notifier=monitor.notifier,  # reuse the single BalanceMonitor-owned Telegram client
+        redis=None,                 # optional; wire a RedisStateShim in plan 03-05 if needed
+        store=store,
+        safety_store=safety_events_store,
+    )
+    engine._safety = safety  # late injection for plan 03-03 one-leg hook
+
+    # Apply safety_events DDL when a Postgres pool is available.
+    if store is not None and getattr(store, "_pool", None) is not None:
+        try:
+            sql_path = Path(__file__).parent / "sql" / "safety_events.sql"
+            ddl = sql_path.read_text()
+            async with store._pool.acquire() as conn:
+                await conn.execute(ddl)
+            logger.info("safety_events table ensured")
+        except Exception as exc:
+            logger.warning("safety_events migration skipped: %s", exc)
+
+    # Chain trade gate: readiness first, safety second. Denials from either
+    # layer short-circuit and preserve the tuple shape returned by the denier.
+    async def chained_gate(opp):
+        readiness_res = readiness.allow_execution(opp)
+        if asyncio.iscoroutine(readiness_res):
+            readiness_res = await readiness_res
+        if isinstance(readiness_res, tuple):
+            if len(readiness_res) >= 1 and not readiness_res[0]:
+                return readiness_res
+        elif not readiness_res:
+            return (False, "readiness denied", {})
+        return await safety.allow_execution(opp)
+
+    engine.set_trade_gate(chained_gate)
 
     # Wire ClobClient to collector for dynamic fee rate lookup (D-09)
     # This happens lazily -- the collector will use fallback rates until ClobClient is ready
@@ -238,6 +281,7 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
         reconciler=reconciler,
         host=host,
         port=port,
+        safety=safety,
     )
 
     logger.info("=" * 60)
