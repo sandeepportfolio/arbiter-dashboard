@@ -713,7 +713,19 @@ class ArbiterAPI:
                     elif isinstance(result, ArbExecution):
                         await self._broadcast_json({"type": "execution", "payload": result.to_dict()})
                     elif isinstance(result, ExecutionIncident):
+                        # Generic incident broadcast (all severities).
                         await self._broadcast_json({"type": "incident", "payload": result.to_dict()})
+                        # Plan 03-03 (SAFE-03): when the incident carries a
+                        # one_leg_exposure event_type, re-emit as a dedicated
+                        # WebSocket event so the dashboard can render a
+                        # hero-level banner without scanning incident metadata.
+                        if (
+                            isinstance(result.metadata, dict)
+                            and result.metadata.get("event_type") == "one_leg_exposure"
+                        ):
+                            await self._broadcast_json(
+                                {"type": "one_leg_exposure", "payload": result.to_dict()}
+                            )
                     elif isinstance(result, dict) and result.get("type") in (
                         "kill_switch", "shutdown_state",
                     ):

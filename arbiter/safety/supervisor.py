@@ -265,6 +265,104 @@ class SafetySupervisor:
         finally:
             clear_contextvars()
 
+    # ─── one-leg exposure (SAFE-03, plan 03-03) ─────────────────────────
+
+    async def handle_one_leg_exposure(
+        self,
+        incident: Any,
+        filled_leg: Any,
+        failed_leg: Any,
+        opp: Any,
+    ) -> None:
+        """Operator-facing fanout for a naked-position incident.
+
+        Called by ``ExecutionEngine._recover_one_leg_risk`` after it records
+        the structured ``one_leg_exposure`` incident. The three notification
+        channels are independent:
+
+        1. **Incident queue** — already delivered by the engine via
+           ``record_incident``; this method does NOT re-emit to that queue.
+        2. **Telegram** — the ``NAKED POSITION`` HTML template, wrapped in a
+           try/except so a Telegram outage cannot abort recovery.
+        3. **WebSocket** — dedicated ``one_leg_exposure`` pub/sub event that
+           ``arbiter/api.py::_broadcast_loop`` consumes; this is separate
+           from the generic ``incident`` event so the dashboard can render a
+           hero-level banner (plan 03-07 UI).
+
+        Threat model T-3-03-C (DoS): Telegram ``notifier.send`` hangs/raises
+        are caught here; the caller (the engine) continues to the cancel-leg
+        loop regardless.
+        """
+        clear_contextvars()
+        bind_contextvars(event="safety.one_leg_exposure", actor="engine")
+        try:
+            meta = getattr(incident, "metadata", {}) or {}
+            canonical_id = getattr(opp, "canonical_id", "") or ""
+            exposure_usd = float(
+                meta.get(
+                    "exposure_usd",
+                    float(getattr(filled_leg, "fill_qty", 0) or 0)
+                    * float(getattr(filled_leg, "fill_price", 0.0) or 0.0),
+                )
+            )
+            unwind_instruction = str(
+                meta.get("recommended_unwind", "Close exposure manually")
+            )
+
+            # Telegram egress — swallow every failure mode; naked-position
+            # recovery MUST NOT abort on notifier problems.
+            try:
+                message = SafetyAlertTemplates.one_leg_exposure(
+                    canonical_id=canonical_id,
+                    filled_platform=str(getattr(filled_leg, "platform", "")),
+                    filled_side=str(getattr(filled_leg, "side", "")),
+                    fill_qty=int(getattr(filled_leg, "fill_qty", 0) or 0),
+                    exposure_usd=exposure_usd,
+                    unwind_instruction=unwind_instruction,
+                )
+                await self.notifier.send(message)
+            except Exception as exc:
+                logger.warning(
+                    "safety.supervisor: telegram one_leg_exposure send failed: %s",
+                    exc,
+                )
+
+            # Build payload for the dedicated WS event. Prefer the incident's
+            # to_dict() serialization when available so the dashboard sees the
+            # same shape as the generic `incident` event.
+            if hasattr(incident, "to_dict") and callable(incident.to_dict):
+                try:
+                    payload = incident.to_dict()
+                except Exception:
+                    payload = {
+                        "canonical_id": canonical_id,
+                        "metadata": dict(meta),
+                        "incident_id": getattr(incident, "incident_id", None),
+                    }
+            else:
+                payload = {
+                    "canonical_id": canonical_id,
+                    "metadata": dict(meta),
+                    "incident_id": getattr(incident, "incident_id", None),
+                }
+
+            # Ensure canonical_id is populated even if an incident.to_dict()
+            # implementation omits it (subscribers — e.g. the plan 03-07
+            # hero banner — key off this field).
+            if "canonical_id" not in payload or not payload.get("canonical_id"):
+                payload["canonical_id"] = canonical_id
+
+            logger.warning(
+                "safety.supervisor: one_leg_exposure canonical_id=%s exposure=$%.2f",
+                canonical_id,
+                exposure_usd,
+            )
+            await self._publish(
+                {"type": "one_leg_exposure", "payload": payload}
+            )
+        finally:
+            clear_contextvars()
+
     # ─── internals ──────────────────────────────────────────────────────
 
     async def _cancel_all_adapters(self) -> Dict[str, int]:

@@ -972,15 +972,75 @@ class ExecutionEngine:
         return None
 
     async def _recover_one_leg_risk(self, arb_id: str, opp: ArbitrageOpportunity, leg_yes: Order, leg_no: Order) -> List[str]:
+        """Handle one-leg exposure (SAFE-03, plan 03-03).
+
+        Classifies the legs: if exactly one is FILLED and the other is not,
+        we have a naked position. Emit a structured ``one_leg_exposure``
+        incident with the full operator-facing metadata, then hand off to
+        ``SafetySupervisor.handle_one_leg_exposure`` (when wired) so the
+        supervisor fires the Telegram + dedicated WS channels.
+
+        The generic "Partial fill or one-leg risk detected" incident is
+        preserved for the fallback case (both filled / both failed / both
+        cancelled) so an operator never sees a silent recovery path.
+
+        Cancel-still-open loop at the tail is unchanged — the still-open leg
+        (if any) is best-effort cancelled after the incident fanout.
+        """
         self._recovery_count += 1
         notes: List[str] = []
-        await self._record_incident(
-            arb_id,
-            opp,
-            "critical",
-            "Partial fill or one-leg risk detected, starting recovery",
-            metadata={"leg_yes": leg_yes.to_dict(), "leg_no": leg_no.to_dict()},
-        )
+
+        yes_filled = leg_yes.status == OrderStatus.FILLED
+        no_filled = leg_no.status == OrderStatus.FILLED
+
+        if yes_filled ^ no_filled:
+            # Classic naked position: exactly one side confirmed filled.
+            filled_leg = leg_yes if yes_filled else leg_no
+            failed_leg = leg_no if yes_filled else leg_yes
+            exposure_usd = float(filled_leg.fill_qty) * float(filled_leg.fill_price)
+            recommended_unwind = (
+                f"Sell {filled_leg.fill_qty} {filled_leg.side.upper()} on "
+                f"{filled_leg.platform.upper()} at market to close exposure"
+            )
+            incident = await self._record_incident(
+                arb_id,
+                opp,
+                "critical",
+                "One-leg exposure detected — naked position requires unwind",
+                metadata={
+                    "event_type": "one_leg_exposure",
+                    "filled_platform": filled_leg.platform,
+                    "filled_side": filled_leg.side,
+                    "filled_qty": filled_leg.fill_qty,
+                    "filled_price": filled_leg.fill_price,
+                    "exposure_usd": exposure_usd,
+                    "failed_platform": failed_leg.platform,
+                    "failed_reason": getattr(failed_leg, "error", None)
+                    or str(failed_leg.status),
+                    "recommended_unwind": recommended_unwind,
+                },
+            )
+            if self._safety is not None:
+                try:
+                    await self._safety.handle_one_leg_exposure(
+                        incident, filled_leg, failed_leg, opp,
+                    )
+                except Exception as exc:
+                    # Supervisor hook failures must not block the cancel loop.
+                    logger.error(
+                        "safety.handle_one_leg_exposure raised: %s", exc,
+                    )
+        else:
+            # Fallback: neither side isolated cleanly (e.g. both filled,
+            # both failed, or partial). Keep the pre-existing generic
+            # incident so the recovery path stays visible in ops logs.
+            await self._record_incident(
+                arb_id,
+                opp,
+                "critical",
+                "Partial fill or one-leg risk detected, starting recovery",
+                metadata={"leg_yes": leg_yes.to_dict(), "leg_no": leg_no.to_dict()},
+            )
 
         for leg in (leg_yes, leg_no):
             if leg.status in {OrderStatus.SUBMITTED, OrderStatus.PENDING, OrderStatus.PARTIAL}:
