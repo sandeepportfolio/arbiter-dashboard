@@ -222,3 +222,144 @@ def test_api_and_dashboard_contracts():
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             proc.kill()
+
+
+# ─── SAFE-04: rate-limit broadcast + /api/system inclusion ───────────────
+
+
+async def _make_rate_limit_api():
+    """Build a minimal in-process ArbiterAPI with two adapters carrying real
+    RateLimiter instances so the broadcast loop can publish rate_limit_state
+    events and /api/system can include a `rate_limits` key.
+    """
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from arbiter.api import ArbiterAPI
+    from arbiter.config.settings import ArbiterConfig, SafetyConfig
+    from arbiter.utils.retry import RateLimiter
+
+    config = ArbiterConfig()
+    config.safety = SafetyConfig()
+
+    kalshi_rl = RateLimiter(name="kalshi-exec", max_requests=10, window_seconds=1.0)
+    poly_rl = RateLimiter(name="poly-exec", max_requests=5, window_seconds=1.0)
+
+    kalshi_adapter = SimpleNamespace(rate_limiter=kalshi_rl)
+    poly_adapter = SimpleNamespace(rate_limiter=poly_rl)
+
+    async def _noop_get_all_prices():
+        return {}
+
+    price_store = SimpleNamespace(get_all_prices=_noop_get_all_prices)
+    scanner = SimpleNamespace(
+        current_opportunities=[], stats={}, history=[],
+    )
+    engine = SimpleNamespace(
+        stats={"audit": {}},
+        execution_history=[],
+        manual_positions=[],
+        incidents=[],
+        equity_curve=[],
+        adapters={"kalshi": kalshi_adapter, "polymarket": poly_adapter},
+    )
+    monitor = SimpleNamespace(current_balances={})
+
+    api = ArbiterAPI(
+        price_store=price_store,
+        scanner=scanner,
+        engine=engine,
+        monitor=monitor,
+        config=config,
+        safety=None,
+    )
+    return api
+
+
+def test_rate_limit_ws_event_shape():
+    """SAFE-04: Within 3s of WS connect, a `rate_limit_state` message arrives
+    with {platform: stats_dict} payload. Each stats_dict must carry the three
+    dashboard-consumable fields: available_tokens, max_requests,
+    remaining_penalty_seconds.
+    """
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async def _run():
+        api = await _make_rate_limit_api()
+        app = web.Application()
+        app.router.add_get("/ws", api.handle_websocket)
+        # Start the periodic rate-limit broadcaster task
+        loop_task = asyncio.create_task(api._rate_limit_broadcast_loop())
+        try:
+            async with TestClient(TestServer(app)) as client:
+                async with client.ws_connect("/ws") as ws:
+                    # First message is `bootstrap`; drain it.
+                    first = await ws.receive(timeout=3.0)
+                    assert first.type == aiohttp.WSMsgType.TEXT
+                    first_payload = json.loads(first.data)
+                    assert first_payload["type"] == "bootstrap"
+
+                    # Wait up to 4s for a rate_limit_state event (loop emits every 2s).
+                    deadline = time.time() + 4.5
+                    rate_msg = None
+                    while time.time() < deadline:
+                        msg = await ws.receive(timeout=4.5)
+                        if msg.type != aiohttp.WSMsgType.TEXT:
+                            continue
+                        data = json.loads(msg.data)
+                        if data.get("type") == "rate_limit_state":
+                            rate_msg = data
+                            break
+                    assert rate_msg is not None, (
+                        "Did not receive rate_limit_state event within 4.5s"
+                    )
+                    payload = rate_msg["payload"]
+                    assert isinstance(payload, dict)
+                    assert "kalshi" in payload
+                    assert "polymarket" in payload
+                    for platform, stats in payload.items():
+                        assert isinstance(stats, dict), (
+                            f"{platform} stats must be a dict, got {type(stats)}"
+                        )
+                        for key in (
+                            "available_tokens",
+                            "max_requests",
+                            "remaining_penalty_seconds",
+                        ):
+                            assert key in stats, (
+                                f"stats for {platform} missing '{key}'; got {stats}"
+                            )
+        finally:
+            loop_task.cancel()
+            try:
+                await loop_task
+            except (asyncio.CancelledError, BaseException):
+                pass
+
+    asyncio.run(_run())
+
+
+def test_system_endpoint_includes_rate_limits():
+    """SAFE-04: GET /api/system JSON body includes a top-level `rate_limits`
+    key whose value is a dict keyed by adapter platform name.
+    """
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async def _run():
+        api = await _make_rate_limit_api()
+        app = web.Application()
+        app.router.add_get("/api/system", api.handle_system)
+        async with TestClient(TestServer(app)) as client:
+            response = await client.get("/api/system")
+            assert response.status == 200
+            body = await response.json()
+            assert "rate_limits" in body, (
+                f"/api/system response missing 'rate_limits'; keys={list(body)}"
+            )
+            assert isinstance(body["rate_limits"], dict)
+            assert "kalshi" in body["rate_limits"]
+            assert "polymarket" in body["rate_limits"]
+
+    asyncio.run(_run())

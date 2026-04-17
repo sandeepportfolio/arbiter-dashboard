@@ -375,3 +375,111 @@ async def test_place_fok_returns_external_client_order_id_none():
 
 # Alias for VALIDATION.md row 02.1-01-08 naming
 test_place_fok_leaves_external_client_order_id_none = test_place_fok_returns_external_client_order_id_none
+
+
+# --- SAFE-04: rate-limiter acquire-before-SDK and 429 handling -------------
+
+
+@pytest.mark.asyncio
+async def test_place_fok_acquires_rate_token_before_sdk():
+    """SAFE-04: rate_limiter.acquire() MUST be awaited BEFORE any SDK call
+    (create_order / post_order) inside the reconcile loop.
+    """
+    call_log: list = []
+
+    async def _acquire():
+        call_log.append("rate_limiter.acquire")
+
+    client = MagicMock()
+    client.get_orders = MagicMock(
+        side_effect=lambda **kw: (call_log.append("client.get_orders"), [])[-1],
+    )
+    client.create_order = MagicMock(
+        side_effect=lambda *a, **kw: (call_log.append("client.create_order"), "SIGNED")[-1],
+    )
+    client.post_order = MagicMock(
+        side_effect=lambda *a, **kw: (
+            call_log.append("client.post_order"), _good_post_response("P-RL-1"),
+        )[-1],
+    )
+
+    adapter = PolymarketAdapter(
+        config=_config(),
+        clob_client_factory=lambda: client,
+        rate_limiter=SimpleNamespace(
+            acquire=AsyncMock(side_effect=_acquire),
+            apply_retry_after=MagicMock(return_value=2.0),
+        ),
+        circuit=_circuit(True),
+    )
+    order = await adapter.place_fok(
+        "ARB-RL-1", "TOKEN", "C", "yes", 0.55, 10,
+    )
+    # SDK must have been called
+    assert "client.create_order" in call_log
+    assert "client.post_order" in call_log
+    # acquire must precede create_order and post_order
+    acquire_idx = call_log.index("rate_limiter.acquire")
+    create_idx = call_log.index("client.create_order")
+    post_idx = call_log.index("client.post_order")
+    assert acquire_idx < create_idx, (
+        f"rate_limiter.acquire must come before client.create_order "
+        f"(acquire={acquire_idx} create={create_idx} log={call_log})"
+    )
+    assert acquire_idx < post_idx, (
+        f"rate_limiter.acquire must come before client.post_order "
+        f"(acquire={acquire_idx} post={post_idx} log={call_log})"
+    )
+    assert order.status == OrderStatus.FILLED
+
+
+@pytest.mark.asyncio
+async def test_429_via_sdk_exception_applies_retry_after():
+    """SAFE-04: When the py-clob-client SDK surfaces a 429 as an exception,
+    the adapter calls apply_retry_after, records circuit failure, and returns
+    a FAILED order whose error contains 'rate_limited'. NO retry for FOK.
+    """
+    client = MagicMock()
+    client.get_orders = MagicMock(return_value=[])
+    # The SDK raises an exception whose message contains "429" — this is how
+    # py-clob-client signals HTTP 429 back to callers.
+    client.create_order = MagicMock(
+        side_effect=Exception("HTTP 429 Too Many Requests: rate limit exceeded"),
+    )
+    client.post_order = MagicMock()
+
+    rate_limiter = SimpleNamespace(
+        acquire=AsyncMock(),
+        apply_retry_after=MagicMock(return_value=2.0),
+    )
+    circuit = _circuit(True)
+    adapter = PolymarketAdapter(
+        config=_config(),
+        clob_client_factory=lambda: client,
+        rate_limiter=rate_limiter,
+        circuit=circuit,
+    )
+    order = await adapter.place_fok("ARB-RL-429", "TOKEN", "C", "yes", 0.55, 10)
+
+    # apply_retry_after must have been called with reason="polymarket_429"
+    assert rate_limiter.apply_retry_after.called, (
+        "apply_retry_after not invoked when SDK signaled 429"
+    )
+    _args, kwargs = rate_limiter.apply_retry_after.call_args
+    assert kwargs.get("reason") == "polymarket_429", (
+        f"expected reason='polymarket_429', got {kwargs.get('reason')!r}"
+    )
+
+    # Circuit failure recorded
+    assert circuit.record_failure.called
+
+    # FAILED order with 'rate_limited' in the error
+    assert order.status == OrderStatus.FAILED
+    assert "rate_limited" in (order.error or "").lower(), (
+        f"expected 'rate_limited' in order.error, got {order.error!r}"
+    )
+
+    # post_order NOT called — create_order raised 429, we should bail not retry
+    assert not client.post_order.called, (
+        "post_order must not be called after a 429 on create_order"
+    )
