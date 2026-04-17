@@ -1118,3 +1118,154 @@ def test_rejected_order_incident_per_platform():
     asyncio.run(runner())
 
     asyncio.run(runner())
+
+
+# ─── Plan 03-03: one-leg exposure surfacing (SAFE-03) ───────────────────────
+
+
+def test_one_leg_exposure_surfaces_structured_metadata():
+    """Plan 03-03: when _recover_one_leg_risk sees one FILLED + one FAILED
+    leg, it must emit a single ExecutionIncident whose metadata carries the
+    full structured payload that the dashboard and plan 03-07 UI rely on."""
+    import pytest
+    from arbiter.execution.engine import Order, OrderStatus
+
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        queue = engine.subscribe_incidents()
+
+        leg_yes = Order(
+            order_id="ARB-1-YES",
+            platform="kalshi",
+            market_id="K-MKT1",
+            canonical_id="MKT1",
+            side="yes",
+            price=0.56,
+            quantity=100,
+            status=OrderStatus.FILLED,
+            fill_price=0.56,
+            fill_qty=100,
+            timestamp=time.time(),
+        )
+        leg_no = Order(
+            order_id="ARB-1-NO",
+            platform="polymarket",
+            market_id="P-MKT1",
+            canonical_id="MKT1",
+            side="no",
+            price=0.40,
+            quantity=100,
+            status=OrderStatus.FAILED,
+            fill_price=0.0,
+            fill_qty=0,
+            timestamp=time.time(),
+            error="rate_limited",
+        )
+
+        opp = _make_safety_opp(
+            canonical_id="MKT1",
+            yes_platform="kalshi",
+            no_platform="polymarket",
+            yes_price=0.56,
+            no_price=0.40,
+            suggested_qty=100,
+        )
+
+        await engine._recover_one_leg_risk("ARB-1", opp, leg_yes, leg_no)
+
+        # Drain queue — expect exactly one incident.
+        incident = await asyncio.wait_for(queue.get(), timeout=1.0)
+        assert queue.empty(), "expected exactly one incident, got more"
+
+        meta = incident.metadata
+        for key in (
+            "event_type",
+            "filled_platform",
+            "filled_side",
+            "filled_qty",
+            "filled_price",
+            "exposure_usd",
+            "failed_platform",
+            "failed_reason",
+            "recommended_unwind",
+        ):
+            assert key in meta, f"missing metadata key: {key}"
+
+        assert meta["event_type"] == "one_leg_exposure"
+        assert meta["filled_platform"] == "kalshi"
+        assert meta["filled_side"] == "yes"
+        assert meta["filled_qty"] == 100
+        assert meta["filled_price"] == pytest.approx(0.56, rel=1e-3)
+        assert meta["exposure_usd"] == pytest.approx(56.0, rel=1e-3)
+        assert meta["failed_platform"] == "polymarket"
+        assert "rate_limited" in str(meta["failed_reason"])
+        assert "Sell 100 YES" in meta["recommended_unwind"]
+        assert incident.severity == "critical"
+
+    asyncio.run(runner())
+
+
+def test_one_leg_exposure_invokes_supervisor_hook():
+    """Plan 03-03: _recover_one_leg_risk must also invoke the injected
+    SafetySupervisor.handle_one_leg_exposure with (incident, filled_leg,
+    failed_leg, opp) exactly once, passing the filled leg (status FILLED)
+    as the second positional argument."""
+    from arbiter.execution.engine import Order, OrderStatus
+
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        engine._safety = AsyncMock()
+
+        leg_yes = Order(
+            order_id="ARB-2-YES",
+            platform="kalshi",
+            market_id="K-MKT1",
+            canonical_id="MKT1",
+            side="yes",
+            price=0.56,
+            quantity=100,
+            status=OrderStatus.FILLED,
+            fill_price=0.56,
+            fill_qty=100,
+            timestamp=time.time(),
+        )
+        leg_no = Order(
+            order_id="ARB-2-NO",
+            platform="polymarket",
+            market_id="P-MKT1",
+            canonical_id="MKT1",
+            side="no",
+            price=0.40,
+            quantity=100,
+            status=OrderStatus.FAILED,
+            fill_price=0.0,
+            fill_qty=0,
+            timestamp=time.time(),
+            error="platform_error",
+        )
+        opp = _make_safety_opp(
+            canonical_id="MKT1",
+            yes_platform="kalshi",
+            no_platform="polymarket",
+            yes_price=0.56,
+            no_price=0.40,
+            suggested_qty=100,
+        )
+
+        await engine._recover_one_leg_risk("ARB-2", opp, leg_yes, leg_no)
+
+        engine._safety.handle_one_leg_exposure.assert_called_once()
+        args = engine._safety.handle_one_leg_exposure.call_args.args
+        # incident, filled_leg, failed_leg, opp
+        assert len(args) == 4
+        incident_arg, filled_arg, failed_arg, opp_arg = args
+        assert hasattr(incident_arg, "metadata")
+        assert incident_arg.metadata.get("event_type") == "one_leg_exposure"
+        assert filled_arg.status == OrderStatus.FILLED
+        assert filled_arg is leg_yes
+        assert failed_arg is leg_no
+        assert opp_arg is opp
+
+    asyncio.run(runner())

@@ -138,3 +138,55 @@ async def test_subscribe_delivers_kill_switch_event(fake_notifier, fake_adapter_
     await supervisor.trip_kill(by="operator:test", reason="subscribe_test")
     event = await asyncio.wait_for(queue.get(), timeout=1.0)
     assert event["type"] == "kill_switch"
+
+
+async def test_handle_one_leg_exposure_sends_telegram_and_publishes(
+    fake_notifier, fake_adapter_factory,
+):
+    """Plan 03-03: supervisor.handle_one_leg_exposure must fire the
+    NAKED POSITION Telegram template AND publish a dedicated
+    one_leg_exposure subscriber event (payload carries canonical_id)."""
+    adapters = {"kalshi": fake_adapter_factory("kalshi", [])}
+    supervisor = _build_supervisor(adapters, fake_notifier)
+    queue = supervisor.subscribe()
+
+    filled_leg = SimpleNamespace(
+        platform="kalshi",
+        side="yes",
+        fill_qty=100,
+        fill_price=0.56,
+    )
+    failed_leg = SimpleNamespace(
+        platform="polymarket",
+        side="no",
+        error="rate_limited",
+    )
+    incident = SimpleNamespace(
+        incident_id="INC-abcd1234",
+        metadata={
+            "event_type": "one_leg_exposure",
+            "filled_platform": "kalshi",
+            "filled_side": "yes",
+            "filled_qty": 100,
+            "filled_price": 0.56,
+            "exposure_usd": 56.0,
+            "failed_platform": "polymarket",
+            "failed_reason": "rate_limited",
+            "recommended_unwind": "Sell 100 YES on KALSHI at market",
+        },
+    )
+    opp = SimpleNamespace(canonical_id="MKT1")
+
+    await supervisor.handle_one_leg_exposure(incident, filled_leg, failed_leg, opp)
+
+    # Telegram was sent exactly once with the NAKED POSITION template.
+    fake_notifier.send.assert_awaited_once()
+    sent_message = fake_notifier.send.await_args.args[0]
+    assert "NAKED POSITION" in sent_message
+
+    # Subscribers received a one_leg_exposure event whose payload carries
+    # the canonical_id (dashboard uses this for the hero banner in plan 03-07).
+    event = queue.get_nowait()
+    assert event["type"] == "one_leg_exposure"
+    payload = event.get("payload", {})
+    assert payload.get("canonical_id") == "MKT1"

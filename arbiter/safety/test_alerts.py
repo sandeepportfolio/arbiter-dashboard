@@ -26,7 +26,22 @@ def test_kill_reset_template():
     assert "operator:x" in message
 
 
-@pytest.mark.skip(reason="plan 03-03 fills this")
-def test_one_leg_template():
-    # Placeholder: implemented in plan 03-03.
-    pass
+def test_one_leg_template_contains_required_parts():
+    """SafetyAlertTemplates.one_leg_exposure formats the Telegram body with
+    all fields plan 03-03's handler passes in. Assertions mirror the
+    ``must_haves.truths`` from the plan frontmatter."""
+    message = SafetyAlertTemplates.one_leg_exposure(
+        canonical_id="DEM_PRES_2028",
+        filled_platform="kalshi",
+        filled_side="yes",
+        fill_qty=100,
+        exposure_usd=56.0,
+        unwind_instruction="Sell 100 YES on KALSHI at market",
+    )
+    assert "NAKED POSITION" in message
+    assert "DEM_PRES_2028" in message
+    # Case-insensitive platform check (template upper-cases for display).
+    assert "kalshi" in message.lower()
+    assert "100" in message
+    assert "$56.00" in message
+    assert "Sell 100 YES" in message
