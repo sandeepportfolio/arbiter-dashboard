@@ -109,7 +109,7 @@ class KalshiAdapter:
             order_body["no_price_dollars"] = f"{price:.4f}"
 
         try:
-            response_status, payload = await self._post_order(order_body)
+            response_status, payload, response_headers = await self._post_order(order_body)
         except TRANSIENT_EXCEPTIONS as exc:
             self.circuit.record_failure()
             return self._failed_order(
@@ -121,6 +121,26 @@ class KalshiAdapter:
             return self._failed_order(
                 arb_id, market_id, canonical_id, side, price, qty, now,
                 f"Kalshi request exception: {exc}",
+            )
+
+        # SAFE-04: 429 → apply Retry-After, record circuit failure, return FAILED.
+        # FOK semantics mean we NEVER retry a rate-limited POST.
+        if response_status == 429:
+            retry_after = response_headers.get("Retry-After", "1") if response_headers else "1"
+            delay = self.rate_limiter.apply_retry_after(
+                retry_after, fallback_delay=2.0, reason="kalshi_429",
+            )
+            # T-3-04-E: cap forged Retry-After headers at 60 seconds.
+            delay = min(float(delay or 0.0), 60.0)
+            log.warning(
+                "kalshi.rate_limited",
+                penalty_seconds=delay,
+                client_order_id=client_order_id,
+            )
+            self.circuit.record_failure()
+            return self._failed_order(
+                arb_id, market_id, canonical_id, side, price, qty, now,
+                f"rate_limited ({delay:.1f}s)",
             )
 
         if response_status not in (200, 201):
@@ -190,12 +210,15 @@ class KalshiAdapter:
         )
 
     @transient_retry()
-    async def _post_order(self, body: dict) -> tuple[int, str]:
+    async def _post_order(self, body: dict) -> tuple[int, str, dict]:
         """Inner HTTP call wrapped by tenacity.
 
         Idempotent on Kalshi via ``client_order_id`` — safe to retry on transient
         network errors (OPS-03). Rate-limiter is inside the retry decorator so
         every attempt waits for a token (Pitfall 4).
+
+        Returns ``(status, body_text, response_headers)``. Headers are exposed
+        so ``place_fok`` can read ``Retry-After`` on 429 responses (SAFE-04).
         """
         await self.rate_limiter.acquire()
         path = "/trade-api/v2/portfolio/orders"
@@ -203,13 +226,18 @@ class KalshiAdapter:
         headers = self.auth.get_headers("POST", path)
         async with self.session.post(url, json=body, headers=headers) as response:
             payload = await response.text()
-            return response.status, payload
+            # Copy headers into a plain dict so the caller doesn't hold a
+            # reference to the aiohttp response after context exit.
+            resp_headers = dict(response.headers) if response.headers else {}
+            return response.status, payload, resp_headers
 
     # ─── cancel_order (verbatim from engine.py:717-730 + retry) ────────────
 
     async def cancel_order(self, order: Order) -> bool:
         if not self.auth or not getattr(self.auth, "is_authenticated", False):
             return False
+        # SAFE-04: acquire a rate-limit token before any network I/O.
+        await self.rate_limiter.acquire()
         try:
             return await self._delete_order(order.order_id)
         except Exception as exc:
@@ -222,11 +250,28 @@ class KalshiAdapter:
         url = f"{self.config.kalshi.base_url}/portfolio/orders/{order_id}"
         headers = self.auth.get_headers("DELETE", path)
         async with self.session.delete(url, headers=headers) as response:
+            # SAFE-04: 429 on DELETE — apply Retry-After + circuit failure.
+            if response.status == 429:
+                retry_after = (
+                    dict(response.headers).get("Retry-After", "1")
+                    if response.headers
+                    else "1"
+                )
+                delay = self.rate_limiter.apply_retry_after(
+                    retry_after, fallback_delay=2.0, reason="kalshi_429",
+                )
+                delay = min(float(delay or 0.0), 60.0)
+                log.warning("kalshi.rate_limited", penalty_seconds=delay, op="cancel")
+                self.circuit.record_failure()
+                return False
             return response.status in (200, 204)
 
     # ─── cancel_all (stub — full batched impl lands in plan 03-05) ─────────
 
     async def cancel_all(self) -> list[str]:
+        # SAFE-04: acquire a token even in stub mode so the invariant survives
+        # the plan 03-05 replacement (chunked batched cancels acquire per chunk).
+        await self.rate_limiter.acquire()
         # TODO(03-05): replace with DELETE /portfolio/orders/batched (20 ids/chunk)
         log.warning(
             "kalshi.cancel_all.stub",
@@ -294,13 +339,26 @@ class KalshiAdapter:
             order.status = OrderStatus.FAILED
             order.error = "Kalshi auth not configured for get_order"
             return order
+        # SAFE-04: acquire a rate-limit token before any network I/O.
+        await self.rate_limiter.acquire()
         try:
-            status_code, payload = await self._fetch_order(order.order_id)
+            status_code, payload, resp_headers = await self._fetch_order(order.order_id)
         except Exception as exc:
             order.status = OrderStatus.FAILED
             order.error = f"Kalshi get_order exception: {exc}"
             return order
 
+        if status_code == 429:
+            retry_after = resp_headers.get("Retry-After", "1") if resp_headers else "1"
+            delay = self.rate_limiter.apply_retry_after(
+                retry_after, fallback_delay=2.0, reason="kalshi_429",
+            )
+            delay = min(float(delay or 0.0), 60.0)
+            log.warning("kalshi.rate_limited", penalty_seconds=delay, op="get_order")
+            self.circuit.record_failure()
+            order.status = OrderStatus.FAILED
+            order.error = f"rate_limited ({delay:.1f}s)"
+            return order
         if status_code == 404:
             order.status = OrderStatus.FAILED
             order.error = "not found on platform"
@@ -327,12 +385,13 @@ class KalshiAdapter:
             return order
 
     @transient_retry()
-    async def _fetch_order(self, order_id: str) -> tuple[int, str]:
+    async def _fetch_order(self, order_id: str) -> tuple[int, str, dict]:
         path = f"/trade-api/v2/portfolio/orders/{order_id}"
         url = f"{self.config.kalshi.base_url}/portfolio/orders/{order_id}"
         headers = self.auth.get_headers("GET", path)
         async with self.session.get(url, headers=headers) as response:
-            return response.status, await response.text()
+            resp_headers = dict(response.headers) if response.headers else {}
+            return response.status, await response.text(), resp_headers
 
     # ─── list_open_orders_by_client_id ────────────────────────────────────
 
@@ -348,8 +407,19 @@ class KalshiAdapter:
         """
         if not self.auth or not getattr(self.auth, "is_authenticated", False):
             return []
+        # SAFE-04: acquire a rate-limit token before any network I/O.
+        await self.rate_limiter.acquire()
         try:
-            status_code, payload = await self._list_orders("resting")
+            status_code, payload, resp_headers = await self._list_orders("resting")
+            if status_code == 429:
+                retry_after = resp_headers.get("Retry-After", "1") if resp_headers else "1"
+                delay = self.rate_limiter.apply_retry_after(
+                    retry_after, fallback_delay=2.0, reason="kalshi_429",
+                )
+                delay = min(float(delay or 0.0), 60.0)
+                log.warning("kalshi.rate_limited", penalty_seconds=delay, op="list")
+                self.circuit.record_failure()
+                return []
             if status_code not in (200, 201):
                 return []
             data = json.loads(payload)
@@ -366,12 +436,13 @@ class KalshiAdapter:
             return []
 
     @transient_retry()
-    async def _list_orders(self, status: str) -> tuple[int, str]:
+    async def _list_orders(self, status: str) -> tuple[int, str, dict]:
         path = f"/trade-api/v2/portfolio/orders?status={status}"
         url = f"{self.config.kalshi.base_url}/portfolio/orders?status={status}"
         headers = self.auth.get_headers("GET", path)
         async with self.session.get(url, headers=headers) as response:
-            return response.status, await response.text()
+            resp_headers = dict(response.headers) if response.headers else {}
+            return response.status, await response.text(), resp_headers
 
     # ─── helpers ──────────────────────────────────────────────────────────
 

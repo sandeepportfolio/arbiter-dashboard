@@ -237,12 +237,14 @@ async def test_fok_circuit_open_short_circuits():
 
 @pytest.mark.asyncio
 async def test_fok_non_2xx_returns_failed_with_status_in_error():
-    session = _session_with_post(429, "rate limited")
+    # 500 exercises the generic non-2xx branch. 429 has dedicated handling
+    # (SAFE-04) verified by test_place_fok_429_applies_retry_after.
+    session = _session_with_post(500, "internal server error")
     adapter = _make_adapter(session)
     order = await adapter.place_fok("ARB-Y", "T", "C", "yes", 0.55, 10)
     assert order.status == OrderStatus.FAILED
-    assert "429" in order.error
-    assert "rate limited" in order.error
+    assert "500" in order.error
+    assert "internal server error" in order.error
     adapter.circuit.record_failure.assert_called()
 
 

@@ -164,6 +164,25 @@ class PolymarketAdapter:
                 continue
 
             except Exception as exc:
+                # SAFE-04: py-clob-client surfaces HTTP 429 as a plain
+                # exception whose message contains "429" or "rate limit".
+                # On 429 we apply Retry-After backoff, record a circuit
+                # failure, and return FAILED — NEVER retry a FOK order.
+                if self._is_rate_limit_error(exc):
+                    delay = self.rate_limiter.apply_retry_after(
+                        "1", fallback_delay=2.0, reason="polymarket_429",
+                    )
+                    delay = min(float(delay or 0.0), 60.0)
+                    log.warning(
+                        "polymarket.rate_limited",
+                        arb_id=arb_id, attempt=attempt, penalty_seconds=delay,
+                    )
+                    self.circuit.record_failure()
+                    return self._failed_order(
+                        arb_id, market_id, canonical_id, side, price, qty,
+                        time.time(),
+                        f"rate_limited ({delay:.1f}s)",
+                    )
                 self.circuit.record_failure()
                 log.error(
                     "polymarket.order.error",
@@ -181,6 +200,22 @@ class PolymarketAdapter:
             arb_id, market_id, canonical_id, side, price, qty,
             time.time(),
             f"Polymarket max attempts exhausted (last_exc={last_exc})",
+        )
+
+    @staticmethod
+    def _is_rate_limit_error(exc: Exception) -> bool:
+        """Detect whether a py-clob-client exception represents an HTTP 429.
+
+        The SDK surfaces rate-limiting as a plain exception; inspect the message
+        for telltale markers. Case-insensitive substring match covers the usual
+        phrasings ('429', 'rate limit', 'too many requests').
+        """
+        msg = str(exc).lower()
+        return (
+            "429" in msg
+            or "rate limit" in msg
+            or "rate_limit" in msg
+            or "too many requests" in msg
         )
 
     @staticmethod
@@ -331,6 +366,8 @@ class PolymarketAdapter:
         client = self._get_client()
         if client is None:
             return False
+        # SAFE-04: acquire a rate-limit token before any SDK call.
+        await self.rate_limiter.acquire()
         loop = asyncio.get_event_loop()
         try:
             for attr in ("cancel", "cancel_order"):
@@ -339,6 +376,18 @@ class PolymarketAdapter:
                     await loop.run_in_executor(None, lambda: method(order.order_id))
                     return True
         except Exception as exc:
+            # SAFE-04: distinguish 429 from other SDK errors.
+            if self._is_rate_limit_error(exc):
+                delay = self.rate_limiter.apply_retry_after(
+                    "1", fallback_delay=2.0, reason="polymarket_429",
+                )
+                delay = min(float(delay or 0.0), 60.0)
+                log.warning(
+                    "polymarket.rate_limited",
+                    op="cancel", order_id=order.order_id, penalty_seconds=delay,
+                )
+                self.circuit.record_failure()
+                return False
             log.error(
                 "polymarket.cancel.failed",
                 order_id=order.order_id, err=str(exc),
@@ -348,6 +397,9 @@ class PolymarketAdapter:
     # --- cancel_all (stub — full SDK impl lands in plan 03-05) -----------
 
     async def cancel_all(self) -> list[str]:
+        # SAFE-04: acquire a token even in stub mode so the invariant survives
+        # the plan 03-05 replacement (full SDK call).
+        await self.rate_limiter.acquire()
         # TODO(03-05): replace with client.cancel_all() SDK call
         log.warning(
             "polymarket.cancel_all.stub",
@@ -452,6 +504,8 @@ class PolymarketAdapter:
             order.status = OrderStatus.FAILED
             order.error = "Polymarket client unavailable for get_order"
             return order
+        # SAFE-04: acquire a rate-limit token before any SDK call.
+        await self.rate_limiter.acquire()
         loop = asyncio.get_event_loop()
         try:
             record = await loop.run_in_executor(
@@ -463,6 +517,19 @@ class PolymarketAdapter:
                 ),
             )
         except Exception as exc:
+            if self._is_rate_limit_error(exc):
+                delay = self.rate_limiter.apply_retry_after(
+                    "1", fallback_delay=2.0, reason="polymarket_429",
+                )
+                delay = min(float(delay or 0.0), 60.0)
+                log.warning(
+                    "polymarket.rate_limited",
+                    op="get_order", order_id=order.order_id, penalty_seconds=delay,
+                )
+                self.circuit.record_failure()
+                order.status = OrderStatus.FAILED
+                order.error = f"rate_limited ({delay:.1f}s)"
+                return order
             order.status = OrderStatus.FAILED
             order.error = f"Polymarket get_order exception: {exc}"
             return order
