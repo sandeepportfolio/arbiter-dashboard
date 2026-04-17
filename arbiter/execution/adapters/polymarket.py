@@ -345,6 +345,16 @@ class PolymarketAdapter:
             )
         return False
 
+    # --- cancel_all (stub — full SDK impl lands in plan 03-05) -----------
+
+    async def cancel_all(self) -> list[str]:
+        # TODO(03-05): replace with client.cancel_all() SDK call
+        log.warning(
+            "polymarket.cancel_all.stub",
+            detail="cancel_all stub called — full impl pending plan 03-05 (PolymarketAdapter)",
+        )
+        return []
+
     # --- check_depth with stale-book guard (Pitfall 1) -------------------
 
     async def check_depth(

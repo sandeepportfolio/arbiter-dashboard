@@ -224,6 +224,16 @@ class KalshiAdapter:
         async with self.session.delete(url, headers=headers) as response:
             return response.status in (200, 204)
 
+    # ─── cancel_all (stub — full batched impl lands in plan 03-05) ─────────
+
+    async def cancel_all(self) -> list[str]:
+        # TODO(03-05): replace with DELETE /portfolio/orders/batched (20 ids/chunk)
+        log.warning(
+            "kalshi.cancel_all.stub",
+            detail="cancel_all stub called — full impl pending plan 03-05 (KalshiAdapter)",
+        )
+        return []
+
     # ─── check_depth (NEW for EXEC-03) ────────────────────────────────────
 
     async def check_depth(

@@ -69,6 +69,18 @@ class PlatformAdapter(Protocol):
         """Best-effort cancel — used for EXEC-05 timeout path and one-leg recovery."""
         ...
 
+    async def cancel_all(self) -> list[str]:
+        """Cancel every open order on this platform in a single batched operation.
+
+        Returns list of cancelled order_ids (best-effort — empty list on adapter
+        error, never raises). Used by SafetySupervisor.trip_kill() (SAFE-01) and
+        graceful shutdown (SAFE-05).
+
+        Kalshi:     DELETE /portfolio/orders/batched (20 orders per call, chunked).
+        Polymarket: client.cancel_all() single SDK call.
+        """
+        ...
+
     async def get_order(self, order: Order) -> Order:
         """Query platform for current order state — used by startup reconciliation
         (arbiter/execution/recovery.py in Plan 06)."""
