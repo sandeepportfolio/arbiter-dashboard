@@ -79,8 +79,8 @@ def test_api_and_dashboard_contracts():
 
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/ops", timeout=5) as response:
             ops_html = response.read().decode("utf-8")
-        assert "ARBITER LIVE" in ops_html
-        assert "Execution equity" in ops_html
+        assert "Arbiter Live" in ops_html
+        assert 'id="equityChart"' in ops_html
 
         health = get_json("/api/health")
         assert health["status"] == "ok"
