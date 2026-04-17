@@ -1269,3 +1269,378 @@ def test_one_leg_exposure_invokes_supervisor_hook():
         assert opp_arg is opp
 
     asyncio.run(runner())
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Plan 03-08 (SAFE-02 gap closure): live-mode per-platform exposure
+# tracking. Closes the gap from 03-VERIFICATION.md where _live_execution
+# only called record_trade on `filled`, leaving `submitted` and
+# `recovering` statuses with stale per-platform accounting.
+# Pattern: Option A (record on submitted) with explicit symmetry on
+# recovery — see 03-08-PLAN.md <objective>.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def _bypass_math_auditor(engine):
+    """Replace the engine's MathAuditor with a stub whose audit_opportunity
+    and audit_execution always pass. The SAFE-02 gap-closure tests use
+    _make_safety_opp() which hand-sets gross_edge/net_edge fields that
+    disagree with the auditor's shadow recomputation (the auditor is
+    comprehensive — it catches scanner math drift). We are exercising
+    RiskManager per-platform accounting in _live_execution, not auditor
+    behaviour — the auditor is asserted elsewhere in this file."""
+    from arbiter.audit.math_auditor import AuditResult
+
+    def _always_pass(opp_dict):
+        return AuditResult(
+            canonical_id=opp_dict.get("canonical_id", ""),
+            yes_platform=opp_dict.get("yes_platform", ""),
+            no_platform=opp_dict.get("no_platform", ""),
+            timestamp=time.time(),
+            passed=True,
+            flags=[],
+        )
+
+    def _always_pass_exec(exec_dict):
+        opp = exec_dict.get("opportunity", {})
+        return AuditResult(
+            canonical_id=opp.get("canonical_id", ""),
+            yes_platform=opp.get("yes_platform", ""),
+            no_platform=opp.get("no_platform", ""),
+            timestamp=time.time(),
+            passed=True,
+            flags=[],
+        )
+
+    engine._auditor.audit_opportunity = _always_pass
+    engine._auditor.audit_execution = _always_pass_exec
+
+
+def _build_live_engine_for_safe02_gap():
+    """Construct a live-mode ExecutionEngine configured for the SAFE-02
+    gap-closure tests:
+      * dry_run=False (takes the _live_execution branch)
+      * max_platform_exposure_usd=300.0 (matches VERIFICATION baseline)
+      * max_position_usd loosened so per-market does not pre-empt
+      * price_store=None so _pre_trade_requote short-circuits (engine.py:618-619)
+      * MathAuditor bypassed so _make_safety_opp's static edge fields don't
+        collide with shadow-recomputation (auditor is covered elsewhere)
+    Adapters remain the caller's responsibility — attach via engine.adapters.
+    """
+    config = ArbiterConfig()
+    config.scanner.dry_run = False
+    config.scanner.confidence_threshold = 0.1
+    config.scanner.min_edge_cents = 1.0
+    config.scanner.slippage_tolerance = 0.01
+    config.scanner.max_position_usd = 1_000.0
+    config.safety.max_platform_exposure_usd = 300.0
+    monitor = BalanceMonitor(
+        config.alerts,
+        {"kalshi": object(), "polymarket": object(), "predictit": object()},
+    )
+    engine = ExecutionEngine(config, monitor, price_store=None, collectors={})
+    engine.risk._max_daily_trades = 250
+    engine.risk._max_total_exposure = 50_000.0
+    _bypass_math_auditor(engine)
+    return engine
+
+
+def test_live_burst_submitted_rejected_at_per_platform_ceiling():
+    """SAFE-02 gap closure: two live-mode 'submitted' opportunities on the
+    same platform whose combined exposure exceeds
+    SafetyConfig.max_platform_exposure_usd — the second is rejected by
+    check_trade (not dispatched to place_fok) because record_trade fires on
+    submitted (not just filled). Currently (pre-Task 1+2) this test FAILS."""
+    from arbiter.execution.engine import Order, OrderStatus
+
+    async def runner():
+        engine = _build_live_engine_for_safe02_gap()
+
+        def _mk_adapter(platform: str, price: float):
+            adapter = MagicMock()
+            adapter.platform = platform
+            adapter.place_fok = AsyncMock(
+                return_value=Order(
+                    order_id=f"ARB-LIVE-{platform.upper()}",
+                    platform=platform,
+                    market_id=f"M-{platform}",
+                    canonical_id="MKT_BURST",
+                    side="yes" if platform == "kalshi" else "no",
+                    price=price,
+                    quantity=400,
+                    status=OrderStatus.SUBMITTED,
+                    fill_qty=0,
+                    fill_price=0.0,
+                    timestamp=time.time(),
+                )
+            )
+            adapter.cancel_order = AsyncMock(return_value=True)
+            return adapter
+
+        kalshi = _mk_adapter("kalshi", 0.60)
+        poly = _mk_adapter("polymarket", 0.40)
+        engine.adapters = {"kalshi": kalshi, "polymarket": poly}
+
+        incidents_q = engine.subscribe_incidents()
+
+        opp1 = _make_safety_opp(
+            canonical_id="MKT_BURST",
+            yes_platform="kalshi",
+            no_platform="polymarket",
+            yes_price=0.60,
+            no_price=0.40,
+            suggested_qty=400,  # Kalshi leg = 240, Poly leg = 160 — both < 300
+        )
+
+        exec1 = await engine.execute_opportunity(opp1)
+        assert exec1 is not None
+        assert exec1.status == "submitted"
+
+        # NEW INVARIANT (was {} before this fix): submitted legs update
+        # per-platform accounting immediately.
+        assert engine.risk._platform_exposures.get("kalshi") == 240.0
+        assert engine.risk._platform_exposures.get("polymarket") == 160.0
+
+        # Second opp on a DIFFERENT canonical_id (per-market would not
+        # block), SAME platform pair. Kalshi leg = 100 → aggregate 340 > 300.
+        opp2 = _make_safety_opp(
+            canonical_id="MKT_BURST_2",
+            yes_platform="kalshi",
+            no_platform="polymarket",
+            yes_price=0.50,
+            no_price=0.50,
+            suggested_qty=200,
+        )
+
+        exec2 = await engine.execute_opportunity(opp2)
+        assert exec2 is None
+
+        # Drain incident queue — expect an order_rejected incident with
+        # per_platform rejection type on kalshi.
+        # First incident may be the incident from exec1's successful flow;
+        # we need to scan until we find the rejection.
+        rejection_found = False
+        while True:
+            try:
+                incident = await asyncio.wait_for(incidents_q.get(), timeout=0.5)
+            except asyncio.TimeoutError:
+                break
+            if incident.metadata.get("event_type") == "order_rejected":
+                assert incident.metadata.get("rejection_type") == "per_platform"
+                assert incident.metadata.get("platform") == "kalshi"
+                rejection_found = True
+                break
+        assert rejection_found, "expected order_rejected/per_platform incident"
+
+        # Second opp did NOT record.
+        assert engine.risk._platform_exposures.get("kalshi") == 240.0
+        # place_fok was called exactly once (for opp1 kalshi leg);
+        # opp2 was blocked by check_trade BEFORE dispatch.
+        assert kalshi.place_fok.await_count == 1
+
+    asyncio.run(runner())
+
+
+def test_live_recovering_records_only_surviving_leg():
+    """SAFE-02 gap closure: when one leg FILLS and the other venue REJECTS
+    (FAILED), _live_execution resolves to status='recovering'. Only the
+    surviving (filled) leg's exposure is recorded. The rejected leg is NOT
+    recorded — it never had real exposure. Currently (pre-Task 1) this test
+    FAILS because _live_execution records nothing for 'recovering'."""
+    from arbiter.execution.engine import Order, OrderStatus
+
+    async def runner():
+        engine = _build_live_engine_for_safe02_gap()
+
+        kalshi = MagicMock()
+        kalshi.platform = "kalshi"
+        kalshi.place_fok = AsyncMock(
+            return_value=Order(
+                order_id="ARB-REC-YES",
+                platform="kalshi",
+                market_id="K-MKT_REC",
+                canonical_id="MKT_REC",
+                side="yes",
+                price=0.60,
+                quantity=100,
+                status=OrderStatus.FILLED,
+                fill_price=0.60,
+                fill_qty=100,
+                timestamp=time.time(),
+            )
+        )
+        kalshi.cancel_order = AsyncMock(return_value=True)
+
+        poly = MagicMock()
+        poly.platform = "polymarket"
+        poly.place_fok = AsyncMock(
+            return_value=Order(
+                order_id="ARB-REC-NO",
+                platform="polymarket",
+                market_id="P-MKT_REC",
+                canonical_id="MKT_REC",
+                side="no",
+                price=0.40,
+                quantity=100,
+                status=OrderStatus.FAILED,
+                fill_price=0.0,
+                fill_qty=0,
+                timestamp=time.time(),
+                error="venue rejected",
+            )
+        )
+        poly.cancel_order = AsyncMock(return_value=True)
+
+        engine.adapters = {"kalshi": kalshi, "polymarket": poly}
+
+        opp = _make_safety_opp(
+            canonical_id="MKT_REC",
+            yes_platform="kalshi",
+            no_platform="polymarket",
+            yes_price=0.60,
+            no_price=0.40,
+            suggested_qty=100,  # Kalshi $60, Polymarket $40
+        )
+
+        exec_result = await engine.execute_opportunity(opp)
+        assert exec_result is not None
+        assert exec_result.status == "recovering"
+
+        # Only the surviving (Kalshi FILLED) leg recorded.
+        assert engine.risk._platform_exposures.get("kalshi") == 60.0
+        # Polymarket rejected by the venue — no exposure, must not be recorded.
+        assert engine.risk._platform_exposures.get("polymarket", 0.0) == 0.0
+
+    asyncio.run(runner())
+
+
+def test_live_recovery_cancellation_releases_reservation():
+    """SAFE-02 gap closure symmetry: when _recover_one_leg_risk cancels a
+    previously-SUBMITTED leg successfully, Task 2's release_trade hook frees
+    the per-platform reservation that Task 1 booked. Currently (pre-Task 2)
+    this test FAILS because the cancel path does not call release_trade."""
+    from arbiter.execution.engine import Order, OrderStatus
+
+    async def runner():
+        engine = _build_live_engine_for_safe02_gap()
+
+        kalshi = MagicMock()
+        kalshi.platform = "kalshi"
+        kalshi.place_fok = AsyncMock(
+            return_value=Order(
+                order_id="ARB-CNC-YES",
+                platform="kalshi",
+                market_id="K-MKT_CNC",
+                canonical_id="MKT_CNC",
+                side="yes",
+                price=0.60,
+                quantity=100,
+                status=OrderStatus.SUBMITTED,
+                fill_price=0.0,
+                fill_qty=0,
+                timestamp=time.time(),
+            )
+        )
+        kalshi.cancel_order = AsyncMock(return_value=True)
+
+        poly = MagicMock()
+        poly.platform = "polymarket"
+        poly.place_fok = AsyncMock(
+            return_value=Order(
+                order_id="ARB-CNC-NO",
+                platform="polymarket",
+                market_id="P-MKT_CNC",
+                canonical_id="MKT_CNC",
+                side="no",
+                price=0.40,
+                quantity=100,
+                status=OrderStatus.FAILED,
+                fill_price=0.0,
+                fill_qty=0,
+                timestamp=time.time(),
+                error="venue rejected",
+            )
+        )
+        poly.cancel_order = AsyncMock(return_value=False)  # nothing to cancel
+
+        engine.adapters = {"kalshi": kalshi, "polymarket": poly}
+
+        # Seed a prior Kalshi exposure ($100 on an unrelated market) so we
+        # can prove release_trade only freed the NEW leg's reservation —
+        # not the pre-existing one. If release_trade had never fired (or
+        # fired with the wrong exposure) the Kalshi aggregate would be
+        # wrong afterward.
+        engine.risk.record_trade(
+            "OTHER_MKT",
+            exposure=100.0,
+            platform="kalshi",
+        )
+        assert engine.risk._platform_exposures.get("kalshi") == 100.0
+
+        opp = _make_safety_opp(
+            canonical_id="MKT_CNC",
+            yes_platform="kalshi",
+            no_platform="polymarket",
+            yes_price=0.60,
+            no_price=0.40,
+            suggested_qty=100,  # Kalshi $60, Polymarket $40
+        )
+
+        exec_result = await engine.execute_opportunity(opp)
+        assert exec_result is not None
+        assert exec_result.status == "recovering"
+
+        # _recover_one_leg_risk attempted to cancel Kalshi's SUBMITTED leg
+        # and the cancel succeeded.
+        assert kalshi.cancel_order.await_count == 1
+
+        # The new release_trade hook (Task 2) fired — the NEW leg's
+        # reservation ($60) is freed, leaving the pre-seeded $100 intact.
+        # Pre-Task-2: Kalshi would read $160 (recorded $60 + never released).
+        # Post-Task-2: Kalshi reads $100 (recorded $60, then released $60,
+        # pre-existing $100 untouched).
+        assert engine.risk._platform_exposures.get("kalshi") == 100.0
+        # Per-market counter on MKT_CNC coherent — release_trade decremented
+        # back to zero for the cancelled arb.
+        assert engine.risk._open_positions.get(opp.canonical_id, 0.0) == 0.0
+
+    asyncio.run(runner())
+
+
+def test_dry_run_record_trade_unchanged_after_fix():
+    """SAFE-02 parity: dry-run (_simulate_execution) is untouched — the
+    existing record_trade call site stays exactly as-is and this test
+    passes BOTH before and after Task 1+2. Guards against accidental
+    dry-run regression during live-path surgery."""
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        # Bypass requote by disabling price_store lookup.
+        engine.price_store = None
+        # Bypass MathAuditor: _make_safety_opp's static edge fields disagree
+        # with shadow recomputation (the auditor itself is covered elsewhere).
+        _bypass_math_auditor(engine)
+
+        opp = _make_safety_opp(
+            canonical_id="MKT_DRYRUN_PARITY",
+            yes_platform="kalshi",
+            no_platform="polymarket",
+            yes_price=0.60,
+            no_price=0.40,
+            suggested_qty=100,
+        )
+
+        exec_result = await engine.execute_opportunity(opp)
+        assert exec_result is not None
+        assert exec_result.status == "simulated"
+
+        # Kalshi yes-leg exposure matches the value dry-run always produced.
+        assert engine.risk._platform_exposures.get("kalshi") == 60.0
+        assert engine.risk._platform_exposures.get("polymarket") == 40.0
+
+        # Per-market counter: exactly one record_trade fired. Total exposure
+        # on this canonical_id equals qty * (yes_price + no_price) = 100.0.
+        expected_total = opp.suggested_qty * (opp.yes_price + opp.no_price)
+        assert engine.risk._open_positions.get(opp.canonical_id) == expected_total
+
+    asyncio.run(runner())
