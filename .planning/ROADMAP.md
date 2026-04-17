@@ -111,6 +111,16 @@ Plans:
 - [x] 04-07-PLAN.md -- Graceful-shutdown subprocess test with SIGINT + platform cancel verification (SAFE-05)
 - [x] 04-08-PLAN.md -- Aggregator library + terminal reconciliation test + 04-VALIDATION.md population (TEST-03+TEST-04 hard-gate per D-19)
 
+### Phase 04.1: Remove PredictIt (INSERTED)
+
+**Goal:** Remove PredictIt as a supported platform. Surgical deletion across 29 files: collector, adapter wiring, settings/fee-math dispatch, scanner position cap, market-seed entries, TypeScript CLI mirror, UI platform labels, tests, docs. Leaves Kalshi + Polymarket as the only two supported venues.
+**Requirements**: (none — this is a subtractive cleanup phase)
+**Depends on:** Phase 4
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 04.1 to break down)
+
 ### Phase 5: Live Trading
 **Goal**: The first real cross-platform arbitrage trade executes successfully with small capital under operator supervision, proving the system works end-to-end with real money
 **Depends on**: Phase 4
@@ -136,3 +146,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 3. Safety Layer | 0/7 | Planned | - |
 | 4. Sandbox Validation | 0/8 | Planned | - |
 | 5. Live Trading | 0/1 | Not started | - |
+
