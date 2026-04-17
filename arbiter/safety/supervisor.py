@@ -265,6 +265,48 @@ class SafetySupervisor:
         finally:
             clear_contextvars()
 
+    # ─── prepare_shutdown (SAFE-05, plan 03-05) ─────────────────────────
+
+    async def prepare_shutdown(self) -> None:
+        """Broadcast ``shutdown_state`` BEFORE trip_kill so the dashboard
+        learns of the impending shutdown before adapters start cancelling.
+
+        Sequence:
+          1. publish ``{"type":"shutdown_state","payload":{"phase":"shutting_down",...}}``
+          2. ``trip_kill(by="system:shutdown", ...)`` — fans out cancel_all
+          3. publish ``{"type":"shutdown_state","payload":{"phase":"complete",...}}``
+             inside a ``finally`` block so the dashboard always sees the
+             completion event even if trip_kill raises.
+
+        Idempotent by delegation: ``trip_kill`` serialises on ``_state_lock``
+        so multiple concurrent ``prepare_shutdown`` callers (rare — only the
+        main-loop signal handler calls this) do not double-cancel.
+        """
+        await self._publish(
+            {
+                "type": "shutdown_state",
+                "payload": {
+                    "phase": "shutting_down",
+                    "started_at": time.time(),
+                    "reason": "Process shutdown signal",
+                },
+            }
+        )
+        try:
+            await self.trip_kill(
+                by="system:shutdown", reason="Process shutdown signal",
+            )
+        finally:
+            await self._publish(
+                {
+                    "type": "shutdown_state",
+                    "payload": {
+                        "phase": "complete",
+                        "completed_at": time.time(),
+                    },
+                }
+            )
+
     # ─── one-leg exposure (SAFE-03, plan 03-03) ─────────────────────────
 
     async def handle_one_leg_exposure(

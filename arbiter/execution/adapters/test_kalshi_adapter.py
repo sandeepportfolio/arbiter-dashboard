@@ -568,15 +568,46 @@ async def test_cancel_order_acquires_rate_token():
 
 
 @pytest.mark.asyncio
-async def test_cancel_all_acquires_token_per_chunk():
-    """SAFE-04: cancel_all (even the plan-03-01 stub) acquires at least one token.
-
-    Plan 03-05 will replace the stub with chunked batch cancels (one acquire per
-    chunk). For now the stub can log+return [], but acquiring at least once is
-    the forward-compat invariant this test enforces.
+async def test_cancel_all_acquires_token_per_chunk(monkeypatch):
+    """SAFE-04 + SAFE-05: cancel_all acquires at least one rate-limit token
+    per chunk when there are open orders. With plan 03-05's real
+    implementation, a single open order means exactly one chunk → one acquire.
     """
     call_log: list = []
-    session = _tracking_session_with_delete(204, call_log)
+
+    def _delete_factory(url, json=None, headers=None):
+        call_log.append(("session.delete", json))
+        resp = MagicMock()
+        resp.status = 204
+        resp.headers = {}
+        resp.text = AsyncMock(return_value="")
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=resp)
+        cm.__aexit__ = AsyncMock(return_value=False)
+        return cm
+
+    session = MagicMock()
+    session.delete = MagicMock(side_effect=_delete_factory)
+
+    # Seed one open order so cancel_all has a chunk to process.
+    one_order = Order(
+        order_id="K-OPEN-1",
+        platform="kalshi",
+        market_id="T",
+        canonical_id="",
+        side="yes",
+        price=0.5,
+        quantity=1,
+        status=OrderStatus.SUBMITTED,
+    )
+
+    async def _fake_list(self=None):
+        return [one_order]
+
+    monkeypatch.setattr(
+        KalshiAdapter, "_list_all_open_orders", _fake_list, raising=False,
+    )
+
     adapter = KalshiAdapter(
         config=_config(),
         session=session,

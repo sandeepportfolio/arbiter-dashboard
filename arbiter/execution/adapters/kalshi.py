@@ -266,18 +266,193 @@ class KalshiAdapter:
                 return False
             return response.status in (200, 204)
 
-    # ─── cancel_all (stub — full batched impl lands in plan 03-05) ─────────
+    # ─── cancel_all (SAFE-05: full chunked batched implementation) ────────
+
+    # Kalshi's POST/DELETE /portfolio/orders/batched accepts up to 20 orders
+    # per call. Shutdown under load will page through open orders in 20-sized
+    # chunks and acquire one rate-limit token per chunk (Pitfall 5 budgeted).
+    CANCEL_ALL_CHUNK_SIZE = 20
 
     async def cancel_all(self) -> list[str]:
-        # SAFE-04: acquire a token even in stub mode so the invariant survives
-        # the plan 03-05 replacement (chunked batched cancels acquire per chunk).
-        await self.rate_limiter.acquire()
-        # TODO(03-05): replace with DELETE /portfolio/orders/batched (20 ids/chunk)
-        log.warning(
-            "kalshi.cancel_all.stub",
-            detail="cancel_all stub called — full impl pending plan 03-05 (KalshiAdapter)",
+        """Cancel every open order via batched DELETE. Best-effort, never raises.
+
+        Returns the list of successfully cancelled ``order_id`` strings aggregated
+        across chunks. An empty list is returned on any of: no auth, no open
+        orders, list-orders error, or every chunk failing.
+        """
+        if not self.auth or not getattr(self.auth, "is_authenticated", False):
+            return []
+
+        try:
+            open_orders = await self._list_all_open_orders()
+        except Exception as exc:
+            log.warning("kalshi.cancel_all.list_failed", err=str(exc))
+            return []
+
+        if not open_orders:
+            return []
+
+        CHUNK_SIZE = self.CANCEL_ALL_CHUNK_SIZE
+        cancelled_ids: list[str] = []
+
+        for i in range(0, len(open_orders), CHUNK_SIZE):
+            chunk = open_orders[i : i + CHUNK_SIZE]
+            chunk_ids = [
+                getattr(o, "order_id", None) or (o.get("order_id") if isinstance(o, dict) else None)
+                for o in chunk
+            ]
+            chunk_ids = [cid for cid in chunk_ids if cid]
+            if not chunk_ids:
+                continue
+
+            # SAFE-04 invariant: one token per chunk (Pitfall 5 — rate-limiter
+            # budget sized to let shutdown finish within the 5s window).
+            await self.rate_limiter.acquire()
+
+            path = "/trade-api/v2/portfolio/orders/batched"
+            url = f"{self.config.kalshi.base_url}/portfolio/orders/batched"
+            try:
+                headers = self.auth.get_headers("DELETE", path)
+            except Exception as exc:
+                log.warning(
+                    "kalshi.cancel_all.headers_failed",
+                    chunk_index=i // CHUNK_SIZE, err=str(exc),
+                )
+                continue
+
+            payload = {"ids": list(chunk_ids)}
+
+            try:
+                async with self.session.delete(
+                    url, json=payload, headers=headers,
+                ) as response:
+                    status = response.status
+                    body_text = await response.text()
+                    resp_headers = dict(response.headers) if response.headers else {}
+
+                # 429 on a chunk → apply Retry-After + circuit failure, but
+                # keep trying the remaining chunks (partial progress > nothing).
+                if status == 429:
+                    retry_after = resp_headers.get("Retry-After", "1")
+                    delay = self.rate_limiter.apply_retry_after(
+                        retry_after, fallback_delay=2.0, reason="kalshi_429",
+                    )
+                    delay = min(float(delay or 0.0), 60.0)
+                    log.warning(
+                        "kalshi.rate_limited",
+                        penalty_seconds=delay,
+                        op="cancel_all",
+                        chunk_index=i // CHUNK_SIZE,
+                    )
+                    self.circuit.record_failure()
+                    continue
+
+                if status not in (200, 204):
+                    log.warning(
+                        "kalshi.cancel_all.chunk_failed",
+                        status=status,
+                        body=body_text[:200] if body_text else "",
+                        chunk_index=i // CHUNK_SIZE,
+                    )
+                    continue
+
+                # Parse body for per-order results when available. Tolerate
+                # minor response-shape variations; on parse failure, assume
+                # all ids in the chunk were cancelled (204 / empty body case).
+                parsed_ids: list[str] = []
+                if body_text:
+                    try:
+                        data = json.loads(body_text)
+                    except Exception:
+                        data = None
+                    if isinstance(data, dict):
+                        # Accept either {"results": [{order_id, error}]} or
+                        # {"orders": [{order_id, error}]} or a top-level list.
+                        rows = (
+                            data.get("results")
+                            or data.get("orders")
+                            or data.get("cancelled")
+                            or []
+                        )
+                    elif isinstance(data, list):
+                        rows = data
+                    else:
+                        rows = []
+                    for row in rows:
+                        if not isinstance(row, dict):
+                            continue
+                        if row.get("error"):
+                            continue
+                        rid = row.get("order_id") or row.get("id")
+                        if rid:
+                            parsed_ids.append(str(rid))
+
+                if parsed_ids:
+                    cancelled_ids.extend(parsed_ids)
+                else:
+                    # No structured response — assume chunk succeeded and
+                    # record the ids we submitted. This matches the 204
+                    # (no body) pattern common for batched DELETE endpoints.
+                    cancelled_ids.extend(str(cid) for cid in chunk_ids)
+            except Exception as exc:
+                log.error(
+                    "kalshi.cancel_all.chunk_exception",
+                    err=str(exc),
+                    chunk_index=i // CHUNK_SIZE,
+                )
+                continue
+
+        log.info(
+            "kalshi.cancel_all.done",
+            total_requested=len(open_orders),
+            total_cancelled=len(cancelled_ids),
+            chunks=(len(open_orders) + CHUNK_SIZE - 1) // CHUNK_SIZE,
         )
-        return []
+        return cancelled_ids
+
+    async def _list_all_open_orders(self) -> list[Order]:
+        """Fetch every resting Kalshi order. Returns [] on error (never raises).
+
+        Uses the same GET /portfolio/orders?status=resting endpoint as
+        ``list_open_orders_by_client_id`` but without any client-order-id
+        prefix filter — used by SAFE-05 cancel_all to discover shutdown
+        candidates.
+        """
+        if not self.auth or not getattr(self.auth, "is_authenticated", False):
+            return []
+        try:
+            status_code, payload, resp_headers = await self._list_orders("resting")
+        except Exception as exc:
+            log.warning("kalshi.list_all_open_orders.failed", err=str(exc))
+            return []
+
+        if status_code == 429:
+            retry_after = resp_headers.get("Retry-After", "1") if resp_headers else "1"
+            delay = self.rate_limiter.apply_retry_after(
+                retry_after, fallback_delay=2.0, reason="kalshi_429",
+            )
+            delay = min(float(delay or 0.0), 60.0)
+            log.warning(
+                "kalshi.rate_limited", penalty_seconds=delay, op="list_all_open",
+            )
+            self.circuit.record_failure()
+            return []
+
+        if status_code not in (200, 201):
+            log.warning(
+                "kalshi.list_all_open_orders.http_error",
+                status=status_code, body=payload[:200] if payload else "",
+            )
+            return []
+
+        try:
+            data = json.loads(payload)
+        except Exception as exc:
+            log.warning("kalshi.list_all_open_orders.parse_failed", err=str(exc))
+            return []
+
+        orders_raw = data.get("orders", []) if isinstance(data, dict) else []
+        return [self._order_data_to_order(od) for od in orders_raw if isinstance(od, dict)]
 
     # ─── check_depth (NEW for EXEC-03) ────────────────────────────────────
 

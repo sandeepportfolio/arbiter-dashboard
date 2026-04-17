@@ -103,6 +103,48 @@ async def run_reconciliation_loop(
             await asyncio.sleep(min(reconciler.check_interval, 10.0))
 
 
+async def run_shutdown_sequence(
+    safety: SafetySupervisor,
+    tasks: list,
+    *,
+    timeout: float = 5.0,
+) -> None:
+    """Graceful-shutdown sequence — SAFE-05 fail-safe.
+
+    Runs in the following order:
+      1. ``safety.prepare_shutdown()`` — broadcasts ``shutdown_state`` then
+         invokes ``trip_kill`` which fans out ``adapter.cancel_all()`` across
+         every platform adapter in parallel (per-adapter 5s timeout inside
+         the supervisor).
+      2. ``task.cancel()`` — only AFTER the cancel fanout completes (or the
+         ``timeout`` budget elapses).
+      3. ``asyncio.gather(..., return_exceptions=True)`` — drain the tasks.
+
+    The ``timeout`` argument is a hard upper bound on the ``prepare_shutdown``
+    await; if it expires we log an error and fall through to ``task.cancel()``
+    so the process can still exit. Second-signal escape hatch (forced
+    immediate exit) lives in the signal handler in ``run_system``.
+    """
+    logger = logging.getLogger("arbiter.main")
+    logger.info("Preparing safety-supervised shutdown...")
+    try:
+        await asyncio.wait_for(safety.prepare_shutdown(), timeout=timeout)
+    except asyncio.TimeoutError:
+        logger.error(
+            "Kill-switch trip exceeded %.1fs — some orders may remain open",
+            timeout,
+        )
+    except Exception as exc:
+        logger.error(
+            "safety.prepare_shutdown raised during shutdown sequence: %s", exc,
+        )
+
+    logger.info("Stopping all components...")
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
 async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = "0.0.0.0", port: int = 8080):
     """Start all ARBITER components."""
     logger = logging.getLogger("arbiter.main")
@@ -340,24 +382,39 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     tasks.append(asyncio.create_task(api.serve(), name="api-server"))
 
     # ── Graceful shutdown ──────────────────────────────────────
+    # SAFE-05: cancel orders BEFORE cancelling tasks. A second SIGINT/SIGTERM
+    # triggers an immediate forced exit so operators always have a hard exit
+    # hatch if a hung adapter or deadlock ever blocks the 5s trip_kill window.
     shutdown_event = asyncio.Event()
+    shutdown_state = {"in_progress": False}
 
     def handle_shutdown(sig):
-        logger.info(f"Received {sig.name}, shutting down...")
+        if shutdown_state["in_progress"]:
+            logger.warning(
+                "Received %s again, forcing immediate exit", sig.name,
+            )
+            os._exit(1)
+        shutdown_state["in_progress"] = True
+        logger.info("Received %s, shutting down...", sig.name)
         shutdown_event.set()
 
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        asyncio.get_event_loop().add_signal_handler(sig, handle_shutdown, sig)
+    # NOTE: Windows asyncio loops do not support add_signal_handler. Wrap in
+    # a try/except so `python -m arbiter.main` still runs on Win32; SIGINT
+    # there falls through to KeyboardInterrupt handling in asyncio.run.
+    try:
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            asyncio.get_event_loop().add_signal_handler(sig, handle_shutdown, sig)
+    except NotImplementedError:
+        logger.info(
+            "signal.add_signal_handler unavailable on this platform; "
+            "relying on KeyboardInterrupt for shutdown",
+        )
 
-    # Wait for shutdown signal
+    # Wait for shutdown signal.
     await shutdown_event.wait()
 
-    # Cancel all tasks
-    logger.info("Stopping all components...")
-    for task in tasks:
-        task.cancel()
-
-    await asyncio.gather(*tasks, return_exceptions=True)
+    # Cancel orders BEFORE tasks (SAFE-05 fail-safe).
+    await run_shutdown_sequence(safety, tasks, timeout=5.0)
 
     # Cleanup
     engine.stop_heartbeat()

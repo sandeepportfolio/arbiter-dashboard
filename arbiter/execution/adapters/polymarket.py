@@ -394,16 +394,64 @@ class PolymarketAdapter:
             )
         return False
 
-    # --- cancel_all (stub — full SDK impl lands in plan 03-05) -----------
+    # --- cancel_all (SAFE-05: SDK-backed implementation) -----------------
 
     async def cancel_all(self) -> list[str]:
-        # SAFE-04: acquire a token even in stub mode so the invariant survives
-        # the plan 03-05 replacement (full SDK call).
+        """Cancel every open Polymarket order via the CLOB SDK.
+
+        Invokes ``client.cancel_all()`` on the shared ClobClient after
+        acquiring a rate-limit token. The SDK method is synchronous, so the
+        call is dispatched through ``run_in_executor`` to avoid blocking the
+        event loop (matches the adapter's other SDK-call pattern).
+
+        Returns the ``canceled`` list from the SDK response (SDK returns
+        ``{"canceled": [...], "not_canceled": [...]}``). Empty list is
+        returned when the client is missing, the SDK raises, or the response
+        shape is unexpected — ``cancel_all`` never raises across this
+        boundary (used by graceful shutdown under SIGINT/SIGTERM pressure).
+        """
+        client = self._get_client()
+        if client is None:
+            return []
+
+        # SAFE-04: one token per SDK call (acquire-before-I/O invariant).
         await self.rate_limiter.acquire()
-        # TODO(03-05): replace with client.cancel_all() SDK call
+
+        loop = asyncio.get_event_loop()
+        try:
+            result = await loop.run_in_executor(None, lambda: client.cancel_all())
+        except Exception as exc:
+            # SAFE-04: distinguish 429 so operators see why shutdown couldn't
+            # finish. Still return [] so run_shutdown_sequence can proceed.
+            if self._is_rate_limit_error(exc):
+                delay = self.rate_limiter.apply_retry_after(
+                    "1", fallback_delay=2.0, reason="polymarket_429",
+                )
+                delay = min(float(delay or 0.0), 60.0)
+                log.warning(
+                    "polymarket.rate_limited",
+                    op="cancel_all", penalty_seconds=delay,
+                )
+                self.circuit.record_failure()
+                return []
+            log.error("polymarket.cancel_all.failed", err=str(exc))
+            return []
+
+        # SDK returns {"canceled": [...], "not_canceled": [...]}.
+        if isinstance(result, dict):
+            canceled = result.get("canceled") or []
+            if isinstance(canceled, (list, tuple)):
+                return [str(x) for x in canceled]
+            log.warning(
+                "polymarket.cancel_all.unexpected_canceled_type",
+                got=type(canceled).__name__,
+            )
+            return []
+
+        # Legacy/non-dict shapes: treat as empty.
         log.warning(
-            "polymarket.cancel_all.stub",
-            detail="cancel_all stub called — full impl pending plan 03-05 (PolymarketAdapter)",
+            "polymarket.cancel_all.unexpected_response_type",
+            got=type(result).__name__,
         )
         return []
 

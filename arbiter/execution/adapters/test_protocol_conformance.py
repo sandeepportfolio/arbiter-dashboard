@@ -46,6 +46,12 @@ class _StubAdapter:
     async def cancel_order(self, order: Order) -> bool:
         return True
 
+    async def cancel_all(self) -> list[str]:
+        # SAFE-05: Protocol contract now includes cancel_all (plan 03-01 added
+        # it; plan 03-05 implements it on real adapters). Stub returns [] so
+        # conformance tests pass without side effects.
+        return []
+
     async def get_order(self, order: Order) -> Order:
         return order
 
@@ -69,6 +75,9 @@ class _MissingMethodAdapter:
     async def cancel_order(self, order):
         return False
 
+    async def cancel_all(self):
+        return []
+
     async def get_order(self, order):
         return order
 
@@ -86,6 +95,9 @@ class _MissingAttributeAdapter:
 
     async def cancel_order(self, order):
         return False
+
+    async def cancel_all(self):
+        return []
 
     async def get_order(self, order):
         return order
@@ -124,11 +136,16 @@ def test_missing_attribute_stub_fails_protocol():
 
 
 def test_protocol_lists_expected_methods():
-    """The Protocol surface must include exactly these 5 methods (sanity)."""
+    """The Protocol surface must include exactly these 6 methods (sanity).
+
+    SAFE-05 (plan 03-05) added `cancel_all` to the Protocol surface so
+    graceful shutdown can fan it out via SafetySupervisor.trip_kill.
+    """
     expected = {
         "check_depth",
         "place_fok",
         "cancel_order",
+        "cancel_all",
         "get_order",
         "list_open_orders_by_client_id",
     }
