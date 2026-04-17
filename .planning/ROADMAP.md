@@ -102,8 +102,8 @@ Plans:
 **Plans**: 8 plans
 
 Plans:
-- [ ] 04-01-PLAN.md -- Sandbox package scaffold + @pytest.mark.live opt-in + guard-railed fixtures + evidence/reconcile helpers + operator README
-- [ ] 04-02-PLAN.md -- settings.py env-var URLs + PolymarketAdapter PHASE4_MAX_ORDER_USD hard-lock + docker-compose multi-DB + .env.sandbox.template + .gitignore
+- [x] 04-01-PLAN.md -- Sandbox package scaffold + @pytest.mark.live opt-in + guard-railed fixtures + evidence/reconcile helpers + operator README
+- [x] 04-02-PLAN.md -- settings.py env-var URLs + PolymarketAdapter PHASE4_MAX_ORDER_USD hard-lock + docker-compose multi-DB + .env.sandbox.template + .gitignore
 - [ ] 04-03-PLAN.md -- Kalshi demo scenarios: happy path (TEST-01+TEST-04 fee_cost), FOK rejection (EXEC-01), timeout-cancel (Phase 2.1 CR-01 live)
 - [ ] 04-04-PLAN.md -- Polymarket real-$1 scenarios: happy path with get_trades fee reconstruction (TEST-02+TEST-04 Pitfall 2), FOK rejection (EXEC-01)
 - [ ] 04-05-PLAN.md -- Kill-switch live-fire against Kalshi demo (SAFE-01): trip_kill + platform-confirmed cancel + 5s budget
