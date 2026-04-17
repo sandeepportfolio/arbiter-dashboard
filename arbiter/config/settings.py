@@ -362,8 +362,18 @@ def iter_confirmed_market_mappings(require_auto_trade: bool = False) -> Iterable
 
 @dataclass
 class KalshiConfig:
-    base_url: str = "https://api.elections.kalshi.com/trade-api/v2"
-    ws_url: str = "wss://api.elections.kalshi.com/trade-api/ws/v2"
+    base_url: str = field(
+        default_factory=lambda: os.getenv(
+            "KALSHI_BASE_URL",
+            "https://api.elections.kalshi.com/trade-api/v2",
+        )
+    )
+    ws_url: str = field(
+        default_factory=lambda: os.getenv(
+            "KALSHI_WS_URL",
+            "wss://api.elections.kalshi.com/trade-api/ws/v2",
+        )
+    )
     api_key_id: str = field(default_factory=lambda: os.getenv("KALSHI_API_KEY_ID", ""))
     private_key_path: str = field(default_factory=lambda: os.getenv("KALSHI_PRIVATE_KEY_PATH", ""))
     poll_interval: float = 1.5
@@ -373,7 +383,12 @@ class KalshiConfig:
 @dataclass
 class PolymarketConfig:
     gamma_url: str = "https://gamma-api.polymarket.com"
-    clob_url: str = "https://clob.polymarket.com"
+    clob_url: str = field(
+        default_factory=lambda: os.getenv(
+            "POLYMARKET_CLOB_URL",
+            "https://clob.polymarket.com",
+        )
+    )
     ws_url: str = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
     private_key: str = field(default_factory=lambda: os.getenv("POLY_PRIVATE_KEY", ""))
     chain_id: int = 137
