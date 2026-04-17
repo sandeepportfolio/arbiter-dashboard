@@ -22,6 +22,7 @@ same client. The heartbeat lifecycle is exclusively owned by the engine
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from typing import Any, Callable, Optional
 
@@ -87,6 +88,31 @@ class PolymarketAdapter:
                 arb_id, market_id, canonical_id, side, price, qty,
                 now, "Unable to initialize Polymarket client",
             )
+
+        # Phase 4 blast-radius hard-lock (D-02): adapter-layer belt above RiskManager + test-wallet
+        # hardware cap. When PHASE4_MAX_ORDER_USD is unset, this is a no-op (production behavior
+        # unchanged). When set, rejects any order whose notional (qty * price) exceeds the cap.
+        # Notional is the correct risk measure (Pitfall 8); raw qty is meaningless on prediction markets.
+        max_order_usd_raw = os.getenv("PHASE4_MAX_ORDER_USD")
+        if max_order_usd_raw:
+            try:
+                max_order_usd = float(max_order_usd_raw)
+            except (TypeError, ValueError):
+                max_order_usd = 0.0  # Unparseable -> maximally restrictive (safe default).
+            notional_usd = float(qty) * float(price)
+            if notional_usd > max_order_usd:
+                log.warning(
+                    "polymarket.phase4_hardlock.rejected",
+                    arb_id=arb_id,
+                    notional=notional_usd,
+                    max=max_order_usd,
+                    qty=qty,
+                    price=price,
+                )
+                return self._failed_order(
+                    arb_id, market_id, canonical_id, side, price, qty, now,
+                    f"PHASE4_MAX_ORDER_USD hard-lock: notional ${notional_usd:.2f} > ${max_order_usd:.2f}",
+                )
 
         return await self._place_fok_reconciling(
             client, arb_id, market_id, canonical_id, side, price, qty,
