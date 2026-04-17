@@ -1,6 +1,13 @@
 import { inferStaticApiBase, mixedContentApiWarning, normalizeApiBase } from "./api-base.js";
 import { buildActivityAtlasView } from "./activity-atlas-model.js";
-import { buildDeskOverview, buildMetricCards, buildOpportunityRows } from "./dashboard-view-model.js";
+import {
+  buildDeskOverview,
+  buildMetricCards,
+  buildOpportunityRows,
+  buildSafetyView,
+  buildRateLimitView,
+  buildMappingComparison,
+} from "./dashboard-view-model.js";
 
 const boot = window.ARBITER_BOOTSTRAP || {};
 const search = new URLSearchParams(window.location.search);
@@ -38,6 +45,24 @@ const initialApiBase = inferStaticApiBase({
 const initialAuthToken = readStorage(window.sessionStorage, AUTH_TOKEN_STORAGE_KEY);
 const normalizedInitialRoute = initialRoute.replace(/\/+$/, "");
 
+const ACKNOWLEDGED_ONE_LEG_STORAGE_KEY = "arbiter.acknowledgedOneLegIds";
+
+function readAcknowledgedOneLegIds() {
+  // I8: rehydrate acknowledged one-leg incident IDs from localStorage so a page
+  // refresh does not re-surface already-dismissed hero alerts. v1 scope is
+  // client-side only — clearing browser data will re-show the alerts on the
+  // next connect. Server-side acknowledgement (new endpoint + DB table) is
+  // deferred to a future phase.
+  try {
+    const raw = window.localStorage?.getItem(ACKNOWLEDGED_ONE_LEG_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 const state = {
   system: null,
   opportunities: [],
@@ -45,8 +70,13 @@ const state = {
   manualPositions: [],
   incidents: [],
   mappings: [],
+  mappingUpdates: {},
   portfolio: null,
   profitability: null,
+  safety: { killSwitch: { armed: false }, rateLimits: {} },
+  oneLegExposures: [],
+  acknowledgedOneLegIds: readAcknowledgedOneLegIds(),
+  shutdown: null,
   wsConnected: false,
   lastQuoteAt: null,
   activeLogFilter: "all",
@@ -1093,6 +1123,10 @@ function connectWebSocket() {
   socket.addEventListener("close", () => {
     if (state.websocket !== socket) return;
     state.wsConnected = false;
+    if (state.shutdown?.phase === "shutting_down" || state.shutdown?.phase === "complete") {
+      setWsLabel("Server shutdown complete", true);
+      return; // do not auto-reconnect after an intentional server shutdown
+    }
     setWsLabel(state.system ? "Polling" : "Reconnecting", true);
     window.setTimeout(connectWebSocket, 1500);
   });
@@ -1106,6 +1140,10 @@ function render() {
   renderOverview();
   renderStatusBand();
   renderMetrics();
+  renderSafetyPanel();
+  renderRateLimitBadges();
+  renderOneLegAlert();
+  renderShutdownBanner();
   renderProfitabilityPanel();
   renderPortfolioPanel();
   renderOpportunities();
@@ -1263,6 +1301,122 @@ function renderRecentTradeCard(trade) {
       </div>
     </article>
   `;
+}
+
+function renderSafetyPanel() {
+  const view = buildSafetyView(state, { nowTimestamp: Date.now() / 1000 });
+  const badge = document.getElementById("killSwitchBadge");
+  const summary = document.getElementById("killSwitchSummary");
+  const armBtn = document.getElementById("killSwitchArm");
+  const resetBtn = document.getElementById("killSwitchReset");
+  const cooldownEl = document.getElementById("killSwitchCooldown");
+  if (!badge || !summary || !armBtn || !resetBtn || !cooldownEl) return;
+
+  // T-3-07-A: XSS mitigation — every dynamic string flows through textContent.
+  badge.textContent = view.badgeLabel;
+  badge.className = `panel-badge status-badge ${view.badgeClass}`;
+  summary.textContent = view.summary;
+
+  if (view.armed) {
+    armBtn.classList.add("hidden");
+    resetBtn.classList.remove("hidden");
+    if (view.cooldownLabel) {
+      cooldownEl.textContent = `Cooldown: ${view.cooldownLabel}`;
+      cooldownEl.classList.remove("hidden");
+      resetBtn.disabled = true;
+    } else {
+      cooldownEl.classList.add("hidden");
+      resetBtn.disabled = false;
+    }
+  } else {
+    armBtn.classList.remove("hidden");
+    resetBtn.classList.add("hidden");
+    cooldownEl.classList.add("hidden");
+    resetBtn.disabled = true;
+  }
+}
+
+function renderRateLimitBadges() {
+  const host = document.getElementById("rateLimitIndicators");
+  if (!host) return;
+  const rows = buildRateLimitView(state);
+  const pills = rows.map((row) => {
+    const pill = document.createElement("span");
+    pill.className = `rate-limit-pill ${row.tone}`;
+    pill.textContent = `${row.platformLabel}: ${row.tokensLabel} · ${row.cooldownLabel}`;
+    pill.title = `${row.platformLabel} rate limiter — ${row.tokensLabel} tokens, ${row.cooldownLabel}`;
+    return pill;
+  });
+  host.replaceChildren(...pills);
+}
+
+function renderOneLegAlert() {
+  const panel = document.getElementById("oneLegAlertPanel");
+  const body = document.getElementById("oneLegAlertBody");
+  if (!panel || !body) return;
+  const list = state.oneLegExposures || [];
+  const acknowledged = new Set(state.acknowledgedOneLegIds || []);
+  const active = list.filter((entry) => !acknowledged.has(entry?.incident_id));
+  if (active.length === 0) {
+    panel.classList.add("hidden");
+    body.replaceChildren();
+    return;
+  }
+  panel.classList.remove("hidden");
+
+  const nodes = active.slice(0, 3).map((ev) => {
+    const meta = ev.metadata || {};
+    const wrap = document.createElement("div");
+    wrap.className = "stack-item one-leg-item";
+    if (ev.incident_id) wrap.dataset.incidentId = ev.incident_id;
+
+    const title = document.createElement("p");
+    title.className = "stack-item-title";
+    // T-3-07-A: operator-visible strings always via textContent.
+    title.textContent = ev.canonical_id || "Unknown market";
+
+    const detail = document.createElement("p");
+    detail.className = "stack-item-detail";
+    const filledPlatform = String(meta.filled_platform || "unknown").toUpperCase();
+    const filledSide = String(meta.filled_side || "").toUpperCase();
+    const filledQty = Number(meta.filled_qty || 0);
+    const exposureUsd = Number(meta.exposure_usd || 0);
+    detail.textContent =
+      `Filled ${filledQty} ${filledSide} on ${filledPlatform} — ` +
+      `exposure $${exposureUsd.toFixed(2)}. ` +
+      `Unwind: ${meta.recommended_unwind || "Close exposure manually"}`;
+
+    const ack = document.createElement("button");
+    ack.type = "button";
+    ack.className = "btn btn-warning one-leg-ack";
+    ack.textContent = "Acknowledge & unwind";
+    if (ev.incident_id) ack.dataset.incidentId = ev.incident_id;
+    if (ev.canonical_id) ack.dataset.canonicalId = ev.canonical_id;
+
+    wrap.append(title, detail, ack);
+    return wrap;
+  });
+  body.replaceChildren(...nodes);
+}
+
+function renderShutdownBanner() {
+  const banner = document.getElementById("shutdownBanner");
+  const textEl = document.getElementById("shutdownBannerText");
+  if (!banner || !textEl) return;
+  const shutdown = state.shutdown;
+  if (!shutdown || !shutdown.phase) {
+    banner.classList.add("hidden");
+    return;
+  }
+  if (shutdown.phase === "shutting_down") {
+    textEl.textContent = "Server shutting down — cancelling open orders";
+    banner.classList.remove("hidden");
+  } else if (shutdown.phase === "complete") {
+    textEl.textContent = "Server shutdown complete";
+    banner.classList.remove("hidden");
+  } else {
+    banner.classList.add("hidden");
+  }
 }
 
 function renderProfitabilityPanel() {
@@ -1714,13 +1868,124 @@ function renderMappings() {
       <div class="operator-meta-row">
         <span>${escapeHtml(mapping.allow_auto_trade ? "Auto-trade allowed" : "Held for review before auto-trade")}</span>
       </div>
-      ${hasOperatorAccess() ? `<div class="action-row">
+      ${hasOperatorAccess() ? `<div class="action-row" data-mapping-action-row>
         ${mappingStatus(mapping) !== "confirmed" ? renderActionButton("Confirm match", "confirm", "mapping", mapping.canonical_id, mapping.canonical_id) : ""}
         ${mapping.allow_auto_trade ? renderActionButton("Hold auto-trade", "disable_auto_trade", "mapping", mapping.canonical_id, mapping.canonical_id, true) : renderActionButton("Enable auto-trade", "enable_auto_trade", "mapping", mapping.canonical_id, mapping.canonical_id)}
         ${mappingStatus(mapping) !== "review" ? renderActionButton("Mark review", "review", "mapping", mapping.canonical_id, mapping.canonical_id, true) : ""}
       </div>` : ""}
     </article>
   `).join("");
+
+  // Side-by-side resolution-criteria comparison (plan 03-07). Dynamic text is
+  // injected via textContent to satisfy T-3-07-A (XSS mitigation).
+  const updates = state.mappingUpdates || {};
+  const cards = container.querySelectorAll("article.stack-item[data-mapping-id]");
+  cards.forEach((card) => {
+    const canonicalId = card.dataset.mappingId;
+    if (!canonicalId) return;
+    const mapping = state.mappings.find((entry) => entry.canonical_id === canonicalId) || {};
+    const merged = {
+      ...mapping,
+      ...(updates[canonicalId] || {}),
+    };
+    const comparison = buildMappingComparison(merged);
+    card.appendChild(buildMappingComparisonNode(comparison));
+
+    // Disable the pre-existing "Confirm match" button when the comparison
+    // status forbids confirmation (divergent / pending / missing).
+    if (!comparison.canConfirm) {
+      const confirmBtn = card.querySelector('[data-mapping-action="confirm"]');
+      if (confirmBtn) {
+        confirmBtn.disabled = true;
+        confirmBtn.classList.add("is-disabled");
+        confirmBtn.title = `Confirm blocked — criteria status is ${comparison.chipLabel}`;
+      }
+    }
+  });
+}
+
+function buildMappingComparisonNode(comparison) {
+  const grid = document.createElement("div");
+  grid.className = "mapping-compare-grid";
+  grid.dataset.canonicalId = comparison.canonicalId || "";
+
+  const chipRow = document.createElement("div");
+  chipRow.className = "mapping-compare-header";
+  const chip = document.createElement("span");
+  chip.className = `criteria-chip ${comparison.chipTone}`;
+  chip.textContent = comparison.chipLabel;
+  chipRow.appendChild(chip);
+
+  if (hasOperatorAccess()) {
+    const select = document.createElement("select");
+    select.className = "criteria-match-select";
+    if (comparison.canonicalId) select.dataset.canonicalId = comparison.canonicalId;
+    for (const value of ["identical", "similar", "divergent", "pending_operator_review"]) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = value.charAt(0).toUpperCase() + value.slice(1).replace(/_/g, " ");
+      if (value === comparison.matchStatus) option.selected = true;
+      select.appendChild(option);
+    }
+    chipRow.appendChild(select);
+  }
+
+  const columns = document.createElement("div");
+  columns.className = "mapping-compare-columns";
+  columns.appendChild(buildMappingCriteriaColumn("Kalshi", {
+    rule: comparison.kalshiRule,
+    source: comparison.kalshiSource,
+    settlement: comparison.kalshiSettlement,
+  }));
+  columns.appendChild(buildMappingCriteriaColumn("Polymarket", {
+    rule: comparison.polymarketRule,
+    source: comparison.polymarketSource,
+    settlement: comparison.polymarketSettlement,
+  }));
+
+  grid.appendChild(chipRow);
+  grid.appendChild(columns);
+
+  if (comparison.operatorNote) {
+    const noteEl = document.createElement("p");
+    noteEl.className = "mapping-compare-note";
+    noteEl.textContent = `Operator note: ${comparison.operatorNote}`;
+    grid.appendChild(noteEl);
+  }
+
+  return grid;
+}
+
+function buildMappingCriteriaColumn(label, fields) {
+  const col = document.createElement("div");
+  col.className = "mapping-compare-column";
+
+  const title = document.createElement("p");
+  title.className = "mapping-compare-column-title";
+  title.textContent = label;
+  col.appendChild(title);
+
+  const rule = document.createElement("p");
+  rule.className = "rule";
+  // T-3-07-A: operator-entered rule text is rendered via textContent only.
+  rule.textContent = fields.rule ? String(fields.rule) : "Rule not captured";
+  col.appendChild(rule);
+
+  if (fields.source) {
+    const source = document.createElement("p");
+    source.className = "source";
+    source.textContent = `Source: ${fields.source}`;
+    col.appendChild(source);
+  }
+
+  if (fields.settlement) {
+    const settle = document.createElement("p");
+    settle.className = "settlement";
+    settle.textContent = `Settles: ${fields.settlement}`;
+    col.appendChild(settle);
+  }
+
+  return col;
 }
 
 function renderCollectors() {
@@ -2001,6 +2266,67 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  const killArm = event.target.closest("#killSwitchArm");
+  if (killArm) {
+    if (!hasOperatorAccess()) {
+      showAuthOverlay("Sign in to arm the kill switch.");
+      return;
+    }
+    if (!window.confirm("ARM the kill switch? This will cancel ALL open orders and halt new execution.")) return;
+    const reason = window.prompt("Reason for arming?", "Operator manual") || "Operator manual";
+    void runAction(killArm, () =>
+      postJson("/api/kill-switch", { action: "arm", reason }),
+    );
+    return;
+  }
+
+  const killReset = event.target.closest("#killSwitchReset");
+  if (killReset) {
+    if (killReset.disabled) return;
+    if (!hasOperatorAccess()) {
+      showAuthOverlay("Sign in to reset the kill switch.");
+      return;
+    }
+    if (!window.confirm("Reset the kill switch? New orders will resume immediately.")) return;
+    void runAction(killReset, () =>
+      postJson("/api/kill-switch", { action: "reset", note: "Operator reset" }),
+    );
+    return;
+  }
+
+  const oneLegAck = event.target.closest(".one-leg-ack");
+  if (oneLegAck) {
+    if (!hasOperatorAccess()) {
+      showAuthOverlay("Sign in to acknowledge one-leg exposure alerts.");
+      return;
+    }
+    const incidentId = oneLegAck.dataset.incidentId;
+    const canonicalId = oneLegAck.dataset.canonicalId;
+    // I8: persist acknowledgement IDs in localStorage so a page refresh does
+    // NOT re-show already-dismissed alerts. v1 scope — server-side
+    // acknowledgement is deferred to a future phase (requires a new
+    // /api/safety/acknowledgements endpoint + DB table).
+    if (incidentId) {
+      state.acknowledgedOneLegIds = [...(state.acknowledgedOneLegIds || []), incidentId];
+      try {
+        window.localStorage?.setItem(
+          ACKNOWLEDGED_ONE_LEG_STORAGE_KEY,
+          JSON.stringify(state.acknowledgedOneLegIds),
+        );
+      } catch {
+        // localStorage may be disabled in private mode — non-fatal.
+      }
+    }
+    if (canonicalId) {
+      void runAction(oneLegAck, () =>
+        postJson(`/api/portfolio/unwind/${encodeURIComponent(canonicalId)}`, {}),
+      );
+    } else {
+      render();
+    }
+    return;
+  }
+
   const manualTarget = event.target.closest("[data-manual-action]");
   if (manualTarget) {
     if (!hasOperatorAccess()) {
@@ -2075,6 +2401,24 @@ if (logSearchInputEl) {
     renderLogExperience();
   });
 }
+
+document.addEventListener("change", (event) => {
+  const select = event.target.closest("select.criteria-match-select");
+  if (!select) return;
+  if (!hasOperatorAccess()) {
+    showAuthOverlay("Sign in to tag resolution criteria.");
+    return;
+  }
+  const canonicalId = select.dataset.canonicalId;
+  const newStatus = select.value;
+  if (!canonicalId || !newStatus) return;
+  void postJson(`/api/market-mappings/${encodeURIComponent(canonicalId)}`, {
+    action: "review",
+    resolution_match_status: newStatus,
+  }).catch((err) => {
+    console.error("criteria-match update failed", err);
+  });
+});
 
 if (authFormEl) {
   authFormEl.addEventListener("submit", (event) => {

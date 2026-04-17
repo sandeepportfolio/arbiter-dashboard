@@ -175,6 +175,43 @@
         </aside>
       </section>
 
+      <section id="safetySection" class="panel-grid panel-grid-tight ops-only"
+               data-ops-only="true" aria-label="Safety controls">
+        <article class="panel safety-panel" data-kill-switch-panel>
+          <div class="panel-header">
+            <div>
+              <p class="panel-kicker">Safety</p>
+              <h2>Kill switch</h2>
+            </div>
+            <span id="killSwitchBadge" class="panel-badge status-badge status-ok">Disarmed</span>
+          </div>
+          <p id="killSwitchSummary" class="panel-copy compact-copy">
+            Armed state halts all new order submission and cancels open orders across venues.
+          </p>
+          <div class="kill-switch-controls">
+            <button id="killSwitchArm" type="button" class="btn btn-danger kill-switch-arm">ARM KILL SWITCH</button>
+            <button id="killSwitchReset" type="button" class="btn btn-secondary kill-switch-reset hidden">Reset kill switch</button>
+            <span id="killSwitchCooldown" class="kill-switch-cooldown hidden">Cooldown: 00:30</span>
+          </div>
+          <div id="rateLimitIndicators" class="rate-limit-grid"></div>
+        </article>
+
+        <article id="oneLegAlertPanel" class="panel one-leg-alert-panel hidden" data-one-leg-alert>
+          <div class="panel-header">
+            <div>
+              <p class="panel-kicker">Naked position</p>
+              <h2>One-leg exposure</h2>
+            </div>
+            <span id="oneLegBadge" class="panel-badge status-badge status-critical">Critical</span>
+          </div>
+          <div id="oneLegAlertBody" class="stack-list"></div>
+        </article>
+      </section>
+
+      <div id="shutdownBanner" class="shutdown-banner hidden" role="status" aria-live="polite">
+        <span id="shutdownBannerText">Server shutting down…</span>
+      </div>
+
       <section id="commandCenter" class="command-center-shell" aria-label="Desk command center">
         <div class="command-center-header">
           <div>

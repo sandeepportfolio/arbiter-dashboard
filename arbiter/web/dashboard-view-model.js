@@ -203,6 +203,99 @@ export function buildMetricCards(state) {
   ];
 }
 
+function formatCooldown(sec) {
+  if (!Number.isFinite(sec) || sec <= 0) return null;
+  const mm = String(Math.floor(sec / 60)).padStart(2, "0");
+  const ss = String(Math.floor(sec % 60)).padStart(2, "0");
+  return `${mm}:${ss}`;
+}
+
+export function buildSafetyView(state, options = {}) {
+  const now = Number(options.nowTimestamp ?? Date.now() / 1000);
+  const ks = state?.safety?.killSwitch ?? { armed: false };
+  const cooldownRemaining = Math.max(0, Number(ks.cooldown_until ?? 0) - now);
+  const armed = Boolean(ks.armed);
+  return {
+    armed,
+    badgeLabel: armed ? "ARMED" : "Disarmed",
+    badgeClass: armed ? "status-critical" : "status-ok",
+    summary: armed
+      ? `Armed by ${ks.armed_by || "unknown"} — ${ks.armed_reason || "no reason"}`
+      : "Kill switch disarmed. Armed state cancels open orders.",
+    armedBy: ks.armed_by || null,
+    armedAt: Number(ks.armed_at || 0) || null,
+    armedReason: ks.armed_reason || null,
+    cooldownRemainingSeconds: cooldownRemaining,
+    canReset: Boolean(armed && cooldownRemaining <= 0),
+    cooldownLabel: formatCooldown(cooldownRemaining),
+  };
+}
+
+export function buildRateLimitView(state) {
+  const limits = state?.safety?.rateLimits ?? {};
+  return Object.entries(limits).map(([platform, stats]) => {
+    const remainingPenalty = Number(stats?.remaining_penalty_seconds ?? 0);
+    const available = Number(stats?.available_tokens ?? 0);
+    const max = Number(stats?.max_requests ?? 0);
+    let tone = "ok";
+    if (remainingPenalty > 0) tone = "warn";
+    else if (available === 0 && max > 0) tone = "warn";
+    // "crit" reserved for circuit-open state (future; not covered in this phase)
+    return {
+      platform,
+      platformLabel:
+        platform === "kalshi"
+          ? "Kalshi"
+          : platform === "polymarket"
+            ? "Polymarket"
+            : platform === "predictit"
+              ? "PredictIt"
+              : titleCase(platform),
+      tokensLabel: `${available}/${max}`,
+      tone,
+      cooldownLabel: remainingPenalty > 0 ? `${remainingPenalty.toFixed(1)}s cooldown` : "idle",
+      remainingPenaltySeconds: remainingPenalty,
+      availableTokens: available,
+      maxRequests: max,
+    };
+  });
+}
+
+export function buildMappingComparison(mapping) {
+  const rc = mapping?.resolution_criteria;
+  const status = mapping?.resolution_match_status ?? rc?.criteria_match ?? "pending_operator_review";
+  const chipToneByStatus = {
+    identical: "ok",
+    similar: "warn",
+    divergent: "crit",
+    pending_operator_review: "warn",
+  };
+  const hasData = rc !== null && rc !== undefined;
+  const chipLabel =
+    status === "pending_operator_review"
+      ? hasData
+        ? "Pending operator review"
+        : "Criteria missing"
+      : typeof status === "string" && status.length
+        ? status.charAt(0).toUpperCase() + status.slice(1)
+        : "Unknown";
+  return {
+    canonicalId: mapping?.canonical_id,
+    hasData,
+    kalshiRule: rc?.kalshi?.rule ?? null,
+    kalshiSource: rc?.kalshi?.source ?? null,
+    kalshiSettlement: rc?.kalshi?.settlement_date ?? null,
+    polymarketRule: rc?.polymarket?.rule ?? null,
+    polymarketSource: rc?.polymarket?.source ?? null,
+    polymarketSettlement: rc?.polymarket?.settlement_date ?? null,
+    operatorNote: rc?.operator_note ?? "",
+    matchStatus: status,
+    chipTone: chipToneByStatus[status] ?? "warn",
+    chipLabel,
+    canConfirm: status === "identical" || status === "similar",
+  };
+}
+
 export function buildOpportunityRows({ opportunities = [], system = {}, nowTimestamp = Date.now() / 1000 }) {
   const scanner = system?.scanner || {};
   const maxQuoteAgeSeconds = Number(scanner.max_quote_age_seconds || 15);

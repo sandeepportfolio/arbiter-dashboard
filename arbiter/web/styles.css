@@ -3901,3 +3901,223 @@ h2,
     gap: 8px;
   }
 }
+
+/* ------------------------------------------------------------------- */
+/* Phase 3 (03-07) safety-layer styles — additive only, no existing    */
+/* selectors modified. Every selector below is net-new for this plan.  */
+/* ------------------------------------------------------------------- */
+
+.safety-panel {
+  border-left: 3px solid var(--color-critical, #c0392b);
+}
+
+.kill-switch-controls {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: none;
+  font-weight: 600;
+  cursor: pointer;
+  font: inherit;
+}
+
+.btn:disabled,
+.btn.is-disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.btn-danger {
+  background: var(--color-critical, #c0392b);
+  color: #fff;
+  letter-spacing: 0.04em;
+}
+
+.btn-danger:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.btn-secondary {
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+}
+
+.btn-warning {
+  background: var(--color-warning, #f39c12);
+  color: #fff;
+  padding: 6px 12px;
+  border-radius: 6px;
+}
+
+.kill-switch-cooldown {
+  font-variant-numeric: tabular-nums;
+  color: var(--color-muted, #888);
+  font-size: 12px;
+}
+
+.rate-limit-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.rate-limit-pill {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.rate-limit-pill.ok {
+  background: rgba(39, 174, 96, 0.12);
+  color: #27ae60;
+}
+
+.rate-limit-pill.warn {
+  background: rgba(243, 156, 18, 0.14);
+  color: #f39c12;
+}
+
+.rate-limit-pill.crit {
+  background: rgba(192, 57, 43, 0.14);
+  color: #c0392b;
+}
+
+.one-leg-alert-panel {
+  border: 2px solid var(--color-critical, #c0392b);
+  animation: one-leg-pulse 1.5s infinite;
+}
+
+@keyframes one-leg-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(192, 57, 43, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 12px rgba(192, 57, 43, 0);
+  }
+}
+
+.one-leg-item {
+  padding: 12px;
+  border-left: 3px solid var(--color-critical, #c0392b);
+}
+
+.one-leg-item + .one-leg-item {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.shutdown-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: 12px 24px;
+  background: var(--color-critical, #c0392b);
+  color: #fff;
+  font-weight: 600;
+  z-index: 9999;
+  text-align: center;
+  letter-spacing: 0.04em;
+}
+
+.mapping-compare-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 6px;
+}
+
+.mapping-compare-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.mapping-compare-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.mapping-compare-column {
+  background: rgba(255, 255, 255, 0.02);
+  padding: 8px 10px;
+  border-radius: 6px;
+}
+
+.mapping-compare-column p {
+  margin: 4px 0;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.mapping-compare-column .rule {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: "Manrope", system-ui, sans-serif;
+}
+
+.mapping-compare-column-title {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 11px !important;
+  color: var(--color-muted, #888);
+}
+
+.mapping-compare-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-muted, #888);
+}
+
+.criteria-chip {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.criteria-chip.ok {
+  background: rgba(39, 174, 96, 0.15);
+  color: #27ae60;
+}
+
+.criteria-chip.warn {
+  background: rgba(243, 156, 18, 0.15);
+  color: #f39c12;
+}
+
+.criteria-chip.crit {
+  background: rgba(192, 57, 43, 0.15);
+  color: #c0392b;
+}
+
+.criteria-match-select {
+  margin-left: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 12px;
+}
