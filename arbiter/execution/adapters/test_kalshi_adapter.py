@@ -589,3 +589,103 @@ async def test_cancel_all_acquires_token_per_chunk():
     assert len(acquires) >= 1, (
         f"cancel_all must acquire at least one rate-limit token; log={call_log}"
     )
+
+
+# ─── SAFE-05: cancel_all full implementation (chunked batched DELETE) ─────
+
+
+@pytest.mark.asyncio
+async def test_cancel_all_chunks_orders_in_20s(monkeypatch):
+    """SAFE-05: cancel_all chunks open orders into 20-sized batches and invokes
+    DELETE /portfolio/orders/batched per chunk. 45 orders → 3 chunks.
+
+    Verifies:
+    - Session.delete called exactly 3 times (ceil(45/20)).
+    - rate_limiter.acquire called at least 3 times (per chunk).
+    - Returned list carries 45 cancelled order_ids.
+    """
+    # 45 open orders with unique order_ids.
+    open_orders = [
+        Order(
+            order_id=f"K-OPEN-{i:03d}",
+            platform="kalshi",
+            market_id="TICKER",
+            canonical_id="",
+            side="yes",
+            price=0.5,
+            quantity=10,
+            status=OrderStatus.SUBMITTED,
+        )
+        for i in range(45)
+    ]
+
+    call_log: list = []
+    delete_bodies: list = []
+
+    # Session whose .delete(...) returns 200 with a body echoing the ids
+    # from the POSTed payload (JSON of the DELETE body).
+    def _delete_factory(url, json=None, headers=None):
+        delete_bodies.append(json or {})
+        call_log.append(("session.delete", len((json or {}).get("ids", []))))
+        resp = MagicMock()
+        resp.status = 200
+        # Build a response body echoing the ids we posted, no errors.
+        body_data = {
+            "results": [
+                {"order_id": oid, "error": None} for oid in (json or {}).get("ids", [])
+            ]
+        }
+        resp.text = AsyncMock(return_value=json_dumps(body_data))
+        resp.headers = {}
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=resp)
+        cm.__aexit__ = AsyncMock(return_value=False)
+        return cm
+
+    session = MagicMock()
+    session.delete = MagicMock(side_effect=_delete_factory)
+
+    rate_limiter = _tracking_rate_limiter(call_log)
+    adapter = KalshiAdapter(
+        config=_config(),
+        session=session,
+        auth=_auth(True),
+        rate_limiter=rate_limiter,
+        circuit=_circuit(True),
+    )
+
+    # Monkeypatch the (new) list-open-orders helper so the test doesn't depend
+    # on Kalshi HTTP traffic for discovery.
+    async def _fake_list_all_open(self=None):
+        return list(open_orders)
+
+    monkeypatch.setattr(
+        KalshiAdapter, "_list_all_open_orders", _fake_list_all_open, raising=False,
+    )
+
+    cancelled = await adapter.cancel_all()
+
+    # 3 DELETE calls for 45 orders @ 20/chunk = 3 chunks.
+    delete_calls = [c for c in call_log if c[0] == "session.delete"]
+    assert len(delete_calls) == 3, (
+        f"expected 3 DELETE calls for 45 orders, got {len(delete_calls)}: {call_log}"
+    )
+
+    # Each chunk ≤ 20 orders.
+    for idx, (_, count) in enumerate(delete_calls):
+        assert count <= 20, f"chunk {idx} had {count} orders (must be ≤ 20)"
+
+    # rate_limiter.acquire called at least 3 times (one per chunk).
+    acquires = [c for c in call_log if c[0] == "rate_limiter.acquire"]
+    assert len(acquires) >= 3, (
+        f"expected ≥3 acquires (one per chunk), got {len(acquires)}: {call_log}"
+    )
+
+    # Returned list contains all 45 ids.
+    assert len(cancelled) == 45, f"expected 45 cancelled ids, got {len(cancelled)}"
+    assert set(cancelled) == {o.order_id for o in open_orders}
+
+
+def json_dumps(obj):
+    """Helper for the mock above — tests should not import the stdlib at top."""
+    return json.dumps(obj)

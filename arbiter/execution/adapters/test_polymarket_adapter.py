@@ -483,3 +483,63 @@ async def test_429_via_sdk_exception_applies_retry_after():
     assert not client.post_order.called, (
         "post_order must not be called after a 429 on create_order"
     )
+
+
+# --- SAFE-05: cancel_all full implementation via client.cancel_all() -------
+
+
+@pytest.mark.asyncio
+async def test_cancel_all_invokes_sdk_and_returns_canceled():
+    """SAFE-05: PolymarketAdapter.cancel_all invokes client.cancel_all() via
+    run_in_executor after acquiring a rate-limit token, and returns the
+    'canceled' list from the SDK response.
+    """
+    client = MagicMock()
+    client.cancel_all = MagicMock(
+        return_value={"canceled": ["a", "b", "c"], "not_canceled": []},
+    )
+
+    call_log: list = []
+
+    async def _acquire():
+        call_log.append("rate_limiter.acquire")
+
+    rate_limiter = SimpleNamespace(
+        acquire=AsyncMock(side_effect=_acquire),
+        apply_retry_after=MagicMock(return_value=2.0),
+    )
+    adapter = PolymarketAdapter(
+        config=_config(),
+        clob_client_factory=lambda: client,
+        rate_limiter=rate_limiter,
+        circuit=_circuit(True),
+    )
+
+    result = await adapter.cancel_all()
+
+    assert result == ["a", "b", "c"], (
+        f"expected ['a','b','c'] from SDK 'canceled' field, got {result!r}"
+    )
+    assert client.cancel_all.called, "SDK cancel_all not invoked"
+    assert rate_limiter.acquire.await_count >= 1, (
+        f"rate_limiter.acquire must fire before SDK call; "
+        f"await_count={rate_limiter.acquire.await_count}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancel_all_returns_empty_list_when_client_missing():
+    """No ClobClient → cancel_all returns []; does NOT raise."""
+    adapter = _make_adapter(client=None)
+    result = await adapter.cancel_all()
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_cancel_all_swallows_sdk_exception():
+    """SDK raises mid-call → cancel_all logs and returns [] (never raises)."""
+    client = MagicMock()
+    client.cancel_all = MagicMock(side_effect=RuntimeError("network down"))
+    adapter = _make_adapter(client=client)
+    result = await adapter.cancel_all()
+    assert result == []
