@@ -109,7 +109,7 @@ Plans:
 - [x] 04-05-PLAN.md -- Kill-switch live-fire against Kalshi demo (SAFE-01): trip_kill + platform-confirmed cancel + 5s budget
 - [x] 04-06-PLAN.md -- Injected safety scenarios: one-leg exposure (SAFE-03) + rate-limit burst (SAFE-04)
 - [x] 04-07-PLAN.md -- Graceful-shutdown subprocess test with SIGINT + platform cancel verification (SAFE-05)
-- [ ] 04-08-PLAN.md -- Aggregator library + terminal reconciliation test + 04-VALIDATION.md population (TEST-03+TEST-04 hard-gate per D-19)
+- [x] 04-08-PLAN.md -- Aggregator library + terminal reconciliation test + 04-VALIDATION.md population (TEST-03+TEST-04 hard-gate per D-19)
 
 ### Phase 5: Live Trading
 **Goal**: The first real cross-platform arbitrage trade executes successfully with small capital under operator supervision, proving the system works end-to-end with real money
