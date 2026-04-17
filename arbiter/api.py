@@ -23,6 +23,7 @@ from .monitor.balance import BalanceMonitor
 from .portfolio import PortfolioMonitor
 from .profitability import ProfitabilityValidator
 from .readiness import OperationalReadiness
+from .safety.supervisor import SafetySupervisor
 from .scanner.arbitrage import ArbitrageOpportunity, ArbitrageScanner
 from .utils.price_store import PricePoint, PriceStore
 
@@ -152,6 +153,7 @@ class ArbiterAPI:
         reconciler=None,
         host: str = "0.0.0.0",
         port: int = 8080,
+        safety: Optional[SafetySupervisor] = None,
     ):
         self.store = price_store
         self.scanner = scanner
@@ -166,6 +168,11 @@ class ArbiterAPI:
         self.reconciler = reconciler
         self.host = host
         self.port = port
+        self.safety = safety
+        # SafetyEventStore exposes list_events() for GET /api/safety/events;
+        # supervisor holds the reference on ``_safety_store`` (may be None in
+        # dev mode without Postgres).
+        self.safety_store = getattr(safety, "_safety_store", None)
         self.started_at = time.time()
         self._ws_clients: list[web.WebSocketResponse] = []
         self._site_index = Path(__file__).resolve().parent.parent / "index.html"
@@ -204,6 +211,9 @@ class ArbiterAPI:
         app.router.add_post("/api/auth/login", self.handle_login)
         app.router.add_post("/api/auth/logout", self.handle_logout)
         app.router.add_get("/api/auth/me", self.handle_auth_me)
+        app.router.add_post("/api/kill-switch", self.handle_kill_switch)
+        app.router.add_get("/api/safety/status", self.handle_safety_status)
+        app.router.add_get("/api/safety/events", self.handle_safety_events)
         app.router.add_get("/ws", self.handle_websocket)
 
         runner = web.AppRunner(app)
@@ -483,6 +493,73 @@ class ArbiterAPI:
             return web.json_response({"authenticated": False})
         return web.json_response({"authenticated": True, "email": user})
 
+    # ── Safety / kill-switch endpoints (SAFE-01) ──────────────────────────
+
+    async def handle_kill_switch(self, request):
+        """POST /api/kill-switch — arm or reset the kill switch.
+
+        Body: {"action": "arm" | "reset", "reason": str, "note": str}
+        - arm:   requires operator auth + non-empty reason
+        - reset: respects SafetySupervisor cooldown (400 while cooldown active)
+        """
+        await require_auth(request)
+        if self.safety is None:
+            return web.json_response(
+                {"error": "Safety supervisor unavailable"}, status=503,
+            )
+        payload = await self._read_json_body(request)
+        action = str(payload.get("action", "")).strip().lower()
+        reason = str(payload.get("reason", "")).strip()[:500]
+        note = str(payload.get("note", "")).strip()[:500]
+        email = await get_current_user(request) or "unknown"
+
+        try:
+            if action == "arm":
+                if not reason:
+                    return web.json_response(
+                        {"error": "reason required"}, status=400,
+                    )
+                state = await self.safety.trip_kill(
+                    by=f"operator:{email}", reason=reason,
+                )
+                return web.json_response(state.to_dict())
+            if action == "reset":
+                state = await self.safety.reset_kill(
+                    by=f"operator:{email}", note=note or "operator reset",
+                )
+                return web.json_response(state.to_dict())
+            return web.json_response(
+                {"error": f"Unsupported kill-switch action: {action or 'unknown'}"},
+                status=400,
+            )
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+
+    async def handle_safety_status(self, request):
+        """GET /api/safety/status — unauth'd read-only snapshot of SafetyState."""
+        if self.safety is None:
+            return web.json_response({"armed": False, "available": False})
+        payload = self.safety._state.to_dict()
+        payload["available"] = True
+        return web.json_response(payload)
+
+    async def handle_safety_events(self, request):
+        """GET /api/safety/events — paginated audit trail."""
+        if self.safety_store is None:
+            return web.json_response({"events": [], "limit": 0, "offset": 0})
+        try:
+            limit = min(int(request.query.get("limit", 50)), 500)
+        except (TypeError, ValueError):
+            limit = 50
+        try:
+            offset = max(int(request.query.get("offset", 0)), 0)
+        except (TypeError, ValueError):
+            offset = 0
+        rows = await self.safety_store.list_events(limit=limit, offset=offset)
+        return web.json_response(
+            {"events": rows, "limit": limit, "offset": offset},
+        )
+
     async def handle_portfolio_unwind(self, request):
         """
         Trigger unwind workflow for a stuck position.
@@ -598,6 +675,9 @@ class ArbiterAPI:
         opp_queue = self.scanner.subscribe()
         execution_queue = self.engine.subscribe()
         incident_queue = self.engine.subscribe_incidents()
+        # SAFE-01: safety supervisor fans out kill_switch/shutdown_state events
+        # as pre-shaped dicts. Supervisor may be None in dev mode.
+        safety_queue = self.safety.subscribe() if self.safety is not None else None
 
         while True:
             if not self._ws_clients:
@@ -605,14 +685,17 @@ class ArbiterAPI:
                 continue
 
             try:
+                tasks = [
+                    asyncio.create_task(price_queue.get()),
+                    asyncio.create_task(opp_queue.get()),
+                    asyncio.create_task(execution_queue.get()),
+                    asyncio.create_task(incident_queue.get()),
+                    asyncio.create_task(asyncio.sleep(2.0)),
+                ]
+                if safety_queue is not None:
+                    tasks.append(asyncio.create_task(safety_queue.get()))
                 done, pending = await asyncio.wait(
-                    [
-                        asyncio.create_task(price_queue.get()),
-                        asyncio.create_task(opp_queue.get()),
-                        asyncio.create_task(execution_queue.get()),
-                        asyncio.create_task(incident_queue.get()),
-                        asyncio.create_task(asyncio.sleep(2.0)),
-                    ],
+                    tasks,
                     return_when=asyncio.FIRST_COMPLETED,
                 )
 
@@ -631,6 +714,11 @@ class ArbiterAPI:
                         await self._broadcast_json({"type": "execution", "payload": result.to_dict()})
                     elif isinstance(result, ExecutionIncident):
                         await self._broadcast_json({"type": "incident", "payload": result.to_dict()})
+                    elif isinstance(result, dict) and result.get("type") in (
+                        "kill_switch", "shutdown_state",
+                    ):
+                        # Supervisor emits pre-shaped {"type": ..., "payload": ...} dicts
+                        await self._broadcast_json(result)
                     elif result is None:
                         continue
                     else:
@@ -673,6 +761,11 @@ class ArbiterAPI:
             "reconciliation": self._reconciliation_snapshot(),
             "collectors": self._collector_snapshot(),
             "balances": balances,
+            "safety": (
+                self.safety._state.to_dict()
+                if self.safety is not None
+                else {"armed": False, "available": False}
+            ),
             "series": {
                 "scanner": self.scanner.history,
                 "equity": self.engine.equity_curve,
@@ -853,6 +946,7 @@ def create_api_server(
     reconciler=None,
     host="0.0.0.0",
     port=8080,
+    safety=None,
 ) -> ArbiterAPI:
     return ArbiterAPI(
         price_store,
@@ -868,4 +962,5 @@ def create_api_server(
         reconciler=reconciler,
         host=host,
         port=port,
+        safety=safety,
     )

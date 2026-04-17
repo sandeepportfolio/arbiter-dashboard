@@ -1067,6 +1067,15 @@ function connectWebSocket() {
     } else if (message.type === "incident") {
       state.incidents.unshift(message.payload);
       state.incidents = state.incidents.slice(0, 24);
+    } else if (message.type === "kill_switch") {
+      // SAFE-01: state mutation only — plan 03-07 builds the DOM renderer.
+      state.safety = { ...(state.safety || {}), killSwitch: message.payload };
+    } else if (message.type === "rate_limit_state") {
+      state.safety = { ...(state.safety || {}), rateLimits: message.payload };
+    } else if (message.type === "one_leg_exposure") {
+      state.oneLegExposures = [message.payload, ...(state.oneLegExposures || [])].slice(0, 8);
+    } else if (message.type === "shutdown_state") {
+      state.shutdown = message.payload;
     } else if (message.type === "heartbeat") {
       state.lastQuoteAt = message.payload.timestamp;
     }

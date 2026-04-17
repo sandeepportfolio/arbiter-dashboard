@@ -131,7 +131,6 @@ async def test_telegram_failure_does_not_abort_trip(fake_adapter_factory):
     assert state.armed is True
 
 
-@pytest.mark.skip(reason="implementation pending (Task 3)")
 async def test_subscribe_delivers_kill_switch_event(fake_notifier, fake_adapter_factory):
     adapters = {"kalshi": fake_adapter_factory("kalshi", [])}
     supervisor = _build_supervisor(adapters, fake_notifier)
