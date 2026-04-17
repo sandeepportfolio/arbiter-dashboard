@@ -22,8 +22,10 @@ Analog: arbiter/safety/test_supervisor.py::test_handle_one_leg_exposure_sends_te
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import os
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -33,6 +35,38 @@ import structlog
 from arbiter.sandbox import evidence
 
 log = structlog.get_logger("arbiter.sandbox.one_leg")
+
+
+# --------------------------------------------------------------------------
+# Deferred-item workaround: Phase 04-01's root conftest dispatches async
+# tests via `asyncio.run(test_func(**kwargs))` but does NOT resolve async
+# fixtures — so an `async def` + yield fixture (like sandbox_db_pool) is
+# delivered to the test as a raw `async_generator` object. The correct fix is
+# to teach the root conftest to drive async fixtures through
+# `asyncio.run(..., *unwrapped_kwargs)`. That fix is out of scope for this
+# plan (affects 04-03/04-04/04-05 too) — tracked in 04-06 SUMMARY as a
+# deferred item for plan 04-08 or a dedicated scaffolding fix. Until then,
+# scenario tests drive the generator locally via this context manager.
+# --------------------------------------------------------------------------
+
+
+@asynccontextmanager
+async def _resolve_async_fixture(candidate):
+    """If `candidate` is an async_generator (unresolved async fixture yield),
+    advance it to the yielded value, then drain it on exit. If it's already
+    a resolved object (Pool, None, etc.), yield it as-is.
+    """
+    if inspect.isasyncgen(candidate):
+        resolved = await candidate.__anext__()
+        try:
+            yield resolved
+        finally:
+            try:
+                await candidate.__anext__()
+            except StopAsyncIteration:
+                pass
+    else:
+        yield candidate
 
 
 @pytest.mark.live
@@ -163,7 +197,7 @@ async def test_one_leg_recovery_injected(sandbox_db_pool, evidence_dir):
     assert payload.get("canonical_id") == "MKT1", (
         f"Expected canonical_id='MKT1' in payload; got payload={payload}"
     )
-    log.info("scenario.one_leg.ws_event", event=event)
+    log.info("scenario.one_leg.ws_event", ws_event=event)
 
     # Assertion 3: adapter_poly_mock.place_fok would raise the INJECTED error
     # if invoked (sanity — proves the injection is in place even if this test
@@ -175,8 +209,10 @@ async def test_one_leg_recovery_injected(sandbox_db_pool, evidence_dir):
         )
 
     # Evidence: dump execution tables (empty but proves DB connectivity) and
-    # write scenario manifest.
-    await evidence.dump_execution_tables(sandbox_db_pool, evidence_dir)
+    # write scenario manifest. Drive async fixture via helper (see module
+    # comment) in case the root conftest delivered it as an async_generator.
+    async with _resolve_async_fixture(sandbox_db_pool) as pool:
+        await evidence.dump_execution_tables(pool, evidence_dir)
     (evidence_dir / "scenario_manifest.json").write_text(
         json.dumps(
             {
