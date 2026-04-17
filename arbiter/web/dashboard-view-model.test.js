@@ -1,5 +1,12 @@
-import { describe, expect, it } from "vitest";
-import { buildDeskOverview, buildMetricCards, buildOpportunityRows } from "./dashboard-view-model.js";
+import { describe, expect, it, test } from "vitest";
+import {
+  buildDeskOverview,
+  buildMetricCards,
+  buildOpportunityRows,
+  buildSafetyView,
+  buildRateLimitView,
+  buildMappingComparison,
+} from "./dashboard-view-model.js";
 
 function makeState(overrides = {}) {
   return {
@@ -139,5 +146,118 @@ describe("dashboard view model", () => {
       "review-route",
       "stale-route",
     ]);
+  });
+});
+
+describe("buildSafetyView", () => {
+  test("disarmed state", () => {
+    const v = buildSafetyView({ safety: { killSwitch: { armed: false } } }, { nowTimestamp: 1000 });
+    expect(v.armed).toBe(false);
+    expect(v.badgeLabel).toBe("Disarmed");
+    expect(v.badgeClass).toBe("status-ok");
+  });
+
+  test("armed with cooldown", () => {
+    const v = buildSafetyView(
+      {
+        safety: {
+          killSwitch: {
+            armed: true,
+            armed_by: "operator:a@b",
+            armed_reason: "manual",
+            cooldown_until: 1100,
+          },
+        },
+      },
+      { nowTimestamp: 1000 },
+    );
+    expect(v.armed).toBe(true);
+    expect(v.badgeLabel).toBe("ARMED");
+    expect(v.cooldownRemainingSeconds).toBe(100);
+    expect(v.canReset).toBe(false);
+  });
+
+  test("armed past cooldown", () => {
+    const v = buildSafetyView(
+      {
+        safety: { killSwitch: { armed: true, cooldown_until: 900 } },
+      },
+      { nowTimestamp: 1000 },
+    );
+    expect(v.canReset).toBe(true);
+  });
+});
+
+describe("buildRateLimitView", () => {
+  test("idle platform", () => {
+    const rows = buildRateLimitView({
+      safety: {
+        rateLimits: {
+          kalshi: { available_tokens: 10, max_requests: 10, remaining_penalty_seconds: 0 },
+        },
+      },
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].platform).toBe("kalshi");
+    expect(rows[0].tone).toBe("ok");
+    expect(rows[0].tokensLabel).toBe("10/10");
+  });
+
+  test("platform in cooldown", () => {
+    const rows = buildRateLimitView({
+      safety: {
+        rateLimits: {
+          polymarket: { available_tokens: 0, max_requests: 5, remaining_penalty_seconds: 3.2 },
+        },
+      },
+    });
+    expect(rows[0].tone).toBe("warn");
+    expect(rows[0].cooldownLabel).toMatch(/3\.2/);
+  });
+});
+
+describe("buildMappingComparison", () => {
+  test("identical criteria allows confirm", () => {
+    const m = {
+      canonical_id: "X",
+      resolution_criteria: {
+        kalshi: { rule: "A", settlement_date: "2029-01-06" },
+        polymarket: { rule: "A", settlement_date: "2029-01-06" },
+        criteria_match: "identical",
+      },
+      resolution_match_status: "identical",
+    };
+    const c = buildMappingComparison(m);
+    expect(c.canConfirm).toBe(true);
+    expect(c.chipTone).toBe("ok");
+    expect(c.chipLabel).toMatch(/identical/i);
+  });
+
+  test("pending_operator_review blocks confirm", () => {
+    const m = {
+      canonical_id: "X",
+      resolution_criteria: { criteria_match: "pending_operator_review" },
+      resolution_match_status: "pending_operator_review",
+    };
+    const c = buildMappingComparison(m);
+    expect(c.canConfirm).toBe(false);
+  });
+
+  test("divergent warns and blocks confirm", () => {
+    const m = {
+      canonical_id: "X",
+      resolution_criteria: { criteria_match: "divergent" },
+      resolution_match_status: "divergent",
+    };
+    const c = buildMappingComparison(m);
+    expect(c.chipTone).toBe("crit");
+    expect(c.canConfirm).toBe(false);
+  });
+
+  test("missing criteria entirely surfaces pending label", () => {
+    const m = { canonical_id: "X" };
+    const c = buildMappingComparison(m);
+    expect(c.canConfirm).toBe(false);
+    expect(c.chipLabel).toMatch(/pending|missing/i);
   });
 });

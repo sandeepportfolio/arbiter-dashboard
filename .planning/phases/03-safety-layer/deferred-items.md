@@ -12,6 +12,16 @@ Out-of-scope discoveries logged during plan execution. These are NOT fixed in th
 - **Resolution (plan 03-05):** Added `async def cancel_all(self) -> list[str]: return []` to `_StubAdapter` and `_MissingAttributeAdapter`. Extended `test_protocol_lists_expected_methods` to include `cancel_all` in the expected-methods set. All 4 protocol conformance tests now pass.
 - **Commit:** See plan 03-05 Task 1 commit.
 
+## From Plan 03-07 Execution
+
+### `buildMetricCards` labels drifted from test expectations
+
+- **File:** `arbiter/web/dashboard-view-model.test.js` → `builds the compact financial strip for the overview layout`
+- **Symptom:** Pre-existing test expects `cards[2].label === "Validator progress"` and `cards[3].label === "Trade throughput"` but the current `buildMetricCards` implementation returns `"Validator state"` and `"Execution flow"`.
+- **Scope:** Pre-existing on base commit 62220e2 (before 03-07 started). Not caused by plan 03-07 changes. Label drift belongs to earlier dashboard polish work.
+- **Decision:** Left unmodified per scope boundary in executor rules. Either the test should be updated or `buildMetricCards` should be reverted to produce `"Validator progress"` / `"Trade throughput"`. Whichever is canonical, it is a separate fix.
+- **Verification:** `git stash && npx vitest run arbiter/web/dashboard-view-model.test.js` at 62220e2 reproduces the same failure.
+
 ## From Plan 03-04 Execution
 
 ### `test_api_and_dashboard_contracts` flakes in sandboxed environments
