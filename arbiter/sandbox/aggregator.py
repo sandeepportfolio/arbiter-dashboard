@@ -542,6 +542,63 @@ def render_validation_markdown(
     )
     lines.append("")
 
+    # --- Phase Gate Status (explicit section per plan artifact contract) ---
+    lines.append("## Phase Gate Status")
+    lines.append("")
+    if awaiting_live_fire:
+        lines.append(
+            "**PENDING** -- Phase 5 BLOCKED. The 9 scenario live-fire runs have not "
+            "been executed yet (evidence/04/ empty). Operator action required: see "
+            "the **Operator Workflow** section below."
+        )
+    elif report.phase_gate_status == "PASS":
+        lines.append(
+            f"**PASS** -- All {passed_count} observed real-tagged scenarios reconciled "
+            f"within +/-${report.tolerance:.2f}. Phase 5 is UNBLOCKED per D-19."
+        )
+    else:
+        lines.append(
+            f"**BLOCKED** -- One or more real-tagged scenarios breached the "
+            f"+/-${report.tolerance:.2f} tolerance. Phase 5 is BLOCKED per D-19. "
+            f"See the Tolerance Breach section below for diagnostics."
+        )
+    lines.append("")
+
+    # --- Operator Workflow (re-run instructions) ---
+    lines.append("## Operator Workflow")
+    lines.append("")
+    lines.append(
+        "To populate or refresh this file with real scenario results, run the full "
+        "Phase 4 live suite from a host with `.env.sandbox` provisioned:"
+    )
+    lines.append("")
+    lines.append("```bash")
+    lines.append("# 1. One-time setup (see arbiter/sandbox/README.md)")
+    lines.append("cp .env.sandbox.template .env.sandbox")
+    lines.append("# Fill in KALSHI_DEMO_API_KEY_ID, KALSHI_PRIVATE_KEY_PATH,")
+    lines.append("# POLY_PRIVATE_KEY (throwaway wallet), POLY_FUNDER, DATABASE_URL")
+    lines.append("# pointing at arbiter_sandbox, PHASE4_MAX_ORDER_USD=5, etc.")
+    lines.append("")
+    lines.append("# 2. Source environment + export scenario-specific overrides")
+    lines.append("set -a; source .env.sandbox; set +a")
+    lines.append("export SANDBOX_HAPPY_TICKER=<liquid-kalshi-demo-market>")
+    lines.append("export SANDBOX_FOK_TICKER=<thin-kalshi-demo-market>")
+    lines.append("export PHASE4_KILLSWITCH_TICKER=<resting-capable-kalshi-market>")
+    lines.append("export PHASE4_SHUTDOWN_TICKER=<same-as-killswitch>")
+    lines.append("")
+    lines.append("# 3. Run all 9 scenario tests")
+    lines.append("pytest -m live --live arbiter/sandbox/ -v")
+    lines.append("")
+    lines.append("# 4. Run the terminal aggregator (rewrites this file)")
+    lines.append("pytest -m live --live arbiter/sandbox/test_phase_reconciliation.py -v")
+    lines.append("```")
+    lines.append("")
+    lines.append(
+        "The aggregator can also be run offline (after manifests exist) via: "
+        "`python -m arbiter.sandbox.aggregator`."
+    )
+    lines.append("")
+
     # --- Scenario Results table ---
     lines.append("## Scenario Results")
     lines.append("")
