@@ -82,8 +82,8 @@ Plans:
 **Plans**: 7 plans
 
 Plans:
-- [ ] 03-01-PLAN.md -- SafetySupervisor + SafetyConfig + /api/kill-switch + WebSocket safety event plumbing + cancel_all stubs (SAFE-01)
-- [ ] 03-02-PLAN.md -- RiskManager per-platform exposure limit + order_rejected structured incident (SAFE-02)
+- [x] 03-01-PLAN.md -- SafetySupervisor + SafetyConfig + /api/kill-switch + WebSocket safety event plumbing + cancel_all stubs (SAFE-01)
+- [x] 03-02-PLAN.md -- RiskManager per-platform exposure limit + order_rejected structured incident (SAFE-02)
 - [ ] 03-03-PLAN.md -- One-leg exposure structured metadata + Telegram alert + dedicated one_leg_exposure WS event (SAFE-03)
 - [ ] 03-04-PLAN.md -- Per-adapter rate-limit acquire + 429 retry-after + periodic rate_limit_state WS broadcast (SAFE-04)
 - [ ] 03-05-PLAN.md -- Graceful shutdown re-ordering + full KalshiAdapter/PolymarketAdapter cancel_all + prepare_shutdown (SAFE-05)
