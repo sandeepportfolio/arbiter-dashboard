@@ -100,6 +100,60 @@ class KalshiAdapter:
                 "kalshi circuit open",
             )
 
+        # Phase 4 blast-radius hard-lock (D-02) — closing the gap documented in
+        # Plan 04-02 SUMMARY: Plan 04-02 only added PHASE4 to PolymarketAdapter;
+        # Plan 04-02.1 only added it to KalshiAdapter.place_resting_limit.
+        # Plan 05-01 adds it to KalshiAdapter.place_fok together with the Phase 5
+        # belt below so a PHASE5-only insertion would not leave a regression
+        # window where the FOK path has PHASE5 but not PHASE4. Unset env ->
+        # no-op. Unparseable -> 0.0 cap (maximally restrictive).
+        max_order_usd_raw = os.getenv("PHASE4_MAX_ORDER_USD")
+        if max_order_usd_raw:
+            try:
+                max_order_usd = float(max_order_usd_raw)
+            except (TypeError, ValueError):
+                max_order_usd = 0.0
+            notional_usd = float(qty) * float(price)
+            if notional_usd > max_order_usd:
+                log.warning(
+                    "kalshi.phase4_hardlock.rejected",
+                    arb_id=arb_id,
+                    notional=notional_usd,
+                    max=max_order_usd,
+                    qty=qty,
+                    price=price,
+                    op="place_fok",
+                )
+                return self._failed_order(
+                    arb_id, market_id, canonical_id, side, price, qty, now,
+                    f"PHASE4_MAX_ORDER_USD hard-lock: notional ${notional_usd:.2f} > ${max_order_usd:.2f}",
+                )
+
+        # Phase 5 blast-radius hard-lock (Plan 05-01): identical semantics to
+        # PHASE4 but a separate env var. When both caps are set, PHASE4 runs
+        # first (above); PHASE5 runs here. Stricter cap effectively wins.
+        max_order_usd_raw = os.getenv("PHASE5_MAX_ORDER_USD")
+        if max_order_usd_raw:
+            try:
+                max_order_usd = float(max_order_usd_raw)
+            except (TypeError, ValueError):
+                max_order_usd = 0.0
+            notional_usd = float(qty) * float(price)
+            if notional_usd > max_order_usd:
+                log.warning(
+                    "kalshi.phase5_hardlock.rejected",
+                    arb_id=arb_id,
+                    notional=notional_usd,
+                    max=max_order_usd,
+                    qty=qty,
+                    price=price,
+                    op="place_fok",
+                )
+                return self._failed_order(
+                    arb_id, market_id, canonical_id, side, price, qty, now,
+                    f"PHASE5_MAX_ORDER_USD hard-lock: notional ${notional_usd:.2f} > ${max_order_usd:.2f}",
+                )
+
         client_order_id = f"{arb_id}-{side.upper()}-{uuid.uuid4().hex[:8]}"
         order_body: dict[str, Any] = {
             "ticker": market_id,
@@ -308,6 +362,31 @@ class KalshiAdapter:
                 return self._failed_order(
                     arb_id, market_id, canonical_id, side, price, qty, now,
                     f"PHASE4_MAX_ORDER_USD hard-lock: notional ${notional_usd:.2f} > ${max_order_usd:.2f}",
+                )
+
+        # Phase 5 blast-radius hard-lock (Plan 05-01): mirrors PHASE4 block
+        # above with PHASE5_MAX_ORDER_USD env var. Both belts enforced in
+        # sequence — stricter cap effectively wins. Unset = no-op.
+        max_order_usd_raw = os.getenv("PHASE5_MAX_ORDER_USD")
+        if max_order_usd_raw:
+            try:
+                max_order_usd = float(max_order_usd_raw)
+            except (TypeError, ValueError):
+                max_order_usd = 0.0
+            notional_usd = float(qty) * float(price)
+            if notional_usd > max_order_usd:
+                log.warning(
+                    "kalshi.phase5_hardlock.rejected",
+                    arb_id=arb_id,
+                    notional=notional_usd,
+                    max=max_order_usd,
+                    qty=qty,
+                    price=price,
+                    op="place_resting_limit",
+                )
+                return self._failed_order(
+                    arb_id, market_id, canonical_id, side, price, qty, now,
+                    f"PHASE5_MAX_ORDER_USD hard-lock: notional ${notional_usd:.2f} > ${max_order_usd:.2f}",
                 )
 
         if not self.circuit.can_execute():

@@ -114,6 +114,34 @@ class PolymarketAdapter:
                     f"PHASE4_MAX_ORDER_USD hard-lock: notional ${notional_usd:.2f} > ${max_order_usd:.2f}",
                 )
 
+        # Phase 5 blast-radius hard-lock (Plan 05-01): identical semantics to
+        # PHASE4 but a separate env var so Phase 4 sandbox + Phase 5 live can
+        # co-exist without cross-contamination. When both are set, the Phase 4
+        # block runs first (above); the Phase 5 block runs here. This means
+        # the stricter cap effectively wins because each belt is enforced in
+        # sequence with no short-circuit. Unset env -> no-op. Unparseable ->
+        # 0.0 cap (maximally restrictive, T-5-01-01 parity).
+        max_order_usd_raw = os.getenv("PHASE5_MAX_ORDER_USD")
+        if max_order_usd_raw:
+            try:
+                max_order_usd = float(max_order_usd_raw)
+            except (TypeError, ValueError):
+                max_order_usd = 0.0
+            notional_usd = float(qty) * float(price)
+            if notional_usd > max_order_usd:
+                log.warning(
+                    "polymarket.phase5_hardlock.rejected",
+                    arb_id=arb_id,
+                    notional=notional_usd,
+                    max=max_order_usd,
+                    qty=qty,
+                    price=price,
+                )
+                return self._failed_order(
+                    arb_id, market_id, canonical_id, side, price, qty, now,
+                    f"PHASE5_MAX_ORDER_USD hard-lock: notional ${notional_usd:.2f} > ${max_order_usd:.2f}",
+                )
+
         return await self._place_fok_reconciling(
             client, arb_id, market_id, canonical_id, side, price, qty,
             max_attempts=3,
