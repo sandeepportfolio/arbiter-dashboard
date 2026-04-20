@@ -894,7 +894,17 @@ class KalshiAdapter:
 
     @transient_retry()
     async def _list_orders(self, status: str) -> tuple[int, str, dict]:
-        path = f"/trade-api/v2/portfolio/orders?status={status}"
+        # G-1 fix (Plan 04-09, 2026-04-20): Kalshi PSS signing requires a
+        # querystring-free path in the signed message. The querystring is
+        # appended to the REQUEST URL (so Kalshi routes the filter) but is
+        # stripped from the SIGNED path. Before this fix, demo Kalshi rejected
+        # `/portfolio/orders?status=resting` with HTTP 401
+        # INCORRECT_API_KEY_SIGNATURE, which silently DoS'd SAFE-01 kill-switch
+        # cancel_all enumeration (no orders listed -> no orders cancelled).
+        # See 04-HUMAN-UAT.md Test 6 evidence. _post_order / _fetch_order /
+        # _delete_order already sign querystring-free paths; this brings
+        # _list_orders into parity.
+        path = "/trade-api/v2/portfolio/orders"
         url = f"{self.config.kalshi.base_url}/portfolio/orders?status={status}"
         headers = self.auth.get_headers("GET", path)
         async with self.session.get(url, headers=headers) as response:
