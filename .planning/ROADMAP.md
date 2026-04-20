@@ -116,7 +116,7 @@ Plans:
 **Goal:** Remove PredictIt as a supported platform. Surgical deletion across 29 files: collector, adapter wiring, settings/fee-math dispatch, scanner position cap, market-seed entries, TypeScript CLI mirror, UI platform labels, tests, docs. Leaves Kalshi + Polymarket as the only two supported venues.
 **Requirements**: (none — this is a subtractive cleanup phase)
 **Depends on:** Phase 4
-**Plans:** 1/1 plans complete
+**Plans:** 9/8 plans complete
 
 Plans:
 - [x] TBD (run /gsd-plan-phase 04.1 to break down) (completed 2026-04-20)
