@@ -3,7 +3,7 @@ status: testing
 phase: 04-sandbox-validation
 source: [04-VERIFICATION.md]
 started: 2026-04-17T16:55:00Z
-updated: 2026-04-20T15:35:00Z
+updated: 2026-04-20T17:20:00Z
 ---
 
 ## Current Test
@@ -15,13 +15,34 @@ expected: |
   evidence/04/kalshi_happy_lifecycle_*/scenario_manifest.json is created;
   realized PnL is within ±$0.01 of predicted edge; fee reconciliation
   within ±$0.01 (TEST-01, TEST-04).
-awaiting: user response
+awaiting: user response — provide Kalshi demo API key (UUID + PEM) manually
+  created at demo.kalshi.co/account/api-keys, or re-export cookies that
+  include any csrf_token cookie present on /account/api-keys
 
 ## Tests
 
 ### 1. Scenario 1 — kalshi_happy_lifecycle
 expected: `pytest -m live --live arbiter/sandbox/test_kalshi_happy_path.py -v` passes; evidence/04/kalshi_happy_lifecycle_*/scenario_manifest.json created; PnL within ±$0.01; fee within ±$0.01 (TEST-01, TEST-04)
-result: [pending]
+result: [blocked]
+evidence: |
+  Blocked 2026-04-20: Kalshi demo API key could not be provisioned.
+  Cookie-injection path (kalshi_key_via_cookies.mjs against demo.kalshi.co)
+  authenticated session cookies at the server layer (direct HTTP GET on
+  /account/api-keys returned 200 with cookies; demo-api.kalshi.co accepts
+  the `sessions` cookie and replies 401 INVALID_CSRF_TOKEN rather than
+  UNAUTHORIZED, confirming the session is recognized), but the Next.js SPA
+  hydration guard client-side-redirects to /sign-in before the Create
+  button is reachable. No CSRF token is embedded in server-rendered HTML
+  and no CSRF-issuance endpoint (/api/csrf, /trade-api/v2/csrf, etc.)
+  responded — making a direct POST to /trade-api/v2/api_keys also blocked.
+  Only 4 cookies were provided (sessions, rCookie, userId, rskxRunCookie);
+  no X-CSRF-Token cookie was present in the export.
+  Retry path: user must either (a) create the API key manually in a logged-in
+  browser via demo.kalshi.co/account/api-keys and paste the UUID into
+  .env.sandbox (KALSHI_API_KEY_ID=) with the downloaded PEM at
+  keys/kalshi_demo_private.pem, or (b) re-export cookies including any
+  csrf_token cookie if one exists when /account/api-keys is fully loaded.
+  KALSHI_API_KEY_ID in .env.sandbox remains empty; /keys/ dir empty.
 
 ### 2. Scenario 2 — polymarket_happy_lifecycle
 expected: `pytest -m live --live arbiter/sandbox/test_polymarket_happy_path.py -v` passes; real $1 fill confirmed; scenario_manifest.json status=pass (TEST-02, TEST-04)
@@ -29,7 +50,10 @@ result: [pending]
 
 ### 3. Scenario 3 — kalshi_fok_rejected_on_thin_market
 expected: `pytest -m live --live arbiter/sandbox/test_kalshi_fok_rejection.py -v`; FOK returns rejected/unfilled; no partial fill; no open position (EXEC-01, TEST-01)
-result: [pending]
+result: [blocked]
+evidence: |
+  Blocked 2026-04-20: depends on Kalshi demo API key (see Test 1).
+  Not run. Thin-market ticker selection also deferred.
 
 ### 4. Scenario 4 — polymarket_fok_rejected_on_thin_market
 expected: `pytest -m live --live arbiter/sandbox/test_polymarket_fok_rejection.py -v`; Polymarket FOK returns unfilled; PHASE4_MAX_ORDER_USD hard-lock enforced (EXEC-01, TEST-02)
@@ -37,23 +61,35 @@ result: [pending]
 
 ### 5. Scenario 5 — kalshi_timeout_triggers_cancel_via_client_order_id
 expected: `pytest -m live --live arbiter/sandbox/test_kalshi_timeout_cancel.py -v`; resting limit placed; cancel_order cancels within timeout; no exposure (TEST-01, EXEC-05, EXEC-04)
-result: [pending]
+result: [blocked]
+evidence: |
+  Blocked 2026-04-20: depends on Kalshi demo API key (see Test 1). Not run.
 
 ### 6. Scenario 6 — kill_switch_cancels_open_kalshi_demo_order
 expected: `pytest -m live --live arbiter/sandbox/test_safety_killswitch.py -v`; supervisor.trip_kill fires within 5s; Kalshi demo order cancelled; WS kill_switch event emitted (SAFE-01, TEST-01)
-result: [pending]
+result: [blocked]
+evidence: |
+  Blocked 2026-04-20: depends on Kalshi demo API key (see Test 1). Not run.
+  UI-level kill-switch path already validated in Test 11.
 
 ### 7. Scenario 7 — one_leg_recovery_injected
 expected: `pytest -m live --live arbiter/sandbox/test_one_leg_exposure.py -v`; Polymarket leg patched to raise; one-leg incident logged; Kalshi position unwound (SAFE-03, TEST-01)
-result: [pending]
+result: [blocked]
+evidence: |
+  Blocked 2026-04-20: depends on Kalshi demo API key (see Test 1). Not run.
 
 ### 8. Scenario 8 — rate_limit_burst_triggers_backoff_and_ws
 expected: `pytest -m live --live arbiter/sandbox/test_rate_limit_burst.py -v`; RateLimiter.apply_retry_after → THROTTLED; WS rate_limit_state payload; xfail on 403 (SAFE-04, TEST-01)
-result: [pending]
+result: [blocked]
+evidence: |
+  Blocked 2026-04-20: depends on Kalshi demo API key (see Test 1). Not run.
 
 ### 9. Scenario 9 — sigint_cancels_open_kalshi_demo_orders
 expected: `pytest -m live --live arbiter/sandbox/test_graceful_shutdown.py -v`; SIGINT cancels all open Kalshi demo orders; subprocess exits with phase=shutting_down (SAFE-05, TEST-01)
-result: [pending]
+result: [blocked]
+evidence: |
+  Blocked 2026-04-20: depends on Kalshi demo API key (see Test 1). Not run.
+  UI-level shutdown banner path already validated in Test 12.
 
 ### 10. Terminal reconciliation — 04-VALIDATION.md gate
 expected: `pytest -m live --live arbiter/sandbox/test_phase_reconciliation.py` (run AFTER scenarios 1-9); 04-VALIDATION.md rewritten to phase_gate_status: PASS; D-19 hard gate enforced (TEST-03, TEST-04)
@@ -126,9 +162,15 @@ evidence: |
 total: 13
 passed: 2
 issues: 1
-pending: 10
+pending: 3
 skipped: 0
-blocked: 0
+blocked: 7
+
+# Note (2026-04-20): Tests 1, 3, 5, 6, 7, 8, 9 moved pending -> blocked because
+# the Kalshi demo API key could not be provisioned via cookie injection (SPA
+# client-side auth guard redirects to /sign-in before the Create UI is reachable;
+# CSRF token not present in exported cookies or server HTML). Tests 2 (polymarket_happy),
+# 4 (polymarket_fok), and 10 (terminal reconciliation) remain pending.
 
 ## Gaps
 
