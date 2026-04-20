@@ -88,11 +88,12 @@ Execute live arbitrage trades across both platforms without losing money to bugs
 
 ## Current State
 
-- **Phases complete:** 1 (API Integration Fixes), 2 (Execution Hardening), 2.1 (cancel-on-timeout + client-order-id), 3 (Safety Layer)
-- **Phase 3 delivered:** kill-switch supervisor + UI, per-platform/per-market exposure limits (closed-loop on submitted+recovering+filled), one-leg recovery with structured alerts, per-adapter rate limiting, graceful shutdown with cancel-all, resolution-criteria mapping schema, consolidated operator dashboard UI
-- **Next phase:** 4 Sandbox Validation — requires Kalshi demo credentials, Polymarket test wallet, Docker-based Postgres+Redis, `.env` populated
-- **Known deferred items (tracked in 03-HUMAN-UAT.md):** operator kill-switch ARM/RESET browser session, shutdown banner visibility, rate-limit pill color transitions — blocked on running server + browser, not on code
-- **Known cross-phase drift:** `test_api_integration.py::test_api_and_dashboard_contracts` line 82 asserts a pre-03-07 heading string; 1-line test fix tracked
+- **Phases complete:** 1 (API Integration Fixes), 2 (Execution Hardening), 2.1 (cancel-on-timeout + client-order-id), 3 (Safety Layer), 4 (Sandbox Validation scaffolding), 4.1 (PredictIt removal)
+- **Phase 4 delivered:** `arbiter/sandbox/` pytest harness with opt-in `@pytest.mark.live` marker, guard-railed Postgres/Kalshi-demo/Polymarket-test-wallet fixtures, structlog-JSONL evidence helpers, reconcile-tolerance helpers; `PHASE4_MAX_ORDER_USD` notional hard-lock in Polymarket adapter + `KalshiAdapter.place_resting_limit` scope-expansion (04-02.1); 9 live-fire scenario tests (Kalshi happy/FOK/timeout, Polymarket happy/FOK, kill-switch SAFE-01, one-leg recovery, rate-limit burst, graceful-shutdown SIGINT); phase-reconciliation aggregator + authoritative `04-VALIDATION.md` D-19 go-live gate (in `pending-live-fire` state until operator provisions `.env.sandbox`)
+- **Phase 4.1 delivered:** PredictIt removed end-to-end (37 files, 3 deletes, 0 production refs remaining); Kalshi + Polymarket now the sole supported venues; WR-02 code-review fix rolled in (`load_dotenv(override=False)` so shell-exported vars win over stale `.env`)
+- **Phase 4 open items (tracked in 04-HUMAN-UAT.md):** 10 live-fire pytest scenarios + 3 browser UATs — all blocked on operator provisioning `.env.sandbox` with real Kalshi demo API key + Polymarket test wallet
+- **Running state:** `arbiter.main` full-mode on :8080 (DRY_RUN=true, collectors healthy, balances empty pending `.env` credentials)
+- **Next phase:** 5 Live Trading — requires Phase 4 live-fire D-19 gate to pass first
 
 ## Evolution
 
@@ -112,4 +113,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-17 after Phase 3 (Safety Layer) completion*
+*Last updated: 2026-04-20 after Phase 4 (Sandbox Validation) + Phase 4.1 (PredictIt removal) completion*
