@@ -12,3 +12,7 @@ output/playwright/
 .env.sandbox
 evidence/04/
 keys/kalshi_demo_private.pem
+
+# Phase 5 live-trading credentials + evidence
+.env.production
+evidence/05/
