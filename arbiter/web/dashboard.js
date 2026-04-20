@@ -82,6 +82,9 @@ const state = {
   activeLogFilter: "all",
   activeLogScope: "all",
   logQuery: "",
+  mappingQuery: "",
+  mappingStatusFilter: "all",
+  mappingTradeFilter: "all",
   apiBase: initialApiBase,
   authToken: initialAuthToken,
   operatorAuthenticated: false,
@@ -113,7 +116,7 @@ const LOG_DEFINITIONS = {
   },
   manual: {
     label: "Manual Flow",
-    description: "PredictIt-assisted workflows that need operator attention.",
+    description: "Manual-review workflows that need operator attention.",
     source: "Tracked",
     tone: "tone-plum",
   },
@@ -179,6 +182,17 @@ const LOG_SCOPE_DEFINITIONS = {
 };
 
 const LOG_SCOPE_ORDER = ["all", "trading", "ops", "infrastructure"];
+const MAPPING_STATUS_FILTERS = [
+  { key: "all", label: "All" },
+  { key: "confirmed", label: "Confirmed" },
+  { key: "review", label: "Review" },
+  { key: "candidate", label: "Candidate" },
+];
+const MAPPING_TRADE_FILTERS = [
+  { key: "all", label: "All routes" },
+  { key: "auto", label: "Auto-trade" },
+  { key: "held", label: "Held" },
+];
 
 const PUBLISHED_TYPES = [
   { key: "system", label: "system", detail: "bootstrap + snapshot" },
@@ -240,6 +254,7 @@ const profitabilityPillEl = document.getElementById("profitabilityPill");
 const profitabilityVerdictBadgeEl = document.getElementById("profitabilityVerdictBadge");
 const profitabilitySummaryEl = document.getElementById("profitabilitySummary");
 const profitabilityReasonsEl = document.getElementById("profitabilityReasons");
+const portfolioPanelEl = document.getElementById("portfolioPanel");
 const portfolioExposureBadgeEl = document.getElementById("portfolioExposureBadge");
 const portfolioSummaryEl = document.getElementById("portfolioSummary");
 const portfolioListEl = document.getElementById("portfolioList");
@@ -247,6 +262,7 @@ const deskMenuEl = document.getElementById("deskMenu");
 const logScopeTabsEl = document.getElementById("logScopeTabs");
 const logSearchInputEl = document.getElementById("logSearchInput");
 const logResultSummaryEl = document.getElementById("logResultSummary");
+const mappingControlsEl = document.getElementById("mappingControls");
 
 const formatUsd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
 const formatWhole = new Intl.NumberFormat("en-US");
@@ -411,7 +427,6 @@ function platformLabel(platform) {
   const labels = {
     kalshi: "Kalshi",
     polymarket: "Polymarket",
-    predictit: "PredictIt",
   };
   return labels[platform] || titleCase(platform);
 }
@@ -488,6 +503,25 @@ function mappingTone(status) {
 
 function mappingStatus(mapping) {
   return String(mapping?.status || "candidate");
+}
+
+function mappingTradeState(mapping) {
+  return mapping?.allow_auto_trade ? "auto" : "held";
+}
+
+function mappingSearchText(mapping) {
+  return [
+    mapping?.description,
+    mapping?.canonical_id,
+    mapping?.kalshi,
+    mapping?.polymarket,
+    mapping?.review_note,
+    mapping?.notes,
+    mapping?.resolution_criteria?.operator_note,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
 }
 
 function auditPassRate() {
@@ -848,7 +882,7 @@ function buildCollectorEntry(name, collector, index) {
 
 function buildMappingEntry(mapping, index) {
   const status = mappingStatus(mapping);
-  const platforms = [mapping.kalshi, mapping.polymarket, mapping.predictit]
+  const platforms = [mapping.kalshi, mapping.polymarket]
     .filter(Boolean)
     .map(String)
     .join(" • ");
@@ -1179,6 +1213,10 @@ function renderChrome() {
   if (logoutButtonEl) {
     logoutButtonEl.classList.toggle("hidden", !state.operatorAuthenticated);
   }
+  const killSwitchToolbarEl = document.getElementById("killSwitchToolbar");
+  if (killSwitchToolbarEl) {
+    killSwitchToolbarEl.classList.toggle("hidden", !hasOperatorAccess());
+  }
   if (heroTitleEl) {
     heroTitleEl.textContent = isOpsMode() ? "Operator trading desk" : "Live trading desk";
   }
@@ -1223,6 +1261,9 @@ function renderChrome() {
   document.querySelectorAll("[data-ops-only]").forEach((element) => {
     element.classList.toggle("hidden", !opsVisible);
   });
+  if (killSwitchToolbarEl) {
+    killSwitchToolbarEl.classList.toggle("hidden", !hasOperatorAccess());
+  }
 }
 
 function renderOverview() {
@@ -1305,17 +1346,23 @@ function renderRecentTradeCard(trade) {
 
 function renderSafetyPanel() {
   const view = buildSafetyView(state, { nowTimestamp: Date.now() / 1000 });
+  const toolbar = document.getElementById("killSwitchToolbar");
   const badge = document.getElementById("killSwitchBadge");
-  const summary = document.getElementById("killSwitchSummary");
   const armBtn = document.getElementById("killSwitchArm");
   const resetBtn = document.getElementById("killSwitchReset");
   const cooldownEl = document.getElementById("killSwitchCooldown");
-  if (!badge || !summary || !armBtn || !resetBtn || !cooldownEl) return;
+  if (!badge || !armBtn || !resetBtn || !cooldownEl) return;
 
-  // T-3-07-A: XSS mitigation — every dynamic string flows through textContent.
+  // T-3-07-A: XSS mitigation ? every dynamic string flows through textContent.
   badge.textContent = view.badgeLabel;
-  badge.className = `panel-badge status-badge ${view.badgeClass}`;
-  summary.textContent = view.summary;
+  badge.className = `utility-pill kill-switch-badge ${view.badgeClass}`;
+  badge.title = view.summary;
+  armBtn.title = view.summary;
+  resetBtn.title = view.summary;
+  if (toolbar) {
+    toolbar.title = view.summary;
+    toolbar.classList.toggle("hidden", !hasOperatorAccess());
+  }
 
   if (view.armed) {
     armBtn.classList.add("hidden");
@@ -1455,14 +1502,29 @@ function renderPortfolioPanel() {
     portfolioExposureBadgeEl.textContent = "$0.00";
     portfolioSummaryEl.textContent = "Portfolio state is still loading.";
     portfolioListEl.innerHTML = emptyState("Exposure and violation details will appear once the API responds.");
+    if (portfolioPanelEl) {
+      portfolioPanelEl.classList.remove("is-risk-critical", "is-risk-active", "is-risk-clear");
+    }
+    portfolioExposureBadgeEl.classList.remove("is-risk-critical", "is-risk-active", "is-risk-clear");
     return;
   }
 
   const violations = portfolio.violations || [];
+  const riskState = violations.length
+    ? "critical"
+    : Number(portfolio.total_exposure || 0) > 0
+      ? "active"
+      : "clear";
   portfolioExposureBadgeEl.textContent = formatUsd.format(portfolio.total_exposure || 0);
   portfolioSummaryEl.textContent = violations.length
     ? `${formatWhole.format(violations.length)} active risk warnings are open across ${formatWhole.format(portfolio.total_open_positions || 0)} positions.`
     : `${formatWhole.format(portfolio.total_open_positions || 0)} open positions are inside the current venue and exposure guardrails.`;
+  if (portfolioPanelEl) {
+    portfolioPanelEl.classList.remove("is-risk-critical", "is-risk-active", "is-risk-clear");
+    portfolioPanelEl.classList.add(`is-risk-${riskState}`);
+  }
+  portfolioExposureBadgeEl.classList.remove("is-risk-critical", "is-risk-active", "is-risk-clear");
+  portfolioExposureBadgeEl.classList.add(`is-risk-${riskState}`);
 
   const venueCards = Object.values(portfolio.by_venue || {}).slice(0, 3).map((venue) =>
     compactPanelItem(
@@ -1846,79 +1908,193 @@ function renderLogExperience(entries = buildLogEntries()) {
 
 function renderMappings() {
   const container = document.getElementById("mappingList");
-  document.getElementById("mappingCount").textContent = formatWhole.format(state.mappings.length);
+  const totalMappings = state.mappings.length;
+  document.getElementById("mappingCount").textContent = formatWhole.format(totalMappings);
+  if (mappingControlsEl) {
+    mappingControlsEl.innerHTML = "";
+  }
   if (!container) return;
-  if (!state.mappings.length) {
+  if (!totalMappings) {
     container.innerHTML = emptyState("No canonical mappings are loaded.");
     return;
   }
 
-  container.innerHTML = state.mappings.slice(0, 8).map((mapping) => `
-    <article class="stack-item ${mappingTone(mappingStatus(mapping))} operator-card" data-mapping-id="${escapeHtml(mapping.canonical_id)}">
-      <div class="stack-item-header">
-        <div class="stack-item-title">${escapeHtml(mapping.description || mapping.canonical_id)}</div>
-        <span class="${statusClass(mappingStatus(mapping))}" data-mapping-status>${escapeHtml(mappingStatus(mapping))}</span>
-      </div>
-      <div class="mapping-platforms">
-        ${mapping.kalshi ? `<span>${escapeHtml(`Kalshi ${mapping.kalshi}`)}</span>` : ""}
-        ${mapping.polymarket ? `<span>${escapeHtml(`Polymarket ${mapping.polymarket}`)}</span>` : ""}
-        ${mapping.predictit ? `<span>${escapeHtml(`PredictIt ${mapping.predictit}`)}</span>` : ""}
-      </div>
-      <div class="stack-item-meta">${escapeHtml(mapping.review_note || mapping.notes || "Confirmed mappings are the only auto-tradable candidates.")}</div>
-      <div class="operator-meta-row">
-        <span>${escapeHtml(mapping.allow_auto_trade ? "Auto-trade allowed" : "Held for review before auto-trade")}</span>
-      </div>
-      ${hasOperatorAccess() ? `<div class="action-row" data-mapping-action-row>
-        ${mappingStatus(mapping) !== "confirmed" ? renderActionButton("Confirm match", "confirm", "mapping", mapping.canonical_id, mapping.canonical_id) : ""}
-        ${mapping.allow_auto_trade ? renderActionButton("Hold auto-trade", "disable_auto_trade", "mapping", mapping.canonical_id, mapping.canonical_id, true) : renderActionButton("Enable auto-trade", "enable_auto_trade", "mapping", mapping.canonical_id, mapping.canonical_id)}
-        ${mappingStatus(mapping) !== "review" ? renderActionButton("Mark review", "review", "mapping", mapping.canonical_id, mapping.canonical_id, true) : ""}
-      </div>` : ""}
-    </article>
-  `).join("");
-
-  // Side-by-side resolution-criteria comparison (plan 03-07). Dynamic text is
-  // injected via textContent to satisfy T-3-07-A (XSS mitigation).
   const updates = state.mappingUpdates || {};
+  const mergedMappings = state.mappings.map((mapping) => ({
+    ...mapping,
+    ...(updates[mapping.canonical_id] || {}),
+  }));
+  const normalizedQuery = state.mappingQuery.trim().toLowerCase();
+  const filteredMappings = mergedMappings
+    .filter((mapping) => {
+      if (state.mappingStatusFilter !== "all" && mappingStatus(mapping) !== state.mappingStatusFilter) {
+        return false;
+      }
+      if (state.mappingTradeFilter !== "all" && mappingTradeState(mapping) !== state.mappingTradeFilter) {
+        return false;
+      }
+      if (normalizedQuery && !mappingSearchText(mapping).includes(normalizedQuery)) {
+        return false;
+      }
+      return true;
+    })
+    .sort((left, right) => {
+      const statusOrder = { confirmed: 0, review: 1, candidate: 2 };
+      const leftStatus = statusOrder[mappingStatus(left)] ?? 3;
+      const rightStatus = statusOrder[mappingStatus(right)] ?? 3;
+      if (leftStatus !== rightStatus) return leftStatus - rightStatus;
+      return String(left.description || left.canonical_id).localeCompare(String(right.description || right.canonical_id));
+    });
+
+  const counts = {
+    confirmed: mergedMappings.filter((mapping) => mappingStatus(mapping) === "confirmed").length,
+    review: mergedMappings.filter((mapping) => mappingStatus(mapping) === "review").length,
+    auto: mergedMappings.filter((mapping) => mappingTradeState(mapping) === "auto").length,
+  };
+
+  if (mappingControlsEl) {
+    mappingControlsEl.innerHTML = `
+      <div class="mapping-toolbar">
+        <label class="mapping-search" for="mappingSearchInput">
+          <span class="mapping-search-label">Search map</span>
+          <input
+            id="mappingSearchInput"
+            name="mappingSearch"
+            type="search"
+            autocomplete="off"
+            placeholder="Search event, venue contract, or note"
+            value="${escapeHtml(state.mappingQuery)}"
+          >
+        </label>
+        <div class="mapping-filter-stack">
+          <div class="mapping-filter-group" role="toolbar" aria-label="Mapping status filters">
+            ${MAPPING_STATUS_FILTERS.map((filter) => `
+              <button
+                type="button"
+                class="mapping-filter-chip ${state.mappingStatusFilter === filter.key ? "is-active" : ""}"
+                data-mapping-filter-group="status"
+                data-mapping-filter-value="${escapeHtml(filter.key)}"
+                aria-pressed="${String(state.mappingStatusFilter === filter.key)}"
+              >${escapeHtml(filter.label)}</button>
+            `).join("")}
+          </div>
+          <div class="mapping-filter-group" role="toolbar" aria-label="Mapping route filters">
+            ${MAPPING_TRADE_FILTERS.map((filter) => `
+              <button
+                type="button"
+                class="mapping-filter-chip ${state.mappingTradeFilter === filter.key ? "is-active" : ""}"
+                data-mapping-filter-group="trade"
+                data-mapping-filter-value="${escapeHtml(filter.key)}"
+                aria-pressed="${String(state.mappingTradeFilter === filter.key)}"
+              >${escapeHtml(filter.label)}</button>
+            `).join("")}
+          </div>
+        </div>
+        <div class="mapping-toolbar-footer">
+          <p class="mapping-result-summary">Showing ${escapeHtml(formatWhole.format(filteredMappings.length))} of ${escapeHtml(formatWhole.format(totalMappings))} mappings</p>
+          <div class="mapping-stat-row">
+            <span class="mapping-stat-pill">${escapeHtml(`${formatWhole.format(counts.confirmed)} confirmed`)}</span>
+            <span class="mapping-stat-pill">${escapeHtml(`${formatWhole.format(counts.review)} in review`)}</span>
+            <span class="mapping-stat-pill">${escapeHtml(`${formatWhole.format(counts.auto)} auto-trade`)}</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  if (!filteredMappings.length) {
+    container.innerHTML = emptyState("No mappings match the current filters.");
+    return;
+  }
+
+  container.innerHTML = filteredMappings.map((mapping) => {
+    const currentStatus = mappingStatus(mapping);
+    const tradeState = mappingTradeState(mapping);
+    const reviewCopy = mapping.review_note || mapping.notes || (tradeState === "auto"
+      ? "Auto-trade is enabled for this confirmed mapping."
+      : "Held for operator review before auto-trade.");
+    return `
+      <article class="stack-item compact-item operator-card mapping-card ${mappingTone(currentStatus)}" data-mapping-id="${escapeHtml(mapping.canonical_id)}">
+        <div class="stack-item-header mapping-card-header">
+          <div class="mapping-card-copy">
+            <div class="stack-item-title">${escapeHtml(mapping.description || mapping.canonical_id)}</div>
+            <div class="mapping-card-id">${escapeHtml(mapping.canonical_id)}</div>
+          </div>
+          <div class="mapping-card-statuses">
+            <span class="${statusClass(currentStatus)}" data-mapping-status>${escapeHtml(titleCase(currentStatus))}</span>
+            <span class="platform-chip mapping-trade-pill ${tradeState === "auto" ? "is-auto" : "is-held"}">${escapeHtml(tradeState === "auto" ? "Auto-trade" : "Held")}</span>
+          </div>
+        </div>
+        <div class="mapping-platforms">
+          ${mapping.kalshi ? `<span>${escapeHtml(`Kalshi ${mapping.kalshi}`)}</span>` : ""}
+          ${mapping.polymarket ? `<span>${escapeHtml(`Polymarket ${mapping.polymarket}`)}</span>` : ""}
+        </div>
+        <div class="stack-item-meta mapping-card-note">${escapeHtml(reviewCopy)}</div>
+      </article>
+    `;
+  }).join("");
+
   const cards = container.querySelectorAll("article.stack-item[data-mapping-id]");
   cards.forEach((card) => {
     const canonicalId = card.dataset.mappingId;
     if (!canonicalId) return;
-    const mapping = state.mappings.find((entry) => entry.canonical_id === canonicalId) || {};
-    const merged = {
-      ...mapping,
-      ...(updates[canonicalId] || {}),
-    };
+    const merged = filteredMappings.find((entry) => entry.canonical_id === canonicalId) || {};
     const comparison = buildMappingComparison(merged);
-    card.appendChild(buildMappingComparisonNode(comparison));
+    const actionMarkup = hasOperatorAccess() ? `
+      <div class="action-row mapping-action-row" data-mapping-action-row>
+        ${mappingStatus(merged) !== "confirmed" ? renderActionButton("Confirm", "confirm", "mapping", merged.canonical_id, merged.canonical_id) : ""}
+        ${merged.allow_auto_trade ? renderActionButton("Hold auto-trade", "disable_auto_trade", "mapping", merged.canonical_id, merged.canonical_id, true) : renderActionButton("Enable auto-trade", "enable_auto_trade", "mapping", merged.canonical_id, merged.canonical_id)}
+        ${mappingStatus(merged) !== "review" ? renderActionButton("Mark review", "review", "mapping", merged.canonical_id, merged.canonical_id, true) : ""}
+      </div>
+    ` : "";
+    card.appendChild(buildMappingComparisonNode(comparison, actionMarkup));
 
-    // Disable the pre-existing "Confirm match" button when the comparison
-    // status forbids confirmation (divergent / pending / missing).
     if (!comparison.canConfirm) {
       const confirmBtn = card.querySelector('[data-mapping-action="confirm"]');
       if (confirmBtn) {
         confirmBtn.disabled = true;
         confirmBtn.classList.add("is-disabled");
-        confirmBtn.title = `Confirm blocked — criteria status is ${comparison.chipLabel}`;
+        confirmBtn.title = `Confirm blocked - criteria status is ${comparison.chipLabel}`;
       }
     }
   });
 }
 
-function buildMappingComparisonNode(comparison) {
-  const grid = document.createElement("div");
-  grid.className = "mapping-compare-grid";
-  grid.dataset.canonicalId = comparison.canonicalId || "";
+function buildMappingComparisonNode(comparison, actionMarkup = "") {
+  const disclosure = document.createElement("details");
+  disclosure.className = "mapping-disclosure";
+  disclosure.dataset.canonicalId = comparison.canonicalId || "";
 
-  const chipRow = document.createElement("div");
-  chipRow.className = "mapping-compare-header";
+  const summary = document.createElement("summary");
+  summary.className = "mapping-disclosure-summary";
+  const summaryTitle = document.createElement("span");
+  summaryTitle.className = "mapping-disclosure-title";
+  summaryTitle.textContent = "Criteria and review";
+  const summaryMeta = document.createElement("span");
+  summaryMeta.className = "mapping-disclosure-meta";
   const chip = document.createElement("span");
   chip.className = `criteria-chip ${comparison.chipTone}`;
   chip.textContent = comparison.chipLabel;
-  chipRow.appendChild(chip);
+  const summaryHint = document.createElement("span");
+  summaryHint.className = "mapping-disclosure-hint";
+  summaryHint.textContent = comparison.hasData ? "Open details" : "Needs detail";
+  summaryMeta.append(chip, summaryHint);
+  summary.append(summaryTitle, summaryMeta);
 
+  const body = document.createElement("div");
+  body.className = "mapping-disclosure-body";
+
+  const chipRow = document.createElement("div");
+  chipRow.className = "mapping-compare-header";
   if (hasOperatorAccess()) {
+    const selectLabel = document.createElement("label");
+    selectLabel.className = "mapping-select-label";
+    const selectText = document.createElement("span");
+    selectText.className = "mapping-select-copy";
+    selectText.textContent = "Review state";
     const select = document.createElement("select");
     select.className = "criteria-match-select";
+    select.setAttribute("aria-label", "Resolution criteria review state");
     if (comparison.canonicalId) select.dataset.canonicalId = comparison.canonicalId;
     for (const value of ["identical", "similar", "divergent", "pending_operator_review"]) {
       const option = document.createElement("option");
@@ -1927,7 +2103,8 @@ function buildMappingComparisonNode(comparison) {
       if (value === comparison.matchStatus) option.selected = true;
       select.appendChild(option);
     }
-    chipRow.appendChild(select);
+    selectLabel.append(selectText, select);
+    chipRow.appendChild(selectLabel);
   }
 
   const columns = document.createElement("div");
@@ -1943,17 +2120,21 @@ function buildMappingComparisonNode(comparison) {
     settlement: comparison.polymarketSettlement,
   }));
 
-  grid.appendChild(chipRow);
-  grid.appendChild(columns);
+  body.append(chipRow, columns);
 
   if (comparison.operatorNote) {
     const noteEl = document.createElement("p");
     noteEl.className = "mapping-compare-note";
     noteEl.textContent = `Operator note: ${comparison.operatorNote}`;
-    grid.appendChild(noteEl);
+    body.appendChild(noteEl);
   }
 
-  return grid;
+  if (actionMarkup) {
+    body.insertAdjacentHTML("beforeend", actionMarkup);
+  }
+
+  disclosure.append(summary, body);
+  return disclosure;
 }
 
 function buildMappingCriteriaColumn(label, fields) {
@@ -2266,6 +2447,20 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  const mappingFilterTarget = event.target.closest("[data-mapping-filter-group]");
+  if (mappingFilterTarget) {
+    const group = mappingFilterTarget.getAttribute("data-mapping-filter-group");
+    const value = mappingFilterTarget.getAttribute("data-mapping-filter-value") || "all";
+    if (group === "status" && value !== state.mappingStatusFilter) {
+      state.mappingStatusFilter = value;
+      renderMappings();
+    } else if (group === "trade" && value !== state.mappingTradeFilter) {
+      state.mappingTradeFilter = value;
+      renderMappings();
+    }
+    return;
+  }
+
   const killArm = event.target.closest("#killSwitchArm");
   if (killArm) {
     if (!hasOperatorAccess()) {
@@ -2401,6 +2596,19 @@ if (logSearchInputEl) {
     renderLogExperience();
   });
 }
+
+document.addEventListener("input", (event) => {
+  const mappingSearch = event.target.closest("#mappingSearchInput");
+  if (!mappingSearch) return;
+  state.mappingQuery = mappingSearch.value || "";
+  const caret = mappingSearch.selectionStart ?? state.mappingQuery.length;
+  renderMappings();
+  const nextInput = document.getElementById("mappingSearchInput");
+  if (nextInput) {
+    nextInput.focus();
+    nextInput.setSelectionRange(caret, caret);
+  }
+});
 
 document.addEventListener("change", (event) => {
   const select = event.target.closest("select.criteria-match-select");

@@ -20,7 +20,7 @@ def make_engine(price_store: PriceStore) -> ExecutionEngine:
     # production default is $300/platform, but the unit tests here run
     # 120 consecutive simulated opportunities against a shared engine.
     config.safety.max_platform_exposure_usd = 1_000_000.0
-    monitor = BalanceMonitor(config.alerts, {"kalshi": object(), "polymarket": object(), "predictit": object()})
+    monitor = BalanceMonitor(config.alerts, {"kalshi": object(), "polymarket": object()})
     engine = ExecutionEngine(config, monitor, price_store=price_store, collectors={})
     engine.risk._max_daily_trades = 250
     engine.risk._max_total_exposure = 50_000
@@ -34,20 +34,21 @@ def test_manual_opportunity_creates_manual_position():
         opportunity = ArbitrageOpportunity(
             canonical_id="TEST_MANUAL",
             description="Manual opportunity",
-            yes_platform="predictit",
+            yes_platform="polymarket",
             yes_price=0.34,
-            yes_fee=0.116,
-            yes_market_id="PI:123",
+            yes_fee_rate=0.04,
+            yes_fee=0.008976,
+            yes_market_id="PM:123",
             no_platform="kalshi",
             no_price=0.50,
-            no_fee=0.018,
+            no_fee=0.017563,
             no_market_id="K-123",
             gross_edge=0.16,
-            total_fees=0.1335630252,
-            net_edge=0.0264369748,
-            net_edge_cents=2.64369748,
+            total_fees=0.026539,
+            net_edge=0.133461,
+            net_edge_cents=13.3461,
             suggested_qty=119,
-            max_profit_usd=3.1459999999999995,
+            max_profit_usd=15.8819,
             timestamp=time.time(),
             confidence=0.7,
             status="manual",
@@ -236,20 +237,21 @@ def test_manual_position_actions_update_execution_history():
         opportunity = ArbitrageOpportunity(
             canonical_id="TEST_MANUAL_ACTIONS",
             description="Manual lifecycle opportunity",
-            yes_platform="predictit",
+            yes_platform="polymarket",
             yes_price=0.35,
-            yes_fee=0.115,
-            yes_market_id="PI:456",
+            yes_fee_rate=0.04,
+            yes_fee=0.0091,
+            yes_market_id="PM:456",
             no_platform="kalshi",
             no_price=0.48,
             no_fee=0.0175,
             no_market_id="K-456",
             gross_edge=0.17,
-            total_fees=0.1325,
-            net_edge=0.0375,
-            net_edge_cents=3.75,
+            total_fees=0.0266,
+            net_edge=0.1434,
+            net_edge_cents=14.34,
             suggested_qty=120,
-            max_profit_usd=4.5,
+            max_profit_usd=17.208,
             timestamp=time.time(),
             confidence=0.72,
             status="manual",
@@ -267,7 +269,7 @@ def test_manual_position_actions_update_execution_history():
         assert engine.execution_history[0].status == "manual_pending"
 
         position = engine.manual_positions[0]
-        entered = await engine.update_manual_position(position.position_id, "mark_entered", note="Entered on PredictIt")
+        entered = await engine.update_manual_position(position.position_id, "mark_entered", note="Entered on Polymarket")
         assert entered is not None
         assert entered.status == "entered"
         assert engine.execution_history[0].status == "manual_entered"
@@ -339,20 +341,21 @@ def test_manual_position_close_releases_risk_exposure():
         opportunity = ArbitrageOpportunity(
             canonical_id="TEST_MANUAL_RELEASE",
             description="Manual exposure release",
-            yes_platform="predictit",
+            yes_platform="polymarket",
             yes_price=0.35,
-            yes_fee=0.115,
-            yes_market_id="PI:789",
+            yes_fee_rate=0.04,
+            yes_fee=0.0091,
+            yes_market_id="PM:789",
             no_platform="kalshi",
             no_price=0.48,
             no_fee=0.0175,
             no_market_id="K-789",
             gross_edge=0.17,
-            total_fees=0.1325,
-            net_edge=0.0375,
-            net_edge_cents=3.75,
+            total_fees=0.0266,
+            net_edge=0.1434,
+            net_edge_cents=14.34,
             suggested_qty=120,
-            max_profit_usd=4.5,
+            max_profit_usd=17.208,
             timestamp=time.time(),
             confidence=0.72,
             status="manual",
@@ -405,10 +408,10 @@ def test_shadow_audit_blocks_unprofitable_manual_math():
         opportunity = ArbitrageOpportunity(
             canonical_id="TEST_BAD_MATH",
             description="Bad manual math",
-            yes_platform="predictit",
+            yes_platform="polymarket",
             yes_price=0.35,
             yes_fee=0.01,
-            yes_market_id="PI:BAD",
+            yes_market_id="PM:BAD",
             no_platform="kalshi",
             no_price=0.48,
             no_fee=0.01,
@@ -1084,7 +1087,7 @@ def test_rejected_order_incident_per_platform():
         config.safety.max_platform_exposure_usd = 300.0
         monitor = BalanceMonitor(
             config.alerts,
-            {"kalshi": object(), "polymarket": object(), "predictit": object()},
+            {"kalshi": object(), "polymarket": object()},
         )
         engine = ExecutionEngine(config, monitor, price_store=store, collectors={})
         engine.risk._max_daily_trades = 250
@@ -1336,7 +1339,7 @@ def _build_live_engine_for_safe02_gap():
     config.safety.max_platform_exposure_usd = 300.0
     monitor = BalanceMonitor(
         config.alerts,
-        {"kalshi": object(), "polymarket": object(), "predictit": object()},
+        {"kalshi": object(), "polymarket": object()},
     )
     engine = ExecutionEngine(config, monitor, price_store=None, collectors={})
     engine.risk._max_daily_trades = 250

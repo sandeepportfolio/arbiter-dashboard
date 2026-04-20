@@ -9,8 +9,6 @@ from .math_auditor import (
     MathAuditor,
     _kalshi_fee,
     _polymarket_fee,
-    _predictit_total_fee,
-    _predictit_simple_fee,
     DISCREPANCY_THRESHOLD,
 )
 
@@ -70,24 +68,11 @@ class TestFeeModels:
         # polymarket_order_fee(price, quantity=1, category=cat) should equal _polymarket_fee(price, cat)
         assert abs(polymarket_order_fee(0.60, category="politics") - _polymarket_fee(0.60, "politics")) < 1e-10
 
-    def test_predictit_total_fee_profit(self):
-        # buy at 0.40, settle at $1.00
-        fee = _predictit_total_fee(0.40, settle_price=1.0)
-        assert abs(fee - 0.11) < 1e-10
-
-    def test_predictit_total_fee_no_profit(self):
-        fee = _predictit_total_fee(1.0, settle_price=1.0)
-        assert abs(fee - 0.05) < 1e-10
-
-    def test_predictit_simple_fee(self):
-        assert abs(_predictit_simple_fee(0.40) - 0.02) < 1e-10
-
-
 # ─── Auditor Tests: Clean Opportunities ──────────────────────────────────
 
 class TestAuditorCleanOpps:
     def setup_method(self):
-        self.auditor = MathAuditor(max_position_usd=100.0, predictit_cap=850.0)
+        self.auditor = MathAuditor(max_position_usd=100.0)
 
     def _make_kalshi_poly_opp(self, yes_price=0.42, no_price=0.45):
         """Create a correctly-computed Kalshi↔Polymarket opportunity."""
@@ -123,41 +108,11 @@ class TestAuditorCleanOpps:
             result = self.auditor.audit_opportunity(opp)
             assert result.passed, f"Failed for yes={yp}, no={np}: {[f.message for f in result.flags]}"
 
-    def _make_predictit_opp(self, yes_price=0.35, no_price=0.40):
-        """Create a PredictIt↔Kalshi opportunity with correct fees."""
-        cost = yes_price + no_price
-        qty = min(int(100.0 / cost), int(850.0 / yes_price))
-        qty = max(1, qty)
-        fee_a = _predictit_total_fee(yes_price, settle_price=1.0, quantity=qty)
-        fee_b = _kalshi_fee(no_price, quantity=qty)
-        gross = 1.0 - yes_price - no_price
-        total_fees = fee_a + fee_b
-        net = gross - total_fees
-        return {
-            "canonical_id": "TEST_PI",
-            "yes_platform": "predictit",
-            "no_platform": "kalshi",
-            "yes_price": yes_price,
-            "no_price": no_price,
-            "gross_edge": gross,
-            "total_fees": total_fees,
-            "net_edge": net,
-            "net_edge_cents": net * 100,
-            "suggested_qty": qty,
-            "max_profit_usd": net * qty,
-        }
-
-    def test_clean_predictit_passes(self):
-        opp = self._make_predictit_opp(0.35, 0.40)
-        result = self.auditor.audit_opportunity(opp)
-        assert result.passed, f"Should pass clean PI opp, got flags: {[f.message for f in result.flags]}"
-
-
 # ─── Auditor Tests: Discrepancy Detection ────────────────────────────────
 
 class TestAuditorDiscrepancies:
     def setup_method(self):
-        self.auditor = MathAuditor(max_position_usd=100.0, predictit_cap=850.0)
+        self.auditor = MathAuditor(max_position_usd=100.0)
 
     def test_wrong_gross_edge(self):
         opp = {

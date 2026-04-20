@@ -97,8 +97,6 @@ MIGRATIONS = [
         kalshi_market_id VARCHAR(100) DEFAULT '',
         polymarket_slug VARCHAR(200) DEFAULT '',
         polymarket_question TEXT DEFAULT '',
-        predictit_id VARCHAR(100) DEFAULT '',
-        predictit_contract_keywords TEXT[] DEFAULT '{}',
         notes TEXT DEFAULT '',
         review_note TEXT DEFAULT '',
         mapping_score DECIMAL(5,4) DEFAULT 0,
@@ -136,7 +134,6 @@ MIGRATIONS = [
     CREATE INDEX IF NOT EXISTS idx_mappings_status ON market_mappings(status);
     CREATE INDEX IF NOT EXISTS idx_mappings_kalshi ON market_mappings(kalshi_market_id) WHERE kalshi_market_id != '';
     CREATE INDEX IF NOT EXISTS idx_mappings_poly ON market_mappings(polymarket_slug) WHERE polymarket_slug != '';
-    CREATE INDEX IF NOT EXISTS idx_mappings_predictit ON market_mappings(predictit_id) WHERE predictit_id != '';
     CREATE INDEX IF NOT EXISTS idx_mappings_expires ON market_mappings(expires_at) WHERE expires_at IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_candidates_status ON mapping_candidates(status);
     CREATE INDEX IF NOT EXISTS idx_candidates_canonical ON mapping_candidates(canonical_id);

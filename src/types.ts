@@ -1,6 +1,6 @@
 /** Core types for the arbitrage pipeline */
 
-export type Platform = "kalshi" | "predictit" | "polymarket";
+export type Platform = "kalshi" | "polymarket";
 
 export interface PricePoint {
   platform: Platform;

@@ -16,7 +16,6 @@ function platformLabel(platform) {
   const labels = {
     kalshi: "Kalshi",
     polymarket: "Polymarket",
-    predictit: "PredictIt",
   };
   return labels[platform] || titleCase(platform);
 }
@@ -248,9 +247,7 @@ export function buildRateLimitView(state) {
           ? "Kalshi"
           : platform === "polymarket"
             ? "Polymarket"
-            : platform === "predictit"
-              ? "PredictIt"
-              : titleCase(platform),
+            : titleCase(platform),
       tokensLabel: `${available}/${max}`,
       tone,
       cooldownLabel: remainingPenalty > 0 ? `${remainingPenalty.toFixed(1)}s cooldown` : "idle",

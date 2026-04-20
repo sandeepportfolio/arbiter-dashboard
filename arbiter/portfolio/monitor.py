@@ -154,7 +154,6 @@ class PortfolioConfig:
     # Per-venue balance thresholds
     kalshi_min_balance: float = 50.0
     polymarket_min_balance: float = 25.0
-    predictit_min_balance: float = 50.0
     # Concentration limits
     max_positions_per_event: int = 3
     # Stale thresholds
@@ -285,8 +284,6 @@ class PortfolioMonitor:
                 is_low = balance < self.config.kalshi_min_balance
             elif platform == "polymarket" and balance is not None:
                 is_low = balance < self.config.polymarket_min_balance
-            elif platform == "predictit" and balance is not None:
-                is_low = balance < self.config.predictit_min_balance
 
             by_venue[platform] = VenueExposure(
                 platform=platform,

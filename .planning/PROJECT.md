@@ -2,11 +2,11 @@
 
 ## What This Is
 
-A cross-platform prediction market arbitrage system that detects price discrepancies across Kalshi, Polymarket, and PredictIt, then executes trades to capture the spread. It includes a real-time WebSocket dashboard for monitoring prices, opportunities, positions, and execution. The system is built but untested against live APIs.
+A cross-platform prediction market arbitrage system that detects price discrepancies across Kalshi and Polymarket, then executes trades to capture the spread. It includes a real-time WebSocket dashboard for monitoring prices, opportunities, positions, and execution. The system is built but untested against live APIs.
 
 ## Core Value
 
-Execute live arbitrage trades across all three platforms without losing money to bugs, stale prices, or partial fills.
+Execute live arbitrage trades across both platforms without losing money to bugs, stale prices, or partial fills.
 
 ## Requirements
 
@@ -14,10 +14,10 @@ Execute live arbitrage trades across all three platforms without losing money to
 
 <!-- Inferred from existing codebase. These capabilities exist in code. -->
 
-- Multi-platform price collection (Kalshi, Polymarket, PredictIt collectors) -- existing
+- Multi-platform price collection (Kalshi, Polymarket collectors) -- existing
 - Redis-backed quote cache with 30s TTL and pub/sub subscriptions -- existing
 - Cross-platform market mapping with scoring and status workflow -- existing
-- Fee-aware arbitrage detection (Kalshi quadratic, Polymarket market-specific, PredictIt profit/withdrawal) -- existing
+- Fee-aware arbitrage detection (Kalshi quadratic, Polymarket market-specific) -- existing
 - Persistence gating (opportunity must appear N consecutive scans) -- existing
 - Execution engine with order lifecycle management (pending -> submitted -> filled -> settled) -- existing
 - Concurrent leg execution (buy + sell in parallel) with re-quote checks -- existing
@@ -55,14 +55,14 @@ Execute live arbitrage trades across all three platforms without losing money to
 - Mobile app -- web dashboard sufficient for monitoring
 - Multi-user support -- single operator system
 - Backtesting engine -- forward-testing with small capital instead
-- Additional platforms beyond Kalshi/Polymarket/PredictIt -- stabilize three first
+- Additional platforms beyond Kalshi/Polymarket -- stabilize both first
+- PredictIt support -- removed in Phase 4.1 (dead weight, never went live)
 - Automated scaling of position sizes -- manual capital allocation initially
 
 ## Context
 
 - **Existing code**: Substantial Python backend with TypeScript CLI. Architecture is layered (collectors -> price store -> scanner -> execution -> monitoring -> API). Event-driven with async pub/sub.
 - **Testing state**: Test files exist alongside modules but nothing has been verified against real APIs. The system may have logic bugs that only surface with live data.
-- **PredictIt status**: Platform is winding down but user's account is still active. Include but don't let it block progress on Kalshi/Polymarket.
 - **Polymarket complexity**: Requires Ethereum wallet signing via py-clob-client. Most complex integration.
 - **Kalshi auth**: RSA private key signing for orders. API key + private key from env vars.
 - **Infrastructure**: Docker Compose stack with PostgreSQL 16, Redis 7, Python 3.12 API server on port 8090.
@@ -73,14 +73,14 @@ Execute live arbitrage trades across all three platforms without losing money to
 - **Capital**: Under $1K per platform initially -- system must handle small position sizes
 - **Timeline**: ASAP -- get to live trades as fast as possible, even with manual monitoring
 - **Risk tolerance**: Low -- cannot afford to lose capital to bugs. Safety > speed.
-- **Platform APIs**: Must comply with rate limits and terms of service for all three platforms
+- **Platform APIs**: Must comply with rate limits and terms of service for both platforms
 - **Auth credentials**: API keys stored in .env file, RSA keys in arbiter/keys/ (git-ignored)
 
 ## Key Decisions
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| All three platforms in scope | PredictIt still works for user's account | -- Pending |
+| Two platforms in scope (Kalshi, Polymarket) | PredictIt removed in Phase 4.1 as dead weight | 2026-04-17 |
 | Small capital first ($1K/platform) | Prove system works before scaling | -- Pending |
 | Python backend for live trading | Already built, async-first, mature | -- Pending |
 | Deep audit before any live trades | Risk of losing money to untested code | -- Pending |

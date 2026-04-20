@@ -175,7 +175,6 @@ class OperationalReadiness:
         details = {
             "kalshi_authenticated": kalshi_ready,
             "polymarket_private_key": polymarket_ready,
-            "predictit_manual_only": True,
         }
         if kalshi_ready and polymarket_ready:
             return ReadinessCheck(

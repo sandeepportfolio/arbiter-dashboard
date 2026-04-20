@@ -16,7 +16,7 @@ import { RiskGate } from "./risk-gate.js";
 import { TradeLogger } from "./trade-logger.js";
 
 /** Platforms where sell-side execution is supported in dry-run mode. */
-const SUPPORTED_SELL_PLATFORMS = new Set(["kalshi", "predictit", "polymarket"]);
+const SUPPORTED_SELL_PLATFORMS = new Set(["kalshi", "polymarket"]);
 
 export class ArbitrageExecutor {
   constructor(

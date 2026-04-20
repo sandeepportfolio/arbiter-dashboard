@@ -36,7 +36,10 @@ def _load_project_dotenv(anchor_file: Path | None = None) -> Path | None:
     )
     for candidate in candidate_paths:
         if candidate.exists():
-            load_dotenv(candidate, override=True)
+            # override=False so explicit shell vars (including subprocess envs
+            # that deliberately clear a var) win over the repo .env. Fixes
+            # WR-02 from the Phase 4 code review.
+            load_dotenv(candidate, override=False)
             return candidate
     return None
 
@@ -49,8 +52,6 @@ POLYMARKET_DEFAULT_TAKER_FEE_RATE = 0.05
 # Backwards-compatible alias for older imports.
 POLYMAKET_DEFAULT_TAKER_FEE_RATE = POLYMARKET_DEFAULT_TAKER_FEE_RATE
 POLYMARKET_DEFAULT_MAKER_FEE_RATE = 0.0
-PREDICTIT_PROFIT_FEE_RATE = 0.10
-PREDICTIT_WITHDRAWAL_FEE_RATE = 0.05
 
 
 def _clamp_probability(price: float) -> float:
@@ -122,29 +123,6 @@ def polymarket_fee(
     return polymarket_order_fee(price, quantity=quantity, fee_rate=fee_rate, category=category) / quantity
 
 
-def predictit_order_fee(
-    buy_price: float,
-    quantity: float = 1.0,
-    settle_price: float = 1.0,
-) -> float:
-    """
-    PredictIt charges 10% of profit plus a 5% withdrawal haircut on proceeds.
-    """
-    quantity = max(float(quantity), 0.0)
-    buy_price = _clamp_probability(buy_price)
-    settle_price = max(float(settle_price), 0.0)
-    if quantity <= 0:
-        return 0.0
-    profit = max(settle_price - buy_price, 0.0)
-    return quantity * ((profit * PREDICTIT_PROFIT_FEE_RATE) + (settle_price * PREDICTIT_WITHDRAWAL_FEE_RATE))
-
-
-def predictit_fee(profit: float) -> float:
-    if profit <= 0:
-        return 0.0
-    return profit * (PREDICTIT_PROFIT_FEE_RATE + PREDICTIT_WITHDRAWAL_FEE_RATE)
-
-
 _TEXT_NORMALIZER = re.compile(r"[^a-z0-9]+")
 
 
@@ -177,8 +155,6 @@ class MarketMappingRecord:
     kalshi: str = ""
     polymarket: str = ""
     polymarket_question: str = ""
-    predictit: str = ""
-    predictit_contract_keywords: Tuple[str, ...] = ()
     notes: str = ""
     # SAFE-06 (plan 03-06): Optional resolution-criteria payload. Structure:
     #   {
@@ -216,8 +192,6 @@ MARKET_SEEDS: Tuple[MarketMappingRecord, ...] = (
         kalshi="KXPRESPARTY-2028",
         polymarket="which-party-will-win-the-house-in-2026",
         polymarket_question="Democratic Party",
-        predictit="8157",
-        predictit_contract_keywords=("democratic", "democrat"),
         notes="Kalshi lacks a true confirmed 2026 House mapping, so this stays review-only.",
     ),
     MarketMappingRecord(
@@ -229,9 +203,7 @@ MARKET_SEEDS: Tuple[MarketMappingRecord, ...] = (
         tags=("politics", "midterms", "senate"),
         polymarket="which-party-will-win-the-senate-in-2026",
         polymarket_question="Democratic Party",
-        predictit="8155",
-        predictit_contract_keywords=("democratic", "democrat"),
-        notes="PredictIt only, so keep manual-only until a confirmed Kalshi leg exists.",
+        notes="Polymarket only, so keep manual-only until a confirmed Kalshi leg exists.",
     ),
     MarketMappingRecord(
         canonical_id="GOP_SENATE_2026",
@@ -242,8 +214,6 @@ MARKET_SEEDS: Tuple[MarketMappingRecord, ...] = (
         tags=("politics", "midterms", "senate"),
         polymarket="which-party-will-win-the-senate-in-2026",
         polymarket_question="Republican Party",
-        predictit="8155",
-        predictit_contract_keywords=("republican", "gop"),
     ),
     MarketMappingRecord(
         canonical_id="VANCE_NOM_2028",
@@ -254,8 +224,6 @@ MARKET_SEEDS: Tuple[MarketMappingRecord, ...] = (
         tags=("politics", "president", "nomination"),
         polymarket="republican-presidential-nominee-2028",
         polymarket_question="J.D. Vance",
-        predictit="8152",
-        predictit_contract_keywords=("vance",),
     ),
     MarketMappingRecord(
         canonical_id="RUBIO_NOM_2028",
@@ -266,8 +234,6 @@ MARKET_SEEDS: Tuple[MarketMappingRecord, ...] = (
         tags=("politics", "president", "nomination"),
         polymarket="republican-presidential-nominee-2028",
         polymarket_question="Marco Rubio",
-        predictit="8152",
-        predictit_contract_keywords=("rubio",),
     ),
     MarketMappingRecord(
         canonical_id="NEWSOM_NOM_2028",
@@ -278,8 +244,6 @@ MARKET_SEEDS: Tuple[MarketMappingRecord, ...] = (
         tags=("politics", "president", "nomination"),
         polymarket="democratic-presidential-nominee-2028",
         polymarket_question="Gavin Newsom",
-        predictit="8153",
-        predictit_contract_keywords=("newsom",),
     ),
     MarketMappingRecord(
         canonical_id="GA_SEN_2026",
@@ -290,8 +254,6 @@ MARKET_SEEDS: Tuple[MarketMappingRecord, ...] = (
         tags=("politics", "senate", "georgia"),
         polymarket="georgia-senate-election-winner",
         polymarket_question="Democrats win",
-        predictit="8156",
-        predictit_contract_keywords=("democratic", "democrat"),
     ),
     MarketMappingRecord(
         canonical_id="MI_SEN_2026",
@@ -302,8 +264,6 @@ MARKET_SEEDS: Tuple[MarketMappingRecord, ...] = (
         tags=("politics", "senate", "michigan"),
         polymarket="michigan-senate-election-winner",
         polymarket_question="Democrats win",
-        predictit="8158",
-        predictit_contract_keywords=("democratic", "democrat"),
     ),
 )
 
@@ -400,20 +360,11 @@ class PolymarketConfig:
 
 
 @dataclass
-class PredictItConfig:
-    base_url: str = "https://www.predictit.org/api/marketdata/all/"
-    poll_interval: float = 20.0
-    min_poll_interval: float = 15.0
-    max_poll_interval: float = 120.0
-
-
-@dataclass
 class AlertConfig:
     telegram_bot_token: str = field(default_factory=lambda: os.getenv("TELEGRAM_BOT_TOKEN", ""))
     telegram_chat_id: str = field(default_factory=lambda: os.getenv("TELEGRAM_CHAT_ID", ""))
     kalshi_low: float = 50.0
     polymarket_low: float = 25.0
-    predictit_low: float = 100.0
     cooldown: float = 300.0
 
 
@@ -421,7 +372,6 @@ class AlertConfig:
 class ScannerConfig:
     min_edge_cents: float = 2.5
     max_position_usd: float = 100.0
-    predictit_cap: float = 850.0
     scan_interval: float = 1.0
     confidence_threshold: float = 0.8
     persistence_scans: int = 3
@@ -472,7 +422,6 @@ class PostgresConfig:
 class ArbiterConfig:
     kalshi: KalshiConfig = field(default_factory=KalshiConfig)
     polymarket: PolymarketConfig = field(default_factory=PolymarketConfig)
-    predictit: PredictItConfig = field(default_factory=PredictItConfig)
     alerts: AlertConfig = field(default_factory=AlertConfig)
     scanner: ScannerConfig = field(default_factory=ScannerConfig)
     safety: SafetyConfig = field(default_factory=SafetyConfig)

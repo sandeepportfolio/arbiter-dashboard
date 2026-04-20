@@ -12,7 +12,7 @@ Audit checks per opportunity:
   3. total_fees = fee_a + fee_b (re-computed from platform fee models)
   4. net_edge = gross_edge - total_fees
   5. net_edge_cents = net_edge * 100
-  6. suggested_qty respects position limits (max_position_usd, PredictIt $850 cap)
+  6. suggested_qty respects position limits (max_position_usd)
   7. max_profit_usd = net_edge * suggested_qty
 
 Discrepancy thresholds:
@@ -63,19 +63,6 @@ def _polymarket_fee(
         rate = max(float(fee_rate), 0.0)
     quantity = max(int(quantity), 1)
     return (rate * price * (1.0 - price) * quantity) / quantity
-
-
-def _predictit_total_fee(buy_price: float, settle_price: float = 1.0, quantity: int = 1) -> float:
-    """PredictIt: 10% profit fee + 5% withdrawal fee on proceeds, per contract."""
-    quantity = max(int(quantity), 1)
-    profit = max(settle_price - buy_price, 0.0)
-    total = quantity * ((profit * 0.10) + (settle_price * 0.05))
-    return total / quantity
-
-
-def _predictit_simple_fee(price: float) -> float:
-    """PredictIt simple fee (withdrawal only, used for initial screening)."""
-    return price * 0.05
 
 
 # ─── Audit Result ─────────────────────────────────────────────────────────
@@ -154,9 +141,8 @@ class MathAuditor:
     sizing logic are re-implemented here to catch bugs in the primary code.
     """
 
-    def __init__(self, max_position_usd: float = 100.0, predictit_cap: float = 850.0):
+    def __init__(self, max_position_usd: float = 100.0):
         self.max_position_usd = max_position_usd
-        self.predictit_cap = predictit_cap
         self._audit_count = 0
         self._flag_count = 0
         self._critical_count = 0
@@ -437,8 +423,6 @@ class MathAuditor:
             return _kalshi_fee(price, quantity)
         elif platform == "polymarket":
             return _polymarket_fee(price, category="politics", quantity=quantity, fee_rate=fee_rate)
-        elif platform == "predictit":
-            return _predictit_total_fee(price, settle_price=1.0, quantity=quantity)
         return 0.0
 
     def _compute_position_size(
@@ -457,15 +441,6 @@ class MathAuditor:
         max_by_capital = int(self.max_position_usd / cost_per_pair)
         if min_available_liquidity > 0:
             max_by_capital = min(max_by_capital, int(max(min_available_liquidity, 1.0)))
-
-        if platform_a == "predictit":
-            if yes_price > 0:
-                pi_max = int(self.predictit_cap / yes_price)
-                max_by_capital = min(max_by_capital, pi_max)
-        if platform_b == "predictit":
-            if no_price > 0:
-                pi_max = int(self.predictit_cap / no_price)
-                max_by_capital = min(max_by_capital, pi_max)
 
         return max(1, max_by_capital)
 

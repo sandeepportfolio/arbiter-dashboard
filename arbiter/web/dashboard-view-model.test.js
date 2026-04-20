@@ -31,7 +31,7 @@ function makeState(overrides = {}) {
       },
       balances: {
         kalshi: { balance: 1_200, is_low: false },
-        predictit: { balance: 45, is_low: true },
+        polymarket: { balance: 45, is_low: true },
       },
       collectors: {
         kalshi: { rate_limiter: { remaining_penalty_seconds: 0 } },
@@ -81,7 +81,7 @@ function makeState(overrides = {}) {
         realized_pnl: 85.25,
         opportunity: { description: "Newest trade" },
         leg_yes: { platform: "kalshi", price: 0.47, quantity: 140 },
-        leg_no: { platform: "predictit", price: 0.4, quantity: 140 },
+        leg_no: { platform: "polymarket", price: 0.4, quantity: 140 },
       },
     ],
     incidents: [
@@ -120,8 +120,8 @@ describe("dashboard view model", () => {
       value: "$1,859.48",
     });
     expect(cards[1].label).toBe("Open exposure");
-    expect(cards[2].label).toBe("Validator progress");
-    expect(cards[3].label).toBe("Trade throughput");
+    expect(cards[2].label).toBe("Validator state");
+    expect(cards[3].label).toBe("Execution flow");
   });
 
   it("pins actionable blotter rows ahead of stale inventory", () => {

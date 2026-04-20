@@ -22,7 +22,7 @@ function makeOpportunity(overrides: Partial<ArbitrageOpportunity> = {}): Arbitra
     id: "opp-1",
     matchedEvent,
     contractKey: "btc-100k-yes",
-    buyPlatform: "predictit",
+    buyPlatform: "polymarket",
     sellPlatform: "kalshi",
     buyPrice: 0.40,
     sellPrice: 0.55,
@@ -61,7 +61,7 @@ describe("ArbitrageExecutor", () => {
 
     // Buy leg should be executed
     expect(result.buyLeg.status).toBe("executed");
-    expect(result.buyLeg.buyPlatform).toBe("predictit");
+    expect(result.buyLeg.buyPlatform).toBe("polymarket");
     expect(result.buyLeg.buyPrice).toBe(0.40);
     expect(result.buyLeg.reason).toContain("DRY RUN");
 
@@ -133,7 +133,7 @@ describe("ArbitrageExecutor", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0].type).toBe("arbitrage");
     expect(entries[0].matchedEvent).toBe("Will BTC hit 100k?");
-    expect(entries[0].buyPlatform).toBe("predictit");
+    expect(entries[0].buyPlatform).toBe("polymarket");
     expect(entries[0].sellPlatform).toBe("kalshi");
     expect(entries[0].dryRun).toBe(true);
   });

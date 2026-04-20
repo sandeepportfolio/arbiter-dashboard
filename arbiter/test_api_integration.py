@@ -37,6 +37,13 @@ def test_api_and_dashboard_contracts():
     env = dict(os.environ)
     env["ARBITER_UI_SMOKE_SEED"] = "1"
     env["DRY_RUN"] = "true"
+    # Isolate the subprocess from the developer's .env — the contract test runs
+    # arbiter.main in its in-memory fallback mode so it doesn't require a
+    # live Postgres/Redis. Empty string (not pop) forces the fallback because
+    # settings.py now uses load_dotenv(override=False), so an explicit empty
+    # value in the subprocess env overrides the .env file's value.
+    env["DATABASE_URL"] = ""
+    env["REDIS_URL"] = ""
     proc = subprocess.Popen(
         [sys.executable, "-m", "arbiter.main", "--api-only", "--port", str(port)],
         cwd=os.getcwd(),
@@ -116,7 +123,7 @@ def test_api_and_dashboard_contracts():
         assert reconciliation["configured"] is True
         assert reconciliation["reconciliation_count"] >= 1
         assert reconciliation["latest_report"] is not None
-        assert len(get_json("/api/manual-positions")) >= 2
+        assert isinstance(get_json("/api/manual-positions"), list)
         assert len(get_json("/api/errors")) >= 1
 
         portfolio = get_json("/api/portfolio")
@@ -172,13 +179,19 @@ def test_api_and_dashboard_contracts():
         assert all("canonical_id" in row for row in mappings)
         assert any(row["canonical_id"] == "DEM_HOUSE_2026" for row in mappings)
 
+        # After PredictIt removal, no seeded manual positions exist by default —
+        # the seed fixture no longer produces them. The POST-action lifecycle
+        # is exercised in arbiter/execution/test_engine.py; this contract test
+        # just verifies the endpoint responds with a list.
         manual_positions = get_json("/api/manual-positions")
-        entered = post_json(
-            f"/api/manual-positions/{manual_positions[0]['position_id']}",
-            {"action": "mark_entered"},
-            headers=auth_headers,
-        )
-        assert entered["status"] == "entered"
+        assert isinstance(manual_positions, list)
+        if manual_positions:
+            entered = post_json(
+                f"/api/manual-positions/{manual_positions[0]['position_id']}",
+                {"action": "mark_entered"},
+                headers=auth_headers,
+            )
+            assert entered["status"] == "entered"
 
         incidents = get_json("/api/errors")
         resolved = post_json(

@@ -13,7 +13,6 @@
  *   KALSHI_PRIVATE_KEY_PATH — Path to Kalshi RSA private key (optional)
  */
 
-import { PredictItClient, PredictItCollector } from "./collectors/predictit-client.js";
 import { KalshiClient, KalshiCollector } from "./collectors/kalshi-client.js";
 import { EventMatcher } from "./matching/event-matcher.js";
 import { ArbitrageDetector } from "./matching/arbitrage-detector.js";
@@ -61,8 +60,6 @@ async function main(): Promise<void> {
 
   // Step 1: Initialize collectors
   console.log("[1/6] Initializing collectors...");
-  const predictitClient = new PredictItClient();
-  const predictitCollector = new PredictItCollector(predictitClient);
 
   const kalshiClient = new KalshiClient({
     apiKey: config.kalshiApiKey,
@@ -73,7 +70,6 @@ async function main(): Promise<void> {
 
   const activePlatforms: string[] = [];
   if (kalshiClient.isAvailable()) activePlatforms.push("Kalshi");
-  activePlatforms.push("PredictIt"); // always available (no auth)
 
   console.log(`  Active platforms: ${activePlatforms.join(", ")}`);
   console.log();
@@ -81,15 +77,6 @@ async function main(): Promise<void> {
   // Step 2: Collect prices
   console.log("[2/6] Fetching market data...");
   const allPrices: PricePoint[][] = [];
-
-  try {
-    const predictitPrices = await predictitCollector.collect();
-    allPrices.push(predictitPrices);
-    console.log(`  PredictIt: ${predictitPrices.length} contracts fetched`);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(`  PredictIt: FAILED — ${msg}`);
-  }
 
   try {
     const kalshiPrices = await kalshiCollector.collect();

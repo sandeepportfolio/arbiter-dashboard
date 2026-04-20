@@ -24,5 +24,4 @@ export { EventMatcher } from "./matching/event-matcher.js";
 export { ArbitrageDetector } from "./matching/arbitrage-detector.js";
 
 // Collectors
-export { PredictItClient, PredictItCollector } from "./collectors/predictit-client.js";
 export { KalshiClient, KalshiCollector } from "./collectors/kalshi-client.js";

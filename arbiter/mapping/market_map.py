@@ -42,8 +42,6 @@ class MarketMapping:
     kalshi_market_id: str = ""
     polymarket_slug: str = ""
     polymarket_question: str = ""
-    predictit_id: str = ""
-    predictit_contract_keywords: Tuple[str, ...] = ()
     notes: str = ""
     review_note: str = ""
     mapping_score: float = 0.0
@@ -84,8 +82,6 @@ class MarketMapping:
             "kalshi": self.kalshi_market_id,
             "polymarket": self.polymarket_slug,
             "polymarket_question": self.polymarket_question,
-            "predictit": self.predictit_id,
-            "predictit_contract_keywords": list(self.predictit_contract_keywords),
             "notes": self.notes,
             "review_note": self.review_note,
             "mapping_score": self.mapping_score,
@@ -112,8 +108,6 @@ class MarketMapping:
             kalshi_market_id=record.kalshi,
             polymarket_slug=record.polymarket,
             polymarket_question=record.polymarket_question,
-            predictit_id=record.predictit,
-            predictit_contract_keywords=record.predictit_contract_keywords,
             notes=record.notes,
             mapping_score=score,
             confidence=score,
@@ -131,8 +125,6 @@ CREATE TABLE IF NOT EXISTS market_mappings (
     kalshi_market_id     VARCHAR(100) DEFAULT '',
     polymarket_slug      VARCHAR(200) DEFAULT '',
     polymarket_question  TEXT DEFAULT '',
-    predictit_id         VARCHAR(100) DEFAULT '',
-    predictit_contract_keywords TEXT[] DEFAULT '{}',
     notes                TEXT DEFAULT '',
     review_note          TEXT DEFAULT '',
     mapping_score        DECIMAL(5,4) DEFAULT 0,
@@ -146,7 +138,6 @@ CREATE TABLE IF NOT EXISTS market_mappings (
 CREATE INDEX IF NOT EXISTS idx_mappings_status ON market_mappings(status);
 CREATE INDEX IF NOT EXISTS idx_mappings_kalshi ON market_mappings(kalshi_market_id) WHERE kalshi_market_id != '';
 CREATE INDEX IF NOT EXISTS idx_mappings_poly ON market_mappings(polymarket_slug) WHERE polymarket_slug != '';
-CREATE INDEX IF NOT EXISTS idx_mappings_predictit ON market_mappings(predictit_id) WHERE predictit_id != '';
 CREATE INDEX IF NOT EXISTS idx_mappings_expires ON market_mappings(expires_at) WHERE expires_at IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS mapping_candidates (
@@ -179,7 +170,7 @@ ALTER TABLE market_mappings
 class MarketMappingStore:
     """
     Postgres-backed market mapping store.
-    Handles all market ID mappings across Kalshi, Polymarket, and PredictIt.
+    Handles all market ID mappings across Kalshi and Polymarket.
 
     Usage:
         store = MarketMappingStore(database_url)
@@ -260,9 +251,9 @@ class MarketMappingStore:
                     INSERT INTO market_mappings (
                         canonical_id, description, status, allow_auto_trade,
                         aliases, tags, kalshi_market_id, polymarket_slug,
-                        polymarket_question, predictit_id, predictit_contract_keywords,
+                        polymarket_question,
                         notes, mapping_score, confidence, updated_at
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW()
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW()
                     ) ON CONFLICT (canonical_id) DO UPDATE SET
                         description = EXCLUDED.description,
                         status = EXCLUDED.status,
@@ -272,8 +263,6 @@ class MarketMappingStore:
                         kalshi_market_id = EXCLUDED.kalshi_market_id,
                         polymarket_slug = EXCLUDED.polymarket_slug,
                         polymarket_question = EXCLUDED.polymarket_question,
-                        predictit_id = EXCLUDED.predictit_id,
-                        predictit_contract_keywords = EXCLUDED.predictit_contract_keywords,
                         notes = EXCLUDED.notes,
                         mapping_score = EXCLUDED.mapping_score,
                         confidence = EXCLUDED.confidence,
@@ -288,8 +277,6 @@ class MarketMappingStore:
                     mapping.kalshi_market_id,
                     mapping.polymarket_slug,
                     mapping.polymarket_question,
-                    mapping.predictit_id,
-                    list(mapping.predictit_contract_keywords),
                     mapping.notes,
                     mapping.mapping_score,
                     mapping.confidence,
@@ -335,12 +322,12 @@ class MarketMappingStore:
                 INSERT INTO market_mappings (
                     canonical_id, description, status, allow_auto_trade,
                     aliases, tags, kalshi_market_id, polymarket_slug,
-                    polymarket_question, predictit_id, predictit_contract_keywords,
+                    polymarket_question,
                     notes, review_note, mapping_score, confidence,
                     expires_at, last_validated_at, created_at, updated_at,
                     resolution_criteria, resolution_match_status
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
-                    $20::jsonb, $21
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
+                    $18::jsonb, $19
                 ) ON CONFLICT (canonical_id) DO UPDATE SET
                     description = EXCLUDED.description,
                     status = EXCLUDED.status,
@@ -350,8 +337,6 @@ class MarketMappingStore:
                     kalshi_market_id = EXCLUDED.kalshi_market_id,
                     polymarket_slug = EXCLUDED.polymarket_slug,
                     polymarket_question = EXCLUDED.polymarket_question,
-                    predictit_id = EXCLUDED.predictit_id,
-                    predictit_contract_keywords = EXCLUDED.predictit_contract_keywords,
                     notes = EXCLUDED.notes,
                     review_note = EXCLUDED.review_note,
                     mapping_score = EXCLUDED.mapping_score,
@@ -371,8 +356,6 @@ class MarketMappingStore:
                 mapping.kalshi_market_id,
                 mapping.polymarket_slug,
                 mapping.polymarket_question,
-                mapping.predictit_id,
-                list(mapping.predictit_contract_keywords),
                 mapping.notes,
                 mapping.review_note,
                 mapping.mapping_score,
@@ -458,7 +441,6 @@ class MarketMappingStore:
             col = {
                 "kalshi": "kalshi_market_id",
                 "polymarket": "polymarket_slug",
-                "predictit": "predictit_id",
             }.get(platform.lower())
 
             if not col:
@@ -488,7 +470,7 @@ class MarketMappingStore:
         try:
             q = f"%{query_text.lower()}%"
             if platform:
-                col = {"kalshi": "kalshi_market_id", "polymarket": "polymarket_slug", "predictit": "predictit_id"}.get(platform.lower())
+                col = {"kalshi": "kalshi_market_id", "polymarket": "polymarket_slug"}.get(platform.lower())
                 col_filter = f" AND {col} != ''" if col else ""
             else:
                 col_filter = ""
@@ -591,8 +573,8 @@ class MarketMappingStore:
                     **{f"{candidate['platform']}_market_id": candidate["platform_market_id"]}
                     if candidate["platform"] == "kalshi"
                     else {},
-                    **{f"{candidate['platform']}_slug" if candidate["platform"] == "polymarket" else candidate["platform"]: candidate["platform_market_id"]}
-                    if candidate["platform"] in ("polymarket", "predictit")
+                    **{"polymarket_slug": candidate["platform_market_id"]}
+                    if candidate["platform"] == "polymarket"
                     else {},
                 )
                 await self.upsert(mapping)
@@ -662,8 +644,6 @@ class MarketMappingStore:
             kalshi_market_id=row["kalshi_market_id"] or "",
             polymarket_slug=row["polymarket_slug"] or "",
             polymarket_question=row["polymarket_question"] or "",
-            predictit_id=row["predictit_id"] or "",
-            predictit_contract_keywords=tuple(row["predictit_contract_keywords"]) if row["predictit_contract_keywords"] else (),
             notes=row["notes"] or "",
             review_note=row["review_note"] or "",
             mapping_score=float(row["mapping_score"]) if row["mapping_score"] else 0.0,

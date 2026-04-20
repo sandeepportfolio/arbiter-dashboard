@@ -379,7 +379,6 @@ class ExecutionEngine:
         self._recovery_count = 0
         self._auditor = MathAuditor(
             max_position_usd=config.scanner.max_position_usd,
-            predictit_cap=config.scanner.predictit_cap,
         )
         self._trade_gate = None
         # Plan 02-06 integration: adapters + store + per-leg timeout

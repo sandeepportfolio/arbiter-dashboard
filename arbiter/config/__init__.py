@@ -9,8 +9,6 @@ from .settings import (
     load_config,
     polymarket_fee,
     polymarket_order_fee,
-    predictit_fee,
-    predictit_order_fee,
     similarity_score,
 )
 
@@ -25,7 +23,5 @@ __all__ = [
     "load_config",
     "polymarket_fee",
     "polymarket_order_fee",
-    "predictit_fee",
-    "predictit_order_fee",
     "similarity_score",
 ]

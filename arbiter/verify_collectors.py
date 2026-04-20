@@ -19,44 +19,6 @@ from arbiter.config.settings import ArbiterConfig
 from arbiter.utils.price_store import PriceStore
 
 
-async def verify_predictit(config):
-    """PredictIt: public API, no auth needed."""
-    logger.info("=== PredictIt Collector ===")
-    from arbiter.collectors.predictit import PredictItCollector
-
-    store = PriceStore(ttl=60)
-    collector = PredictItCollector(config.predictit, store)
-    try:
-        # PredictIt API: fetch_all_markets() returns dict of markets,
-        # extract_prices() parses them into PricePoints and pushes to store
-        all_markets = await collector.fetch_all_markets()
-        if all_markets:
-            await collector.extract_prices(all_markets)
-
-        prices = await store.get_all_prices()
-        pi_prices = [p for p in prices.values() if p.platform == "predictit"]
-        logger.info("PredictIt: %d markets fetched", len(pi_prices))
-        if pi_prices:
-            sample = pi_prices[0]
-            logger.info(
-                "  Sample: %s yes=%.2f no=%.2f",
-                sample.canonical_id,
-                sample.yes_price,
-                sample.no_price,
-            )
-            assert sample.yes_price >= 0, "yes_price must be >= 0"
-            assert sample.no_price >= 0, "no_price must be >= 0"
-            logger.info("  PASS: PredictIt schema OK")
-        else:
-            logger.warning("  WARN: No PredictIt markets returned (API may be down or no markets mapped)")
-        return True
-    except Exception as exc:
-        logger.error("  FAIL: PredictIt: %s", exc)
-        return False
-    finally:
-        await collector.stop()
-
-
 async def verify_kalshi(config):
     """Kalshi: requires auth (API key + RSA key)."""
     logger.info("=== Kalshi Collector ===")
@@ -139,7 +101,6 @@ async def main():
     config = ArbiterConfig()
     results = {}
 
-    results["predictit"] = await verify_predictit(config)
     results["kalshi"] = await verify_kalshi(config)
     results["polymarket"] = await verify_polymarket(config)
 

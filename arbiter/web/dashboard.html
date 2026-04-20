@@ -71,6 +71,12 @@
           <button id="apiConfigButton" type="button" class="icon-button" aria-label="Configure API">API</button>
           <span id="deskModeTag" class="utility-pill app-identity-pill">Public desk</span>
           <span id="apiBasePill" class="utility-pill utility-pill-muted app-api-pill">API: not configured</span>
+          <div id="killSwitchToolbar" class="kill-switch-toolbar hidden" data-ops-only="true" aria-label="Emergency controls">
+            <span id="killSwitchBadge" class="utility-pill kill-switch-badge">Disarmed</span>
+            <button id="killSwitchArm" type="button" class="ghost-button kill-switch-nav-button">Arm kill switch</button>
+            <button id="killSwitchReset" type="button" class="ghost-button kill-switch-nav-button hidden">Reset kill switch</button>
+            <span id="killSwitchCooldown" class="utility-pill utility-pill-muted kill-switch-nav-cooldown hidden">Cooldown: 00:30</span>
+          </div>
           <a id="opsShortcut" class="ghost-link app-ops-link" href="/ops">Open ops desk</a>
           <button id="logoutButton" type="button" class="icon-button hidden" aria-label="Logout">Out</button>
         </div>
@@ -90,7 +96,7 @@
                 <span id="heroUpdated" class="hero-updated">Awaiting live data</span>
               </div>
             </div>
-            <p id="heroSubtitle" class="subtitle hero-subtitle">Fee-aware routes, live charts, manual PredictIt queue, and recovery state in one operator-first view.</p>
+            <p id="heroSubtitle" class="subtitle hero-subtitle">Fee-aware routes, live charts, manual review queue, and recovery state in one operator-first view.</p>
             <div class="overview-toolbar">
               <div class="range-pills" aria-label="Performance range">
                 <button type="button" class="range-pill">1h</button>
@@ -175,38 +181,16 @@
         </aside>
       </section>
 
-      <section id="safetySection" class="panel-grid panel-grid-tight ops-only"
-               data-ops-only="true" aria-label="Safety controls">
-        <article class="panel safety-panel" data-kill-switch-panel>
-          <div class="panel-header">
-            <div>
-              <p class="panel-kicker">Safety</p>
-              <h2>Kill switch</h2>
-            </div>
-            <span id="killSwitchBadge" class="panel-badge status-badge status-ok">Disarmed</span>
+      <article id="oneLegAlertPanel" class="panel one-leg-alert-panel ops-only hidden" data-ops-only="true" data-one-leg-alert>
+        <div class="panel-header">
+          <div>
+            <p class="panel-kicker">Naked position</p>
+            <h2>One-leg exposure</h2>
           </div>
-          <p id="killSwitchSummary" class="panel-copy compact-copy">
-            Armed state halts all new order submission and cancels open orders across venues.
-          </p>
-          <div class="kill-switch-controls">
-            <button id="killSwitchArm" type="button" class="btn btn-danger kill-switch-arm">ARM KILL SWITCH</button>
-            <button id="killSwitchReset" type="button" class="btn btn-secondary kill-switch-reset hidden">Reset kill switch</button>
-            <span id="killSwitchCooldown" class="kill-switch-cooldown hidden">Cooldown: 00:30</span>
-          </div>
-          <div id="rateLimitIndicators" class="rate-limit-grid"></div>
-        </article>
-
-        <article id="oneLegAlertPanel" class="panel one-leg-alert-panel hidden" data-one-leg-alert>
-          <div class="panel-header">
-            <div>
-              <p class="panel-kicker">Naked position</p>
-              <h2>One-leg exposure</h2>
-            </div>
-            <span id="oneLegBadge" class="panel-badge status-badge status-critical">Critical</span>
-          </div>
-          <div id="oneLegAlertBody" class="stack-list"></div>
-        </article>
-      </section>
+          <span id="oneLegBadge" class="panel-badge status-badge status-critical">Critical</span>
+        </div>
+        <div id="oneLegAlertBody" class="stack-list"></div>
+      </article>
 
       <div id="shutdownBanner" class="shutdown-banner hidden" role="status" aria-live="polite">
         <span id="shutdownBannerText">Server shutting down…</span>
@@ -277,13 +261,13 @@
           <div id="profitabilityReasons" class="stack-list compact-stack"></div>
         </article>
 
-        <article class="panel infra-panel">
+        <article id="portfolioPanel" class="panel infra-panel risk-panel">
           <div class="panel-header">
             <div>
               <p class="panel-kicker">Guardrails</p>
               <h2>Risk and exposure</h2>
             </div>
-            <span id="portfolioExposureBadge" class="panel-badge">$0.00</span>
+            <span id="portfolioExposureBadge" class="panel-badge risk-exposure-badge">$0.00</span>
           </div>
           <p id="portfolioSummary" class="panel-copy">Exposure, funding, and operator risk warnings appear here so production tests stay controlled.</p>
           <div id="portfolioList" class="stack-list compact-stack"></div>
@@ -291,19 +275,19 @@
       </section>
 
       <section id="opsSection" class="panel-grid panel-grid-tight ops-only" data-ops-only="true">
-        <article class="panel infra-panel">
+        <article class="panel ops-queue-panel">
           <div class="panel-header">
             <div>
               <p class="panel-kicker">Manual Desk</p>
-              <h2>PredictIt operator queue</h2>
+              <h2>Manual operator queue</h2>
             </div>
             <span id="manualCount" class="panel-badge">0</span>
           </div>
           <p class="panel-copy">Manual venues stay visible here with exact entry and unwind steps, plus explicit confirmation controls for the operator.</p>
-          <div id="manualQueue" class="stack-list"></div>
+          <div id="manualQueue" class="stack-list queue-list"></div>
         </article>
 
-        <article class="panel">
+        <article class="panel ops-queue-panel">
           <div class="panel-header">
             <div>
               <p class="panel-kicker">Recovery</p>
@@ -312,7 +296,7 @@
             <span id="incidentCount" class="panel-badge">0</span>
           </div>
           <p class="panel-copy">Failures and one-leg risks are tracked separately so resolution is obvious, timestamped, and easy to verify.</p>
-          <div id="incidentList" class="stack-list"></div>
+          <div id="incidentList" class="stack-list queue-list"></div>
         </article>
       </section>
 
@@ -335,6 +319,14 @@
           </div>
         </div>
 
+        <div class="log-stage-summary">
+          <div class="log-section-heading log-stage-summary-heading">
+            <span>Atlas summary</span>
+            <span id="logCategoryCount" class="panel-badge">0</span>
+          </div>
+          <div id="logCategoryAtlas" class="log-category-atlas"></div>
+        </div>
+
         <div class="log-stage-layout">
           <aside class="log-atlas">
             <article class="log-brief">
@@ -349,12 +341,6 @@
                 </div>
               </div>
             </article>
-
-            <div class="log-section-heading">
-              <span>Atlas summary</span>
-              <span id="logCategoryCount" class="panel-badge">0</span>
-            </div>
-            <div id="logCategoryAtlas" class="log-category-atlas"></div>
           </aside>
 
           <section class="log-console">
@@ -384,6 +370,7 @@
             </div>
             <span id="mappingCount" class="panel-badge">0</span>
           </div>
+          <div id="mappingControls" class="infra-panel-controls mapping-panel-controls"></div>
           <div id="mappingList" class="stack-list mapping-list infra-panel-list"></div>
         </article>
 

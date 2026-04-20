@@ -91,13 +91,12 @@ class BalanceMonitor:
         self._thresholds = {
             "kalshi": config.kalshi_low,
             "polymarket": config.polymarket_low,
-            "predictit": config.predictit_low,
         }
         # Manual balance overrides (for platforms without balance API)
         self._manual_balances: Dict[str, float] = {}
 
     def set_manual_balance(self, platform: str, balance: float):
-        """Set balance manually for platforms without API (e.g., PredictIt)."""
+        """Set balance manually for platforms without API."""
         self._manual_balances[platform] = balance
         logger.info(f"Manual balance set: {platform} = ${balance:.2f}")
 

@@ -95,12 +95,6 @@ class MockConn:
                 if m.get("polymarket_slug") == sid and sid:
                     return MockRecord(m)
             return None
-        if "SELECT * FROM market_mappings WHERE predictit_id" in query:
-            pid = args[0]
-            for m in self._mappings.values():
-                if m.get("predictit_id") == pid and pid:
-                    return MockRecord(m)
-            return None
         if "SELECT * FROM mapping_candidates WHERE id" in query:
             cid = args[0]
             return MockRecord(self._candidates[cid]) if cid in self._candidates else None
@@ -160,12 +154,6 @@ class MockConn:
                 MockRecord(m) for m in self._mappings.values()
                 if m.get("polymarket_slug") == sid and sid
             ]
-        if "SELECT * FROM market_mappings WHERE predictit_id" in query:
-            pid = args[0]
-            return [
-                MockRecord(m) for m in self._mappings.values()
-                if m.get("predictit_id") == pid and pid
-            ]
         return []
 
     def _build_mapping_dict(self, args) -> dict:
@@ -179,15 +167,13 @@ class MockConn:
             "kalshi_market_id": args[6] or "",
             "polymarket_slug": args[7] or "",
             "polymarket_question": args[8] or "",
-            "predictit_id": args[9] or "",
-            "predictit_contract_keywords": list(args[10]) if args[10] else [],
-            "notes": args[11] or "",
-            "review_note": args[12] or "",
-            "mapping_score": float(args[13]) if args[13] else 0.0,
-            "confidence": float(args[14]) if args[14] else 0.0,
-            "expires_at": args[15],
-            "last_validated_at": args[16],
-            "created_at": args[17] if len(args) > 17 else utc_now(),
+            "notes": args[9] or "",
+            "review_note": args[10] or "",
+            "mapping_score": float(args[11]) if args[11] else 0.0,
+            "confidence": float(args[12]) if args[12] else 0.0,
+            "expires_at": args[13],
+            "last_validated_at": args[14],
+            "created_at": args[15] if len(args) > 15 else utc_now(),
             "updated_at": utc_now(),
         }
 
@@ -293,7 +279,6 @@ async def test_get_by_platform(mock_pool, monkeypatch):
         status=MappingStatus.CONFIRMED,
         kalshi_market_id="kalshi-xyz",
         polymarket_slug="poly-xyz",
-        predictit_id="pi-xyz",
     )
     await store.upsert(m)
 
@@ -304,10 +289,6 @@ async def test_get_by_platform(mock_pool, monkeypatch):
     by_poly = await store.get_by_platform("polymarket", "poly-xyz")
     assert by_poly is not None
     assert by_poly.canonical_id == "PLATFORM-TEST"
-
-    by_predictit = await store.get_by_platform("predictit", "pi-xyz")
-    assert by_predictit is not None
-    assert by_predictit.canonical_id == "PLATFORM-TEST"
 
     missing = await store.get_by_platform("kalshi", "nonexistent")
     assert missing is None

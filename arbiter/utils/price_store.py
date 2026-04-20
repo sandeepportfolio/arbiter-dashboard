@@ -106,7 +106,7 @@ class PriceStore:
 
     async def get_all_for_market(self, canonical_id: str) -> Dict[str, PricePoint]:
         result = {}
-        for platform in ("kalshi", "polymarket", "predictit"):
+        for platform in ("kalshi", "polymarket"):
             price = await self.get(platform, canonical_id)
             if price:
                 result[platform] = price

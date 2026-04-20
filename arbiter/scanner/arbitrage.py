@@ -15,7 +15,6 @@ from ..config.settings import (
     ScannerConfig,
     kalshi_order_fee,
     polymarket_order_fee,
-    predictit_order_fee,
 )
 from ..utils.price_store import PricePoint, PriceStore
 
@@ -131,14 +130,7 @@ def compute_fee(platform: str, price: float, quantity: int, fee_rate: float = 0.
         return kalshi_order_fee(price, quantity=quantity)
     if platform == "polymarket":
         return polymarket_order_fee(price, quantity=quantity, fee_rate=fee_rate or None, category="politics")
-    if platform == "predictit":
-        return predictit_order_fee(price, quantity=quantity, settle_price=1.0)
     return 0.0
-
-
-def compute_predictit_total_fee(buy_price: float, profit: float, quantity: int = 1) -> float:
-    settle_price = buy_price + max(profit, 0.0)
-    return predictit_order_fee(buy_price, quantity=quantity, settle_price=settle_price)
 
 
 class ArbitrageScanner:
@@ -295,7 +287,7 @@ class ArbitrageScanner:
 
         quote_age_seconds = max(yes_price_point.age_seconds, no_price_point.age_seconds)
         min_available_liquidity = min(yes_price_point.yes_volume, no_price_point.no_volume)
-        requires_manual = "predictit" in {yes_price_point.platform, no_price_point.platform}
+        requires_manual = False
         confidence = self._compute_confidence(
             quote_age_seconds=quote_age_seconds,
             min_available_liquidity=min_available_liquidity,
@@ -374,11 +366,6 @@ class ArbitrageScanner:
         capital_limited = int(self.config.max_position_usd / cost_per_pair)
         liquidity_limited = int(max(min(yes_price_point.yes_volume, no_price_point.no_volume), 1))
         size = max(1, min(capital_limited, liquidity_limited))
-
-        if yes_price_point.platform == "predictit":
-            size = min(size, int(self.config.predictit_cap / max(yes_price, 0.01)))
-        if no_price_point.platform == "predictit":
-            size = min(size, int(self.config.predictit_cap / max(no_price, 0.01)))
         return max(size, 0)
 
     def _compute_confidence(

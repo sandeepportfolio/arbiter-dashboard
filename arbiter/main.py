@@ -25,7 +25,6 @@ from .utils.logger import setup_logging, TradeLogger
 from .utils.price_store import PricePoint, PriceStore
 from .collectors.kalshi import KalshiCollector
 from .collectors.polymarket import PolymarketCollector
-from .collectors.predictit import PredictItCollector
 from .scanner.arbitrage import ArbitrageScanner
 from .monitor.balance import BalanceMonitor, BalanceSnapshot
 from .execution.engine import ExecutionEngine
@@ -156,7 +155,6 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     # ── Collectors ─────────────────────────────────────────────
     kalshi = KalshiCollector(config.kalshi, price_store)
     polymarket = PolymarketCollector(config.polymarket, price_store)
-    predictit = PredictItCollector(config.predictit, price_store)
 
     # ── Scanner ────────────────────────────────────────────────
     scanner = ArbitrageScanner(config.scanner, price_store)
@@ -167,7 +165,6 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     collectors_dict = {
         "kalshi": kalshi,
         "polymarket": polymarket,
-        "predictit": predictit,
     }
     monitor = BalanceMonitor(config.alerts, collectors_dict)
 
@@ -237,7 +234,6 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
             max_per_market_usd=config.scanner.max_position_usd,
             kalshi_min_balance=config.alerts.kalshi_low,
             polymarket_min_balance=config.alerts.polymarket_low,
-            predictit_min_balance=config.alerts.predictit_low,
         ),
         config.scanner,
         engine,
@@ -367,7 +363,6 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
         tasks.extend([
             asyncio.create_task(kalshi.run(), name="kalshi-collector"),
             asyncio.create_task(polymarket.run(), name="poly-collector"),
-            asyncio.create_task(predictit.run(), name="pi-collector"),
             asyncio.create_task(scanner.run(), name="arb-scanner"),
             asyncio.create_task(monitor.run(alert_queue), name="balance-monitor"),
             asyncio.create_task(engine.run(arb_queue), name="execution-engine"),
@@ -420,7 +415,6 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     engine.stop_heartbeat()
     await kalshi.stop()
     await polymarket.stop()
-    await predictit.stop()
     await scanner.stop()
     await monitor.stop()
     await engine.stop()
@@ -451,7 +445,6 @@ async def seed_dashboard_fixture(
     monitor._balances = {
         "kalshi": BalanceSnapshot(platform="kalshi", balance=148.22, timestamp=now, is_low=False),
         "polymarket": BalanceSnapshot(platform="polymarket", balance=79.54, timestamp=now, is_low=False),
-        "predictit": BalanceSnapshot(platform="predictit", balance=62.10, timestamp=now, is_low=True),
     }
 
     seed_prices = [
@@ -486,16 +479,17 @@ async def seed_dashboard_fixture(
             mapping_score=0.42,
         ),
         PricePoint(
-            platform="predictit",
+            platform="kalshi",
             canonical_id="DEM_SENATE_2026",
             yes_price=0.32,
             no_price=0.68,
             yes_volume=180,
             no_volume=180,
             timestamp=now,
-            raw_market_id="PI-8155-DEM",
-            yes_market_id="PI-8155-DEM",
-            no_market_id="PI-8155-DEM-NO",
+            raw_market_id="K-SEN-2026-DEM",
+            yes_market_id="K-SEN-2026-DEM",
+            no_market_id="K-SEN-2026-DEM-NO",
+            fee_rate=0.07,
             mapping_status="confirmed",
             mapping_score=0.91,
         ),
@@ -515,16 +509,17 @@ async def seed_dashboard_fixture(
             mapping_score=0.91,
         ),
         PricePoint(
-            platform="predictit",
+            platform="kalshi",
             canonical_id="GOP_SENATE_2026",
             yes_price=0.29,
             no_price=0.71,
             yes_volume=165,
             no_volume=165,
             timestamp=now,
-            raw_market_id="PI-8155-GOP",
-            yes_market_id="PI-8155-GOP",
-            no_market_id="PI-8155-GOP-NO",
+            raw_market_id="K-SEN-2026-GOP",
+            yes_market_id="K-SEN-2026-GOP",
+            no_market_id="K-SEN-2026-GOP-NO",
+            fee_rate=0.07,
             mapping_status="confirmed",
             mapping_score=0.89,
         ),

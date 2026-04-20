@@ -1,7 +1,7 @@
 # Requirements: Arbiter Dashboard
 
 **Defined:** 2026-04-16
-**Core Value:** Execute live arbitrage trades across all three platforms without losing money to bugs, stale prices, or partial fills.
+**Core Value:** Execute live arbitrage trades across both platforms (Kalshi, Polymarket) without losing money to bugs, stale prices, or partial fills.
 
 ## v1 Requirements
 
@@ -13,7 +13,7 @@ Requirements for production-ready live trading. Each maps to roadmap phases.
 - [ ] **API-02**: Polymarket ClobClient initialized with correct `signature_type` and `funder` parameters for authenticated order placement
 - [ ] **API-03**: Polymarket heartbeat manager sends keepalive every 5 seconds to prevent open order auto-cancellation
 - [ ] **API-04**: Fee calculations use correct platform-specific rates (Polymarket category rates: crypto 0.072, sports 0.03, politics 0.04, geopolitics 0.0)
-- [ ] **API-05**: PredictIt scoped to read-only price signal -- removed from automated execution paths
+- [x] **API-05**: Supported platforms constrained to Kalshi + Polymarket (PredictIt removed in Phase 4.1)
 - [ ] **API-06**: Polymarket platform decision resolved (international vs US) with correct SDK, endpoints, and auth method
 - [ ] **API-07**: All platform collectors verified against current API responses (schema, field names, auth flow)
 
@@ -72,11 +72,11 @@ Deferred to after live trading is proven profitable.
 
 | Feature | Reason |
 |---------|--------|
-| PredictIt automated execution | No trading API exists -- read-only price data only |
+| PredictIt integration (any form) | Removed in Phase 4.1 -- dead weight, never went live |
 | Multi-user dashboard | Single operator system, adds unnecessary complexity |
 | Mobile app | Web dashboard sufficient for monitoring |
 | Backtesting engine | Forward-testing with small capital is more reliable for this domain |
-| Additional platforms | Stabilize three before expanding |
+| Additional platforms | Stabilize both before expanding |
 | High-frequency strategies | Prediction markets have wide spreads and slow settlement -- HFT doesn't apply |
 | Automated position scaling | Manual capital allocation until system is proven profitable |
 
@@ -88,7 +88,7 @@ Deferred to after live trading is proven profitable.
 | API-02 | Phase 1 | Pending |
 | API-03 | Phase 1 | Pending |
 | API-04 | Phase 1 | Pending |
-| API-05 | Phase 1 | Pending |
+| API-05 | Phase 4.1 | Complete |
 | API-06 | Phase 1 | Pending |
 | API-07 | Phase 1 | Pending |
 | SAFE-01 | Phase 3 | Pending |

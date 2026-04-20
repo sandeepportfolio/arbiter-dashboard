@@ -3,16 +3,16 @@
 
 **Arbiter Dashboard**
 
-A cross-platform prediction market arbitrage system that detects price discrepancies across Kalshi, Polymarket, and PredictIt, then executes trades to capture the spread. It includes a real-time WebSocket dashboard for monitoring prices, opportunities, positions, and execution. The system is built but untested against live APIs.
+A cross-platform prediction market arbitrage system that detects price discrepancies across Kalshi and Polymarket, then executes trades to capture the spread. It includes a real-time WebSocket dashboard for monitoring prices, opportunities, positions, and execution. The system is built but untested against live APIs.
 
-**Core Value:** Execute live arbitrage trades across all three platforms without losing money to bugs, stale prices, or partial fills.
+**Core Value:** Execute live arbitrage trades across both platforms without losing money to bugs, stale prices, or partial fills.
 
 ### Constraints
 
 - **Capital**: Under $1K per platform initially -- system must handle small position sizes
 - **Timeline**: ASAP -- get to live trades as fast as possible, even with manual monitoring
 - **Risk tolerance**: Low -- cannot afford to lose capital to bugs. Safety > speed.
-- **Platform APIs**: Must comply with rate limits and terms of service for all three platforms
+- **Platform APIs**: Must comply with rate limits and terms of service for both platforms
 - **Auth credentials**: API keys stored in .env file, RSA keys in arbiter/keys/ (git-ignored)
 <!-- GSD:project-end -->
 
@@ -65,7 +65,6 @@ A cross-platform prediction market arbitrage system that detects price discrepan
 ## Supported Markets
 - **Kalshi** - Prediction market with authentication (`py-clob-client` for CLOB orders)
 - **Polymarket** - Ethereum-based AMM via CLOB (`web3` + `py-clob-client`)
-- **PredictIt** - Public API, no authentication required
 ## Key Versions
 - Node.js: 18+ (ES2022 target)
 - Python: 3.12
@@ -87,25 +86,23 @@ Conventions not yet established. Will populate as patterns emerge during develop
 - **Polyglot:** TypeScript CLI for dry-run pipeline, Python backend for live trading and dashboard API
 - **Async-first:** All I/O is non-blocking (aiohttp, asyncpg, asyncio)
 - **Event-driven:** Price updates trigger scanner, which broadcasts opportunities to subscribers
-- **Fee-aware:** Cross-platform arbitrage math includes venue-specific fee structures (Kalshi quadratic, Polymarket market-specific, PredictIt profit/withdrawal fees)
+- **Fee-aware:** Cross-platform arbitrage math includes venue-specific fee structures (Kalshi quadratic, Polymarket market-specific)
 - **Dual execution modes:** Dry-run simulation (TypeScript) and live trading (Python)
 ## Layers
-- **Purpose:** Fetch live market prices from three platforms (Kalshi, Polymarket, PredictIt)
+- **Purpose:** Fetch live market prices from two platforms (Kalshi, Polymarket)
 - **Location:** `arbiter/collectors/` (Python), `src/collectors/` (TypeScript)
 - **Contains:** Platform-specific HTTP clients with retry logic and circuit breakers
 - **Depends on:** External market APIs, Redis quote cache
 - **Used by:** Price scanner, portfolio monitor
 - `arbiter/collectors/kalshi.py` - Kalshi market data (authenticated CLOB queries)
 - `arbiter/collectors/polymarket.py` - Polymarket via thegraph.com indexing
-- `arbiter/collectors/predictit.py` - PredictIt public API
-- `src/collectors/predictit-client.ts` - TypeScript PredictIt client (CLI only)
 - `src/collectors/kalshi-client.ts` - TypeScript Kalshi client (CLI only)
 - **Purpose:** Centralized quote cache with subscriptions for state changes
 - **Location:** `arbiter/utils/price_store.py`
 - **Contains:** In-memory and Redis-backed quote storage (30-second TTL)
 - **Depends on:** Redis client
 - **Used by:** Scanner, execution engine, portfolio monitor
-- **Purpose:** Canonical market identification (link Kalshi market to Polymarket contract to PredictIt market)
+- **Purpose:** Canonical market identification (link Kalshi market to Polymarket contract)
 - **Location:** `arbiter/mapping/market_map.py`, `arbiter/config/settings.py:MARKET_MAP`
 - **Contains:** Mapping status (candidate, review, confirmed), scoring algorithm
 - **Depends on:** None (config only)
@@ -117,7 +114,7 @@ Conventions not yet established. Will populate as patterns emerge during develop
 - **Used by:** Execution engine, portfolio monitor
 - `ArbitrageScanner` - Main scanning loop
 - `ArbitrageOpportunity` - Dataclass for opportunity representation
-- Fee functions: `kalshi_order_fee()`, `polymarket_order_fee()`, `predictit_order_fee()`
+- Fee functions: `kalshi_order_fee()`, `polymarket_order_fee()`
 - **Purpose:** Order submission, fill simulation, state tracking
 - **Location:** `arbiter/execution/engine.py`
 - **Contains:**
@@ -200,7 +197,6 @@ Conventions not yet established. Will populate as patterns emerge during develop
 - Token expiry: 7 days, verified on each request
 - Kalshi: Quadratic fee function `kalshi_order_fee()` with cent rounding
 - Polymarket: Market-category-specific rates with fallback defaults
-- PredictIt: Profit fee (10%) + withdrawal fee (5%) applied on settlement
 <!-- GSD:architecture-end -->
 
 <!-- GSD:skills-start source:skills/ -->

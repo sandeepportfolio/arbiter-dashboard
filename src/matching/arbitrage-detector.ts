@@ -15,7 +15,6 @@ export interface DetectorConfig {
 
 const DEFAULT_FEES: Record<string, number> = {
   kalshi: 0.01, // ~1% fee estimate
-  predictit: 0.10, // PredictIt charges 10% on profits + 5% withdrawal
   polymarket: 0.02,
 };
 
