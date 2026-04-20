@@ -217,7 +217,27 @@ describe("buildRateLimitView", () => {
 
   // G-5 fix (Plan 04-09): circuit-open collector promotes tone to "crit" so
   // operators see the red state in the green -> amber -> red SAFE-04 progression.
-  test("circuit-open collector promotes tone to crit", () => {
+  // Production collector state lives at state.system.collectors (dashboard.js:1112).
+  test("circuit-open collector promotes tone to crit (state.system.collectors)", () => {
+    const rows = buildRateLimitView({
+      safety: {
+        rateLimits: {
+          kalshi: { available_tokens: 10, max_requests: 10, remaining_penalty_seconds: 0 },
+        },
+      },
+      system: {
+        collectors: {
+          kalshi: { circuit: { state: "open" } },
+        },
+      },
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].tone).toBe("crit");
+    expect(rows[0].circuitState).toBe("open");
+  });
+
+  // Fallback path: top-level state.collectors is still supported for test harnesses.
+  test("top-level state.collectors fallback still works", () => {
     const rows = buildRateLimitView({
       safety: {
         rateLimits: {
@@ -228,7 +248,6 @@ describe("buildRateLimitView", () => {
         kalshi: { circuit: { state: "open" } },
       },
     });
-    expect(rows).toHaveLength(1);
     expect(rows[0].tone).toBe("crit");
     expect(rows[0].circuitState).toBe("open");
   });
@@ -240,8 +259,10 @@ describe("buildRateLimitView", () => {
           kalshi: { available_tokens: 10, max_requests: 10, remaining_penalty_seconds: 0 },
         },
       },
-      collectors: {
-        kalshi: { circuit: { state: "closed" } },
+      system: {
+        collectors: {
+          kalshi: { circuit: { state: "closed" } },
+        },
       },
     });
     expect(rows[0].tone).toBe("ok");
@@ -255,7 +276,7 @@ describe("buildRateLimitView", () => {
           kalshi: { available_tokens: 10, max_requests: 10, remaining_penalty_seconds: 0 },
         },
       },
-      // collectors intentionally omitted
+      // collectors intentionally omitted (neither state.system.collectors nor state.collectors)
     });
     expect(rows[0].circuitState).toBe("closed");
     expect(rows[0].tone).toBe("ok");

@@ -232,7 +232,11 @@ export function buildSafetyView(state, options = {}) {
 
 export function buildRateLimitView(state) {
   const limits = state?.safety?.rateLimits ?? {};
-  const collectors = state?.collectors ?? {};
+  // Dashboard stores collectors under state.system.collectors (dashboard.js:1112
+  // sets `state.system = message.payload` on `system`/`bootstrap` WS messages).
+  // Accept a top-level `state.collectors` fallback for test harnesses that
+  // synthesize a trimmed state object.
+  const collectors = state?.system?.collectors ?? state?.collectors ?? {};
   return Object.entries(limits).map(([platform, stats]) => {
     const remainingPenalty = Number(stats?.remaining_penalty_seconds ?? 0);
     const available = Number(stats?.available_tokens ?? 0);
