@@ -1,194 +1,241 @@
 ---
 phase: 04-sandbox-validation
-verified: 2026-04-17T09:00:00Z
+verified: 2026-04-20T00:00:00Z
 status: human_needed
-score: 14/14
+score: 20/20
 overrides_applied: 0
+re_verification:
+  previous_status: human_needed
+  previous_score: 14/14
+  previous_verified: 2026-04-17T09:00:00Z
+  gaps_closed:
+    - "G-1: KalshiAdapter._list_orders signed the path WITH querystring → HTTP 401 INCORRECT_API_KEY_SIGNATURE → SAFE-01 cancel_all silently enumerated zero orders."
+    - "G-2: Sandbox tests (timeout_cancel, graceful_shutdown) passed unsupported `client_order_id=` kwarg to adapter.place_resting_limit → TypeError before any HTTP call."
+    - "G-3: Root conftest.py pytest_pyfunc_call did not resolve async-generator fixtures (balance_snapshot) in pytest-asyncio STRICT mode."
+    - "G-4: test_kalshi_fok_rejection asserted CANCELLED only, but demo Kalshi returns HTTP 409 → FAILED. EXEC-01 actually held (fill_qty==0) but status-only assertion masked this."
+    - "G-5: `#rateLimitIndicators` DOM host missing from index.html; buildRateLimitView never emitted `crit` tone for circuit-open collectors."
+  gaps_remaining: []
+  regressions: []
+  new_must_haves: 6  # Added by 04-09-PLAN frontmatter: truths 15-20
+  note: "Score widened from 14/14 to 20/20: 14 original scaffolding truths (all still verified, no regressions) + 6 new gap-closure truths from 04-09-PLAN must_haves.truths. Status stays `human_needed` — the gap closure unblocked the CODE-LEVEL obstacles but did NOT remove the operator gating. Live-fire scenarios 1, 2, 3, 4, 5, 6, 9, 10 + Browser UAT 11, 12, 13 still require operator `.env.sandbox` provisioning and a real Kalshi demo credential re-sweep."
 human_verification:
-  - test: "Run Scenario 1 — kalshi_happy_lifecycle"
+  - test: "Re-run Scenario 1 — kalshi_happy_lifecycle"
     expected: "pytest -m live --live arbiter/sandbox/test_kalshi_happy_path.py passes; evidence/04/kalshi_happy_lifecycle_*/ directory created; scenario_manifest.json shows status=pass; PnL within ±$0.01; fee within ±$0.01 (TEST-01 + TEST-04)"
-    why_human: ".env.sandbox not provisioned on dev machine; requires KALSHI_DEMO_API_KEY_ID, KALSHI_PRIVATE_KEY_PATH, and SANDBOX_HAPPY_TICKER pointing at a live liquid Kalshi demo market"
-  - test: "Run Scenario 2 — polymarket_happy_lifecycle"
-    expected: "pytest -m live --live arbiter/sandbox/test_polymarket_happy_path.py passes; evidence/04/polymarket_happy_lifecycle_*/ directory created; scenario_manifest.json shows status=pass; real $1 fill confirmed (TEST-02 + TEST-04)"
-    why_human: ".env.sandbox not provisioned; requires POLY_PRIVATE_KEY (throwaway wallet), POLY_FUNDER, and a funded Polymarket test wallet"
-  - test: "Run Scenario 3 — kalshi_fok_rejected_on_thin_market"
-    expected: "pytest -m live --live arbiter/sandbox/test_kalshi_fok_rejection.py passes; FOK order returns rejected/unfilled status without partial fill; no open position left (EXEC-01 + TEST-01)"
-    why_human: ".env.sandbox not provisioned; requires SANDBOX_FOK_TICKER pointing at a thin Kalshi demo market"
-  - test: "Run Scenario 4 — polymarket_fok_rejected_on_thin_market"
-    expected: "pytest -m live --live arbiter/sandbox/test_polymarket_fok_rejection.py passes; Polymarket FOK returns unfilled; PHASE4_MAX_ORDER_USD hard-lock enforced (EXEC-01 + TEST-02)"
-    why_human: ".env.sandbox not provisioned; requires POLY_PRIVATE_KEY and a thin Polymarket market"
-  - test: "Run Scenario 5 — kalshi_timeout_triggers_cancel_via_client_order_id"
-    expected: "pytest -m live --live arbiter/sandbox/test_kalshi_timeout_cancel.py passes; resting limit order is placed then cancel_order(order) called within timeout window; order confirmed cancelled; no open exposure (TEST-01 + EXEC-05 + EXEC-04)"
-    why_human: ".env.sandbox not provisioned; requires Kalshi demo credentials and PHASE4_KILLSWITCH_TICKER"
-  - test: "Run Scenario 6 — kill_switch_cancels_open_kalshi_demo_order"
-    expected: "pytest -m live --live arbiter/sandbox/test_safety_killswitch.py passes; supervisor.trip_kill fires within 5s; open Kalshi demo order is cancelled; WS kill_switch event emitted (SAFE-01 + TEST-01)"
-    why_human: ".env.sandbox not provisioned; requires Kalshi demo credentials + PHASE4_KILLSWITCH_TICKER pointing at a resting-capable market"
-  - test: "Run Scenario 7 — one_leg_recovery_injected"
-    expected: "pytest -m live --live arbiter/sandbox/test_one_leg_exposure.py passes; Polymarket leg patched to raise; one-leg exposure incident logged; recovery workflow completes without leaving open Kalshi position (SAFE-03 + TEST-01)"
-    why_human: ".env.sandbox not provisioned; requires Kalshi demo credentials; Polymarket client is patched/injected so no real Polymarket credentials needed for this scenario"
-  - test: "Run Scenario 8 — rate_limit_burst_triggers_backoff_and_ws"
-    expected: "pytest -m live --live arbiter/sandbox/test_rate_limit_burst.py passes (or xfail on 403 FORBIDDEN per design); RateLimiter.apply_retry_after transitions to THROTTLED state; rate_limit_state WS payload emitted (SAFE-04 + TEST-01)"
-    why_human: ".env.sandbox not provisioned; test intentionally calls pytest.skip for 403 FORBIDDEN — still needs Kalshi demo credentials to verify the non-403 backoff path"
-  - test: "Run Scenario 9 — sigint_cancels_open_kalshi_demo_orders"
-    expected: "pytest -m live --live arbiter/sandbox/test_graceful_shutdown.py passes; SIGINT to arbiter.main subprocess triggers graceful cancel of all open Kalshi demo orders; process exits cleanly with phase=shutting_down log (SAFE-05 + TEST-01)"
-    why_human: ".env.sandbox not provisioned; requires Kalshi demo credentials and PHASE4_SHUTDOWN_TICKER; test spawns real subprocess"
-  - test: "Run terminal reconciliation and verify 04-VALIDATION.md gate status"
-    expected: "pytest -m live --live arbiter/sandbox/test_phase_reconciliation.py passes; 04-VALIDATION.md rewritten with phase_gate_status: PASS (or FAIL with breach details); all 9 scenarios observed; D-19 hard gate enforced (TEST-03 + TEST-04)"
-    why_human: "Requires all 9 scenarios above to have been run first; aggregator reads evidence/04/ and rewrites 04-VALIDATION.md"
-  - test: "Browser UAT — Kill-switch ARM/RESET end-to-end"
-    expected: "Dashboard ARM button triggers kill-switch; RESET button clears it; UI reflects WS kill_switch event in real time (SAFE-01 UI)"
-    why_human: "UI behavior cannot be verified programmatically; requires browser + running arbiter with WS connection"
-  - test: "Browser UAT — Shutdown banner visibility"
-    expected: "During graceful shutdown (Scenario 9), dashboard displays shutdown banner; banner dissappears after process exits (SAFE-05 UI)"
-    why_human: "Visual / real-time UI behavior; requires running arbiter subprocess and open browser"
-  - test: "Browser UAT — Rate-limit pill color transition"
-    expected: "Rate-limit status pill in dashboard transitions from green to yellow/red when rate_limit_state payload arrives via WS during Scenario 8 (SAFE-04 UI)"
-    why_human: "Visual color-state transition; requires live WS event and browser observation"
+    why_human: "Requires real Kalshi demo credentials (.env.sandbox) + liquid Kalshi demo market. Prior 2026-04-20 sweep blocked on demo-wide zero liquidity (400 of 3200 markets probed, all empty) — not a code gap; awaiting demo market-maker bootstrap or alternate ticker selection."
+  - test: "Re-run Scenario 2 — polymarket_happy_lifecycle"
+    expected: "pytest -m live --live arbiter/sandbox/test_polymarket_happy_path.py passes; real $1 fill confirmed (TEST-02 + TEST-04)"
+    why_human: ".env.sandbox not yet provisioned with POLY_PRIVATE_KEY (throwaway wallet) funded on Polygon. Not in 2026-04-20 Kalshi-gated sweep scope — still pending operator run."
+  - test: "Re-run Scenario 3 — kalshi_fok_rejected_on_thin_market (G-4 unblocked)"
+    expected: "pytest -m live --live arbiter/sandbox/test_kalshi_fok_rejection.py passes; assertion now accepts OrderStatus.CANCELLED OR OrderStatus.FAILED AND enforces order.fill_qty == 0 (EXEC-01 + TEST-01)"
+    why_human: "Code-level assertion widened per G-4 fix (commit 245319c). Operator must re-run against demo to confirm the HTTP 409 → FAILED path now passes the widened assertion."
+  - test: "Re-run Scenario 4 — polymarket_fok_rejected_on_thin_market"
+    expected: "pytest -m live --live arbiter/sandbox/test_polymarket_fok_rejection.py passes; PHASE4_MAX_ORDER_USD hard-lock enforced (EXEC-01 + TEST-02)"
+    why_human: "Requires Polymarket test wallet + thin market. Not in Kalshi-gated scope — still pending operator run."
+  - test: "Re-run Scenario 5 — kalshi_timeout_triggers_cancel_via_client_order_id (G-2 unblocked)"
+    expected: "pytest -m live --live arbiter/sandbox/test_kalshi_timeout_cancel.py passes; resting limit placed via adapter.place_resting_limit (no client_order_id kwarg); cancel via effective_client_order_id from Order.external_client_order_id (TEST-01 + EXEC-05 + EXEC-04)"
+    why_human: "Prior run failed with TypeError before any HTTP call (client_order_id kwarg). G-2 fix (commit 1e21684) drops the kwarg and consumes adapter-generated id. Operator re-run needed to confirm end-to-end with real demo."
+  - test: "Re-run Scenario 6 — kill_switch_cancels_open_kalshi_demo_order (G-1 unblocked — MOST IMPORTANT)"
+    expected: "pytest -m live --live arbiter/sandbox/test_safety_killswitch.py passes; supervisor.trip_kill fires within 5s; Kalshi demo order CANCELLED (previously survived because _list_all_open_orders returned HTTP 401) (SAFE-01 + TEST-01)"
+    why_human: "PRODUCTION BUG fix validation. Prior sweep confirmed resting-order placement works but cancel_all enumerated zero orders due to G-1 signature bug. Dangling order `6f70eeb6-dcf7-45c3-b0bf-2083cf279120` had to be manually cancelled. After G-1 fix (commit 7989972), cancel_all should enumerate correctly. Operator MUST re-run to validate SAFE-01 end-to-end against real exchange."
+  - test: "Scenario 7 — one_leg_recovery_injected (already PASSED 2026-04-20)"
+    expected: "Test passed 2026-04-20 with --asyncio-mode=auto (mocked adapter — no real HTTP). After G-3 fix (commit 134a685), should also pass in STRICT mode without the --asyncio-mode=auto workaround (SAFE-03 + TEST-01)"
+    why_human: "Regression check: operator should verify the G-3 fix does not break the mocked scenario that previously passed. Low risk — async-gen resolver is backward-compatible per review."
+  - test: "Scenario 8 — rate_limit_burst (already PASSED 2026-04-20)"
+    expected: "Test passed 2026-04-20 with --asyncio-mode=auto. After G-3 fix, should also pass in STRICT mode without the workaround (SAFE-04 + TEST-01)"
+    why_human: "Same as Scenario 7 — regression check for G-3 async-gen fix."
+  - test: "Re-run Scenario 9 — sigint_cancels_open_kalshi_demo_orders (G-2 unblocked)"
+    expected: "pytest -m live --live arbiter/sandbox/test_graceful_shutdown.py passes; SIGINT cancels all open Kalshi demo orders via effective_client_order_id (SAFE-05 + TEST-01)"
+    why_human: "Same G-2 fix as Scenario 5. Prior run failed with TypeError at helper step 1. Operator re-run needed. Also depends on G-1 indirectly (cancel_all path enumerates open orders)."
+  - test: "Run terminal reconciliation — 04-VALIDATION.md gate"
+    expected: "pytest -m live --live arbiter/sandbox/test_phase_reconciliation.py passes; 04-VALIDATION.md rewritten to `phase_gate_status: PASS`; all 9 scenarios observed; D-19 hard gate enforced (TEST-03 + TEST-04)"
+    why_human: "Requires all 9 scenarios to have evidence directories populated from live-fire sweep. Current 04-VALIDATION.md still in `phase_gate_status: PENDING` / `total_scenarios_observed: 0`. Blocked by operator completing scenarios 1-9."
+  - test: "Browser UAT 11 — Kill-switch ARM/RESET end-to-end (already PASSED 2026-04-20)"
+    expected: "UI ARM/RESET round-trip; WS kill_switch event reflected real-time (SAFE-01 UI)"
+    why_human: "Passed 2026-04-20 via output/uat_11_13.mjs with three screenshots (test11-pre-arm, test11-armed, test11-reset). Regression-unchanged by Plan 04-09 — no dashboard.js modifications to kill-switch wiring. No re-run required unless dashboard.js changes."
+  - test: "Browser UAT 12 — Shutdown banner visibility (already PASSED 2026-04-20)"
+    expected: "Banner appears on phase=shutting_down, disappears on phase=null (SAFE-05 UI)"
+    why_human: "Passed 2026-04-20 via synthetic WS payload injection. Not regressed by Plan 04-09."
+  - test: "Browser UAT 13 — Rate-limit pill color transition ok→warn→crit (G-5 unblocks crit tone; previously PARTIAL)"
+    expected: "Dashboard rate-limit pills render inside ops-section host (#rateLimitIndicators now present per G-5 fix), show ok/warn/crit tone transitions matching RateLimiter state + collector circuit state (SAFE-04 UI)"
+    why_human: "G-5 fix (commit 5f3787f) adds `#rateLimitIndicators` host to index.html:286 and emits `crit` tone when collectors[platform].circuit.state === 'open'. Operator must re-run UAT 13 browser test to observe all three tones in a live session. Prior UAT was PARTIAL because no host + no crit emission."
 ---
 
-# Phase 4: Sandbox Validation — Verification Report
+# Phase 4: Sandbox Validation — Verification Report (re-verification after 04-09 gap closure)
 
 **Phase Goal:** The full pipeline (collect -> scan -> execute -> monitor -> reconcile) is validated end-to-end against real platform APIs in sandbox/demo mode with no real money at risk.
-**Verified:** 2026-04-17T09:00:00Z
-**Status:** HUMAN NEEDED — scaffolding complete and verified; live-fire requires operator `.env.sandbox` provisioning
-**Re-verification:** No — initial verification
+**Verified:** 2026-04-20T00:00:00Z
+**Status:** HUMAN NEEDED — gap-closure mechanical fixes landed; live-fire re-sweep required with operator `.env.sandbox`
+**Re-verification:** Yes — following Plan 04-09 gap closure (commits 44cd93a..f84ad81 on HEAD c6fc719^..HEAD)
+**Previous Verification:** 2026-04-17T09:00:00Z — 14/14 static must-haves verified, operator ran 2026-04-20 Kalshi-gated sweep and surfaced G-1..G-5
 
 ---
 
 ## Goal Achievement
 
-Phase 4's goal has two distinct components:
+Phase 4's goal has three distinct components now:
 
-1. **Scaffolding** (Wave 0 + Wave 1): Build the test harness, fixtures, scenario skeletons, reconciliation engine, and configuration guards that make live-fire safe and repeatable. All scaffolding is VERIFIED.
+1. **Scaffolding** (Wave 0 + Wave 1): Build the test harness, fixtures, scenario skeletons, reconciliation engine, and configuration guards. All 14 original scaffolding truths remain VERIFIED — no regressions from 04-09.
 
-2. **Live-fire execution** (Wave 2 + Wave 3): Run all 9 scenarios against real Kalshi demo and Polymarket test APIs. These require `.env.sandbox` provisioning on a machine with real API credentials. All live-fire scenarios are surfaced as HUMAN NEEDED — not gaps, not stubs.
+2. **Gap closure** (Plan 04-09): Fix the 5 gaps surfaced by the 2026-04-20 operator sweep — one real production bug (G-1), two test-harness bugs (G-2, G-4), one scaffolding bug (G-3), one UI wiring regression (G-5). All 6 gap-closure truths from 04-09-PLAN frontmatter are VERIFIED mechanically in code.
+
+3. **Live-fire execution** (Wave 2 + Wave 3 + operator re-sweep): Run all 9 scenarios against real Kalshi demo and Polymarket test APIs with the gap-closure code landed. These still require `.env.sandbox` provisioning. All live-fire scenarios are surfaced as HUMAN NEEDED — the gap closure did NOT remove the operator gating, it only unblocked the code-level obstacles that prevented prior runs from completing.
 
 The phase gate (04-VALIDATION.md `phase_gate_status: PASS`) cannot be met by automated checks alone. It requires operator action.
 
 ---
 
-### Observable Truths
+### Observable Truths — Original 14 (regression check)
+
+All 14 truths from 2026-04-17 verification are re-checked for regression. None broke.
 
 | # | Truth | Status | Evidence |
 |---|-------|--------|----------|
-| 1 | `@pytest.mark.live` opt-in registered; tests skip without `--live`, pass with it | VERIFIED | pytest sandbox suite: 19 passed, 11 skipped (0.30s); smoke tests confirm 6 pass + 1 skip on live-gated marker |
-| 2 | `sandbox_db`, `demo_kalshi_adapter`, `poly_test_adapter` guard-rail fixtures assert env vars before yielding | VERIFIED | `arbiter/sandbox/fixtures/` submodule exists; conftest.py present; 04-01-SUMMARY confirms all self-check items passed |
-| 3 | `evidence_dir` fixture attaches structlog ProcessorFormatter + SHARED_PROCESSORS + `run.log.jsonl` per scenario | VERIFIED | `arbiter/sandbox/evidence.py` exists (confirmed in dir listing); 04-01-SUMMARY self-check: evidence fixture creates `evidence/04/<scenario>_<ts>/run.log.jsonl` |
-| 4 | `balance_snapshot` fixture uses real `KalshiCollector` + `PolymarketCollector`, no `object()` placeholders | VERIFIED | 04-01-SUMMARY confirms real constructor signatures discovered and wired: `KalshiAdapter(config, session, auth, rate_limiter, circuit)` |
-| 5 | `PHASE4_MAX_ORDER_USD` notional hard-lock rejects oversize orders at the PolymarketAdapter layer | VERIFIED | 04-02-SUMMARY: 5/5 hard-lock unit tests pass; `arbiter/execution/adapters/test_polymarket_phase4_hardlock.py` present |
-| 6 | `KalshiConfig.base_url` and `ws_url` are env-var-sourced (default to demo in sandbox); settings defaults preserved | VERIFIED | 04-02-SUMMARY: python sanity checks on settings.py defaults pass; `.env.sandbox.template` includes `KALSHI_BASE_URL=https://demo-api.kalshi.co/trade-api/v2` |
-| 7 | `docker-compose.yml` supports `POSTGRES_MULTIPLE_DATABASES`; `init-sandbox.sh` creates `arbiter_sandbox` DB | VERIFIED | 04-02-SUMMARY: `docker-compose config && bash -n arbiter/sql/init-sandbox.sh` passed; multi-DB config confirmed |
-| 8 | `.env.sandbox.template` exists with all required vars including `PHASE4_MAX_ORDER_USD=5` | VERIFIED | 04-02-SUMMARY confirms file created; 04-01-PLAN artifact list includes `.env.sandbox.template` |
-| 9 | `.gitignore` excludes `.env.sandbox` and `evidence/04/` directories | VERIFIED | 04-02-SUMMARY confirms .gitignore updated |
-| 10 | `KalshiAdapter.place_resting_limit` implemented with 21 unit tests; existing 74 adapter tests unchanged | VERIFIED | 04-02.1-SUMMARY: 21/21 new tests pass + 74/74 existing unchanged; `arbiter/execution/adapters/test_kalshi_place_resting_limit.py` present |
-| 11 | All 9 scenario test files exist and skip cleanly without `--live` flag | VERIFIED | Directory listing confirms all 9 files: test_kalshi_happy_path.py, test_kalshi_fok_rejection.py, test_kalshi_timeout_cancel.py, test_polymarket_happy_path.py, test_polymarket_fok_rejection.py, test_safety_killswitch.py, test_one_leg_exposure.py, test_rate_limit_burst.py, test_graceful_shutdown.py; pytest run: 11 skipped |
-| 12 | `aggregator.py` library implements `collect_scenario_manifests`, `reconcile_pnl_across_manifests`, `render_validation_markdown` | VERIFIED | 04-08-SUMMARY: 820-line aggregator.py; 13/13 unit tests pass in test_aggregator.py |
-| 13 | `test_phase_reconciliation.py` enforces D-19 hard gate (any real tolerance breach blocks Phase 5) | VERIFIED | 04-08-SUMMARY: 90-line terminal test confirmed; D-19 gate logic in aggregator + terminal test |
-| 14 | `04-VALIDATION.md` in `pending_live_fire` state with 9-row expected-scenarios table and 19-row Per-Task Verification Map | VERIFIED | Read confirmed: `status: pending_live_fire`, `phase_gate_status: PENDING`, 9 expected scenarios all marked PENDING, Wave 1 tasks marked "complete (Wave 1 scaffolding)" |
+| 1 | `@pytest.mark.live` opt-in registered; tests skip without `--live`, pass with it | VERIFIED (no regression) | `pytest arbiter/sandbox/ -q` → 19 passed, 11 skipped in 0.17s (same as 2026-04-17) |
+| 2 | `sandbox_db`, `demo_kalshi_adapter`, `poly_test_adapter` guard-rail fixtures assert env vars before yielding | VERIFIED (no regression) | arbiter/sandbox/fixtures/ intact; smoke tests still pass |
+| 3 | `evidence_dir` fixture attaches structlog ProcessorFormatter + SHARED_PROCESSORS + `run.log.jsonl` per scenario | VERIFIED (no regression) | arbiter/sandbox/evidence.py intact; smoke `test_evidence_dir_writes_jsonl_file_handler` passes |
+| 4 | `balance_snapshot` fixture uses real `KalshiCollector` + `PolymarketCollector`, no `object()` placeholders | VERIFIED (no regression) | Fixture now resolvable in STRICT mode thanks to G-3 conftest fix — strictly IMPROVED |
+| 5 | `PHASE4_MAX_ORDER_USD` notional hard-lock rejects oversize orders at the PolymarketAdapter layer | VERIFIED (no regression) | `pytest arbiter/execution/adapters/test_polymarket_phase4_hardlock.py` → 5/5 pass |
+| 6 | `KalshiConfig.base_url` and `ws_url` are env-var-sourced (default to demo in sandbox); settings defaults preserved | VERIFIED (no regression) | `.env.sandbox.template` grep confirms `KALSHI_BASE_URL=https://demo-api.kalshi.co/trade-api/v2` |
+| 7 | `docker-compose.yml` supports `POSTGRES_MULTIPLE_DATABASES`; `init-sandbox.sh` creates `arbiter_sandbox` DB | VERIFIED (no regression) | Untouched by 04-09 (files_modified list does not include docker-compose.yml or init-sandbox.sh) |
+| 8 | `.env.sandbox.template` exists with all required vars including `PHASE4_MAX_ORDER_USD=5` | VERIFIED (no regression) | `grep PHASE4_MAX_ORDER_USD .env.sandbox.template` returns `PHASE4_MAX_ORDER_USD=5` |
+| 9 | `.gitignore` excludes `.env.sandbox` and `evidence/04/` directories | VERIFIED (no regression) | Untouched by 04-09 |
+| 10 | `KalshiAdapter.place_resting_limit` implemented with 21 unit tests; existing 74 adapter tests unchanged | VERIFIED (no regression) | `pytest arbiter/execution/adapters/test_kalshi_place_resting_limit.py -q` → 21/21 pass; full adapter suite (incl. new signing tests) 116 passed per 04-09-SUMMARY |
+| 11 | All 9 scenario test files exist and skip cleanly without `--live` flag | VERIFIED (no regression) | `pytest arbiter/sandbox/ --collect-only -q` → 30 tests collected, no errors (previously would have TypeError'd on timeout_cancel + graceful_shutdown pre-G-2 fix) |
+| 12 | `aggregator.py` library implements `collect_scenario_manifests`, `reconcile_pnl_across_manifests`, `render_validation_markdown` | VERIFIED (no regression) | `pytest arbiter/sandbox/test_aggregator.py -q` → 13/13 pass |
+| 13 | `test_phase_reconciliation.py` enforces D-19 hard gate (any real tolerance breach blocks Phase 5) | VERIFIED (no regression) | File present; D-19 logic unchanged by 04-09 |
+| 14 | `04-VALIDATION.md` in `pending_live_fire` state with 9-row expected-scenarios table and 19-row Per-Task Verification Map | VERIFIED (no regression) | `grep phase_gate_status 04-VALIDATION.md` → `PENDING`; `total_scenarios_observed: 0` (re-sweep not yet run post-fix) |
 
-**Score:** 14/14 static truths verified
+**Score (original): 14/14 — no regressions.**
 
 ---
 
-### Required Artifacts
+### Observable Truths — New 6 from Plan 04-09 gap closure
+
+| # | Truth (from 04-09-PLAN must_haves.truths) | Status | Evidence |
+|---|-------------------------------------------|--------|----------|
+| 15 | KalshiAdapter._list_orders signs the path WITHOUT the querystring; GET /portfolio/orders?status=resting now returns 200 against demo Kalshi; kill-switch/cancel_all enumerates real resting orders (G-1) | VERIFIED | `grep -n 'path = "/trade-api/v2/portfolio/orders"' arbiter/execution/adapters/kalshi.py` returns 2 hits (lines 285 + 907 — _post_order + _list_orders parity). `grep -n 'path = f"/trade-api/v2/portfolio/orders?status' arbiter/execution/adapters/kalshi.py` returns 0 hits. New test file `arbiter/execution/adapters/test_kalshi_list_open_orders_signing.py` passes; full adapter suite green. Commits `44cd93a` (RED test) + `7989972` (GREEN fix). |
+| 16 | test_kalshi_timeout_cancel.py and test_graceful_shutdown.py no longer pass `client_order_id=` to adapter.place_resting_limit; consume Order.external_client_order_id (G-2) | VERIFIED | `grep external_client_order_id arbiter/sandbox/test_kalshi_timeout_cancel.py` → hits at lines 100, 115. Same file `arbiter/sandbox/test_graceful_shutdown.py` → hits at lines 126, 141. Both files collect without TypeError. Commit `1e21684`. |
+| 17 | test_kalshi_fok_rejection.py accepts BOTH OrderStatus.CANCELLED and OrderStatus.FAILED as valid EXEC-01 outcomes AND enforces fill_qty == 0 (G-4) | VERIFIED | arbiter/sandbox/test_kalshi_fok_rejection.py line 83: `assert order.status in (OrderStatus.CANCELLED, OrderStatus.FAILED)`; line 90: `assert order.fill_qty == 0`. Manifest field at line 113 widened. Commit `245319c`. |
+| 18 | Root conftest.py pytest_pyfunc_call resolves async-generator fixtures (balance_snapshot) before calling the test; live-fire tests work without --asyncio-mode=auto workaround (G-3) | VERIFIED | conftest.py line 37: `if inspect.isasyncgen(value):` — setup via `__anext__()`; line 33: `active_generators` list tracks for teardown via reversed loop (lines 47-56). Non-sandbox async suites (aggregator 13, hardlock 5, place_resting_limit 21, signing 3) all pass → 42/42 non-regressive. Commit `134a685`. Note: WR-01 from 04-09-REVIEW flags silent teardown-exception swallow; not a correctness regression, deferred. |
+| 19 | `#rateLimitIndicators` host element present inside `#opsSection` in index.html so renderRateLimitBadges() can write pills (G-5 host) | VERIFIED | `grep 'id="rateLimitIndicators"' index.html` → line 286, inside `<article class="panel rate-limit-panel" data-ops-only="true">` at line 278, which is the FIRST child of `#opsSection` (line 277). Renderer target confirmed: arbiter/web/dashboard.js:1387 `const host = document.getElementById("rateLimitIndicators");`. Commit `5f3787f`. |
+| 20 | buildRateLimitView emits `crit` tone when collector circuit is OPEN, completing the green→amber→red SAFE-04 UX spec (G-5 crit branch) | VERIFIED | arbiter/web/dashboard-view-model.js line 250: `if (circuitState === "open") tone = "crit";`. circuitState additively exposed on row output at line 265 for test/downstream consumption. 3 new vitest cases in dashboard-view-model.test.js confirm crit tone emission and closed fallback (lines 218-260) — vitest passes 15/15. Commit `5f3787f`. |
+
+**Score (new): 6/6 — all gap-closure truths mechanically verified.**
+
+---
+
+### Combined Score: 20/20 must-haves verified
+
+---
+
+### Gap-Closure Evidence Table (G-1..G-5 from 04-HUMAN-UAT.md)
+
+Direct mapping from 2026-04-20 sweep gaps to landed code with commit hashes and file:line locations.
+
+| Gap | Class | Symptom (sweep evidence) | Mechanical closure (file:line) | Commit | Operator re-sweep impact |
+|-----|-------|--------------------------|--------------------------------|--------|--------------------------|
+| G-1 | PRODUCTION BUG (Tampering/DoS) | Test 6: Kalshi demo order `6f70eeb6-dcf7-45c3-b0bf-2083cf279120` survived `trip_kill` because `_list_all_open_orders()` returned HTTP 401 INCORRECT_API_KEY_SIGNATURE. cancel_all enumerated 0 orders. | `arbiter/execution/adapters/kalshi.py:907` — `path = "/trade-api/v2/portfolio/orders"` (querystring-free signed path); regression test `arbiter/execution/adapters/test_kalshi_list_open_orders_signing.py` (3 tests, new file) | `44cd93a` (RED) + `7989972` (GREEN) | Unblocks SAFE-01 kill-switch cancel_all against real exchange. Test 6 should now PASS. |
+| G-2 | TEST-HARNESS BUG | Tests 5 + 9: `TypeError: KalshiAdapter.place_resting_limit() got an unexpected keyword argument 'client_order_id'` before any HTTP call. | `arbiter/sandbox/test_kalshi_timeout_cancel.py:105-117` (drops kwarg, consumes `order.external_client_order_id`); `arbiter/sandbox/test_graceful_shutdown.py:131-143` (same fix) | `1e21684` | Unblocks Tests 5 + 9 at the test-collection → execution boundary. |
+| G-3 | SCAFFOLDING BUG | Tests 1-9: async-generator fixtures (balance_snapshot) arrived as raw async_generator objects under pytest_pyfunc_call; operator forced to add `--asyncio-mode=auto` workaround. | `conftest.py:37-56` — `inspect.isasyncgen(value)` setup + LIFO teardown via reversed `active_generators` | `134a685` | Removes the `--asyncio-mode=auto` workaround; tests now work in STRICT mode. |
+| G-4 | TEST SEMANTICS | Test 3: assertion `order.status == OrderStatus.CANCELLED` failed because demo Kalshi now returns HTTP 409 → OrderStatus.FAILED. EXEC-01 actually held (fill_qty==0) but status-only assertion masked this. | `arbiter/sandbox/test_kalshi_fok_rejection.py:83` (accept CANCELLED OR FAILED); `:90` (NEW: assert `order.fill_qty == 0` — the real EXEC-01 invariant); `:113` (manifest field widened) | `245319c` | Test 3 should now PASS on the current demo response shape. |
+| G-5 | UI WIRING REGRESSION | UAT 13: `#rateLimitIndicators` host missing from index.html (renderer returned early); `buildRateLimitView` never emitted `crit` → green→amber→red spec unreachable. Result: operators saw no rate-limit pills today. | `index.html:286` — `<div id="rateLimitIndicators" class="rate-limit-host">` inside new `<article class="panel rate-limit-panel">` (lines 278-287, first child of #opsSection); `arbiter/web/dashboard-view-model.js:250` — `if (circuitState === "open") tone = "crit";` | `5f3787f` | UAT 13 should now render pills with ok/warn/crit tone ladder. Operator must re-run UAT 13 to observe in live session. |
+
+---
+
+### Required Artifacts — Plan 04-09 additions
 
 | Artifact | Description | Status | Details |
 |----------|-------------|--------|---------|
-| `arbiter/sandbox/__init__.py` | Sandbox package init | VERIFIED | Present in dir listing |
-| `arbiter/sandbox/conftest.py` | Guard-rail fixtures + marker registration | VERIFIED | Present; 04-01-SUMMARY self-check passed |
-| `arbiter/sandbox/evidence.py` | evidence_dir fixture + structlog wiring | VERIFIED | Present; SHARED_PROCESSORS reused from arbiter/utils/logger.py |
-| `arbiter/sandbox/reconcile.py` | `assert_pnl_within_tolerance` + `assert_fee_matches` helpers | VERIFIED | Present; ±$0.01 absolute tolerance (D-17) |
-| `arbiter/sandbox/fixtures/` | Real-collector fixtures subpackage | VERIFIED | Directory present |
-| `arbiter/sandbox/README.md` | Operator runbook for live-fire provisioning | VERIFIED | Present; `wc -l arbiter/sandbox/README.md` check passed per 04-VALIDATION.md Per-Task Map |
-| `arbiter/sandbox/test_smoke.py` | Smoke tests (6 pass, 1 live-gated skip) | VERIFIED | 6 pass + 1 skip confirmed |
-| `arbiter/sandbox/aggregator.py` | Offline reconciliation library (820 lines) | VERIFIED | 13/13 unit tests pass |
-| `arbiter/sandbox/test_aggregator.py` | 13 aggregator unit tests | VERIFIED | 13 passed |
-| `arbiter/sandbox/test_phase_reconciliation.py` | Terminal live-fire reconciliation test + D-19 gate | VERIFIED | Present; 90 lines confirmed |
-| `arbiter/execution/adapters/test_polymarket_phase4_hardlock.py` | 5 hard-lock unit tests | VERIFIED | 5/5 pass |
-| `arbiter/execution/adapters/test_kalshi_place_resting_limit.py` | 21 resting limit unit tests | VERIFIED | 21/21 pass |
-| `.env.sandbox.template` | Sandbox env template with PHASE4_MAX_ORDER_USD=5 | VERIFIED | Confirmed in 04-02-SUMMARY |
-| `arbiter/sql/init-sandbox.sh` | Multi-DB init script | VERIFIED | bash -n syntax check passed |
-| `arbiter/sandbox/test_kalshi_happy_path.py` | Scenario 1 test | VERIFIED (skip-gated) | Skips without --live; content substantive per 04-03-SUMMARY |
-| `arbiter/sandbox/test_kalshi_fok_rejection.py` | Scenario 3 test | VERIFIED (skip-gated) | Skips without --live |
-| `arbiter/sandbox/test_kalshi_timeout_cancel.py` | Scenario 5 test | VERIFIED (skip-gated) | Skips without --live |
-| `arbiter/sandbox/test_polymarket_happy_path.py` | Scenario 2 test | VERIFIED (skip-gated) | Skips without --live |
-| `arbiter/sandbox/test_polymarket_fok_rejection.py` | Scenario 4 test | VERIFIED (skip-gated) | Skips without --live |
-| `arbiter/sandbox/test_safety_killswitch.py` | Scenario 6 test | VERIFIED (skip-gated) | Skips without --live |
-| `arbiter/sandbox/test_one_leg_exposure.py` | Scenario 7 test | VERIFIED (skip-gated) | Skips without --live |
-| `arbiter/sandbox/test_rate_limit_burst.py` | Scenario 8 test | VERIFIED (skip-gated) | Skips without --live |
-| `arbiter/sandbox/test_graceful_shutdown.py` | Scenario 9 test | VERIFIED (skip-gated) | Skips without --live |
-| `.planning/phases/04-sandbox-validation/04-VALIDATION.md` | Phase gate artifact in pending_live_fire state | VERIFIED | Confirmed: `phase_gate_status: PENDING`, `total_scenarios_observed: 0` |
+| `arbiter/execution/adapters/test_kalshi_list_open_orders_signing.py` | G-1 regression guard: 3 tests asserting querystring-free signed path for list_orders / list_open_orders_by_client_id / place_fok | VERIFIED | File created (207 LOC); passes in combined adapter suite |
+| `arbiter/execution/adapters/kalshi.py` (G-1 delta) | `_list_orders` signs bare path `/trade-api/v2/portfolio/orders` (line 907) while URL retains querystring | VERIFIED | 2 hits for the bare-path literal (line 285 _post_order + line 907 _list_orders parity); 0 hits for the buggy querystring-in-path shape |
+| `arbiter/sandbox/test_kalshi_timeout_cancel.py` (G-2 delta) | `_place_resting_limit_via_adapter_or_bypass` Step 1 drops `client_order_id` kwarg; consumes `order.external_client_order_id` into SimpleNamespace | VERIFIED | Lines 105-117 show the fix; `effective_client_order_id` used downstream |
+| `arbiter/sandbox/test_graceful_shutdown.py` (G-2 delta) | Same fix as timeout_cancel | VERIFIED | Lines 131-143 show identical pattern |
+| `arbiter/sandbox/test_kalshi_fok_rejection.py` (G-4 delta) | Assertion widened to `(CANCELLED, FAILED)` AND `fill_qty == 0`; manifest `exec_01_invariant_holds` widened | VERIFIED | Lines 83, 90, 113 |
+| `conftest.py` (G-3 delta) | `pytest_pyfunc_call` resolves async-generators via `__anext__` setup + teardown | VERIFIED | Lines 37-56; 60-line file |
+| `index.html` (G-5 delta) | New `<article class="panel rate-limit-panel">` at lines 278-287 with `<div id="rateLimitIndicators">` host | VERIFIED | Single grep hit at line 286 |
+| `arbiter/web/dashboard-view-model.js` (G-5 delta) | `buildRateLimitView` emits `crit` tone for circuit-open; surfaces `circuitState` on row output | VERIFIED | Lines 240-265 |
+| `arbiter/web/dashboard-view-model.test.js` (G-5 coverage) | 3 new vitest cases for circuit-open promotion + closed fallback + missing collectors fallback | VERIFIED | vitest 15/15 passes |
 
 ---
 
-### Key Link Verification
+### Key Link Verification — Plan 04-09 (from 04-09-PLAN must_haves.key_links)
 
-| From | To | Via | Status | Details |
-|------|----|-----|--------|---------|
-| `conftest.py` guard-rail fixtures | DATABASE_URL env var (`arbiter_sandbox`) | assert-before-yield in sandbox_db fixture | WIRED | 04-01-SUMMARY confirms fixture pattern |
-| `conftest.py` guard-rail fixtures | KALSHI_BASE_URL env var (`demo-api.kalshi.co`) | assert-before-yield in demo_kalshi_adapter | WIRED | Confirmed in 04-01-SUMMARY |
-| Scenario test files | `evidence_dir` fixture | pytest fixture injection | WIRED | Fixtures declared in conftest.py; test files in same package |
-| `aggregator.py` | `evidence/04/*/scenario_manifest.json` files | `collect_scenario_manifests(evidence_root)` | WIRED | 13 unit tests verify collection logic |
-| `aggregator.py` | `04-VALIDATION.md` | `render_validation_markdown()` | WIRED | 04-08-SUMMARY confirms rewrite confirmed working |
-| `test_phase_reconciliation.py` | `aggregator.py` D-19 gate | import + call in terminal test | WIRED | 04-08-SUMMARY confirms integration |
-| `PolymarketAdapter.place_fok` | `PHASE4_MAX_ORDER_USD` setting | notional check at adapter layer | WIRED | 5/5 hard-lock tests confirm rejection at correct boundary |
-| `KalshiAdapter.place_resting_limit` | Kalshi REST API (via `adapter.session + adapter.auth`) | direct aiohttp + auth signing | WIRED | 04-02.1-SUMMARY: 21/21 tests; 04-03-SUMMARY: TEST-ONLY bypass pattern confirmed |
-| `@pytest.mark.live` marker | `--live` CLI flag | conftest `addoption` + `skipif` | WIRED | pytest run confirms: 11 skip without flag |
+| From | To | Via | Pattern | Status | Details |
+|------|----|-----|---------|--------|---------|
+| `KalshiAdapter.cancel_all` | Kalshi demo `GET /portfolio/orders?status=resting` | `_list_all_open_orders → _list_orders → auth.get_headers("GET", path="/trade-api/v2/portfolio/orders")` | `get_headers\("GET",\s*path\)` | WIRED | `grep 'get_headers("GET", path)' arbiter/execution/adapters/kalshi.py` → 2 hits (lines 848, 909); at line 909 the `path` local is the bare `/trade-api/v2/portfolio/orders` string set at line 907. URL at line 908 retains the `?status={status}` querystring for request routing. G-1 closed. |
+| `renderRateLimitBadges()` | `#rateLimitIndicators` DOM node | `document.getElementById` | `getElementById\("rateLimitIndicators"\)` | WIRED | `grep getElementById.*rateLimitIndicators arbiter/web/` → `arbiter/web/dashboard.js:1387` — `const host = document.getElementById("rateLimitIndicators");`. Corresponding markup present at `index.html:286`. G-5 host wired. |
+| `buildRateLimitView` | collector circuit state | `state.collectors[platform].circuit.state === "open" → tone="crit"` | `circuit.*open.*crit|tone\s*=\s*"crit"` | WIRED | `arbiter/web/dashboard-view-model.js:250` — `if (circuitState === "open") tone = "crit";`. Circuit state read at lines 240-242 from `state.collectors[platform].circuit.state` with default `"closed"`. 3 vitest cases exercise this branch. G-5 crit branch wired. |
 
 ---
 
-### Data-Flow Trace (Level 4)
-
-Level 4 data-flow trace deferred for live-fire artifacts: scenario tests cannot be exercised without `.env.sandbox`. The static scaffolding components (aggregator, fixtures, reconcile helpers) have data flows verified via their unit test suites (13/13 aggregator, 5/5 hard-lock, 21/21 resting-limit).
-
----
-
-### Behavioral Spot-Checks
+### Behavioral Spot-Checks (re-run 2026-04-20)
 
 | Behavior | Command | Result | Status |
 |----------|---------|--------|--------|
-| Sandbox pytest suite (non-live) | `pytest arbiter/sandbox/ -v --tb=no -q` | 19 passed, 11 skipped in 0.30s | PASS |
-| @pytest.mark.live skip without flag | Included in above | 11 skipped (9 scenario + 2 others) | PASS |
-| Aggregator unit tests offline | `pytest arbiter/sandbox/test_aggregator.py -v` | 13/13 passed | PASS |
-| Polymarket hard-lock unit tests | `pytest arbiter/execution/adapters/test_polymarket_phase4_hardlock.py -v` | 5/5 passed | PASS |
-| KalshiAdapter resting limit tests | `pytest arbiter/execution/adapters/test_kalshi_place_resting_limit.py -v` | 21/21 passed | PASS |
-| 04-VALIDATION.md pending state | File read | `phase_gate_status: PENDING`, `total_scenarios_observed: 0` | PASS |
-| Live-fire scenarios (all 9) | `pytest -m live --live arbiter/sandbox/` | Requires .env.sandbox | SKIP (human needed) |
+| Full sandbox test suite (non-live) regression | `pytest arbiter/sandbox/ -q --tb=no` | 19 passed, 11 skipped in 0.17s (identical to 2026-04-17 baseline) | PASS (no regression) |
+| Sandbox collection (post-G-2/G-3) | `pytest arbiter/sandbox/ --collect-only -q` | 30 tests collected, no errors (previously TypeError'd on timeout_cancel + graceful_shutdown before G-2 fix) | PASS |
+| Adapter + aggregator combined suite | `pytest arbiter/execution/adapters/test_kalshi_list_open_orders_signing.py arbiter/execution/adapters/test_kalshi_place_resting_limit.py arbiter/execution/adapters/test_polymarket_phase4_hardlock.py arbiter/sandbox/test_aggregator.py -q --tb=no` | 42 passed in 0.24s | PASS |
+| Dashboard view-model vitest (post-G-5) | `npx vitest run arbiter/web/dashboard-view-model.test.js` | 15/15 passed (12 pre-existing + 3 new crit-tone cases) | PASS |
+| G-1 grep invariant — bare path hits | `grep -n 'path = "/trade-api/v2/portfolio/orders"' arbiter/execution/adapters/kalshi.py` | 2 hits (lines 285, 907) | PASS (>= 2 per plan) |
+| G-1 grep invariant — buggy shape hits | `grep -n 'path = f"/trade-api/v2/portfolio/orders?status' arbiter/execution/adapters/kalshi.py` | 0 hits | PASS (expected 0) |
+| G-2 grep invariant | `grep external_client_order_id` in timeout_cancel + graceful_shutdown | 2 hits each | PASS |
+| G-3 grep invariant | `grep isasyncgen conftest.py` | 1 hit (line 37) | PASS |
+| G-4 grep invariant | `grep 'OrderStatus.CANCELLED\|OrderStatus.FAILED\|fill_qty == 0' test_kalshi_fok_rejection.py` | All 3 literals present on assertion block (lines 83, 90, 113) | PASS |
+| G-5 grep invariant — host | `grep 'id="rateLimitIndicators"' index.html` | 1 hit (line 286) | PASS (exactly 1) |
+| G-5 grep invariant — crit | `grep '"crit"' arbiter/web/dashboard-view-model.js` inside buildRateLimitView | 1 hit (line 250) in buildRateLimitView (additional hits at line 276 belong to buildMappingComparison — not in scope) | PASS |
+| Live-fire scenarios (1-9) + UAT 13 re-sweep | `pytest -m live --live arbiter/sandbox/` + `node output/uat_11_13.mjs` | Requires .env.sandbox + demo credentials | SKIP (human needed — re-sweep pending) |
 
 ---
 
-### Requirements Coverage
+### Requirements Coverage (expanded with 04-09 requirement IDs)
 
 | Requirement | Plan(s) | Description | Status | Evidence |
 |-------------|---------|-------------|--------|----------|
-| TEST-01 | 04-01, 04-02, 04-03, 04-05, 04-06, 04-07, 04-08 | Kalshi demo sandbox harness: all pipeline stages (collect→scan→execute→monitor→reconcile) exercised against Kalshi demo API with real orders at ≤$5 notional | PARTIAL — scaffolding VERIFIED; live-fire HUMAN NEEDED | Fixtures, guard-rails, and 5 Kalshi scenario test files exist and skip correctly. Live execution requires .env.sandbox provisioning. |
-| TEST-02 | 04-01, 04-02, 04-04, 04-08 | Polymarket test sandbox harness: Polymarket pipeline stages exercised with real $1 fills using throwaway test wallet | PARTIAL — scaffolding VERIFIED; live-fire HUMAN NEEDED | PHASE4_MAX_ORDER_USD hard-lock verified (5/5 tests). Polymarket scenario files (happy path, FOK) exist and skip. Throwaway wallet not provisioned. |
-| TEST-03 | 04-08 | PnL reconciliation within ±$0.01 absolute tolerance across all real-tagged scenarios | PARTIAL — reconcile.py VERIFIED; live data HUMAN NEEDED | `assert_pnl_within_tolerance` helper in reconcile.py confirmed; aggregator unit tests verify offline logic; D-19 gate in test_phase_reconciliation.py confirmed. No real scenario data yet. |
-| TEST-04 | 04-03, 04-04, 04-08 | Fee reconciliation: platform-reported fees match computed fee model within ±$0.01 per execution | PARTIAL — reconcile.py VERIFIED; live data HUMAN NEEDED | `assert_fee_matches` helper confirmed; aggregator fee reconciliation logic covered in 13 unit tests. No real execution data yet. |
+| TEST-01 | 04-01, 04-02, 04-03, 04-05, 04-06, 04-07, 04-08, **04-09** | Kalshi demo sandbox harness: all pipeline stages exercised against Kalshi demo API with real orders at ≤$5 notional | PARTIAL — scaffolding + gap-closure VERIFIED; live-fire HUMAN NEEDED | All fixtures, harness, scenario files intact. G-1/G-2/G-3/G-4 code-level obstacles for Kalshi scenarios 3, 5, 6, 9 cleared. Operator re-sweep required. |
+| TEST-02 | 04-01, 04-02, 04-04, 04-08 | Polymarket test sandbox harness with real $1 fills | PARTIAL — scaffolding VERIFIED; live-fire HUMAN NEEDED | Untouched by 04-09 (no Polymarket files in plan files_modified). Still pending operator wallet provisioning. |
+| TEST-03 | 04-08 | PnL reconciliation within ±$0.01 tolerance | PARTIAL — reconcile.py VERIFIED; live data HUMAN NEEDED | Unchanged by 04-09 |
+| TEST-04 | 04-03, 04-04, 04-08 | Fee reconciliation within ±$0.01 per execution | PARTIAL — reconcile.py VERIFIED; live data HUMAN NEEDED | Unchanged by 04-09 |
+| SAFE-01 | 03-*, **04-09 (G-1)** | Kill switch cancels all open/pending orders within 5s | PARTIAL — code fix VERIFIED (G-1 unblocks cancel_all enumeration); live-fire HUMAN NEEDED | G-1 landed (commit 7989972). Prior UAT 11 already PASSED for UI path; Scenario 6 (operator) required for end-to-end confirmation against real exchange. |
+| SAFE-04 | 03-*, **04-09 (G-5)** | Per-platform API rate limiting with operator visibility | PARTIAL — code fix VERIFIED (host + crit tone); live-fire HUMAN NEEDED | G-5 landed (commit 5f3787f). UAT 13 was PARTIAL pre-fix; now unblocked for operator re-run. Scenario 8 (programmatic) already PASSED 2026-04-20 with --asyncio-mode=auto. |
+| SAFE-05 | 03-*, **04-09 (G-2)** | Graceful shutdown cancels open orders before exit (SIGINT/SIGTERM) | PARTIAL — code fix VERIFIED (G-2 unblocks Scenario 9 test harness); live-fire HUMAN NEEDED | G-2 landed (commit 1e21684). UAT 12 PASSED (UI path). Scenario 9 operator re-run required. |
+| EXEC-01 | 02-*, **04-09 (G-4)** | FOK order types eliminate partial fill risk | PARTIAL — code fix VERIFIED (assertion widened + fill_qty==0 enforced); live-fire HUMAN NEEDED | G-4 landed (commit 245319c). Scenario 3 operator re-run required to confirm widened assertion passes on demo HTTP 409 → FAILED path. |
+| EXEC-05 | 02-*, **04-09 (G-2)** | Execution timeout with automatic cancellation | PARTIAL — code fix VERIFIED (G-2 unblocks Scenario 5 harness); live-fire HUMAN NEEDED | G-2 landed. Scenario 5 operator re-run required. Marked [x] Complete in REQUIREMENTS.md (from Phase 2) but live validation was never done. |
 
-All four requirements are in "Pending" state in REQUIREMENTS.md — consistent with phase gate not yet passed.
+REQUIREMENTS.md traceability unchanged: all TEST-* remain Pending until operator re-sweep completes and 04-VALIDATION.md flips to PASS.
 
 ---
 
 ### Anti-Patterns Found
 
-No blocker anti-patterns detected in scaffolding code. All live-gated tests use `@pytest.mark.live` + `pytest.skip` as the correct deferral mechanism — these are intentional gates, not stubs.
+**Plan 04-09 new code (from 04-09-REVIEW.md, reviewed 2026-04-20):**
 
-Pre-existing issue (out of scope): `arbiter/test_api_integration.py::test_api_and_dashboard_contracts` asserts `"ARBITER LIVE"` heading string renamed in Phase 03-07. This predates Phase 4 and is not a Phase 4 regression.
+| Severity | ID | File | Issue | Impact |
+|----------|----|------|-------|--------|
+| Warning | WR-01 | conftest.py:48-56 | Async-generator fixture teardown exceptions silently swallowed (`except Exception: pass`). Can hide asyncpg pool / aiohttp session / structlog FileHandler close failures. | NOT a correctness regression for the 5 gaps closed; IS a footgun for future async fixture debugging. Mitigation (from review): log + re-raise teardown exception when test body succeeded. Deferred — does not block operator re-sweep. |
+| Info | IN-01 | conftest.py:13-18 | Docstring references "pytest-asyncio STRICT mode" but project does not depend on pytest-asyncio; misleading for future maintainers. | Cosmetic. Defer. |
+| Info | IN-02 | test_graceful_shutdown.py:585, 591 | `locals().get()` / `dir()` late-binding pattern fragile; manifest write outside `finally:` — no evidence on assertion failure. | Pre-existing pattern; G-2 did not introduce. Defer. |
+| Info | IN-03 | test_kalshi_list_open_orders_signing.py:170-207 | `test_post_order_still_signs_bare_orders_path` sensitive to ambient PHASE4_MAX_ORDER_USD / PHASE5_MAX_ORDER_USD env vars (notional $1.65 > possible cap). | Could flake in shells with env set < $1.65. Mitigation: monkeypatch.delenv. Defer — test passes in unsetted CI env. |
+| Info | IN-04 | dashboard-view-model.js:244-250 | Tone precedence when cooldown AND circuit-open co-occur not exercised by new vitest cases. | Implementation is correct (crit-check is last write); test gap means a future refactor reordering the ifs could silently demote. Defer. |
+| Info | IN-05 | kalshi.py:28-34 + test_kalshi_fok_rejection.py:83-89 | `_FOK_STATUS_MAP` has no FAILED mapping; G-4's widened assertion leans on `_failed_order(...)` for the non-2xx path. If Kalshi demo ships a third response shape (e.g., HTTP 200 + body.status="failed"), adapter would map to SUBMITTED and G-4 would fail. | Not introduced by G-4; G-4 broadened the acceptance surface. The `fill_qty == 0` secondary assertion is the real EXEC-01 guarantee. Defer. |
+
+**Pre-existing (out of scope):**
+- `arbiter/test_api_integration.py::test_api_and_dashboard_contracts` still references "ARBITER LIVE" heading string renamed in Phase 03-07. Unchanged by 04-09.
+
+No blocker anti-patterns. All `@pytest.mark.live` + `pytest.skip` gates remain correct deferral mechanisms, not stubs.
 
 ---
 
 ### Human Verification Required
 
-The following 13 items cannot be verified without `.env.sandbox` provisioned on a host with real API credentials.
+Status stays `human_needed` because Plan 04-09 landed the **mechanical** gap closure (G-1..G-5 fixed in code) but did NOT re-run live-fire against real demo credentials. The operator must re-sweep scenarios 1, 3, 5, 6, 9 (Kalshi-gated) and Browser UAT 13, then scenarios 2, 4, 10 (Polymarket + terminal reconciliation) to complete the phase gate.
 
-**Operator setup prerequisite** (all items below):
+**Operator setup prerequisite (same as 2026-04-17):**
 ```bash
 cp .env.sandbox.template .env.sandbox
-# Fill in: KALSHI_DEMO_API_KEY_ID, KALSHI_PRIVATE_KEY_PATH,
-#          POLY_PRIVATE_KEY (throwaway wallet), POLY_FUNDER,
-#          DATABASE_URL pointing at arbiter_sandbox,
-#          PHASE4_MAX_ORDER_USD=5
+# Fill: KALSHI_DEMO_API_KEY_ID, KALSHI_PRIVATE_KEY_PATH,
+#       POLY_PRIVATE_KEY (throwaway wallet), POLY_FUNDER,
+#       DATABASE_URL → arbiter_sandbox,
+#       PHASE4_MAX_ORDER_USD=5
 set -a; source .env.sandbox; set +a
 export SANDBOX_HAPPY_TICKER=<liquid-kalshi-demo-market>
 export SANDBOX_FOK_TICKER=<thin-kalshi-demo-market>
@@ -198,108 +245,51 @@ export PHASE4_SHUTDOWN_TICKER=<same-as-killswitch>
 
 **Refer to:** `arbiter/sandbox/README.md` for full provisioning runbook.
 
-#### 1. Scenario 1 — kalshi_happy_lifecycle
+#### Priority A — Kalshi re-sweep (unblocked by Plan 04-09)
 
-**Test:** `pytest -m live --live arbiter/sandbox/test_kalshi_happy_path.py -v`
-**Expected:** Test passes; `evidence/04/kalshi_happy_lifecycle_*/scenario_manifest.json` created; PnL within ±$0.01; fee within ±$0.01
-**Covers:** TEST-01, TEST-04
-**Why human:** Requires KALSHI_DEMO_API_KEY_ID + real liquid Kalshi demo market ticker
+Most-important: Scenario 6 validates G-1 production fix (cancel_all enumeration against real Kalshi demo). Per 04-09 operator re-sweep doc, run:
+```bash
+pytest -m live --live arbiter/sandbox/test_kalshi_timeout_cancel.py -v    # Test 5 (G-2 unblocked)
+pytest -m live --live arbiter/sandbox/test_safety_killswitch.py -v        # Test 6 (G-1 unblocks cancel_all) — CRITICAL
+pytest -m live --live arbiter/sandbox/test_graceful_shutdown.py -v        # Test 9 (G-2 unblocked)
+pytest -m live --live arbiter/sandbox/test_kalshi_fok_rejection.py -v     # Test 3 (G-4 widened assertion)
+```
 
-#### 2. Scenario 2 — polymarket_happy_lifecycle
+#### Priority B — Browser UAT re-check (G-5 unblocked)
 
-**Test:** `pytest -m live --live arbiter/sandbox/test_polymarket_happy_path.py -v`
-**Expected:** Test passes; real $1 fill confirmed; scenario_manifest.json created with status=pass
-**Covers:** TEST-02, TEST-04
-**Why human:** Requires POLY_PRIVATE_KEY throwaway wallet funded with USDC on Polygon
+UAT 13 was PARTIAL in 2026-04-20 sweep because host + crit tone absent. Now:
+- Re-run `node output/uat_11_13.mjs` (or equivalent) on a running arbiter
+- Observe rate-limit pills appear inside ops-section `#rateLimitIndicators` host
+- Verify tone progression ok → warn → crit on circuit-open collector state
 
-#### 3. Scenario 3 — kalshi_fok_rejected_on_thin_market
+UAT 11 (kill-switch ARM/RESET) and UAT 12 (shutdown banner) already PASSED 2026-04-20 and are not regressed by 04-09.
 
-**Test:** `pytest -m live --live arbiter/sandbox/test_kalshi_fok_rejection.py -v`
-**Expected:** FOK returns rejected/unfilled; no partial fill; no open position
-**Covers:** EXEC-01, TEST-01
-**Why human:** Requires SANDBOX_FOK_TICKER pointing at a thin Kalshi demo market
+#### Priority C — Pending Polymarket scenarios (not affected by 04-09)
 
-#### 4. Scenario 4 — polymarket_fok_rejected_on_thin_market
+Scenarios 2, 4, and 10 were [pending] in 2026-04-20 sweep (not Kalshi-gated). Still pending operator Polymarket wallet provisioning:
+```bash
+pytest -m live --live arbiter/sandbox/test_polymarket_happy_path.py -v     # Test 2
+pytest -m live --live arbiter/sandbox/test_polymarket_fok_rejection.py -v  # Test 4
+# After all 9 scenarios produce evidence/04/<scenario>/scenario_manifest.json:
+pytest -m live --live arbiter/sandbox/test_phase_reconciliation.py -v      # Test 10 — terminal gate
+```
 
-**Test:** `pytest -m live --live arbiter/sandbox/test_polymarket_fok_rejection.py -v`
-**Expected:** Polymarket FOK returns unfilled; PHASE4_MAX_ORDER_USD hard-lock enforced
-**Covers:** EXEC-01, TEST-02
-**Why human:** Requires POLY_PRIVATE_KEY + thin Polymarket market
+#### Outstanding operator-side blockers outside Plan 04-09 scope
 
-#### 5. Scenario 5 — kalshi_timeout_triggers_cancel_via_client_order_id
-
-**Test:** `pytest -m live --live arbiter/sandbox/test_kalshi_timeout_cancel.py -v`
-**Expected:** Resting limit placed; `cancel_order(order)` cancels within timeout; no exposure
-**Covers:** TEST-01, EXEC-05, EXEC-04
-**Why human:** Requires Kalshi demo credentials + PHASE4_KILLSWITCH_TICKER
-
-#### 6. Scenario 6 — kill_switch_cancels_open_kalshi_demo_order
-
-**Test:** `pytest -m live --live arbiter/sandbox/test_safety_killswitch.py -v`
-**Expected:** `supervisor.trip_kill` fires within 5s of open order placement; Kalshi demo order cancelled; WS `kill_switch` event emitted
-**Covers:** SAFE-01, TEST-01
-**Why human:** Requires Kalshi demo credentials + resting-capable market ticker
-
-#### 7. Scenario 7 — one_leg_recovery_injected
-
-**Test:** `pytest -m live --live arbiter/sandbox/test_one_leg_exposure.py -v`
-**Expected:** Polymarket leg patched to raise; one-leg incident logged; Kalshi position unwound
-**Covers:** SAFE-03, TEST-01
-**Why human:** Polymarket is injected/patched but Kalshi leg requires real demo credentials
-
-#### 8. Scenario 8 — rate_limit_burst_triggers_backoff_and_ws
-
-**Test:** `pytest -m live --live arbiter/sandbox/test_rate_limit_burst.py -v`
-**Expected:** RateLimiter.apply_retry_after → THROTTLED state; WS `rate_limit_state` payload emitted; test xfail on 403 FORBIDDEN (intentional per design)
-**Covers:** SAFE-04, TEST-01
-**Why human:** Requires Kalshi demo credentials to verify the non-403 backoff path
-
-#### 9. Scenario 9 — sigint_cancels_open_kalshi_demo_orders
-
-**Test:** `pytest -m live --live arbiter/sandbox/test_graceful_shutdown.py -v`
-**Expected:** SIGINT to `arbiter.main` subprocess; all open Kalshi demo orders cancelled; subprocess exits with `phase=shutting_down` log
-**Covers:** SAFE-05, TEST-01
-**Why human:** Spawns real subprocess; requires Kalshi demo credentials + PHASE4_SHUTDOWN_TICKER
-
-#### 10. Terminal reconciliation — 04-VALIDATION.md gate
-
-**Test:** `pytest -m live --live arbiter/sandbox/test_phase_reconciliation.py -v` (run after all 9 scenarios)
-**Expected:** 04-VALIDATION.md rewritten with `phase_gate_status: PASS`; D-19 gate: no real scenario tolerance breach; all 9 scenarios observed
-**Covers:** TEST-03, TEST-04
-**Why human:** Requires all 9 scenario evidence directories populated first
-
-#### 11. Browser UAT — Kill-switch ARM/RESET end-to-end
-
-**Test:** Open dashboard in browser with running arbiter; click ARM; verify kill-switch activates; click RESET; verify cleared
-**Expected:** WS `kill_switch` event reflected in real-time UI; ARM/RESET round-trip completes
-**Covers:** SAFE-01 UI path
-**Why human:** Visual / real-time UI behavior
-
-#### 12. Browser UAT — Shutdown banner visibility
-
-**Test:** During Scenario 9 graceful shutdown, observe dashboard
-**Expected:** Shutdown banner appears during `phase=shutting_down` state; disappears after process exits
-**Covers:** SAFE-05 UI path
-**Why human:** Visual banner, timing-dependent, requires running subprocess + browser
-
-#### 13. Browser UAT — Rate-limit pill color transition
-
-**Test:** During Scenario 8 rate-limit burst, observe dashboard rate-limit status indicator
-**Expected:** Pill transitions from green to yellow/red when `rate_limit_state` WS payload arrives
-**Covers:** SAFE-04 UI path
-**Why human:** Visual color-state transition, requires live WS event + browser
+- Test 1 (Kalshi happy path): demo.kalshi.co has **zero counterparty liquidity** globally (400 markets probed in 2026-04-20 sweep; all orderbooks empty). Not a code gap; awaiting either demo market-maker bootstrap from Kalshi support or selection of a rare-liquid demo market.
 
 ---
 
 ### Gaps Summary
 
-No gaps. All 14 static must-haves are VERIFIED.
+**No outstanding code-level gaps.** All 5 gaps from 2026-04-20 operator sweep (G-1..G-5) are mechanically closed in commits `44cd93a..f84ad81` and verified by grep invariants, unit-test runs (42/42 Python + 15/15 vitest), and artifact inspection.
 
-The phase is in its correct state: Wave 0 (scaffolding) and Wave 1 (test harness infrastructure) are complete. Wave 2 (live-fire scenarios 1-9) and Wave 3 (terminal reconciliation) require operator action with `.env.sandbox` provisioned.
+**Operator action remains the sole blocker for phase gate PASS.** This is unchanged from 2026-04-17 verification. Plan 04-09 did not remove the `.env.sandbox` gating; it removed the code-level obstacles that prevented prior operator runs from reaching pass state.
 
-**Phase 5 gate status:** BLOCKED per D-19 until operator runs the full live-fire suite and 04-VALIDATION.md shows `phase_gate_status: PASS`. This is expected and by design.
+**Phase 5 gate status:** BLOCKED per D-19 until operator runs the Kalshi-gated re-sweep + Polymarket scenarios and 04-VALIDATION.md shows `phase_gate_status: PASS`. Expected and by design.
 
 ---
 
-_Verified: 2026-04-17T09:00:00Z_
+_Verified: 2026-04-20T00:00:00Z_
 _Verifier: Claude (gsd-verifier)_
+_Re-verification following Plan 04-09 gap closure (commits 44cd93a..f84ad81)_
