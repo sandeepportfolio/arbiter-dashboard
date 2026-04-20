@@ -95,14 +95,25 @@ async def _place_resting_limit_via_adapter_or_bypass(
         fn = getattr(adapter, name, None)
         if callable(fn):
             log.info("scenario.kalshi_timeout.non_fok_strategy", strategy=f"adapter.{name}")
-            return await fn(
+            # G-2 fix (Plan 04-09, 2026-04-20): KalshiAdapter.place_resting_limit
+            # does NOT accept a client_order_id kwarg — the adapter generates
+            # its own internally and surfaces it as Order.external_client_order_id.
+            # The Phase 4.1 adapter signature is frozen; tests must consume the
+            # adapter-generated id rather than pass one in. Step 2/Step 3 below
+            # are TEST-ONLY raw-HTTP bypass paths that DO use the test-generated
+            # client_order_id because they skip the adapter's generator entirely.
+            order = await fn(
                 arb_id=arb_id,
                 market_id=market_id,
                 canonical_id=market_id,
                 side=side,
                 price=price,
                 qty=qty,
-                client_order_id=client_order_id,
+            )
+            return SimpleNamespace(
+                order_id=str(order.order_id),
+                client_order_id=str(order.external_client_order_id or ""),
+                raw=order,
             )
 
     # Step 2: TEST-ONLY bypass via underlying Kalshi SDK client (adapter._client).
@@ -299,10 +310,16 @@ async def test_kalshi_timeout_triggers_cancel_via_client_order_id(
         client_order_id=client_order_id,
     )
 
+    # G-2 fix (Plan 04-09): if Step 1 (adapter.place_resting_limit) was chosen,
+    # the adapter generated its own client_order_id — use the effective id
+    # returned by the helper. Step 2/Step 3 (TEST-ONLY bypass paths) use the
+    # test-generated id as-is (returned unchanged by the helper).
+    effective_client_order_id = placed.client_order_id or client_order_id
+
     log.info(
         "scenario.kalshi_timeout.resting_order_placed",
         order_id=placed.order_id,
-        client_order_id=client_order_id,
+        client_order_id=effective_client_order_id,
     )
 
     # Simulate the engine's timeout path: wait briefly, then invoke CR-01 recovery.
@@ -311,9 +328,9 @@ async def test_kalshi_timeout_triggers_cancel_via_client_order_id(
     # CR-02 invariant: list_open_orders_by_client_id finds the order via
     # engine-chosen ARB-*-SIDE-HEX client_order_id (not the Kalshi server-assigned
     # order_id). This is the Phase 2.1 remediation being live-fired here.
-    orphans = await adapter.list_open_orders_by_client_id(client_order_id)
+    orphans = await adapter.list_open_orders_by_client_id(effective_client_order_id)
     assert orphans, (
-        f"CR-02 INVARIANT VIOLATED: list_open_orders_by_client_id({client_order_id!r}) "
+        f"CR-02 INVARIANT VIOLATED: list_open_orders_by_client_id({effective_client_order_id!r}) "
         f"returned empty. Placed order_id was {placed.order_id}. Either the "
         f"client_order_id was not threaded through to Kalshi, the order closed between "
         f"placement and lookup, or the prefix-match in the adapter lost the id."
@@ -322,7 +339,7 @@ async def test_kalshi_timeout_triggers_cancel_via_client_order_id(
     log.info(
         "scenario.kalshi_timeout.orphan_found",
         orphan_order_id=orphan.order_id,
-        client_order_id=client_order_id,
+        client_order_id=effective_client_order_id,
     )
 
     # CR-01 invariant: cancel the orphan. KalshiAdapter.cancel_order takes an Order,
@@ -330,11 +347,11 @@ async def test_kalshi_timeout_triggers_cancel_via_client_order_id(
     cancelled = await adapter.cancel_order(orphan)
     assert cancelled, (
         f"CR-01 INVARIANT VIOLATED: adapter.cancel_order returned falsy for orphan "
-        f"{orphan.order_id} (client_order_id={client_order_id})."
+        f"{orphan.order_id} (client_order_id={effective_client_order_id})."
     )
 
     # Verification: order should no longer appear as open after cancel.
-    post_orphans = await adapter.list_open_orders_by_client_id(client_order_id)
+    post_orphans = await adapter.list_open_orders_by_client_id(effective_client_order_id)
     assert not post_orphans, (
         f"Cancel did not stick: list_open_orders_by_client_id still returns an open "
         f"order after cancel. post_orphans: {post_orphans}"
@@ -350,7 +367,7 @@ async def test_kalshi_timeout_triggers_cancel_via_client_order_id(
                 "phase_2_1_refs": ["CR-01", "CR-02"],
                 "tag": "real",
                 "order_id": placed.order_id,
-                "client_order_id": client_order_id,
+                "client_order_id": effective_client_order_id,
                 "market": TIMEOUT_MARKET_TICKER,
                 "price": TIMEOUT_AGGRESSIVE_PRICE,
                 "qty": TIMEOUT_QTY,
