@@ -3,6 +3,7 @@ ARBITER live-readiness gating and operator-facing status snapshots.
 """
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
@@ -223,6 +224,48 @@ class OperationalReadiness:
             )
 
         snapshot = self.profitability.get_snapshot()
+
+        # B-1 Q6: Phase 5 bootstrap override (chicken-and-egg resolution).
+        # When PHASE5_BOOTSTRAP_TRADES is set to an int in [1, 5] AND the
+        # completed-execution count is below that threshold, bypass the
+        # profitability gate for the first N trades. Once the Nth trade
+        # completes, this branch no longer fires and the normal logic below
+        # re-engages. Unset env = existing behaviour (Phase 4 + dev unchanged).
+        # Out-of-range / unparseable values fall through silently (preflight
+        # check #8 is the second belt that catches invalid values).
+        # This bootstrap short-circuits BEFORE the validated_profitable and
+        # blocked branches: operator setting the env var = accepting the
+        # override (05-RESEARCH.md Open Question #6).
+        bootstrap_raw = os.getenv("PHASE5_BOOTSTRAP_TRADES")
+        if bootstrap_raw:
+            try:
+                bootstrap_limit = int(bootstrap_raw)
+            except ValueError:
+                bootstrap_limit = 0
+            if 1 <= bootstrap_limit <= 5:
+                completed = int(getattr(snapshot, "completed_executions", 0) or 0)
+                if completed < bootstrap_limit:
+                    remaining = bootstrap_limit - completed
+                    return ReadinessCheck(
+                        key="profitability",
+                        status="pass",
+                        summary=(
+                            f"Phase 5 bootstrap: {remaining} trade(s) remaining "
+                            f"before profitability gate re-engages"
+                        ),
+                        blocking=False,
+                        details={
+                            "verdict": snapshot.verdict,
+                            "completed_executions": completed,
+                            "bootstrap_limit": bootstrap_limit,
+                            "bootstrap_remaining": remaining,
+                        },
+                    )
+            # bootstrap_raw set but out-of-range / unparseable: fall through to
+            # the existing logic (treat as absent). Preflight check #8 blocks
+            # invalid values at startup so this fallthrough is only reached in
+            # local dev / test setups where the env var leaked from elsewhere.
+
         details = {
             "verdict": snapshot.verdict,
             "progress": round(snapshot.progress, 4),

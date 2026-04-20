@@ -87,6 +87,24 @@ class SafetySupervisor:
         self._state_lock = asyncio.Lock()
         self._subscribers: List[asyncio.Queue] = []
 
+    # ─── public accessors (W-5: Plan 05-01) ─────────────────────────────
+    #
+    # These properties expose the existing private ``_state`` attribute as
+    # read-only public surface so callers (dashboard API, live-fire tests)
+    # no longer reach into ``supervisor._state.armed`` / ``._state.armed_by``
+    # directly. No behavior change; mutation still goes through
+    # ``trip_kill`` and ``reset_kill``.
+
+    @property
+    def is_armed(self) -> bool:
+        """Read-only: True when the kill-switch is armed."""
+        return bool(self._state.armed)
+
+    @property
+    def armed_by(self) -> Optional[str]:
+        """Read-only: actor that armed the kill-switch, or None if not armed."""
+        return self._state.armed_by
+
     # ─── pub/sub fanout ─────────────────────────────────────────────────
 
     def subscribe(self) -> asyncio.Queue:
