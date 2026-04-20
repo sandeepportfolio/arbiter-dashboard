@@ -69,17 +69,27 @@ async def test_kalshi_fok_rejected_on_thin_market(
         error=order.error,
     )
 
-    # EXEC-01 invariant: thin-liquidity FOK MUST return CANCELLED, never PARTIAL, never FILLED.
-    # Per Pitfall 3 (RESEARCH.md): Kalshi returns HTTP 201 with body.status=canceled for FOK
-    # that cannot fully fill. KalshiAdapter._FOK_STATUS_MAP handles the mapping already, so
-    # this test asserts on the mapped OrderStatus - NOT on HTTP status codes.
-    assert order.status == OrderStatus.CANCELLED, (
-        f"EXEC-01 assertion FAILED on thin demo market {FOK_MARKET_TICKER} "
-        f"with qty={FOK_TARGET_QTY}: expected CANCELLED, got {order.status}. "
+    # EXEC-01 invariant: thin-liquidity FOK MUST NOT partial-fill. Demo Kalshi
+    # has shipped two shapes for the rejection, both of which satisfy EXEC-01:
+    #   (a) HTTP 201 + body.status="canceled" -> adapter maps to OrderStatus.CANCELLED
+    #       (Pitfall 3 legacy semantics, RESEARCH.md)
+    #   (b) HTTP 409 + body.error.code="fill_or_kill_insufficient_resting_volume"
+    #       -> adapter maps to OrderStatus.FAILED (current demo semantics, 2026-04-20;
+    #       see G-4 in 04-HUMAN-UAT.md Test 3)
+    # Both satisfy EXEC-01 because in both cases fill_qty == 0. We accept either
+    # terminal status but enforce fill_qty == 0 as the actual invariant (G-4 fix,
+    # Plan 04-09): status alone is brittle against platform response-shape drift;
+    # fill_qty == 0 is the semantic guarantee we actually care about.
+    assert order.status in (OrderStatus.CANCELLED, OrderStatus.FAILED), (
+        f"EXEC-01 invariant: expected CANCELLED or FAILED on thin demo market "
+        f"{FOK_MARKET_TICKER} with qty={FOK_TARGET_QTY}; got {order.status}. "
         f"Error: {order.error!r}. "
-        f"If FILLED: market has more depth than expected - pick a thinner market "
-        f"or raise qty. If PARTIAL: EXEC-01 INVARIANT VIOLATED (FOK should never "
-        f"partial-fill). If FAILED: HTTP/auth issue - check Kalshi demo status."
+        f"If FILLED: market has more depth than expected -- pick a thinner market "
+        f"or raise qty. If PARTIAL: EXEC-01 INVARIANT VIOLATED."
+    )
+    assert order.fill_qty == 0, (
+        f"EXEC-01 INVARIANT VIOLATED: FOK rejection reported non-zero fill_qty="
+        f"{order.fill_qty}. A rejected FOK MUST have zero fills."
     )
 
     # Evidence capture for Plan 04-08 aggregator.
@@ -97,7 +107,12 @@ async def test_kalshi_fok_rejected_on_thin_market(
                 "price": FOK_TARGET_PRICE,
                 "qty": FOK_TARGET_QTY,
                 "status": str(order.status),
-                "exec_01_invariant_holds": order.status == OrderStatus.CANCELLED,
+                # G-4 fix (Plan 04-09): EXEC-01 holds when the FOK reaches a
+                # terminal non-fill state (CANCELLED or FAILED) AND fill_qty == 0.
+                "exec_01_invariant_holds": (
+                    order.status in (OrderStatus.CANCELLED, OrderStatus.FAILED)
+                    and order.fill_qty == 0
+                ),
             },
             indent=2,
         ),
