@@ -214,6 +214,52 @@ describe("buildRateLimitView", () => {
     expect(rows[0].tone).toBe("warn");
     expect(rows[0].cooldownLabel).toMatch(/3\.2/);
   });
+
+  // G-5 fix (Plan 04-09): circuit-open collector promotes tone to "crit" so
+  // operators see the red state in the green -> amber -> red SAFE-04 progression.
+  test("circuit-open collector promotes tone to crit", () => {
+    const rows = buildRateLimitView({
+      safety: {
+        rateLimits: {
+          kalshi: { available_tokens: 10, max_requests: 10, remaining_penalty_seconds: 0 },
+        },
+      },
+      collectors: {
+        kalshi: { circuit: { state: "open" } },
+      },
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].tone).toBe("crit");
+    expect(rows[0].circuitState).toBe("open");
+  });
+
+  test("circuit-closed leaves tone ok when tokens available", () => {
+    const rows = buildRateLimitView({
+      safety: {
+        rateLimits: {
+          kalshi: { available_tokens: 10, max_requests: 10, remaining_penalty_seconds: 0 },
+        },
+      },
+      collectors: {
+        kalshi: { circuit: { state: "closed" } },
+      },
+    });
+    expect(rows[0].tone).toBe("ok");
+    expect(rows[0].circuitState).toBe("closed");
+  });
+
+  test("missing collectors state defaults circuitState to closed", () => {
+    const rows = buildRateLimitView({
+      safety: {
+        rateLimits: {
+          kalshi: { available_tokens: 10, max_requests: 10, remaining_penalty_seconds: 0 },
+        },
+      },
+      // collectors intentionally omitted
+    });
+    expect(rows[0].circuitState).toBe("closed");
+    expect(rows[0].tone).toBe("ok");
+  });
 });
 
 describe("buildMappingComparison", () => {
