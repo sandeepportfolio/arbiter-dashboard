@@ -3,7 +3,7 @@ status: testing
 phase: 04-sandbox-validation
 source: [04-VERIFICATION.md]
 started: 2026-04-17T16:55:00Z
-updated: 2026-04-20T22:42:00Z
+updated: 2026-04-20T23:55:00Z
 ---
 
 ## Current Test
@@ -105,31 +105,31 @@ evidence: |
 
 ### 6. Scenario 6 — kill_switch_cancels_open_kalshi_demo_order
 expected: `pytest -m live --live arbiter/sandbox/test_safety_killswitch.py -v`; supervisor.trip_kill fires within 5s; Kalshi demo order cancelled; WS kill_switch event emitted (SAFE-01, TEST-01)
-result: [issue]
+result: [pass]
 evidence: |
-  Executed 2026-04-20 against demo.kalshi.co with API key 933682f1-2e75-4513-b4bd-28420db2844e.
-  PHASE4_KILLSWITCH_TICKER=KXSPOTIFY2D-26APR21-BAB price=$0.31 qty=5 (notional $1.55 < $5).
-  Partial progress confirmed:
-    - Resting order placed successfully on demo: order_id=6f70eeb6-dcf7-45c3-b0bf-2083cf279120
-      (HTTP 200, status=resting). Validates KalshiAdapter.place_resting_limit on the real
-      exchange. This is the FIRST CONFIRMATION that resting-order placement path works
-      end-to-end against live Kalshi demo.
-    - Supervisor.trip_kill fired within 0.13s (well under SAFE-01 5s budget).
+  Re-verified 2026-04-20T23:50:00Z after plan 04-09 gap closure landed
+  (commits 44cd93a..1d0d839). Test PASSED in 1.63s against demo.kalshi.co
+  with API key 933682f1-2e75-4513-b4bd-28420db2844e.
+  Full kill-switch loop exercised end-to-end:
+    - Resting order placed on demo (HTTP 200, status=resting).
+    - Supervisor.trip_kill fired within SAFE-01 5s budget.
+    - cancel_all enumerated resting orders via adapter._list_all_open_orders
+      (previously HTTP 401 INCORRECT_API_KEY_SIGNATURE pre-G-1 fix).
+    - Order transitioned to CANCELLED on the exchange.
     - WS kill_switch event emitted with payload.armed=True.
-  Assertion failure at Step 5 (order actually cancelled on platform):
-    `AssertionError: SAFE-01 INVARIANT VIOLATED: order ... reports status=SUBMITTED`
-  Root cause (adapter bug, not test harness):
-    The cancel_all path invokes adapter.list_all_open_orders() which returns HTTP 401
-    INCORRECT_API_KEY_SIGNATURE. Cancellation fires against 0 orders. The resting order
-    remains open on the platform.
-    Log: `kalshi.list_all_open_orders.http_error status=401 body='...INCORRECT_API_KEY_SIGNATURE'`
-  The dangling order was manually cancelled post-test via signed DELETE (HTTP 200,
-  confirmed status=canceled). No orphan left on the demo exchange.
-  Balance before/after: $25.00 / $25.00 (resting order reserved $1.55 briefly; released on cancel).
-  Evidence: evidence/04/test_kill_switch_cancels_open_kalshi_demo_order_20260420T223932Z/run.log.jsonl
-  Recommended remediation: fix signature generation in KalshiAdapter.list_all_open_orders
-  (likely includes querystring in the signed path — Kalshi PSS signing must exclude
-  querystrings). Diff: compare with balance-endpoint signing that works.
+  This validates the G-1 fix (Plan 04-09 commit 7989972) end-to-end against
+  the real exchange — the querystring-free signed path in _list_orders now
+  returns 200 and the kill-switch can actually enumerate and cancel real
+  resting orders. Prior to the fix, kill-switch against the real API was
+  silently broken (see "2026-04-20T22:43Z live-fire sweep" note below).
+  Balance before/after: $25.00 / $25.00 (order cancelled pre-fill).
+  Evidence: live-fire session 2026-04-20T23:50:00Z (1.63s run, 1 passed).
+
+  --- Historical record of pre-04-09 failure (2026-04-20T22:40Z sweep) ---
+  Previously failed with HTTP 401 INCORRECT_API_KEY_SIGNATURE on
+  list_all_open_orders; order 6f70eeb6-dcf7-45c3-b0bf-2083cf279120 was
+  cleaned up manually via signed DELETE. That failure was the exact
+  production bug that plan 04-09 G-1 closes.
 
 ### 7. Scenario 7 — one_leg_recovery_injected
 expected: `pytest -m live --live arbiter/sandbox/test_one_leg_exposure.py -v`; Polymarket leg patched to raise; one-leg incident logged; Kalshi position unwound (SAFE-03, TEST-01)
@@ -218,7 +218,36 @@ evidence: |
 
 ### 13. Browser UAT — Rate-limit pill color transition
 expected: Trigger rate-limit via adapter throttle; verify dashboard pill color transitions green → amber → red matching RateLimiter state; verify it clears after penalty expires (SAFE-04 UI contract)
-result: [partial]
+result: [pass]
+evidence_post_04_09: |
+  Re-verified 2026-04-20T23:48:00Z via output/uat_post_04_09.mjs after plan
+  04-09 gap closure landed AND follow-up commit 1d0d839 fixed two bugs that
+  browser UAT exposed in the G-5 fix:
+    G-5a: #rateLimitIndicators host was added to index.html (static-frontend
+          variant) but not arbiter/web/dashboard.html — the file /ops actually
+          serves. Operators still saw no pills after plan 04-09 merged.
+          Fix: mirrored the <article> into arbiter/web/dashboard.html at the
+          top of #opsSection.
+    G-5b: buildRateLimitView read state.collectors, but the dashboard stores
+          collectors under state.system.collectors (dashboard.js:1112 assigns
+          state.system = message.payload on every system/bootstrap WS msg).
+          Vitest passed because the new cases synthesized a top-level
+          {collectors: ...} shape. In production state.collectors was always
+          undefined, so circuitState always defaulted to "closed" and the
+          crit tone never promoted. Fix: prefer state.system.collectors and
+          keep state.collectors as a test-harness fallback.
+  Post-fix UAT observed all three tones end-to-end:
+    - idle:   "rate-limit-pill ok"   both platforms (Kalshi 10/10, Poly 20/20)
+    - warn:   "rate-limit-pill warn" Kalshi (remaining_penalty_seconds=5.0)
+    - crit:   "rate-limit-pill crit" Kalshi (system.collectors.kalshi.circuit.state=open)
+    - recover: back to "rate-limit-pill ok" for both.
+  hostState.existed=true (native, not injected), kalshiCritEmitted=true.
+  Screenshots: output/uat-post-04-09/test13-{idle,warn,crit-expected,recover}.png
+  Report: output/uat-post-04-09/report.json (test13.result=pass)
+  Vitest: 16/16 cases pass including new "crit via state.system.collectors"
+  case and the "top-level state.collectors fallback" regression guard.
+
+previous_result: [partial]
 evidence: |
   Executed 2026-04-20 via output/uat_11_13.mjs. Synthetic `rate_limit_state`
   WS payloads were injected with varying remaining_penalty_seconds. Observed:
@@ -245,12 +274,16 @@ evidence: |
 ## Summary
 
 total: 13
-passed: 4
-issues: 5
+passed: 6
+issues: 4
 pending: 3
 skipped: 0
 blocked: 0
-partial: 1
+partial: 0
+
+# Post-04-09 delta (2026-04-20T23:55Z):
+#   - Test 6 [issue]→[pass]   G-1 validated end-to-end on demo exchange (1.63s run)
+#   - Test 13 [partial]→[pass] G-5 end-to-end after follow-up G-5a/G-5b fix (commit 1d0d839)
 
 # Note (2026-04-20T22:43Z live-fire sweep): Kalshi demo API key
 # 933682f1-2e75-4513-b4bd-28420db2844e was provisioned out-of-band and
@@ -280,16 +313,20 @@ partial: 1
 ## Gaps
 
 - truth: "Rate-limit pill indicators visible in operator dashboard with green→amber→red transitions matching RateLimiter state (SAFE-04 UI contract)"
-  status: failed
-  reason: "`#rateLimitIndicators` container is missing from index.html although renderRateLimitBadges() (arbiter/web/dashboard.js:1386-1398) targets it — renderer returns early when host is absent, so operators see no pills today. Additionally, buildRateLimitView (arbiter/web/dashboard-view-model.js:233-258) only emits `ok` and `warn` tones; `crit` (red) is reserved for a future circuit-open state, so green→amber→red spec is not fully reachable."
-  severity: major
+  status: resolved
+  resolved_at: 2026-04-20T23:55:00Z
+  resolved_by: plan 04-09 (G-5 Part A + Part B) AND follow-up commit 1d0d839 (G-5a + G-5b)
+  resolution_evidence: |
+    Plan 04-09 commit 5f3787f added #rateLimitIndicators to index.html and
+    buildRateLimitView's crit-tone branch. Browser UAT post-04-09 (2026-04-20
+    evening) exposed two bugs that vitest missed because the test state shape
+    did not match production:
+      G-5a: host was added to index.html (static-frontend variant) but NOT
+            arbiter/web/dashboard.html, which is what /ops actually serves.
+      G-5b: buildRateLimitView read state.collectors but the dashboard stores
+            collectors under state.system.collectors.
+    Follow-up commit 1d0d839 fixed both and added a vitest case using the
+    production state.system.collectors shape.
+    UAT 13 re-run observed all three tones (ok → warn → crit) end-to-end,
+    kalshiCritEmitted=true, host existed natively.
   test: 13
-  artifacts:
-    - arbiter/web/dashboard.js
-    - arbiter/web/dashboard-view-model.js
-    - index.html
-  missing:
-    - "#rateLimitIndicators container element in index.html ops-section markup"
-    - "buildRateLimitView branch emitting `crit` tone for circuit-open states"
-  discovered_via: UAT 13 Playwright test (output/uat_11_13.mjs)
-  recommended_scope: Phase 3 SAFE-04 UI gap closure (decimal phase e.g., 3.1) OR Phase 4 gap-closure (/gsd-plan-phase 4 --gaps)

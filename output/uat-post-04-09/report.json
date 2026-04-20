@@ -1,0 +1,107 @@
+{
+  "test11": {
+    "result": "pass",
+    "screenshots": [
+      "C:/Users/sande/Documents/arbiter-dashboard/output/uat-post-04-09/test11-pre-arm.png",
+      "C:/Users/sande/Documents/arbiter-dashboard/output/uat-post-04-09/test11-armed.png",
+      "C:/Users/sande/Documents/arbiter-dashboard/output/uat-post-04-09/test11-reset.png"
+    ],
+    "preBadge": {
+      "text": "Disarmed",
+      "className": "utility-pill kill-switch-badge status-ok"
+    },
+    "armedBadge": {
+      "text": "ARMED",
+      "className": "utility-pill kill-switch-badge status-critical",
+      "armHidden": true,
+      "resetHidden": false
+    },
+    "resetBadge": {
+      "text": "Disarmed",
+      "className": "utility-pill kill-switch-badge status-ok",
+      "armHidden": false,
+      "resetHidden": true
+    },
+    "armStatus": 200,
+    "resetStatus": 200
+  },
+  "test12": {
+    "result": "pass",
+    "screenshots": [
+      "C:/Users/sande/Documents/arbiter-dashboard/output/uat-post-04-09/test12-pre-shutdown.png",
+      "C:/Users/sande/Documents/arbiter-dashboard/output/uat-post-04-09/test12-shutting-down.png",
+      "C:/Users/sande/Documents/arbiter-dashboard/output/uat-post-04-09/test12-complete.png"
+    ],
+    "preState": {
+      "hidden": true,
+      "text": "Server shutting down…"
+    },
+    "duringState": {
+      "hidden": false,
+      "text": "Server shutting down — cancelling open orders",
+      "display": "block"
+    },
+    "completeState": {
+      "text": "Server shutdown complete",
+      "hidden": false
+    }
+  },
+  "test13": {
+    "result": "pass",
+    "screenshots": [
+      "C:/Users/sande/Documents/arbiter-dashboard/output/uat-post-04-09/test13-idle.png",
+      "C:/Users/sande/Documents/arbiter-dashboard/output/uat-post-04-09/test13-warn.png",
+      "C:/Users/sande/Documents/arbiter-dashboard/output/uat-post-04-09/test13-crit-expected.png",
+      "C:/Users/sande/Documents/arbiter-dashboard/output/uat-post-04-09/test13-recover.png"
+    ],
+    "hostState": {
+      "existed": true,
+      "className": "rate-limit-host",
+      "parentId": "",
+      "parentTag": "ARTICLE"
+    },
+    "tonesSeen": [
+      "ok",
+      "warn",
+      "crit"
+    ],
+    "kalshiCritEmitted": true,
+    "idleSnap": [
+      {
+        "text": "Kalshi: 10/10 · idle",
+        "className": "rate-limit-pill ok"
+      },
+      {
+        "text": "Polymarket: 20/20 · idle",
+        "className": "rate-limit-pill ok"
+      }
+    ],
+    "warnSnap": [
+      {
+        "text": "Kalshi: 4/10 · 5.0s cooldown",
+        "className": "rate-limit-pill warn"
+      },
+      {
+        "text": "Polymarket: 20/20 · idle",
+        "className": "rate-limit-pill ok"
+      }
+    ],
+    "critSnap": {
+      "pills": [
+        {
+          "text": "Kalshi: 0/10 · 30.0s cooldown",
+          "className": "rate-limit-pill crit"
+        },
+        {
+          "text": "Polymarket: 20/20 · idle",
+          "className": "rate-limit-pill ok"
+        }
+      ],
+      "debug": {
+        "systemCollectors": [],
+        "topLevelCollectors": []
+      }
+    }
+  },
+  "consoleMessages": []
+}
