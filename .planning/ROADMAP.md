@@ -119,20 +119,21 @@ Plans:
 **Plans:** 9/8 plans complete
 
 Plans:
-- [x] TBD (run /gsd-plan-phase 04.1 to break down) (completed 2026-04-20)
+- [x] TBD (run /gsd-plan-phase 04.1 to break down) (completed 2026-04-20)
 
 ### Phase 5: Live Trading
 **Goal**: The first real cross-platform arbitrage trade executes successfully with small capital under operator supervision, proving the system works end-to-end with real money
-**Depends on**: Phase 4
+**Depends on**: Phase 4 (D-19 gate must flip to PASS before Plan 05-02 live-fire; Plan 05-01 scaffolding can proceed now)
 **Requirements**: TEST-05
 **Success Criteria** (what must be TRUE):
   1. A real arbitrage opportunity is detected, both legs are executed across two platforms, and both orders are filled -- visible in dashboard and platform accounts
   2. The trade's actual profit (after all fees) is positive and matches the system's predicted edge within reasonable tolerance
   3. Operator supervised the entire trade lifecycle from detection to settlement without needing to intervene for bugs or errors
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 05-01: TBD
+- [ ] 05-01-PLAN.md -- PHASE5_MAX_ORDER_USD adapter hard-lock (3 call sites, TDD) + arbiter/live/ harness + 15-item preflight runner + .env.production.template + operator runbook
+- [ ] 05-02-PLAN.md -- auto_abort primitive (reconcile breach -> trip_kill, fail-closed) + first-live-trade scenario with preflight gate + operator pause + evidence + 05-VALIDATION.md D-19-analog gate
 
 ## Progress
 
@@ -145,5 +146,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 2. Execution & Operational Hardening | 0/6 | Planned | - |
 | 3. Safety Layer | 0/7 | Planned | - |
 | 4. Sandbox Validation | 0/8 | Planned | - |
-| 5. Live Trading | 0/1 | Not started | - |
+| 5. Live Trading | 0/2 | Not started | - |
 

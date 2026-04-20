@@ -559,37 +559,46 @@ _The smallest Phase 5 that gets to "first live trade executed successfully." The
 | A7 | Running Phase 5 before OPS-04 (py-clob-client bump to 0.34.x) is safe because Phase 4 validated 0.25.x | Standard Stack | If the 0.25.x behavior diverges from 0.34.x on production endpoints (migrated or not), we could hit an unexpected production-only bug. Low-medium risk; explicit operator acknowledgment recommended. |
 | A8 | The simpler "tight cap + kill-switch" supervision protocol is acceptable to the user per "ASAP" timeline constraint | Operator Supervision | If user wants the full approval-UI workflow, our plan undershoots. **Confirm in discuss-phase or early in plan-phase.** |
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+_All 6 questions resolved during planning iteration-2 revision (2026-04-20). Each decision is LOCKED; see per-question `**Decision:**` blocks below. Decisions implemented in Plans 05-01 / 05-02 where noted._
 
 1. **Should we create a new `arbiter_live` Postgres database, or reuse existing `arbiter` dev DB?**
    - What we know: sandbox uses `arbiter_sandbox`; dev uses `arbiter` (default per settings.py:416).
    - What's unclear: mixing dev + live data in one DB creates audit-trail ambiguity.
-   - Recommendation: create `arbiter_live`. Costs almost nothing, preserves cleanliness. Planner decision point.
+   - Recommendation: create `arbiter_live`. Costs almost nothing, preserves cleanliness.
+   - **Decision (LOCKED):** Create a new `arbiter_live` database. `.env.production.template` sets `DATABASE_URL=postgresql://arbiter:arbiter_secret@localhost:5432/arbiter_live`. Fixtures in `arbiter/live/fixtures/production_db.py` assert `'arbiter_live' in DATABASE_URL AND 'arbiter_sandbox' NOT in DATABASE_URL AND 'arbiter_dev' NOT in DATABASE_URL`. Operator creates the DB + applies `arbiter/sql/init.sql` during the Plan 05-02 Task 1 checkpoint. Implemented: Plan 05-01.
 
 2. **Which market mapping do we target for the first live trade?**
    - What we know: at least one mapping must have `allow_auto_trade=True`, `resolution_match_status="identical"`, and non-zero confidence.
    - What's unclear: do we have a specific mapping in mind, or should the operator cherry-pick at trade time?
-   - Recommendation: operator cherry-picks in dashboard at trade time; no need to hard-code. But the preflight should confirm at least ONE viable mapping exists.
+   - Recommendation: operator cherry-picks in dashboard at trade time; no need to hard-code.
+   - **Decision (LOCKED):** Operator cherry-picks at trade time from the `iter_confirmed_market_mappings(require_auto_trade=True)` set. Preflight check #14 asserts at least one mapping has `resolution_match_status == "identical"`. Operator may override auto-pick via `PHASE5_TARGET_CANONICAL_ID` env var (`test_first_live_trade.py` reads it). Implemented: Plan 05-01 (preflight), Plan 05-02 (test body).
 
 3. **Do we ship the operator approval UI (Task 9) or the simpler tight-cap protocol?**
    - What we know: CLAUDE.md says "ASAP — even with manual monitoring." That points to simpler.
    - What's unclear: does "operator supervised" in the success criteria require an explicit approval button, or is "human watching the dashboard with kill-switch ready" sufficient?
-   - Recommendation: simpler protocol. Resolve in discuss-phase.
+   - Recommendation: simpler protocol.
+   - **Decision (LOCKED, per CLAUDE.md "ASAP" + "Safety > speed"):** Ship the **tight-cap + kill-switch protocol**; NOT an approval UI. The operator-supervision primitive is: (a) PHASE5_MAX_ORDER_USD=$10 adapter hard-lock (Plan 05-01 Task 1), (b) MAX_POSITION_USD=$10 scanner-level belt (Plan 05-01 `.env.production.template`, addresses blocker B-5), (c) operator-present-at-dashboard-with-kill-switch (Plan 05-02 Task 1 checkpoint), (d) 60-second operator-abort window in the test body immediately before `engine.execute` (Plan 05-02 Task 3b, widened from original 10s to 60s per warning W-6 + "Safety > speed"), (e) auto-abort-on-reconcile-breach (Plan 05-02 Task 2 + Task 3a). An approval-per-trade UI is DEFERRED to v2 unless the first live-fire run reveals a gap the operator window cannot close. Implemented: Plans 05-01 + 05-02.
 
 4. **Phase 5 plan structure: single plan or multiple?**
    - What we know: Phase 5 scope is small (~1-2 days of work).
-   - What's unclear: whether to break it into 3-4 plans (mirroring Phase 4's plan structure) or consolidate into one.
-   - Recommendation: 2 plans — (a) scaffolding (env-var, adapter hard-lock, preflight, harness), (b) live-fire execution + reconciliation + evidence + SUMMARY. Keeps the blast radius of each plan small.
+   - What's unclear: whether to break it into 3-4 plans or consolidate into one.
+   - Recommendation: 2 plans.
+   - **Decision (LOCKED):** 2 plans. Plan 05-01 = scaffolding (adapter hard-lock, `arbiter/live/` harness, preflight, env template, runbook). Plan 05-02 = operator preflight checkpoint + auto-abort primitive + live-fire test + VALIDATION flip. Plan 05-02 Task 3 is SPLIT into Task 3a (auto, scaffold + helpers) and Task 3b (checkpoint:human-verify, live-fire execution) per blocker B-4 resolution. Implemented: current plan structure.
 
 5. **Is the 60s reconcile wait correct for Polymarket on-chain settlement?**
    - What we know: on-chain settlement can take 2-30s in typical conditions, longer when congested.
    - What's unclear: 99th percentile settlement time during normal market hours.
-   - Recommendation: start with 60s; monitor actual settlement latency in evidence; tune in SUMMARY.
+   - Recommendation: start with 60s; monitor.
+   - **Decision (LOCKED):** Start at 60s. If the first live-fire run observes a pending tx on Polygonscan at reconcile time, the executor may bump to 120s for the next run AND document the observation in `operator_notes.md`. The 60s is recorded in `test_first_live_trade.py` as a module constant `POLYGON_SETTLEMENT_WAIT_SECONDS = 60.0` so it is a single-source-of-truth value, tunable without retesting. Implemented: Plan 05-02.
 
 6. **Does the `readiness._check_profitability` gate pass in live mode if we have zero live executions?**
-   - What we know: `ProfitabilityValidator` requires a minimum number of completed executions to validate.
-   - What's unclear: will `verdict` stay in `collecting_evidence` forever (blocking live) if we're in `DRY_RUN=false` with no trades?
-   - Recommendation: trace the code. If the profitability gate blocks on zero executions, we need a way to let the first trade through. Candidate: have `_check_profitability` allow execution if live_trades_count < first_trade_approval_limit. Planner decision.
+   - What we know: `_check_profitability` in `arbiter/readiness.py:216-254` inspects `ProfitabilityValidator.get_snapshot().verdict`. For verdicts `{"blocked", "not_profitable"}` it returns `status="fail"` + `blocking=True`. For `"validated_profitable"` it passes. For ANY OTHER verdict (including `"collecting_evidence"`) it returns `status="warning"` + `blocking=True` — which means **readiness.allow_execution denies every opportunity until enough completed executions lift the validator out of `collecting_evidence`**.
+   - What's unclear (NOW RESOLVED): this creates a chicken-and-egg problem — cannot ship the FIRST live trade because readiness blocks until trades exist. Traced and confirmed: `_check_profitability` with zero live executions returns `status="warning", blocking=True`, so `startup_failures()` short-circuits to BLOCK.
+   - Options: (a) relax the gate globally, (b) operator-overriding readiness for the first N trades, (c) bootstrap mode.
+   - **Decision (LOCKED): Option (c) — bootstrap mode via `PHASE5_BOOTSTRAP_TRADES` env var.** Rationale: (a) globally relaxing `_check_profitability` undermines the existing safety net for later operations; (b) operator-override requires dashboard surgery out of scope. Option (c) scoped narrowly: when `PHASE5_BOOTSTRAP_TRADES` is set to a positive int (e.g., `1`) AND completed-executions count is below that int, `_check_profitability` returns `status="pass"` with `summary="Phase 5 bootstrap: <N> trades remaining"` and `blocking=False`. Once executions >= bootstrap limit, the env var has no effect and normal profitability logic resumes. This is a **temporary, opt-in, env-driven** override that leaves no silent backdoor when the env var is unset (default behavior unchanged).
+   - **Implementation (LOCKED):** Plan 05-01 Task 3 (NEW) — add bootstrap-mode logic to `arbiter/readiness.py::_check_profitability`; unit-test that: (i) unset `PHASE5_BOOTSTRAP_TRADES` preserves existing collecting/blocking behavior, (ii) `PHASE5_BOOTSTRAP_TRADES=1` with 0 executions returns pass-not-blocking, (iii) `PHASE5_BOOTSTRAP_TRADES=1` with 1 execution falls through to normal logic. `.env.production.template` sets `PHASE5_BOOTSTRAP_TRADES=1` (Plan 05-01 Task 2 edit). Preflight check #16 (new) asserts `PHASE5_BOOTSTRAP_TRADES` is either unset OR an int between 1 and 5 (belt: block mis-scoped overrides like 1000). Implemented: Plan 05-01 (new Task 3 + template + preflight edit), Plan 05-02 (clears the env var in operator runbook ROLLBACK procedure after first trade completes).
 
 ## Environment Availability
 
