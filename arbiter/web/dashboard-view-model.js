@@ -232,14 +232,22 @@ export function buildSafetyView(state, options = {}) {
 
 export function buildRateLimitView(state) {
   const limits = state?.safety?.rateLimits ?? {};
+  const collectors = state?.collectors ?? {};
   return Object.entries(limits).map(([platform, stats]) => {
     const remainingPenalty = Number(stats?.remaining_penalty_seconds ?? 0);
     const available = Number(stats?.available_tokens ?? 0);
     const max = Number(stats?.max_requests ?? 0);
+    const circuitState = String(
+      collectors?.[platform]?.circuit?.state ?? "closed"
+    ).toLowerCase();
     let tone = "ok";
     if (remainingPenalty > 0) tone = "warn";
     else if (available === 0 && max > 0) tone = "warn";
-    // "crit" reserved for circuit-open state (future; not covered in this phase)
+    // G-5 fix (Plan 04-09, 2026-04-20): circuit-open promotes to "crit" so
+    // operators see the red state in the green -> amber -> red progression
+    // that SAFE-04 specifies. Replaces the placeholder comment that said
+    // "reserved for a future circuit-open state".
+    if (circuitState === "open") tone = "crit";
     return {
       platform,
       platformLabel:
@@ -254,6 +262,7 @@ export function buildRateLimitView(state) {
       remainingPenaltySeconds: remainingPenalty,
       availableTokens: available,
       maxRequests: max,
+      circuitState,
     };
   });
 }

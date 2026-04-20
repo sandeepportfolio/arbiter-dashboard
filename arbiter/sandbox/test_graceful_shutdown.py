@@ -121,14 +121,25 @@ async def _place_resting_limit_via_adapter_or_bypass(
     for name in ("place_limit", "place_gtc", "place_resting_limit"):
         fn = getattr(adapter, name, None)
         if callable(fn):
-            return await fn(
+            # G-2 fix (Plan 04-09, 2026-04-20): KalshiAdapter.place_resting_limit
+            # does NOT accept a client_order_id kwarg — the adapter generates
+            # its own internally and surfaces it as Order.external_client_order_id.
+            # The Phase 4.1 adapter signature is frozen; tests must consume the
+            # adapter-generated id rather than pass one in. Step 2/Step 3 below
+            # are TEST-ONLY raw-HTTP bypass paths that DO use the test-generated
+            # client_order_id because they skip the adapter's generator entirely.
+            order = await fn(
                 arb_id=arb_id,
                 market_id=market_id,
                 canonical_id=market_id,
                 side=side,
                 price=price,
                 qty=qty,
-                client_order_id=client_order_id,
+            )
+            return SimpleNamespace(
+                order_id=str(order.order_id),
+                client_order_id=str(order.external_client_order_id or ""),
+                raw=order,
             )
 
     # Step 2: TEST-ONLY bypass via adapter._client.create_order(...).
@@ -392,10 +403,15 @@ async def test_sigint_cancels_open_kalshi_demo_orders(evidence_dir):
             qty=SHUTDOWN_QTY,
             client_order_id=client_order_id,
         )
+        # G-2 fix (Plan 04-09): if Step 1 (adapter.place_resting_limit) was chosen,
+        # the adapter generated its own client_order_id — use the effective id
+        # returned by the helper for downstream list_open_orders_by_client_id.
+        # Step 2/Step 3 bypass paths return the test-generated id unchanged.
+        effective_client_order_id = placed.client_order_id or client_order_id
         log.info(
             "scenario.shutdown.order_placed",
             order_id=placed.order_id,
-            client_order_id=client_order_id,
+            client_order_id=effective_client_order_id,
             non_fok_strategy=non_fok_strategy,
         )
 
@@ -513,9 +529,9 @@ async def test_sigint_cancels_open_kalshi_demo_orders(evidence_dir):
 
         # Assertion 2: the resting order is CANCELLED on the demo exchange.
         await asyncio.sleep(1.0)  # allow platform to finalize cancel
-        remaining = await adapter.list_open_orders_by_client_id(client_order_id)
+        remaining = await adapter.list_open_orders_by_client_id(effective_client_order_id)
         assert not remaining, (
-            f"SAFE-05 INVARIANT VIOLATED: order {client_order_id} still open on Kalshi "
+            f"SAFE-05 INVARIANT VIOLATED: order {effective_client_order_id} still open on Kalshi "
             f"demo after subprocess SIGINT. cancel_all path did not cancel it. "
             f"remaining={remaining}"
         )
@@ -561,7 +577,13 @@ async def test_sigint_cancels_open_kalshi_demo_orders(evidence_dir):
                 ],
                 "tag": "real",
                 "subprocess_return_code": return_code,
-                "placed_client_order_id": client_order_id,
+                # G-2 fix (Plan 04-09): if adapter.place_resting_limit ran, the
+                # adapter generated a different client_order_id than the test
+                # precomputed. Prefer the effective id; fall back to the
+                # test-generated id (used by bypass paths and on early failures).
+                "placed_client_order_id": (
+                    locals().get("effective_client_order_id") or client_order_id
+                ),
                 "market": SHUTDOWN_MARKET_TICKER,
                 "price": SHUTDOWN_PRICE,
                 "qty": SHUTDOWN_QTY,

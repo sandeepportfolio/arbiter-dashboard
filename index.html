@@ -275,6 +275,17 @@
       </section>
 
       <section id="opsSection" class="panel-grid panel-grid-tight ops-only" data-ops-only="true">
+        <article class="panel rate-limit-panel" data-ops-only="true">
+          <div class="panel-header">
+            <div>
+              <p class="panel-kicker">Safety</p>
+              <h2>Rate-limit state</h2>
+            </div>
+          </div>
+          <p class="panel-copy">Per-platform rate-limit health. Green = tokens available, amber = cooling down, red = circuit open.</p>
+          <div id="rateLimitIndicators" class="rate-limit-host"></div>
+        </article>
+
         <article class="panel ops-queue-panel">
           <div class="panel-header">
             <div>
