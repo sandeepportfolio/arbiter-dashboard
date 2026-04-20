@@ -132,7 +132,7 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 05-01-PLAN.md -- PHASE5_MAX_ORDER_USD adapter hard-lock (3 call sites, TDD) + arbiter/live/ harness + 15-item preflight runner + .env.production.template + operator runbook
+- [x] 05-01-PLAN.md -- PHASE5_MAX_ORDER_USD adapter hard-lock (3 call sites, TDD) + arbiter/live/ harness + 15-item preflight runner + .env.production.template + operator runbook (completed 2026-04-20)
 - [ ] 05-02-PLAN.md -- auto_abort primitive (reconcile breach -> trip_kill, fail-closed) + first-live-trade scenario with preflight gate + operator pause + evidence + 05-VALIDATION.md D-19-analog gate
 
 ## Progress
@@ -146,5 +146,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 2. Execution & Operational Hardening | 0/6 | Planned | - |
 | 3. Safety Layer | 0/7 | Planned | - |
 | 4. Sandbox Validation | 0/8 | Planned | - |
-| 5. Live Trading | 0/2 | Not started | - |
+| 5. Live Trading | 1/2 | In progress (05-01 done; 05-02 pending Phase 4 D-19 PASS) | - |
 
