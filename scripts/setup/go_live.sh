@@ -113,10 +113,12 @@ if ! python scripts/setup/check_mapping_ready.py; then
     fail "No mapping ready for auto-trade"
 fi
 
-# ─── 7. 15-item preflight ─────────────────────────────────────────────
-step "7. Arbiter 15-item preflight"
-# Preflight in-process (not via docker exec) so we use the same env we just validated
-if ! python -m arbiter.live.preflight; then
+# ─── 7. 15-item preflight (+ Task 16 5b live balance) ────────────────
+step "7. Arbiter preflight (16 checks)"
+# Preflight in-process (not via docker exec) so we use the same env we just validated.
+# PREFLIGHT_ALLOW_LIVE=1 enables the 5b live balance check (safe here — we already
+# verified credentials in step 4, and go_live.sh always runs with full env).
+if ! PREFLIGHT_ALLOW_LIVE=1 python -m arbiter.live.preflight; then
     fail "Preflight reported blockers — fix them and re-run"
 fi
 

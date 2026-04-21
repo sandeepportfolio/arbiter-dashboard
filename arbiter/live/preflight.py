@@ -9,10 +9,15 @@ Runnable two ways:
 
 Every check returns a ``PreflightItem`` dataclass so the same function can
 be asserted in tests AND rendered to an operator-facing table.
+
+Task 16 adds two new checks that replace check 5 when POLYMARKET_VARIANT=us:
+  5a — credentials CI-safe (no network)
+  5b — live balance check (only runs when PREFLIGHT_ALLOW_LIVE=1)
 """
 from __future__ import annotations
 
 import asyncio
+import base64
 import os
 import pathlib
 import re
@@ -246,6 +251,203 @@ def _check_05_polymarket_funded() -> PreflightItem:
         blocking=True,
         detail="OK (on-chain balance check is manual)"
                if passed else "; ".join(issues),
+    )
+
+
+def _check_05a_polymarket_us_credentials() -> PreflightItem:
+    """Check 5a: Polymarket US API key ID present + secret parseable as >=32-byte Ed25519 seed.
+
+    When POLYMARKET_VARIANT=us: validates credentials without any network call.
+    When POLYMARKET_VARIANT=legacy: delegates to the legacy _check_05_polymarket_funded().
+    When POLYMARKET_VARIANT=disabled (or unset): both 5a/5b are not applicable.
+    """
+    variant = os.getenv("POLYMARKET_VARIANT", "legacy").lower()
+
+    if variant == "disabled":
+        return PreflightItem(
+            key="polymarket_us_creds",
+            label="Polymarket US credentials (5a)",
+            passed=True,
+            blocking=False,
+            detail="not applicable (POLYMARKET_VARIANT=disabled)",
+        )
+
+    if variant != "us":
+        # Legacy path — delegate
+        legacy = _check_05_polymarket_funded()
+        return PreflightItem(
+            key="polymarket_us_creds",
+            label="Polymarket US credentials (5a) [legacy variant]",
+            passed=legacy.passed,
+            blocking=legacy.blocking,
+            detail=legacy.detail,
+        )
+
+    # US variant — credential check
+    key_id = os.getenv("POLYMARKET_US_API_KEY_ID", "")
+    secret_b64 = os.getenv("POLYMARKET_US_API_SECRET", "")
+    issues: List[str] = []
+
+    if not key_id:
+        issues.append("POLYMARKET_US_API_KEY_ID unset")
+
+    if not secret_b64:
+        issues.append("POLYMARKET_US_API_SECRET unset")
+    else:
+        # Validate it decodes to >=32 bytes (Ed25519 seed requirement)
+        try:
+            raw = base64.b64decode(secret_b64)
+            if len(raw) < 32:
+                issues.append(
+                    f"POLYMARKET_US_API_SECRET decodes to only {len(raw)} bytes; need >=32"
+                )
+        except Exception:
+            issues.append("POLYMARKET_US_API_SECRET is not valid base64")
+
+    passed = not issues
+    return PreflightItem(
+        key="polymarket_us_creds",
+        label="Polymarket US credentials (5a)",
+        passed=passed,
+        blocking=True,
+        detail="key_id set; secret is valid >=32-byte Ed25519 seed"
+               if passed else "; ".join(issues),
+    )
+
+
+async def _check_05b_polymarket_us_balance() -> PreflightItem:
+    """Check 5b: Live signed GET /v1/account/balances; assert currentBalance >= $20.
+
+    Only runs when PREFLIGHT_ALLOW_LIVE=1. Otherwise returns a SKIPPED result
+    (not a blocking failure) so CI never contacts the live API.
+
+    When POLYMARKET_VARIANT=legacy: delegates to the legacy _check_05_polymarket_funded().
+    When POLYMARKET_VARIANT=disabled: not applicable.
+    """
+    variant = os.getenv("POLYMARKET_VARIANT", "legacy").lower()
+
+    if variant == "disabled":
+        return PreflightItem(
+            key="polymarket_us_balance",
+            label="Polymarket US live balance >=20 (5b)",
+            passed=True,
+            blocking=False,
+            detail="not applicable (POLYMARKET_VARIANT=disabled)",
+        )
+
+    if variant != "us":
+        # Legacy path — delegate (marks as non-blocking advisory)
+        legacy = _check_05_polymarket_funded()
+        return PreflightItem(
+            key="polymarket_us_balance",
+            label="Polymarket US live balance >=20 (5b) [legacy variant]",
+            passed=legacy.passed,
+            blocking=False,
+            detail=legacy.detail,
+        )
+
+    # Guard: 5b NEVER runs without PREFLIGHT_ALLOW_LIVE=1
+    allow_live = os.getenv("PREFLIGHT_ALLOW_LIVE", "").strip() == "1"
+    if not allow_live:
+        return PreflightItem(
+            key="polymarket_us_balance",
+            label="Polymarket US live balance >=20 (5b)",
+            passed=True,
+            blocking=False,
+            detail="SKIPPED (live check, set PREFLIGHT_ALLOW_LIVE=1 to enable)",
+        )
+
+    # Credentials must be present for the live call
+    key_id = os.getenv("POLYMARKET_US_API_KEY_ID", "")
+    secret_b64 = os.getenv("POLYMARKET_US_API_SECRET", "")
+    if not key_id or not secret_b64:
+        return PreflightItem(
+            key="polymarket_us_balance",
+            label="Polymarket US live balance >=20 (5b)",
+            passed=False,
+            blocking=True,
+            detail="credentials missing — run 5a first",
+        )
+
+    # Live signed request
+    import aiohttp
+    try:
+        from arbiter.auth.ed25519_signer import Ed25519Signer, SignatureError
+    except Exception as exc:
+        return PreflightItem(
+            key="polymarket_us_balance",
+            label="Polymarket US live balance >=20 (5b)",
+            passed=False,
+            blocking=True,
+            detail=f"Ed25519Signer import failed: {exc}",
+        )
+
+    try:
+        signer = Ed25519Signer(key_id=key_id, secret_b64=secret_b64)
+    except Exception as exc:
+        return PreflightItem(
+            key="polymarket_us_balance",
+            label="Polymarket US live balance >=20 (5b)",
+            passed=False,
+            blocking=True,
+            detail=f"Ed25519Signer init failed: {exc}",
+        )
+
+    base_url = os.getenv("POLYMARKET_US_API_URL", "https://api.polymarket.us").rstrip("/")
+    path = "/v1/account/balances"
+    headers = signer.headers("GET", path)
+
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+            async with session.get(f"{base_url}{path}", headers=headers) as resp:
+                status = resp.status
+                if status == 401:
+                    return PreflightItem(
+                        key="polymarket_us_balance",
+                        label="Polymarket US live balance >=20 (5b)",
+                        passed=False,
+                        blocking=True,
+                        detail="HTTP 401 — check POLYMARKET_US_API_KEY_ID + POLYMARKET_US_API_SECRET match",
+                    )
+                if status != 200:
+                    return PreflightItem(
+                        key="polymarket_us_balance",
+                        label="Polymarket US live balance >=20 (5b)",
+                        passed=False,
+                        blocking=True,
+                        detail=f"unexpected HTTP {status}",
+                    )
+                body = await resp.json()
+    except Exception as exc:
+        return PreflightItem(
+            key="polymarket_us_balance",
+            label="Polymarket US live balance >=20 (5b)",
+            passed=False,
+            blocking=False,
+            detail=f"network error: {exc.__class__.__name__}",
+        )
+
+    # Parse currentBalance — accept both numeric and string forms
+    try:
+        current_balance = float(body.get("currentBalance", 0))
+    except (TypeError, ValueError):
+        return PreflightItem(
+            key="polymarket_us_balance",
+            label="Polymarket US live balance >=20 (5b)",
+            passed=False,
+            blocking=True,
+            detail=f"could not parse currentBalance from response: {body!r:.200}",
+        )
+
+    passed = current_balance >= 20.0
+    return PreflightItem(
+        key="polymarket_us_balance",
+        label="Polymarket US live balance >=20 (5b)",
+        passed=passed,
+        blocking=True,
+        detail=f"currentBalance=${current_balance:.2f}"
+               if passed
+               else f"currentBalance=${current_balance:.2f} < $20.00 minimum",
     )
 
 
@@ -578,7 +780,11 @@ def _check_15_operator_runbook_ack() -> PreflightItem:
 
 
 async def run_preflight(dashboard_url: Optional[str] = None) -> PreflightReport:
-    """Run all 15 checks. Sync checks are called directly; async ones awaited.
+    """Run all 16 checks. Sync checks are called directly; async ones awaited.
+
+    Task 16: adds 5a (credentials) + 5b (live balance) to the original 15 checks.
+    5a replaces the legacy check-5 position; 5b is appended as an additional async
+    check giving 16 total items.
 
     ``dashboard_url`` defaults to ``os.getenv("DASHBOARD_URL", "http://localhost:8080")``.
     """
@@ -587,7 +793,7 @@ async def run_preflight(dashboard_url: Optional[str] = None) -> PreflightReport:
         _check_02_phase4_scenarios_observed,
         _check_03_phase4_review,
         _check_04_kalshi_production_creds,
-        _check_05_polymarket_funded,
+        _check_05a_polymarket_us_credentials,   # replaces _check_05_polymarket_funded
         _check_06_kalshi_funded,
         _check_07_database_url_live,
         _check_08_phase5_max_order_usd,
@@ -599,15 +805,18 @@ async def run_preflight(dashboard_url: Optional[str] = None) -> PreflightReport:
     ]
     items: List[PreflightItem] = [check() for check in sync_checks]
 
-    # Async checks (dashboard endpoints) — run concurrently.
+    # Async checks (dashboard endpoints + live balance) — run concurrently.
     async_checks: List[Coroutine[Any, Any, PreflightItem]] = [
         _check_11_dashboard_kill_switch(dashboard_url),
         _check_12_readiness_endpoint(dashboard_url),
+        _check_05b_polymarket_us_balance(),
     ]
     async_items = await asyncio.gather(*async_checks, return_exceptions=False)
     # Splice the async results back into positions 11 and 12 (1-indexed).
     items.insert(10, async_items[0])
     items.insert(11, async_items[1])
+    # 5b appended at the end (16th item)
+    items.append(async_items[2])
 
     return PreflightReport(items=items)
 

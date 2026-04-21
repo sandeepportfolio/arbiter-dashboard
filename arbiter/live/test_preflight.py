@@ -22,6 +22,7 @@ from arbiter.live.preflight import (
     _check_03_phase4_review,
     _check_04_kalshi_production_creds,
     _check_05_polymarket_funded,
+    _check_05a_polymarket_us_credentials,
     _check_06_kalshi_funded,
     _check_07_database_url_live,
     _check_08_phase5_max_order_usd,
@@ -363,8 +364,11 @@ def test_check_15_fail_when_wrong_value(monkeypatch):
 # ─── Integration: run_preflight ──────────────────────────────────────────────
 
 
-async def test_run_preflight_with_clean_env_still_returns_15_items(monkeypatch, tmp_path):
-    """Orchestrator returns PreflightReport with 15 items even when env is empty."""
+async def test_run_preflight_with_clean_env_still_returns_16_items(monkeypatch, tmp_path):
+    """Orchestrator returns PreflightReport with 16 items even when env is empty.
+
+    Task 16 adds check 5b (live balance) to the original 15, giving 16 total.
+    """
     # Chdir to a temp dir so 04-VALIDATION.md is absent (forces check 1 + 2 fail).
     monkeypatch.chdir(tmp_path)
     # Clear env so dashboard checks fall to unreachable branch quickly.
@@ -372,12 +376,14 @@ async def test_run_preflight_with_clean_env_still_returns_15_items(monkeypatch, 
         "DATABASE_URL", "PHASE5_MAX_ORDER_USD", "PHASE4_MAX_ORDER_USD",
         "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "OPERATOR_RUNBOOK_ACK",
         "POLYMARKET_MIGRATION_ACK", "KALSHI_API_KEY_ID",
+        "POLYMARKET_VARIANT", "POLYMARKET_US_API_KEY_ID", "POLYMARKET_US_API_SECRET",
+        "PREFLIGHT_ALLOW_LIVE",
     ):
         monkeypatch.delenv(var, raising=False)
     report = await run_preflight(dashboard_url="http://127.0.0.1:1")
     assert isinstance(report, PreflightReport)
-    assert len(report.items) == 15, (
-        f"expected 15 check rows, got {len(report.items)}"
+    assert len(report.items) == 16, (
+        f"expected 16 check rows, got {len(report.items)}"
     )
     # With nothing configured, overall must NOT pass.
     assert report.passed is False
