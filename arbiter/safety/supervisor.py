@@ -170,11 +170,14 @@ class SafetySupervisor:
                 cancelled_counts = await self._cancel_all_adapters()
 
                 # Telegram send: never propagate failures out of trip_kill.
+                # Phase 6 Plan 06-03: dedup_key prevents a fan-out of kill_armed
+                # messages when multiple actors attempt to arm within the dedup
+                # window; only the first one sends a Telegram alert.
                 try:
                     message = SafetyAlertTemplates.kill_armed(
                         by=by, reason=reason, cancelled_counts=cancelled_counts,
                     )
-                    await self.notifier.send(message)
+                    await self.notifier.send(message, dedup_key=f"kill_armed:{by}")
                 except Exception as exc:
                     logger.warning(
                         "safety.supervisor: telegram kill_armed send failed: %s", exc,
@@ -244,7 +247,7 @@ class SafetySupervisor:
 
                 try:
                     message = SafetyAlertTemplates.kill_reset(by=by, note=note)
-                    await self.notifier.send(message)
+                    await self.notifier.send(message, dedup_key=f"kill_reset:{by}")
                 except Exception as exc:
                     logger.warning(
                         "safety.supervisor: telegram kill_reset send failed: %s", exc,
@@ -380,7 +383,10 @@ class SafetySupervisor:
                     exposure_usd=exposure_usd,
                     unwind_instruction=unwind_instruction,
                 )
-                await self.notifier.send(message)
+                await self.notifier.send(
+                    message,
+                    dedup_key=f"one_leg:{canonical_id}",
+                )
             except Exception as exc:
                 logger.warning(
                     "safety.supervisor: telegram one_leg_exposure send failed: %s",

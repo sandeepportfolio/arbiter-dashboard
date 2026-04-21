@@ -26,23 +26,74 @@ class BalanceSnapshot:
 
 
 class TelegramNotifier:
-    """Send alerts via Telegram bot."""
+    """Send alerts via Telegram bot.
 
-    def __init__(self, bot_token: str, chat_id: str):
+    Phase 6 Plan 06-03 adds:
+      - Retry on transient aiohttp failures (3 attempts with 0.5/1/2s backoff).
+      - Dedup within a sliding window (default 60s) keyed by ``dedup_key`` so
+        repeat alerts (e.g., rate-limit crit bursts) don't spam Telegram.
+      - Disabled-mode is a true no-op: ``send()`` returns False quickly with
+        no HTTP call.
+
+    Backwards-compatible: the previous ``send(message)`` signature still works;
+    ``dedup_key`` is optional.
+    """
+
+    def __init__(
+        self,
+        bot_token: str,
+        chat_id: str,
+        *,
+        dedup_window_sec: float = 60.0,
+        max_retries: int = 3,
+    ):
         self.bot_token = bot_token
         self.chat_id = chat_id
         self._session: Optional[aiohttp.ClientSession] = None
         self._enabled = bool(bot_token and chat_id)
+        self._dedup_window_sec = max(0.0, float(dedup_window_sec))
+        self._max_retries = max(1, int(max_retries))
+        self._last_sent: Dict[str, float] = {}
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession()
         return self._session
 
-    async def send(self, message: str, parse_mode: str = "HTML") -> bool:
-        """Send a Telegram message."""
+    def _is_duplicate(self, dedup_key: Optional[str]) -> bool:
+        if dedup_key is None or self._dedup_window_sec <= 0:
+            return False
+        now = time.time()
+        prior = self._last_sent.get(dedup_key)
+        if prior is not None and (now - prior) < self._dedup_window_sec:
+            return True
+        self._last_sent[dedup_key] = now
+        # Opportunistic compaction (bounded memory growth).
+        if len(self._last_sent) > 256:
+            cutoff = now - self._dedup_window_sec * 4
+            self._last_sent = {
+                k: t for k, t in self._last_sent.items() if t >= cutoff
+            }
+        return False
+
+    async def send(
+        self,
+        message: str,
+        parse_mode: str = "HTML",
+        *,
+        dedup_key: Optional[str] = None,
+    ) -> bool:
+        """Send a Telegram message with retry + optional dedup.
+
+        Returns True on HTTP 200 from Telegram, False on any other outcome
+        (disabled, deduped, retries exhausted, non-200 response).
+        """
         if not self._enabled:
             logger.debug(f"Telegram disabled, would send: {message[:80]}...")
+            return False
+
+        if self._is_duplicate(dedup_key):
+            logger.debug(f"Telegram deduped (key={dedup_key!r}): {message[:80]}...")
             return False
 
         session = await self._get_session()
@@ -53,18 +104,31 @@ class TelegramNotifier:
             "parse_mode": parse_mode,
         }
 
-        try:
-            async with session.post(url, json=payload) as resp:
-                if resp.status == 200:
-                    logger.debug("Telegram message sent")
-                    return True
-                else:
+        backoff = 0.5
+        for attempt in range(1, self._max_retries + 1):
+            try:
+                async with session.post(url, json=payload) as resp:
+                    if resp.status == 200:
+                        logger.debug("Telegram message sent")
+                        return True
                     text = await resp.text()
-                    logger.warning(f"Telegram API error {resp.status}: {text[:200]}")
-                    return False
-        except Exception as e:
-            logger.error(f"Telegram send error: {e}")
-            return False
+                    logger.warning(
+                        f"Telegram API error {resp.status} (attempt {attempt}/{self._max_retries}): {text[:200]}"
+                    )
+                    # 5xx → retry; 4xx (bad token, missing chat, rate-limit 429) → give up
+                    if resp.status < 500 and resp.status != 429:
+                        return False
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(
+                    f"Telegram send transient error (attempt {attempt}/{self._max_retries}): {e}"
+                )
+            if attempt < self._max_retries:
+                await asyncio.sleep(backoff)
+                backoff *= 2
+        logger.error("Telegram send failed after %d retries", self._max_retries)
+        return False
 
     async def close(self):
         if self._session and not self._session.closed:
