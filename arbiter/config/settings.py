@@ -486,6 +486,23 @@ class ArbiterConfig:
     postgres: PostgresConfig = field(default_factory=PostgresConfig)
 
 
+# Polymarket US fee curve — docs.polymarket.us/fees
+_THETA_TAKER = 0.05
+_THETA_MAKER = -0.0125  # rebate, signed negative
+
+
+def polymarket_us_order_fee(price: float, qty: float, intent: str = "taker") -> float:
+    """
+    Polymarket US fee formula: fee = θ × qty × price × (1−price)
+    θ_taker = 0.05; θ_maker = −0.0125 (negative = rebate).
+    Result is banker's-rounded to the nearest cent.
+    """
+    theta = _THETA_TAKER if intent == "taker" else _THETA_MAKER
+    raw = theta * qty * price * (1.0 - price)
+    # Banker's rounding to cent
+    return round(raw * 100) / 100.0
+
+
 def load_config() -> ArbiterConfig:
     cfg = ArbiterConfig()
     if cfg.kalshi.private_key_path and not os.path.isabs(cfg.kalshi.private_key_path):
