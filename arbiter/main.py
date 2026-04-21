@@ -43,6 +43,56 @@ from sentry_sdk.integrations.aiohttp import AioHttpIntegration
 from sentry_sdk.integrations.asyncio import AsyncioIntegration
 from sentry_sdk.integrations.logging import LoggingIntegration
 
+from .config.settings import PolymarketConfig, PolymarketUSConfig
+
+
+def build_polymarket_component(config: ArbiterConfig):
+    """Return the correct Polymarket adapter (or None) based on config.polymarket type.
+
+    This is a minimal factory used for variant selection and rollback smoke tests.
+    It does NOT wire the adapter into the engine — that happens in run_system().
+
+    Returns
+    -------
+    PolymarketAdapter | PolymarketUSAdapter | None
+        - None           when config.polymarket is None  (POLYMARKET_VARIANT=disabled)
+        - PolymarketAdapter     when config.polymarket is PolymarketConfig (legacy)
+        - PolymarketUSAdapter   when config.polymarket is PolymarketUSConfig (us)
+    """
+    if config.polymarket is None:
+        return None
+
+    if isinstance(config.polymarket, PolymarketUSConfig):
+        from .collectors.polymarket_us import PolymarketUSClient
+        from .auth.ed25519_signer import Ed25519Signer
+        from .execution.adapters.polymarket_us import PolymarketUSAdapter
+
+        cfg = config.polymarket
+        # Only build the signer if credentials are present; otherwise use a stub
+        if cfg.api_key_id and cfg.api_secret:
+            signer = Ed25519Signer(key_id=cfg.api_key_id, secret_b64=cfg.api_secret)
+        else:
+            # Stub signer for test/dry-run contexts where no real credentials exist
+            signer = None  # type: ignore[assignment]
+
+        client = PolymarketUSClient(base_url=cfg.api_url, signer=signer)  # type: ignore[arg-type]
+        return PolymarketUSAdapter(client=client)
+
+    if isinstance(config.polymarket, PolymarketConfig):
+        # Legacy CLOB adapter — defer heavy imports to avoid side effects in tests
+        from .execution.adapters.polymarket import PolymarketAdapter as _PolymarketAdapter
+
+        # Build a minimal adapter without a real ClobClient (dry-run / rollback context).
+        # The full wire-up with a live ClobClient lives in run_system().
+        return _PolymarketAdapter(
+            config=config,
+            clob_client_factory=lambda: None,
+            rate_limiter=None,  # type: ignore[arg-type]
+            circuit=None,       # type: ignore[arg-type]
+        )
+
+    return None
+
 
 def _init_sentry() -> None:
     """Initialize sentry-sdk. No-op if SENTRY_DSN unset (sentry-sdk handles dsn=None)."""
