@@ -668,3 +668,62 @@ docker compose -f docker-compose.prod.yml logs -f arbiter-api-prod | grep auto_e
 - **Frequent commits:** each task ends in a commit pushed to `main`.
 - **Safety invariants:** kill-switch, hard-locks, SAFE-01..06 untouched unless test specifically proves they still hold.
 - **Secrets hygiene:** `.env.production` and `keys/*.pem` stay gitignored; Ed25519 secret never echoed.
+
+## Per-task regression gate (applies to every task)
+
+**Before any task's final commit step, run `pytest -q` and confirm the full suite is still green.** If a task mutates a shared module (`settings.py`, `scanner/arbitrage.py`, `execution/engine.py`, `main.py`), this is non-negotiable. Broken-legacy discovered N tasks later costs hours of bisect. Tasks 2, 3, 9 specifically call this out but the rule is universal.
+
+If a subagent reports "X tests now fail, will be fixed in Task N+1," STOP. A task is not complete until everything is green.
+
+## Additions to specific tasks (from plan review round 1)
+
+**Task 7 — hard-lock ORDER test (was C1):**
+
+Add a test that monkeypatches `_sign_and_prepare` to raise, then calls `place_fok` with oversized notional. PHASE4 hard-lock must trip first (so `_sign_and_prepare` is never called). Assert:
+- `_sign_and_prepare.call_count == 0`
+- Raised exception message contains "PHASE4"
+
+Add a parallel test with PHASE4 disabled but PHASE5 set — same assertion, message contains "PHASE5."
+
+Add a test with supervisor.is_armed=True — same assertion.
+
+**Task 15 — liquidity depth test (was M1):**
+
+For condition #5 (liquidity ≥ `PHASE5_MAX_ORDER_USD × 2`), test must construct a fake order book with known depth and assert the gate returns correct pass/fail based on arithmetic, not a boolean fixture.
+
+**Task 16 — 5b refuses to run without flag (was M3):**
+
+Explicit test: `PREFLIGHT_ALLOW_LIVE` unset AND credentials present → 5b is skipped with exit code indicating skip-not-fail. Then set the flag → 5b actually runs. This guards the "5b never runs in CI" invariant.
+
+**Task 17 — secret-leak test (was M4):**
+
+`check_polymarket_us.py` test captures stdout+stderr, runs the script with a known fake secret in env, greps the output — MUST NOT contain the secret. Same for stderr.
+
+**Task 11 — realistic rate (was M5):**
+
+Drop synthetic rate to 3 updates/sec × 1000 markets = 3000 events/sec. Assert:
+- p99 match-to-emit latency ≤ 100ms
+- Backpressure drop rate < 0.1% (separate assertion, not bundled into latency)
+
+## Task 19.5 — Rollback smoke test (was C3, NEW)
+
+**Files:**
+- Create: `arbiter/live/test_rollback_variants.py`
+
+- [ ] **Step 1: Test `POLYMARKET_VARIANT=disabled`** — boot `main.run_system` for 5 seconds in a subprocess with variant=disabled; assert:
+  - No HTTP calls to any Polymarket host (monkeypatch aiohttp at module level or use `aioresponses` assert-not-called)
+  - Kalshi collector still runs
+  - Scanner produces no opportunities (only one platform present)
+  - Process exits cleanly on SIGTERM
+
+- [ ] **Step 2: Test `POLYMARKET_VARIANT=legacy`** — boot with variant=legacy and mocked `POLY_PRIVATE_KEY`/`POLY_FUNDER`; assert the legacy `PolymarketCollector` is instantiated (not the US one). No live HTTP — use the existing sandbox fixture harness.
+
+- [ ] **Step 3: Test switch-under-load** — start under `us` variant, kill, relaunch under `legacy`, confirm clean transition with no orphan connections.
+
+- [ ] **Step 4: Commit.**
+
+(Insert this task between Task 19 (Playwright onboarding) and Task 20 (Full suite). Renumber downstream tasks accordingly.)
+
+## Task renumbering after insertion
+
+Task 20 → 21 (Full suite); Task 21 → 22 (Telegram deliverable).
