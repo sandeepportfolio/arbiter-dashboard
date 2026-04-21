@@ -1,0 +1,23 @@
+{
+  "baseUrl": "http://localhost:8090",
+  "urlsChecked": [
+    {
+      "url": "http://localhost:8090/index.html",
+      "status": 200,
+      "reachable": true
+    },
+    {
+      "url": "http://localhost:8090/",
+      "status": 200,
+      "reachable": true
+    }
+  ],
+  "consoleErrors": [
+    "[http://localhost:8090/index.html] http://localhost:8090/arbiter/web/dashboard.js: WebSocket connection to 'ws://localhost:8090/ws' failed: Error during WebSocket handshake: Unexpected response code: 404",
+    "[http://localhost:8090/index.html] http://localhost:8090/arbiter/web/dashboard.js: WebSocket connection to 'ws://localhost:8090/ws' failed: Error during WebSocket handshake: Unexpected response code: 404",
+    "[http://localhost:8090/] http://localhost:8090/arbiter/web/dashboard.js: WebSocket connection to 'ws://localhost:8090/ws' failed: Error during WebSocket handshake: Unexpected response code: 404",
+    "[http://localhost:8090/] http://localhost:8090/arbiter/web/dashboard.js: WebSocket connection to 'ws://localhost:8090/ws' failed: Error during WebSocket handshake: Unexpected response code: 404"
+  ],
+  "missingSelectors": [],
+  "passed": false
+}

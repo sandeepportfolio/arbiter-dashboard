@@ -1,0 +1,12 @@
+import { chromium, devices } from 'playwright';
+const browser = await chromium.launch({ headless: true });
+const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+await page.goto('http://127.0.0.1:8090/', { waitUntil: 'networkidle' });
+await page.locator('#logsSection').scrollIntoViewIfNeeded();
+await page.waitForTimeout(300);
+const before = await page.evaluate(() => document.querySelector('.app-topbar').getBoundingClientRect().top);
+await page.mouse.wheel(0, 1200);
+await page.waitForTimeout(300);
+const after = await page.evaluate(() => document.querySelector('.app-topbar').getBoundingClientRect().top);
+console.log(JSON.stringify({ before, after }));
+await browser.close();
