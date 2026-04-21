@@ -373,6 +373,8 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
         mapping_store=make_settings_mapping_adapter(MARKET_MAP),
         config_env=os.environ,
     )
+    # Expose to the api server so /api/metrics can surface auto_executor stats.
+    api.auto_executor = auto_executor
     logger.info(
         f"  Auto-execute: {'✓ ENABLED' if auto_executor._config.enabled else '✗ disabled (AUTO_EXECUTE_ENABLED=false)'}"
     )

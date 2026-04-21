@@ -217,6 +217,7 @@ class ArbiterAPI:
         app.router.add_post("/api/kill-switch", self.handle_kill_switch)
         app.router.add_get("/api/safety/status", self.handle_safety_status)
         app.router.add_get("/api/safety/events", self.handle_safety_events)
+        app.router.add_get("/api/metrics", self.handle_metrics)
         app.router.add_get("/ws", self.handle_websocket)
 
         runner = web.AppRunner(app)
@@ -725,6 +726,130 @@ class ArbiterAPI:
             },
             "next_step": "Check Telegram for unwind instructions",
         })
+
+    async def handle_metrics(self, request):
+        """Prometheus text-exposition metrics.
+
+        Phase 6 Plan 06-04 deliverable. Content-Type: text/plain; version=0.0.4.
+        Scrape from Prometheus with:
+
+            - job_name: arbiter
+              static_configs:
+                - targets: ['arbiter-api-prod:8080']
+              metrics_path: /api/metrics
+              scheme: http
+        """
+        lines: list[str] = []
+
+        scanner_stats = getattr(self.scanner, "stats", {}) or {}
+        engine_stats = getattr(self.engine, "stats", {}) or {}
+        safety_armed = 1 if (self.safety and self.safety.is_armed) else 0
+
+        lines.append("# HELP arbiter_build_info Arbiter build metadata")
+        lines.append("# TYPE arbiter_build_info gauge")
+        lines.append(
+            f'arbiter_build_info{{release="{os.getenv("ARBITER_RELEASE", "dev")}",env="{os.getenv("ARBITER_ENV", "dev")}"}} 1'
+        )
+
+        lines.append("# HELP arbiter_scanner_scans_total Total scanner iterations")
+        lines.append("# TYPE arbiter_scanner_scans_total counter")
+        lines.append(f"arbiter_scanner_scans_total {int(scanner_stats.get('scan_count', 0))}")
+
+        lines.append("# HELP arbiter_scanner_active_opportunities Current opportunities in flight")
+        lines.append("# TYPE arbiter_scanner_active_opportunities gauge")
+        lines.append(
+            f"arbiter_scanner_active_opportunities {int(scanner_stats.get('active_opportunities', 0))}"
+        )
+
+        lines.append("# HELP arbiter_scanner_best_edge_cents Best currently-tradable edge (cents)")
+        lines.append("# TYPE arbiter_scanner_best_edge_cents gauge")
+        lines.append(f"arbiter_scanner_best_edge_cents {float(scanner_stats.get('best_edge_cents', 0))}")
+
+        lines.append("# HELP arbiter_scanner_last_scan_ms Latest scan duration (ms)")
+        lines.append("# TYPE arbiter_scanner_last_scan_ms gauge")
+        lines.append(f"arbiter_scanner_last_scan_ms {float(scanner_stats.get('last_scan_ms', 0))}")
+
+        lines.append("# HELP arbiter_executions_total Total trade executions, by status")
+        lines.append("# TYPE arbiter_executions_total counter")
+        lines.append(f'arbiter_executions_total{{status="live"}} {int(engine_stats.get("live", 0))}')
+        lines.append(f'arbiter_executions_total{{status="simulated"}} {int(engine_stats.get("simulated", 0))}')
+        lines.append(f'arbiter_executions_total{{status="manual"}} {int(engine_stats.get("manual", 0))}')
+
+        lines.append("# HELP arbiter_incidents_total Total recorded incidents")
+        lines.append("# TYPE arbiter_incidents_total counter")
+        lines.append(f"arbiter_incidents_total {int(engine_stats.get('incidents', 0))}")
+
+        lines.append("# HELP arbiter_recoveries_total One-leg recovery completions")
+        lines.append("# TYPE arbiter_recoveries_total counter")
+        lines.append(f"arbiter_recoveries_total {int(engine_stats.get('recoveries', 0))}")
+
+        lines.append("# HELP arbiter_aborts_total Trades aborted (reconcile breach / auto_abort)")
+        lines.append("# TYPE arbiter_aborts_total counter")
+        lines.append(f"arbiter_aborts_total {int(engine_stats.get('aborted', 0))}")
+
+        lines.append("# HELP arbiter_pnl_total Cumulative realized PnL (USD)")
+        lines.append("# TYPE arbiter_pnl_total gauge")
+        lines.append(f"arbiter_pnl_total {float(engine_stats.get('total_pnl', 0))}")
+
+        lines.append("# HELP arbiter_kill_switch_armed Kill-switch state (1=armed, 0=disarmed)")
+        lines.append("# TYPE arbiter_kill_switch_armed gauge")
+        lines.append(f"arbiter_kill_switch_armed {safety_armed}")
+
+        # Per-collector circuit state + rate-limiter tokens
+        circuit_map = {"closed": 0, "half_open": 1, "open": 2}
+        for platform, collector in (getattr(self, "collectors", {}) or {}).items():
+            circuit = getattr(collector, "circuit", None)
+            if circuit is not None:
+                state_name = str(getattr(circuit, "state", "closed")).lower()
+                circuit_val = circuit_map.get(state_name, 0)
+                lines.append("# HELP arbiter_circuit_state Circuit state (0=closed,1=half_open,2=open)")
+                lines.append("# TYPE arbiter_circuit_state gauge")
+                lines.append(f'arbiter_circuit_state{{platform="{platform}"}} {circuit_val}')
+            limiter = getattr(collector, "rate_limiter", None)
+            if limiter is not None:
+                available = int(getattr(limiter, "available_tokens", 0) or 0)
+                penalty = float(getattr(limiter, "remaining_penalty_seconds", 0) or 0.0)
+                lines.append("# HELP arbiter_rate_limiter_tokens Available rate-limit tokens")
+                lines.append("# TYPE arbiter_rate_limiter_tokens gauge")
+                lines.append(f'arbiter_rate_limiter_tokens{{platform="{platform}"}} {available}')
+                lines.append("# HELP arbiter_rate_limiter_penalty_seconds Cooldown remaining")
+                lines.append("# TYPE arbiter_rate_limiter_penalty_seconds gauge")
+                lines.append(
+                    f'arbiter_rate_limiter_penalty_seconds{{platform="{platform}"}} {penalty}'
+                )
+
+        # AutoExecutor stats (Plan 06-01) — attached to arbiter.main, may not be exposed yet
+        ae = getattr(self, "auto_executor", None)
+        if ae is not None and getattr(ae, "stats", None) is not None:
+            s = ae.stats
+            lines.append("# HELP arbiter_auto_executor_considered Opportunities seen by auto-executor")
+            lines.append("# TYPE arbiter_auto_executor_considered counter")
+            lines.append(f"arbiter_auto_executor_considered {s.considered}")
+            lines.append("# HELP arbiter_auto_executor_executed Opportunities auto-executed")
+            lines.append("# TYPE arbiter_auto_executor_executed counter")
+            lines.append(f"arbiter_auto_executor_executed {s.executed}")
+            lines.append("# HELP arbiter_auto_executor_skipped Opportunities skipped by policy gate")
+            lines.append("# TYPE arbiter_auto_executor_skipped counter")
+            for reason, count in (
+                ("disabled", s.skipped_disabled),
+                ("armed", s.skipped_armed),
+                ("requires_manual", s.skipped_requires_manual),
+                ("not_allowed", s.skipped_not_allowed),
+                ("duplicate", s.skipped_duplicate),
+                ("over_cap", s.skipped_over_cap),
+                ("bootstrap_full", s.skipped_bootstrap_full),
+            ):
+                lines.append(
+                    f'arbiter_auto_executor_skipped{{reason="{reason}"}} {count}'
+                )
+
+        body = "\n".join(lines) + "\n"
+        return web.Response(
+            text=body,
+            content_type="text/plain",
+            charset="utf-8",
+            headers={"Cache-Control": "no-store"},
+        )
 
     async def handle_websocket(self, request):
         ws = web.WebSocketResponse()
