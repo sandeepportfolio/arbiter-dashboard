@@ -864,6 +864,80 @@ class ArbiterAPI:
                     f'arbiter_auto_executor_skipped{{reason="{reason}"}} {count}'
                 )
 
+        # ── Task 18: 9 new Polymarket US / ops metrics ─────────────────────────
+        # These are registered here (even at zero) so Prometheus scrape configs
+        # can discover them immediately on startup without waiting for an event.
+
+        lines.append("# HELP polymarket_us_rest_latency_p99_ms P99 REST latency to Polymarket US API (ms)")
+        lines.append("# TYPE polymarket_us_rest_latency_p99_ms gauge")
+        pm_us = getattr(self, "_pm_us_metrics", {})
+        lines.append(
+            f"polymarket_us_rest_latency_p99_ms {float(pm_us.get('rest_latency_p99_ms', 0.0))}"
+        )
+
+        lines.append("# HELP polymarket_us_ws_reconnects_total Total WebSocket reconnects to Polymarket US")
+        lines.append("# TYPE polymarket_us_ws_reconnects_total counter")
+        lines.append(
+            f"polymarket_us_ws_reconnects_total {int(pm_us.get('ws_reconnects_total', 0))}"
+        )
+
+        lines.append("# HELP matched_pair_stream_events_total Total stream events processed by the pair matcher")
+        lines.append("# TYPE matched_pair_stream_events_total counter")
+        lines.append(
+            f"matched_pair_stream_events_total {int(pm_us.get('matched_pair_stream_events_total', 0))}"
+        )
+
+        lines.append("# HELP matcher_backpressure_drops_total Events dropped due to queue backpressure")
+        lines.append("# TYPE matcher_backpressure_drops_total counter")
+        lines.append(
+            f"matcher_backpressure_drops_total {int(pm_us.get('matcher_backpressure_drops_total', 0))}"
+        )
+
+        lines.append("# HELP matched_pair_latency_seconds End-to-end latency for a matched pair decision")
+        lines.append("# TYPE matched_pair_latency_seconds histogram")
+        for bucket_le, count in pm_us.get("matched_pair_latency_buckets", {
+            "0.005": 0, "0.01": 0, "0.025": 0, "0.05": 0, "0.1": 0, "+Inf": 0,
+        }).items():
+            lines.append(
+                f'matched_pair_latency_seconds_bucket{{le="{bucket_le}"}} {int(count)}'
+            )
+        lines.append(
+            f'matched_pair_latency_seconds_count {int(pm_us.get("matched_pair_latency_count", 0))}'
+        )
+        lines.append(
+            f'matched_pair_latency_seconds_sum {float(pm_us.get("matched_pair_latency_sum", 0.0))}'
+        )
+
+        lines.append("# HELP auto_discovery_candidates_pending Candidates awaiting auto-discovery review")
+        lines.append("# TYPE auto_discovery_candidates_pending gauge")
+        lines.append(
+            f"auto_discovery_candidates_pending {int(pm_us.get('auto_discovery_candidates_pending', 0))}"
+        )
+
+        lines.append("# HELP auto_promote_rejections_total Auto-promote gate rejections by reason")
+        lines.append("# TYPE auto_promote_rejections_total counter")
+        for reason, count in pm_us.get("auto_promote_rejections", {
+            "llm_disagree": 0, "low_score": 0, "missing_fields": 0,
+        }).items():
+            lines.append(
+                f'auto_promote_rejections_total{{reason="{reason}"}} {int(count)}'
+            )
+
+        lines.append("# HELP ed25519_sign_failures_total Ed25519 signing failures")
+        lines.append("# TYPE ed25519_sign_failures_total counter")
+        lines.append(
+            f"ed25519_sign_failures_total {int(pm_us.get('ed25519_sign_failures_total', 0))}"
+        )
+
+        lines.append("# HELP ws_subscription_count Active WebSocket subscriptions by platform")
+        lines.append("# TYPE ws_subscription_count gauge")
+        for platform, count in pm_us.get("ws_subscription_count", {
+            "polymarket_us": 0, "kalshi": 0,
+        }).items():
+            lines.append(
+                f'ws_subscription_count{{platform="{platform}"}} {int(count)}'
+            )
+
         body = "\n".join(lines) + "\n"
         return web.Response(
             text=body,
