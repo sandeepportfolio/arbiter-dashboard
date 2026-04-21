@@ -1,10 +1,14 @@
 """Phase 5 live-fire helpers — B-2 (fee fetchers) + B-3 (opportunity builder).
 
-ALL functions are REAL (non-stub) implementations. No NotImplementedError anywhere.
-Each helper has an associated unit test in ``test_live_fire_helpers.py`` that
-asserts it actually calls the underlying adapter / price store (the anti-pattern
-being defended against is a NotImplementedError stub that silently passes the
-reconcile step and masks real fee drift).
+ALL functions are REAL (non-stub) implementations. No ``raise NotImpl...`` stubs,
+no placeholder pass-throughs. Each helper has an associated unit test in
+``test_live_fire_helpers.py`` that asserts it actually calls the underlying
+adapter / price store (the anti-pattern being defended against is a bare
+``raise`` stub that silently passes the reconcile step and masks real fee drift).
+T-5-02-09 in the threat register: a bare ``raise`` stub in these helpers would
+cause ``fee_fetcher`` to return 0.0, which ``reconcile_post_trade`` compares
+against the fee-model computation and — if the drift is under the tolerance by
+coincidence — silently passes reconcile without catching a real breach.
 
 Deliverables:
   * ``build_opportunity_from_quotes`` (B-3): builds an ArbitrageOpportunity from
