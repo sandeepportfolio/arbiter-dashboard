@@ -1,10 +1,10 @@
 ---
 phase: 5
 slug: live-trading
-status: planning                 # flips to `pending_live_fire` after Plan 05-01 lands; `live_fire_complete` after Plan 05-02 test passes
+status: pending_live_fire        # Plan 05-01 + 05-02 code-side complete; awaiting operator live-fire
 phase_gate_status: PENDING       # flips to PASS only after first live trade reconciles ±$0.01 (or auto-aborts correctly) AND operator attests
 nyquist_compliant: true
-wave_0_complete: false           # flips to true after Plan 05-01 lands
+wave_0_complete: true            # Plan 05-01 landed 2026-04-20; Plan 05-02 Task 3a landed 2026-04-20
 created: 2026-04-20
 tolerance_usd: 0.01              # D-17 reused from Phase 4 — same tolerance bar for live
 total_scenarios_expected: 1      # single first-live-trade scenario
@@ -54,13 +54,13 @@ scenarios_missing: 1
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 5-01-01 | 05-01 | 1 | TEST-05 | T-5-01-01, T-5-01-02, T-5-01-08 | PHASE5_MAX_ORDER_USD hard-lock enforced at PolymarketAdapter.place_fok, KalshiAdapter.place_fok (new gap closure), KalshiAdapter.place_resting_limit; both PHASE4 and PHASE5 run in sequence | unit | `pytest arbiter/execution/adapters/test_phase5_hardlock.py -v` | ❌ Plan 05-01 creates | ⬜ pending |
-| 5-01-02 | 05-01 | 1 | TEST-05 | T-5-01-03, T-5-01-04, T-5-01-10 | arbiter/live/ harness mirrors arbiter/sandbox/ with production guard-rails (KALSHI_BASE_URL NOT demo, DATABASE_URL arbiter_live, PHASE5_MAX_ORDER_USD ≤ 10); preflight runner implements 15-item checklist; .env.production.template includes MAX_POSITION_USD=10 (B-5) + PHASE5_BOOTSTRAP_TRADES=1 (B-1 Q6); preflight #9 polarity fixed (W-2) | unit + integration | `pytest arbiter/live/ -v && python -m arbiter.live.preflight` | ❌ Plan 05-01 creates | ⬜ pending |
-| 5-01-03 | 05-01 | 1 | TEST-05 | T-5-01-11, T-5-01-12 | readiness PHASE5_BOOTSTRAP_TRADES override (B-1 Q6 chicken-and-egg) + SafetySupervisor.is_armed/armed_by public properties (W-5); unset env var = existing behavior unchanged; set to int in [1,5] bypasses collecting_evidence block for first N live trades | unit | `pytest arbiter/tests/test_readiness_bootstrap.py -v` | ❌ Plan 05-01 creates | ⬜ pending |
-| 5-02-01 | 05-02 | 2 | TEST-05 | T-5-01-05 | Operator pre-flight checkpoint pass (15-item preflight clean + Telegram dry test + mapping confirmed + arbiter_live DB ready) | manual | (checkpoint — no automated command) | N/A | ⬜ pending |
-| 5-02-02 | 05-02 | 2 | TEST-05 | T-5-02-01, T-5-02-02 | wire_auto_abort_on_reconcile calls supervisor.trip_kill on reconcile breach OR reconcile exception (fail-closed); does not double-fire (supervisor handles idempotency) | unit | `pytest arbiter/live/test_auto_abort.py -v` | ❌ Plan 05-02 creates | ⬜ pending |
-| 5-02-03a | 05-02 | 2 | TEST-05 | T-5-02-09, T-5-02-10 | live_fire_helpers.py (B-2 fee fetchers + B-3 opportunity builder) as FIRST-CLASS deliverables — NO NotImplementedError; test_first_live_trade.py scaffold with W-3 (pre_trade_requote.json), W-5 (supervisor.is_armed public API), W-6 (60s abort window) | unit + scaffolding | `pytest arbiter/live/test_live_fire_helpers.py -v && ! grep -q NotImplementedError arbiter/live/live_fire_helpers.py && ! grep -q NotImplementedError arbiter/live/test_first_live_trade.py && ! grep -q "_state\.armed" arbiter/live/test_first_live_trade.py` | ❌ Plan 05-02 creates | ⬜ pending |
-| 5-02-03b | 05-02 | 2 | TEST-05 | T-5-02-03, T-5-02-04, T-5-02-05, T-5-02-06, T-5-02-07, T-5-02-08 | First real cross-platform arbitrage executes: preflight PASS -> opportunity detected -> 60s operator-abort window (W-6) -> engine.execute -> both legs terminal -> 60s Polygon settlement wait -> reconcile -> auto-abort-on-breach OR clean-PASS -> evidence captured (incl. pre_trade_requote.json per W-3) | integration + live + manual | `pytest -m live --live arbiter/live/test_first_live_trade.py -v -s` + operator attestation in this file | ❌ Plan 05-02 creates scaffold; live-fire pending operator | ⬜ pending |
+| 5-01-01 | 05-01 | 1 | TEST-05 | T-5-01-01, T-5-01-02, T-5-01-08 | PHASE5_MAX_ORDER_USD hard-lock enforced at PolymarketAdapter.place_fok, KalshiAdapter.place_fok (new gap closure), KalshiAdapter.place_resting_limit; both PHASE4 and PHASE5 run in sequence | unit | `pytest arbiter/execution/adapters/test_phase5_hardlock.py -v` | ✅ created 2026-04-20 (Plan 05-01) | ✅ green (18/18 tests) |
+| 5-01-02 | 05-01 | 1 | TEST-05 | T-5-01-03, T-5-01-04, T-5-01-10 | arbiter/live/ harness mirrors arbiter/sandbox/ with production guard-rails (KALSHI_BASE_URL NOT demo, DATABASE_URL arbiter_live, PHASE5_MAX_ORDER_USD ≤ 10); preflight runner implements 15-item checklist; .env.production.template includes MAX_POSITION_USD=10 (B-5) + PHASE5_BOOTSTRAP_TRADES=1 (B-1 Q6); preflight #9 polarity fixed (W-2) | unit + integration | `pytest arbiter/live/ -v && python -m arbiter.live.preflight` | ✅ created 2026-04-20 (Plan 05-01) | ✅ green (41/41 tests) |
+| 5-01-03 | 05-01 | 1 | TEST-05 | T-5-01-11, T-5-01-12 | readiness PHASE5_BOOTSTRAP_TRADES override (B-1 Q6 chicken-and-egg) + SafetySupervisor.is_armed/armed_by public properties (W-5); unset env var = existing behavior unchanged; set to int in [1,5] bypasses collecting_evidence block for first N live trades | unit | `pytest arbiter/tests/test_readiness_bootstrap.py -v` | ✅ created 2026-04-20 (Plan 05-01) | ✅ green (9/9 tests) |
+| 5-02-01 | 05-02 | 2 | TEST-05 | T-5-01-05 | Operator pre-flight checkpoint pass (15-item preflight clean + Telegram dry test + mapping confirmed + arbiter_live DB ready) | manual | (checkpoint — no automated command) | N/A | ⬜ pending (awaiting operator) |
+| 5-02-02 | 05-02 | 2 | TEST-05 | T-5-02-01, T-5-02-02 | wire_auto_abort_on_reconcile calls supervisor.trip_kill on reconcile breach OR reconcile exception (fail-closed); does not double-fire (supervisor handles idempotency) | unit | `pytest arbiter/live/test_auto_abort.py -v` | ✅ created 2026-04-20 (Plan 05-02 Task 2) | ✅ green (5/5 tests) |
+| 5-02-03a | 05-02 | 2 | TEST-05 | T-5-02-09, T-5-02-10 | live_fire_helpers.py (B-2 fee fetchers + B-3 opportunity builder) as FIRST-CLASS deliverables — no stub bodies; test_first_live_trade.py scaffold with W-3 (pre_trade_requote.json), W-5 (supervisor.is_armed public API), W-6 (60s abort window) | unit + scaffolding | `pytest arbiter/live/test_live_fire_helpers.py -v && ! grep -q NotImplementedError arbiter/live/live_fire_helpers.py && ! grep -q NotImplementedError arbiter/live/test_first_live_trade.py && ! grep -q "_state\.armed" arbiter/live/test_first_live_trade.py` | ✅ created 2026-04-20 (Plan 05-02 Task 3a) | ✅ green (11/11 helper tests; grep invariants clean) |
+| 5-02-03b | 05-02 | 2 | TEST-05 | T-5-02-03, T-5-02-04, T-5-02-05, T-5-02-06, T-5-02-07, T-5-02-08 | First real cross-platform arbitrage executes: preflight PASS -> opportunity detected -> 60s operator-abort window (W-6) -> engine.execute -> both legs terminal -> 60s Polygon settlement wait -> reconcile -> auto-abort-on-breach OR clean-PASS -> evidence captured (incl. pre_trade_requote.json per W-3) | integration + live + manual | `pytest -m live --live arbiter/live/test_first_live_trade.py -v -s` + operator attestation in this file | ✅ scaffold created 2026-04-20 (Plan 05-02 Task 3a); live-fire ⬜ pending operator | ⬜ pending (awaiting operator) |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -68,35 +68,41 @@ scenarios_missing: 1
 
 ## Wave 0 Requirements
 
-**Plan 05-01 deliverables (all should exist on disk when 05-01 completes):**
-- [ ] `arbiter/execution/adapters/test_phase5_hardlock.py` — 18 tests (5 × 3 call sites + 3 combination tests)
-- [ ] `arbiter/safety/supervisor.py` — W-5: public `is_armed: bool` + `armed_by: Optional[str]` `@property` accessors
-- [ ] `arbiter/readiness.py` — B-1 Q6: `PHASE5_BOOTSTRAP_TRADES` env-var override in `_check_profitability`
-- [ ] `arbiter/tests/test_readiness_bootstrap.py` — 9 tests (unset / set+zero / set+count / invalid range / non-numeric / validated+bootstrap / blocked+bootstrap)
-- [ ] `arbiter/live/__init__.py`
-- [ ] `arbiter/live/conftest.py` — @pytest.mark.live opt-in + pytest_plugins for fixtures subpackage; NO re-registration of --live flag
-- [ ] `arbiter/live/fixtures/__init__.py`
-- [ ] `arbiter/live/fixtures/production_db.py` — asserts DATABASE_URL contains 'arbiter_live' (NOT sandbox/dev)
-- [ ] `arbiter/live/fixtures/kalshi_production.py` — asserts KALSHI_BASE_URL does NOT contain 'demo'; key path does NOT contain 'demo'; key file exists on disk
-- [ ] `arbiter/live/fixtures/polymarket_production.py` — asserts PHASE5_MAX_ORDER_USD set and ≤ 10; POLY_PRIVATE_KEY + POLY_FUNDER set
-- [ ] `arbiter/live/evidence.py` — re-exports dump_execution_tables + write_balances from arbiter.sandbox.evidence
-- [ ] `arbiter/live/reconcile.py` — re-exports from arbiter.sandbox.reconcile + new `reconcile_post_trade(execution, adapters, tolerance, fee_fetcher)`
-- [ ] `arbiter/live/preflight.py` — PreflightReport + 15 _check_* functions + run_preflight + CLI main
-- [ ] `arbiter/live/test_reconcile.py` — 4 non-live unit tests for reconcile_post_trade
-- [ ] `arbiter/live/test_preflight.py` — 15+3 non-live unit tests for each _check_* function
-- [ ] `arbiter/live/README.md` — operator runbook (Prerequisites, Setup, Go-Live, Abort, Rollback, Troubleshooting, Success Criteria; ≥120 lines)
-- [ ] `.env.production.template` — DRY_RUN=false, arbiter_live DB, production Kalshi URL, PHASE5_MAX_ORDER_USD=10
-- [ ] `.gitignore` edit — `.env.production` + `evidence/05/`
+**Plan 05-01 deliverables (Wave 0 — completed 2026-04-20):**
+- [x] `arbiter/execution/adapters/test_phase5_hardlock.py` — 18 tests (5 × 3 call sites + 3 combination tests)
+- [x] `arbiter/safety/supervisor.py` — W-5: public `is_armed: bool` + `armed_by: Optional[str]` `@property` accessors
+- [x] `arbiter/readiness.py` — B-1 Q6: `PHASE5_BOOTSTRAP_TRADES` env-var override in `_check_profitability`
+- [x] `arbiter/tests/test_readiness_bootstrap.py` — 9 tests (unset / set+zero / set+count / invalid range / non-numeric / validated+bootstrap / blocked+bootstrap)
+- [x] `arbiter/live/__init__.py`
+- [x] `arbiter/live/conftest.py` — @pytest.mark.live opt-in + pytest_plugins for fixtures subpackage; no re-registration of --live flag
+- [x] `arbiter/live/fixtures/__init__.py`
+- [x] `arbiter/live/fixtures/production_db.py` — asserts DATABASE_URL contains 'arbiter_live' (not sandbox/dev)
+- [x] `arbiter/live/fixtures/kalshi_production.py` — asserts KALSHI_BASE_URL does not contain 'demo'; key path does not contain 'demo'; key file exists on disk
+- [x] `arbiter/live/fixtures/polymarket_production.py` — asserts PHASE5_MAX_ORDER_USD set and ≤ 10; POLY_PRIVATE_KEY + POLY_FUNDER set
+- [x] `arbiter/live/evidence.py` — re-exports dump_execution_tables + write_balances from arbiter.sandbox.evidence
+- [x] `arbiter/live/reconcile.py` — re-exports from arbiter.sandbox.reconcile + new `reconcile_post_trade(execution, adapters, tolerance, fee_fetcher)`
+- [x] `arbiter/live/preflight.py` — PreflightReport + 15 _check_* functions + run_preflight + CLI main
+- [x] `arbiter/live/test_reconcile.py` — 4 non-live unit tests for reconcile_post_trade
+- [x] `arbiter/live/test_preflight.py` — 15+3 non-live unit tests for each _check_* function
+- [x] `arbiter/live/README.md` — operator runbook (Prerequisites, Setup, Go-Live, Abort, Rollback, Troubleshooting, Success Criteria; ≥120 lines)
+- [x] `.env.production.template` — DRY_RUN=false, arbiter_live DB, production Kalshi URL, PHASE5_MAX_ORDER_USD=10
+- [x] `.gitignore` edit — `.env.production` + `evidence/05/`
 
-**Plan 05-02 deliverables:**
-- [ ] `arbiter/live/auto_abort.py` — wire_auto_abort_on_reconcile (fail-closed)
-- [ ] `arbiter/live/test_auto_abort.py` — 5 unit tests
-- [ ] `arbiter/live/live_fire_helpers.py` — B-2 + B-3: real (non-stub) build_opportunity_from_quotes + fetch_kalshi_platform_fee + fetch_polymarket_platform_fee + write_pre_trade_requote + module constants PRE_EXECUTION_OPERATOR_ABORT_SECONDS=60.0 (W-6) + POLYGON_SETTLEMENT_WAIT_SECONDS=60.0
-- [ ] `arbiter/live/test_live_fire_helpers.py` — 10 unit tests for helpers (AsyncMock/MagicMock; no network I/O)
-- [ ] `arbiter/live/test_first_live_trade.py` — single @pytest.mark.live scenario using helpers (NO NotImplementedError, NO `_state.armed` access), 60s operator-abort window (W-6), writes pre_trade_requote.json (W-3)
-- [ ] `.planning/phases/05-live-trading/05-VALIDATION.md` — THIS FILE, flipped to live-fire state by Plan 05-02 Task 3b after operator attestation
+**Plan 05-02 Wave 0 deliverables (code-side — completed 2026-04-20 Task 3a):**
+- [x] `arbiter/live/auto_abort.py` — `wire_auto_abort_on_reconcile` (fail-closed)
+- [x] `arbiter/live/test_auto_abort.py` — 5 unit tests
+- [x] `arbiter/live/live_fire_helpers.py` — B-2 + B-3: real build_opportunity_from_quotes + fetch_kalshi_platform_fee + fetch_polymarket_platform_fee + write_pre_trade_requote + module constants PRE_EXECUTION_OPERATOR_ABORT_SECONDS=60.0 (W-6) + POLYGON_SETTLEMENT_WAIT_SECONDS=60.0
+- [x] `arbiter/live/test_live_fire_helpers.py` — 11 unit tests for helpers (AsyncMock/MagicMock; no network I/O)
+- [x] `arbiter/live/test_first_live_trade.py` — single @pytest.mark.live scenario using helpers (grep invariants clean: 0 NotImplementedError, 0 `_state.armed` access), 60s operator-abort window (W-6), writes pre_trade_requote.json (W-3). **Live-fire execution still PENDING (operator-gated).**
+- [x] `.planning/phases/05-live-trading/05-VALIDATION.md` — THIS FILE, populated with D-19-analog gate. `phase_gate_status` remains PENDING until operator attests after successful live-fire.
 
-Wave 0 completes when Plan 05-01 lands. Live-fire run (under Plan 05-02) can then proceed under operator supervision.
+**Plan 05-02 Task 3b — DEFERRED (operator-gated):**
+- [ ] Operator runs `pytest -m live --live arbiter/live/test_first_live_trade.py -v -s` against production Kalshi + Polymarket with a tradable arb available
+- [ ] Operator archives manual evidence (kalshi_ui_screenshot.png, polymarket_ui_screenshot.png, operator_notes.md) under `evidence/05/first_live_trade_<ts>/manual/`
+- [ ] Operator fills the Operator Attestation block below
+- [ ] Operator flips `phase_gate_status: PENDING` → `phase_gate_status: PASS` in this file's frontmatter
+
+Wave 0 COMPLETE (both plans landed). Live-fire run awaits operator provisioning (funded accounts + arbiter_live DB + preflight clean).
 
 ---
 
