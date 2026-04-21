@@ -26,52 +26,9 @@ from structlog.stdlib import ProcessorFormatter
 from arbiter.utils.logger import SHARED_PROCESSORS
 
 
-# Re-export fixtures from fixtures/ submodule so scenario tests can consume them.
-pytest_plugins = [
-    "arbiter.live.fixtures.production_db",
-    "arbiter.live.fixtures.kalshi_production",
-    "arbiter.live.fixtures.polymarket_production",
-]
-
-
-def pytest_addoption(parser):
-    """Register ``--live`` if arbiter/sandbox/conftest.py has not already done so.
-
-    Pytest only walks conftest.py files in the path ancestry of the collected
-    items, so ``pytest arbiter/live/`` alone does NOT load
-    arbiter/sandbox/conftest.py. The live conftest must register the flag to
-    remain usable standalone; when both sandbox and live are collected
-    together, the live conftest's pytest_addoption runs first (alphabetical
-    discovery order) and the sandbox conftest raises ValueError on the second
-    registration — this is why Plan 05-01 Task 2 called out putting the
-    try/except HERE (and why sandbox's conftest.py intentionally does NOT
-    carry the try/except: its pytest_addoption is the historical owner of
-    this flag and any future removal would fold back to a single registration
-    here). Threat T-5-01-10 (double-registration) mitigation.
-    """
-    try:
-        parser.addoption(
-            "--live",
-            action="store_true",
-            default=False,
-            help="Run Phase 4 sandbox + Phase 5 live-fire scenarios "
-                 "(real API calls; real $ on Polymarket production).",
-        )
-    except ValueError:
-        # Already registered — this path fires only if sandbox's conftest
-        # happens to load first (unusual given alphabetical order, but
-        # defensive). No-op is safe because the flag is usable either way.
-        pass
-
-
-def pytest_configure(config):
-    # Pytest deduplicates marker registrations by name, so declaring `live`
-    # here is safe even if arbiter/sandbox/conftest.py declared it first.
-    config.addinivalue_line(
-        "markers",
-        "live: Phase 4 sandbox or Phase 5 live-fire scenario — "
-        "requires real API creds + --live flag or -m live",
-    )
+# pytest_plugins, --live option, and live marker moved to root conftest.py
+# (pytest 8+ deprecates pytest_plugins in non-top-level conftests).
+# Everything below still runs per-directory.
 
 
 def pytest_collection_modifyitems(config, items):

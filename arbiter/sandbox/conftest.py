@@ -17,27 +17,8 @@ from arbiter.utils.logger import SHARED_PROCESSORS
 
 
 # Re-export fixtures from fixtures/ submodule so scenario tests can consume them via conftest.
-pytest_plugins = [
-    "arbiter.sandbox.fixtures.sandbox_db",
-    "arbiter.sandbox.fixtures.kalshi_demo",
-    "arbiter.sandbox.fixtures.polymarket_test",
-]
-
-
-def pytest_addoption(parser):
-    parser.addoption(
-        "--live",
-        action="store_true",
-        default=False,
-        help="Run Phase 4 sandbox live-fire scenarios (real API calls; real $ on Polymarket).",
-    )
-
-
-def pytest_configure(config):
-    config.addinivalue_line(
-        "markers",
-        "live: Phase 4 sandbox live-fire scenario - requires real API creds + --live flag or -m live",
-    )
+# pytest_plugins, --live option, and live marker moved to root conftest.py
+# (pytest 8+ deprecates pytest_plugins in non-top-level conftests)
 
 
 def pytest_collection_modifyitems(config, items):

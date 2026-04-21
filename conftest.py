@@ -2,8 +2,32 @@ import asyncio
 import inspect
 
 
+# Moved to root conftest — pytest 8+ deprecates pytest_plugins in non-top-level conftests.
+# Sandbox + live fixture modules are loaded as plugins here; individual test modules
+# that don't consume these fixtures are unaffected (plugin loading is lazy).
+pytest_plugins = [
+    "arbiter.sandbox.fixtures.sandbox_db",
+    "arbiter.sandbox.fixtures.kalshi_demo",
+    "arbiter.sandbox.fixtures.polymarket_test",
+    "arbiter.live.fixtures.production_db",
+    "arbiter.live.fixtures.kalshi_production",
+    "arbiter.live.fixtures.polymarket_production",
+]
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--live",
+        action="store_true",
+        default=False,
+        help="Run live-marked scenarios against configured endpoints.",
+    )
+
+
 def pytest_configure(config):
     config.addinivalue_line("markers", "asyncio: run the test inside an asyncio event loop")
+    config.addinivalue_line("markers", "live: live-fire scenario (opt-in via --live)")
+    config.addinivalue_line("markers", "legacy_polymarket: legacy non-US CLOB tests")
 
 
 def pytest_pyfunc_call(pyfuncitem):
