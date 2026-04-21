@@ -1,0 +1,50 @@
+[Unit]
+Description=Arbiter — Cross-Platform Prediction-Market Arbitrage
+Documentation=https://github.com/sandeepportfolio/arbiter-dashboard
+After=network-online.target postgresql.service redis.service
+Wants=network-online.target
+Requires=postgresql.service redis.service
+
+[Service]
+# Dedicated user (create with: sudo useradd -r -s /bin/false arbiter)
+User=arbiter
+Group=arbiter
+
+# Install path (adjust to your deployment)
+WorkingDirectory=/opt/arbiter
+EnvironmentFile=/etc/arbiter/arbiter.env
+
+# Python virtualenv at /opt/arbiter/.venv
+ExecStart=/opt/arbiter/.venv/bin/python -m arbiter.main --live
+ExecStartPre=/opt/arbiter/.venv/bin/python -m arbiter.live.preflight
+
+# SAFE-05 graceful shutdown: arbiter.main traps SIGTERM via add_signal_handler
+# (or signal.signal fallback on Windows) and runs run_shutdown_sequence with
+# a 5s trip_kill budget. Give it 30s of headroom before SIGKILL.
+KillSignal=SIGTERM
+TimeoutStopSec=35s
+
+# Restart policy: always, but not a restart loop if something is fundamentally broken
+Restart=always
+RestartSec=5s
+StartLimitBurst=10
+StartLimitIntervalSec=600
+
+# Hardening (harmless defaults; relax as needed for your distro)
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/opt/arbiter/logs /opt/arbiter/evidence
+
+# Resource limits
+LimitNOFILE=65536
+MemoryMax=2G
+
+# stdout/stderr routed to journal; use logrotate for /opt/arbiter/logs/*.log
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=arbiter
+
+[Install]
+WantedBy=multi-user.target

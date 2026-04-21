@@ -1,0 +1,130 @@
+# ARBITER — Production Stack
+#
+# Run with: docker compose -f docker-compose.prod.yml --env-file .env.production up -d
+#
+# Differences from docker-compose.yml (dev/sandbox):
+#   - arbiter_live database instead of arbiter_dev
+#   - Postgres port NOT exposed to host (only reachable over the arbiter_prod_net network)
+#   - env_file: .env.production (not .env) — MUST BE PROVISIONED BEFORE first `up`
+#   - restart: always on every service (vs unless-stopped) — survives docker-daemon restart
+#   - structured json-file log driver with rotation (max-size=50m, max-file=5)
+#   - healthcheck-gated startup + healthcheck-gated dependency order
+#   - Named volumes: arbiter_postgres_prod_data, arbiter_redis_prod_data
+#
+# Before first up:
+#   1. cp .env.production.template .env.production
+#   2. Fill in all <placeholder> values (Kalshi prod key, Polymarket wallet, Telegram, etc.)
+#   3. Place keys at ./keys/kalshi_private.pem (mounted read-only into the arbiter container)
+#   4. Verify .env.production and ./keys/*.pem are git-ignored (they are by default)
+#
+# Bring up:
+#   docker compose -f docker-compose.prod.yml --env-file .env.production up -d
+#   curl http://localhost:8080/api/health   # expect {"status":"ok"}
+#   curl http://localhost:8080/api/readiness  # expect "ready": true
+#
+# Tear down (graceful, SAFE-05 shutdown runs):
+#   docker compose -f docker-compose.prod.yml down
+
+services:
+  # ── Postgres (durable state — NOT exposed to host) ──────────────────
+  arbiter-postgres-prod:
+    image: postgres:16-alpine
+    container_name: arbiter-postgres-prod
+    environment:
+      POSTGRES_DB: arbiter_live
+      POSTGRES_USER: ${PG_USER:-arbiter}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-arbiter_secret}
+    volumes:
+      - arbiter_postgres_prod_data:/var/lib/postgresql/data
+      - ./arbiter/sql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-arbiter} -d arbiter_live"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    networks:
+      - arbiter_prod_net
+
+  # ── Redis (quote cache + fanout — NOT exposed to host) ──────────────
+  arbiter-redis-prod:
+    image: redis:7-alpine
+    container_name: arbiter-redis-prod
+    command: >
+      redis-server
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+    volumes:
+      - arbiter_redis_prod_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    networks:
+      - arbiter_prod_net
+
+  # ── ARBITER API + Scanner + Engine ──────────────────────────────────
+  arbiter-api-prod:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: arbiter-api-prod
+    image: ghcr.io/sandeepportfolio/arbiter:latest
+    env_file: .env.production
+    environment:
+      # Override the DATABASE_URL so it points at the in-compose Postgres hostname
+      # (overrides any localhost value accidentally left in .env.production).
+      DATABASE_URL: postgresql://${PG_USER:-arbiter}:${PG_PASSWORD:-arbiter_secret}@arbiter-postgres-prod:5432/arbiter_live
+      REDIS_URL: redis://arbiter-redis-prod:6379/0
+    ports:
+      - "${ARBITER_PORT:-8080}:8080"
+    depends_on:
+      arbiter-postgres-prod:
+        condition: service_healthy
+      arbiter-redis-prod:
+        condition: service_healthy
+    volumes:
+      # RSA private key mounted read-only
+      - ./keys:/app/keys:ro
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/api/health').read()\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: always
+    stop_grace_period: 35s   # covers the 5s trip_kill budget + 30s cleanup
+    stop_signal: SIGTERM      # triggers arbiter.main SAFE-05 graceful-shutdown
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "10"
+    networks:
+      - arbiter_prod_net
+    command: ["python", "-m", "arbiter.main", "--live"]
+
+networks:
+  arbiter_prod_net:
+    driver: bridge
+    name: arbiter_prod_net
+
+volumes:
+  arbiter_postgres_prod_data:
+    name: arbiter_postgres_prod_data
+  arbiter_redis_prod_data:
+    name: arbiter_redis_prod_data
