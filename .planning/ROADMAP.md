@@ -17,7 +17,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 3: Safety Layer** - Build the safety net: kill switch, position limits, one-leg recovery, rate limiting, graceful shutdown
 - [x] **Phase 4: Sandbox Validation** - Validate the full pipeline against sandbox/demo APIs with real API calls and small orders — completed 2026-04-21 (phase_gate_status: PASS, 10/10 observable scenarios pass, 3 blocked by external environment: demo zero-liquidity + POLY wallet not provisioned)
 - [ ] **Phase 5: Live Trading** - Execute the first live arbitrage trade with real money under operator supervision
-- [ ] **Phase 6: Production Automation** - Remove operator-per-trade gate, wire scanner→engine auto-execution, production deployment (docker-compose.prod + systemd), Telegram alerting, metrics, MARKET_MAP hot-reload, operator runbook
+- [x] **Phase 6: Production Automation** - Remove operator-per-trade gate, wire scanner→engine auto-execution, production deployment (docker-compose.prod + systemd), Telegram alerting, metrics, MARKET_MAP hot-reload, operator runbook — completed 2026-04-21 (6/6 plans, 35 new tests green; AUTO_EXECUTE_ENABLED=false by default — flip after supervised Phase 5 first-live-trade per GOLIVE.md)
 
 ## Phase Details
 
@@ -150,12 +150,12 @@ Plans:
 **Plans**: 6 plans
 
 Plans:
-- [ ] 06-01-PLAN.md -- Auto-execute wiring: ExecutionEngine subscribes to ArbitrageScanner opportunities; persistence + allow_auto_trade gate; respect SafetySupervisor.is_armed (no trades while armed); MAX_POSITION_USD enforced per-opportunity; idempotent (no double-fire on re-emit)
-- [ ] 06-02-PLAN.md -- Production deployment: docker-compose.prod.yml (Postgres, Redis, arbiter-api with restart=always + healthchecks), systemd unit template (arbiter.service), logrotate config, startup reconcile hook
-- [ ] 06-03-PLAN.md -- Telegram alerting: TelegramNotifier.send() implementation + event bus subscriber for safety events (trip_kill, one_leg, auto_abort, rate-limit crit, shutdown); queue + retry for transient failures; dedup within sliding window
-- [ ] 06-04-PLAN.md -- /metrics endpoint (Prometheus-style): scanner rate, opps count, exec success rate, circuit state per collector, rate-limit tokens, kill-switch armed; /readiness returns dashboard-ready go/no-go matching preflight
-- [ ] 06-05-PLAN.md -- MARKET_MAP hot-reload: extend POST /api/market-mappings/{id} to toggle allow_auto_trade at runtime; SafetySupervisor reads mapping state live (no restart); audit log entry per toggle
-- [ ] 06-06-PLAN.md -- GOLIVE.md operator runbook: end-to-end credential provisioning (Polymarket wallet, Kalshi prod key, Telegram bot), .env.production population, preflight run, supervised first trade, flip to auto-mode; troubleshooting matrix; rollback playbook
+- [x] 06-01-PLAN.md -- Auto-execute wiring: ExecutionEngine subscribes to ArbitrageScanner opportunities; persistence + allow_auto_trade gate; respect SafetySupervisor.is_armed (no trades while armed); MAX_POSITION_USD enforced per-opportunity; idempotent (no double-fire on re-emit) (completed 2026-04-21; 11 tests green)
+- [x] 06-02-PLAN.md -- Production deployment: docker-compose.prod.yml (Postgres, Redis, arbiter-api with restart=always + healthchecks), systemd unit template (arbiter.service), logrotate config, startup reconcile hook (completed 2026-04-21)
+- [x] 06-03-PLAN.md -- Telegram alerting: TelegramNotifier.send() implementation + event bus subscriber for safety events (trip_kill, one_leg, auto_abort, rate-limit crit, shutdown); queue + retry for transient failures; dedup within sliding window (completed 2026-04-21; 10 tests green)
+- [x] 06-04-PLAN.md -- /metrics endpoint (Prometheus-style): scanner rate, opps count, exec success rate, circuit state per collector, rate-limit tokens, kill-switch armed; /readiness returns dashboard-ready go/no-go matching preflight (completed 2026-04-21; 8 tests green)
+- [x] 06-05-PLAN.md -- MARKET_MAP hot-reload: extend POST /api/market-mappings/{id} to toggle allow_auto_trade at runtime; SafetySupervisor reads mapping state live (no restart); audit log entry per toggle (completed 2026-04-21; 6 tests green)
+- [x] 06-06-PLAN.md -- GOLIVE.md operator runbook: end-to-end credential provisioning (Polymarket wallet, Kalshi prod key, Telegram bot), .env.production population, preflight run, supervised first trade, flip to auto-mode; troubleshooting matrix; rollback playbook (completed 2026-04-21)
 
 ## Progress
 
