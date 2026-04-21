@@ -1,0 +1,420 @@
+[
+  {
+    "label": "DEM_HOUSE_2026 — identical across platforms",
+    "a": {
+      "question": "Will Democrats win the House in the 2026 midterms?",
+      "resolution_date": "2026-11-30",
+      "resolution_source": "Associated Press",
+      "tie_break_rule": null,
+      "category": "politics",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will Democrats win the House in the 2026 midterms?",
+      "resolution_date": "2026-11-30",
+      "resolution_source": "Associated Press",
+      "tie_break_rule": null,
+      "category": "politics",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "DEM_SENATE_2026 — AP vs Associated Press source allow-list",
+    "a": {
+      "question": "Will Democrats win Senate control in 2026?",
+      "resolution_date": "2026-11-30",
+      "resolution_source": "AP",
+      "tie_break_rule": null,
+      "category": "politics",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will Democrats win Senate control in 2026?",
+      "resolution_date": "2026-11-30",
+      "resolution_source": "Associated Press",
+      "tie_break_rule": null,
+      "category": "politics",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "GOP_SENATE_2026 — identical with date within 24h",
+    "a": {
+      "question": "Will Republicans win Senate 2026 midterms?",
+      "resolution_date": "2026-11-03",
+      "resolution_source": "Associated Press",
+      "tie_break_rule": null,
+      "category": "politics",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will Republicans win Senate 2026 midterms?",
+      "resolution_date": "2026-11-04",
+      "resolution_source": "Associated Press",
+      "tie_break_rule": null,
+      "category": "politics",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "VANCE_NOM_2028 — identical nomination market",
+    "a": {
+      "question": "Will JD Vance win the 2028 GOP presidential nomination?",
+      "resolution_date": "2028-07-31",
+      "resolution_source": "Republican National Convention",
+      "tie_break_rule": null,
+      "category": "politics",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will JD Vance win the 2028 GOP presidential nomination?",
+      "resolution_date": "2028-07-31",
+      "resolution_source": "Republican National Convention",
+      "tie_break_rule": null,
+      "category": "politics",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "RUBIO_NOM_2028 — same nomination markets",
+    "a": {
+      "question": "Will Marco Rubio win the Republican presidential nomination in 2028?",
+      "resolution_date": "2028-07-31",
+      "resolution_source": "Republican National Convention",
+      "tie_break_rule": null,
+      "category": "politics",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will Marco Rubio win the Republican presidential nomination in 2028?",
+      "resolution_date": "2028-07-31",
+      "resolution_source": "Republican National Convention",
+      "tie_break_rule": null,
+      "category": "politics",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "NEWSOM_NOM_2028 — Democratic presidential nomination",
+    "a": {
+      "question": "Will Gavin Newsom win the 2028 Democratic presidential nomination?",
+      "resolution_date": "2028-08-31",
+      "resolution_source": "Democratic National Convention",
+      "tie_break_rule": null,
+      "category": "politics",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will Gavin Newsom win the 2028 Democratic presidential nomination?",
+      "resolution_date": "2028-08-31",
+      "resolution_source": "Democratic National Convention",
+      "tie_break_rule": null,
+      "category": "politics",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "GA_SEN_2026 — Georgia Senate identical",
+    "a": {
+      "question": "Will Democrats win the Georgia Senate seat in 2026?",
+      "resolution_date": "2026-11-30",
+      "resolution_source": "Georgia Secretary of State",
+      "tie_break_rule": null,
+      "category": "politics",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will Democrats win the Georgia Senate seat in 2026?",
+      "resolution_date": "2026-11-30",
+      "resolution_source": "Georgia Secretary of State",
+      "tie_break_rule": null,
+      "category": "politics",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "MI_SEN_2026 — Michigan Senate identical",
+    "a": {
+      "question": "Will Democrats win the Michigan Senate seat in 2026?",
+      "resolution_date": "2026-11-30",
+      "resolution_source": "Michigan Secretary of State",
+      "tie_break_rule": null,
+      "category": "politics",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will Democrats win the Michigan Senate seat in 2026?",
+      "resolution_date": "2026-11-30",
+      "resolution_source": "Michigan Secretary of State",
+      "tie_break_rule": null,
+      "category": "politics",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "FED_RATE_MAY_2026 — identical Fed cut market",
+    "a": {
+      "question": "Will the Federal Reserve cut rates in May 2026?",
+      "resolution_date": "2026-05-31",
+      "resolution_source": "Federal Reserve",
+      "tie_break_rule": null,
+      "category": "economics",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will the Federal Reserve cut rates in May 2026?",
+      "resolution_date": "2026-05-31",
+      "resolution_source": "Federal Reserve",
+      "tie_break_rule": null,
+      "category": "economics",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "FED_RATE_MAY_2026 — Federal Reserve vs Fed exact allow-list",
+    "a": {
+      "question": "Will the Fed cut rates in May 2026?",
+      "resolution_date": "2026-05-31",
+      "resolution_source": "Federal Reserve",
+      "tie_break_rule": null,
+      "category": "economics",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will the Fed cut rates in May 2026?",
+      "resolution_date": "2026-05-31",
+      "resolution_source": "Fed",
+      "tie_break_rule": null,
+      "category": "economics",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "SPX_ABOVE_5000_2026 — identical finance market",
+    "a": {
+      "question": "Will the S&P 500 close above 5000 by end of 2026?",
+      "resolution_date": "2026-12-31",
+      "resolution_source": "Bloomberg",
+      "tie_break_rule": null,
+      "category": "finance",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will the S&P 500 close above 5000 by end of 2026?",
+      "resolution_date": "2026-12-31",
+      "resolution_source": "Bloomberg",
+      "tie_break_rule": null,
+      "category": "finance",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "BTC_100K_2026 — identical crypto market with tie-break",
+    "a": {
+      "question": "Will Bitcoin reach $100,000 in 2026?",
+      "resolution_date": "2026-12-31",
+      "resolution_source": "Coinbase",
+      "tie_break_rule": "24h VWAP on resolution date",
+      "category": "crypto",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will Bitcoin reach $100,000 in 2026?",
+      "resolution_date": "2026-12-31",
+      "resolution_source": "Coinbase",
+      "tie_break_rule": "24h VWAP on resolution date",
+      "category": "crypto",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "NFL_SUPER_BOWL_2027 — identical sports market",
+    "a": {
+      "question": "Will the Kansas City Chiefs win the Super Bowl in 2027?",
+      "resolution_date": "2027-02-07",
+      "resolution_source": "NFL",
+      "tie_break_rule": null,
+      "category": "sports",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will the Kansas City Chiefs win the Super Bowl in 2027?",
+      "resolution_date": "2027-02-07",
+      "resolution_source": "NFL",
+      "tie_break_rule": null,
+      "category": "sports",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "CPI_ABOVE_3_JUN_2026 — identical CPI market",
+    "a": {
+      "question": "Will US CPI be above 3% in June 2026?",
+      "resolution_date": "2026-07-15",
+      "resolution_source": "Bureau of Labor Statistics",
+      "tie_break_rule": null,
+      "category": "economics",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will US CPI be above 3% in June 2026?",
+      "resolution_date": "2026-07-15",
+      "resolution_source": "Bureau of Labor Statistics",
+      "tie_break_rule": null,
+      "category": "economics",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "BLS vs Bureau of Labor Statistics allow-list",
+    "a": {
+      "question": "Will US CPI exceed 3% year-over-year in Q1 2026?",
+      "resolution_date": "2026-04-15",
+      "resolution_source": "BLS",
+      "tie_break_rule": null,
+      "category": "economics",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will US CPI exceed 3% year-over-year in Q1 2026?",
+      "resolution_date": "2026-04-15",
+      "resolution_source": "Bureau of Labor Statistics",
+      "tie_break_rule": null,
+      "category": "economics",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "TRUMP_APPROVAL_50_2026 — identical presidential approval market",
+    "a": {
+      "question": "Will Trump's approval rating exceed 50% in 2026?",
+      "resolution_date": "2026-12-31",
+      "resolution_source": "RealClearPolitics average",
+      "tie_break_rule": null,
+      "category": "politics",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will Trump's approval rating exceed 50% in 2026?",
+      "resolution_date": "2026-12-31",
+      "resolution_source": "RealClearPolitics average",
+      "tie_break_rule": null,
+      "category": "politics",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "UKRAINE_CEASEFIRE_2026 — identical geopolitics market",
+    "a": {
+      "question": "Will there be a ceasefire in Ukraine by end of 2026?",
+      "resolution_date": "2026-12-31",
+      "resolution_source": "UN Security Council",
+      "tie_break_rule": null,
+      "category": "geopolitics",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will there be a ceasefire in Ukraine by end of 2026?",
+      "resolution_date": "2026-12-31",
+      "resolution_source": "UN Security Council",
+      "tie_break_rule": null,
+      "category": "geopolitics",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "NVIDIA_REVENUE_Q2_2026 — identical tech earnings market",
+    "a": {
+      "question": "Will NVIDIA revenue exceed $40B in Q2 2026?",
+      "resolution_date": "2026-08-31",
+      "resolution_source": "NVIDIA earnings report",
+      "tie_break_rule": null,
+      "category": "tech",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will NVIDIA revenue exceed $40B in Q2 2026?",
+      "resolution_date": "2026-08-31",
+      "resolution_source": "NVIDIA earnings report",
+      "tie_break_rule": null,
+      "category": "tech",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "US_GDP_Q1_2026 — identical GDP market",
+    "a": {
+      "question": "Will US GDP grow more than 2% in Q1 2026?",
+      "resolution_date": "2026-04-30",
+      "resolution_source": "Bureau of Economic Analysis",
+      "tie_break_rule": null,
+      "category": "economics",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will US GDP grow more than 2% in Q1 2026?",
+      "resolution_date": "2026-04-30",
+      "resolution_source": "Bureau of Economic Analysis",
+      "tie_break_rule": null,
+      "category": "economics",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "BEA vs Bureau of Economic Analysis allow-list",
+    "a": {
+      "question": "Will US GDP growth exceed 3% in 2026?",
+      "resolution_date": "2027-01-31",
+      "resolution_source": "BEA",
+      "tie_break_rule": null,
+      "category": "economics",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will US GDP growth exceed 3% in 2026?",
+      "resolution_date": "2027-01-31",
+      "resolution_source": "Bureau of Economic Analysis",
+      "tie_break_rule": null,
+      "category": "economics",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "EURO_DOLLAR_PARITY_2026 — identical FX market",
+    "a": {
+      "question": "Will EUR/USD reach parity in 2026?",
+      "resolution_date": "2026-12-31",
+      "resolution_source": "European Central Bank",
+      "tie_break_rule": null,
+      "category": "finance",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will EUR/USD reach parity in 2026?",
+      "resolution_date": "2026-12-31",
+      "resolution_source": "European Central Bank",
+      "tie_break_rule": null,
+      "category": "finance",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "ECB vs European Central Bank allow-list",
+    "a": {
+      "question": "Will the ECB cut rates in March 2026?",
+      "resolution_date": "2026-03-31",
+      "resolution_source": "ECB",
+      "tie_break_rule": null,
+      "category": "economics",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will the ECB cut rates in March 2026?",
+      "resolution_date": "2026-03-31",
+      "resolution_source": "European Central Bank",
+      "tie_break_rule": null,
+      "category": "economics",
+      "outcome_set": ["Yes", "No"]
+    }
+  }
+]

@@ -1,0 +1,401 @@
+[
+  {
+    "label": "DIVERGENT: Same Fed topic, different resolution dates > 24h (May vs July)",
+    "a": {
+      "question": "Will the Fed cut rates in May 2026?",
+      "resolution_date": "2026-05-31",
+      "resolution_source": "Federal Reserve",
+      "tie_break_rule": null,
+      "category": "economics",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will the Fed cut rates by July 2026?",
+      "resolution_date": "2026-07-31",
+      "resolution_source": "Federal Reserve",
+      "tie_break_rule": null,
+      "category": "economics",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "DIVERGENT: Same topic, AP vs NY Times resolution source",
+    "a": {
+      "question": "Who will win the 2026 Georgia Senate race?",
+      "resolution_date": "2026-11-30",
+      "resolution_source": "AP",
+      "tie_break_rule": null,
+      "category": "politics",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Who will win the 2026 Georgia Senate race?",
+      "resolution_date": "2026-11-30",
+      "resolution_source": "New York Times",
+      "tie_break_rule": null,
+      "category": "politics",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "DIVERGENT: Same topic, different tie-break rules",
+    "a": {
+      "question": "Will Bitcoin exceed $100K in 2026?",
+      "resolution_date": "2026-12-31",
+      "resolution_source": "Coinbase",
+      "tie_break_rule": "24h VWAP on resolution date",
+      "category": "crypto",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will Bitcoin exceed $100K in 2026?",
+      "resolution_date": "2026-12-31",
+      "resolution_source": "Coinbase",
+      "tie_break_rule": "no trade / void",
+      "category": "crypto",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "DIVERGENT: Same topic, different categories (economics vs politics)",
+    "a": {
+      "question": "Will the US debt ceiling be raised in 2026?",
+      "resolution_date": "2026-12-31",
+      "resolution_source": "Congressional Record",
+      "tie_break_rule": null,
+      "category": "economics",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will the US debt ceiling be raised in 2026?",
+      "resolution_date": "2026-12-31",
+      "resolution_source": "Congressional Record",
+      "tie_break_rule": null,
+      "category": "politics",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "DIVERGENT: Fed cuts in May vs September (large date gap)",
+    "a": {
+      "question": "Will the Federal Reserve cut interest rates?",
+      "resolution_date": "2026-05-31",
+      "resolution_source": "Federal Reserve",
+      "tie_break_rule": null,
+      "category": "economics",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will the Federal Reserve cut interest rates?",
+      "resolution_date": "2026-09-30",
+      "resolution_source": "Federal Reserve",
+      "tie_break_rule": null,
+      "category": "economics",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "DIVERGENT: Different resolution sources, same topic (Reuters vs Bloomberg)",
+    "a": {
+      "question": "Will S&P 500 exceed 6000 by end of 2026?",
+      "resolution_date": "2026-12-31",
+      "resolution_source": "Reuters",
+      "tie_break_rule": null,
+      "category": "finance",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will S&P 500 exceed 6000 by end of 2026?",
+      "resolution_date": "2026-12-31",
+      "resolution_source": "Bloomberg",
+      "tie_break_rule": null,
+      "category": "finance",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "DIVERGENT: Same presidential topic, different tie-break rules",
+    "a": {
+      "question": "Will a Democrat win the 2028 presidential election?",
+      "resolution_date": "2028-11-30",
+      "resolution_source": "Associated Press",
+      "tie_break_rule": "Electoral College majority",
+      "category": "politics",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will a Democrat win the 2028 presidential election?",
+      "resolution_date": "2028-11-30",
+      "resolution_source": "Associated Press",
+      "tie_break_rule": "Popular vote majority",
+      "category": "politics",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "DIVERGENT: Inflation topic, date > 24h apart, June vs July 2026",
+    "a": {
+      "question": "Will US CPI exceed 4% in 2026?",
+      "resolution_date": "2026-06-15",
+      "resolution_source": "Bureau of Labor Statistics",
+      "tie_break_rule": null,
+      "category": "economics",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will US CPI exceed 4% in 2026?",
+      "resolution_date": "2026-07-15",
+      "resolution_source": "Bureau of Labor Statistics",
+      "tie_break_rule": null,
+      "category": "economics",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "DIVERGENT: Sports topic, different categories (sports vs culture)",
+    "a": {
+      "question": "Will the Super Bowl 2027 attract more than 100M US viewers?",
+      "resolution_date": "2027-02-10",
+      "resolution_source": "Nielsen",
+      "tie_break_rule": null,
+      "category": "sports",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will the Super Bowl 2027 attract more than 100M US viewers?",
+      "resolution_date": "2027-02-10",
+      "resolution_source": "Nielsen",
+      "tie_break_rule": null,
+      "category": "culture",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "DIVERGENT: Crypto topic, Coinbase vs Binance source",
+    "a": {
+      "question": "Will Ethereum exceed $5000 by end of 2026?",
+      "resolution_date": "2026-12-31",
+      "resolution_source": "Coinbase",
+      "tie_break_rule": null,
+      "category": "crypto",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will Ethereum exceed $5000 by end of 2026?",
+      "resolution_date": "2026-12-31",
+      "resolution_source": "Binance",
+      "tie_break_rule": null,
+      "category": "crypto",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "DIVERGENT: Election topic, dates 3 months apart",
+    "a": {
+      "question": "Will Republicans win the 2026 House midterms?",
+      "resolution_date": "2026-11-03",
+      "resolution_source": "Associated Press",
+      "tie_break_rule": null,
+      "category": "politics",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will Republicans win the 2026 House midterms?",
+      "resolution_date": "2027-01-15",
+      "resolution_source": "Associated Press",
+      "tie_break_rule": null,
+      "category": "politics",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "DIVERGENT: Different sources, Ukraine topic (UN vs Reuters)",
+    "a": {
+      "question": "Will Ukraine join NATO by 2028?",
+      "resolution_date": "2028-12-31",
+      "resolution_source": "UN Security Council",
+      "tie_break_rule": null,
+      "category": "geopolitics",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will Ukraine join NATO by 2028?",
+      "resolution_date": "2028-12-31",
+      "resolution_source": "Reuters",
+      "tie_break_rule": null,
+      "category": "geopolitics",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "DIVERGENT: Fed vs FOMC — NOT in allow-list (different source abbreviations)",
+    "a": {
+      "question": "Will the Federal Reserve raise rates in 2026?",
+      "resolution_date": "2026-12-31",
+      "resolution_source": "Fed",
+      "tie_break_rule": null,
+      "category": "economics",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will the Federal Reserve raise rates in 2026?",
+      "resolution_date": "2026-12-31",
+      "resolution_source": "FOMC",
+      "tie_break_rule": null,
+      "category": "economics",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "DIVERGENT: Different outcome sets (binary vs categorical)",
+    "a": {
+      "question": "Who will win the 2028 presidential election?",
+      "resolution_date": "2028-11-30",
+      "resolution_source": "Associated Press",
+      "tie_break_rule": null,
+      "category": "politics",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Who will win the 2028 presidential election?",
+      "resolution_date": "2028-11-30",
+      "resolution_source": "Associated Press",
+      "tie_break_rule": null,
+      "category": "politics",
+      "outcome_set": ["Democrats", "Republicans", "Third Party"]
+    }
+  },
+  {
+    "label": "DIVERGENT: Tech topic, category tech vs economics",
+    "a": {
+      "question": "Will Apple market cap exceed $4T in 2026?",
+      "resolution_date": "2026-12-31",
+      "resolution_source": "NASDAQ",
+      "tie_break_rule": null,
+      "category": "tech",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will Apple market cap exceed $4T in 2026?",
+      "resolution_date": "2026-12-31",
+      "resolution_source": "NASDAQ",
+      "tie_break_rule": null,
+      "category": "economics",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "DIVERGENT: Oil topic, dates 6 months apart",
+    "a": {
+      "question": "Will Brent crude oil exceed $100/barrel in 2026?",
+      "resolution_date": "2026-06-30",
+      "resolution_source": "EIA",
+      "tie_break_rule": null,
+      "category": "finance",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will Brent crude oil exceed $100/barrel in 2026?",
+      "resolution_date": "2026-12-31",
+      "resolution_source": "EIA",
+      "tie_break_rule": null,
+      "category": "finance",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "DIVERGENT: Same topic different tie-break (VWAP vs last trade)",
+    "a": {
+      "question": "Will Tesla stock exceed $500 in Q3 2026?",
+      "resolution_date": "2026-09-30",
+      "resolution_source": "NASDAQ",
+      "tie_break_rule": "closing price on resolution date",
+      "category": "finance",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will Tesla stock exceed $500 in Q3 2026?",
+      "resolution_date": "2026-09-30",
+      "resolution_source": "NASDAQ",
+      "tie_break_rule": "24h VWAP on resolution date",
+      "category": "finance",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "DIVERGENT: GOP nomination different years (2028 vs 2032)",
+    "a": {
+      "question": "Will DeSantis win the GOP presidential nomination?",
+      "resolution_date": "2028-07-31",
+      "resolution_source": "Republican National Convention",
+      "tie_break_rule": null,
+      "category": "politics",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will DeSantis win the GOP presidential nomination?",
+      "resolution_date": "2032-07-31",
+      "resolution_source": "Republican National Convention",
+      "tie_break_rule": null,
+      "category": "politics",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "DIVERGENT: AI topic, different sources (OpenAI blog vs arXiv)",
+    "a": {
+      "question": "Will OpenAI release GPT-5 in 2026?",
+      "resolution_date": "2026-12-31",
+      "resolution_source": "OpenAI blog",
+      "tie_break_rule": null,
+      "category": "tech",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will OpenAI release GPT-5 in 2026?",
+      "resolution_date": "2026-12-31",
+      "resolution_source": "arXiv",
+      "tie_break_rule": null,
+      "category": "tech",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "DIVERGENT: Weather topic, different tie-break rules (NOAA vs NCEP)",
+    "a": {
+      "question": "Will 2026 be a record-hot year globally?",
+      "resolution_date": "2027-01-31",
+      "resolution_source": "NOAA",
+      "tie_break_rule": "within top 3 hottest years",
+      "category": "weather",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will 2026 be a record-hot year globally?",
+      "resolution_date": "2027-01-31",
+      "resolution_source": "NOAA",
+      "tie_break_rule": "all-time hottest single year",
+      "category": "weather",
+      "outcome_set": ["Yes", "No"]
+    }
+  },
+  {
+    "label": "DIVERGENT: Soccer topic, categories sports vs culture",
+    "a": {
+      "question": "Will the US men's soccer team reach the 2026 World Cup final?",
+      "resolution_date": "2026-07-20",
+      "resolution_source": "FIFA",
+      "tie_break_rule": null,
+      "category": "sports",
+      "outcome_set": ["Yes", "No"]
+    },
+    "b": {
+      "question": "Will the US men's soccer team reach the 2026 World Cup final?",
+      "resolution_date": "2026-07-20",
+      "resolution_source": "FIFA",
+      "tie_break_rule": null,
+      "category": "culture",
+      "outcome_set": ["Yes", "No"]
+    }
+  }
+]
