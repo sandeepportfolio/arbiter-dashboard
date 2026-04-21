@@ -1,0 +1,28 @@
+{
+  "slug": "palantir-total-customers-above-1080-in-q1",
+  "token_id": "11791367668259926399775655567765463772626331593324440205074075168931327994236",
+  "best_ask": 0.06,
+  "depth_observed_max": 3.33,
+  "depth_observed_min": 3.33,
+  "min_order_size": 5,
+  "qty": 7,
+  "cost_usd": 0.42,
+  "samples": [
+    {
+      "ask": 0.06,
+      "size_at_best": 3.33,
+      "depth_cum": 3.33
+    },
+    {
+      "ask": 0.06,
+      "size_at_best": 3.33,
+      "depth_cum": 3.33
+    },
+    {
+      "ask": 0.06,
+      "size_at_best": 3.33,
+      "depth_cum": 3.33
+    }
+  ],
+  "observed_at": "2026-04-17T08:14:38.692730+00:00"
+}

@@ -1,0 +1,17 @@
+{
+  "base": "https://demo-api.kalshi.co/trade-api/v2",
+  "candidates": {
+    "liquid_top10": [],
+    "thin_bottom10": [],
+    "probed_liquid": []
+  },
+  "balance": {
+    "status": 200,
+    "body": {
+      "balance": 2500,
+      "portfolio_value": 0,
+      "updated_ts": 1776729648
+    }
+  },
+  "market_count": 4000
+}

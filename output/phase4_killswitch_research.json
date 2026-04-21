@@ -1,0 +1,35 @@
+{
+  "observed_at_utc": "2026-04-17T03:20:00Z",
+  "primary": {
+    "ticker": "KXPRESPARTY-2028-R",
+    "title": "Will Republican win the Presidency in 2028?",
+    "event_ticker": "KXPRESPARTY-2028",
+    "close_time": "2029-11-07T12:00:00Z",
+    "days_to_close_approx": 934,
+    "yes_ask_dollars": 0.39,
+    "yes_ask_qty": 19.56,
+    "yes_bid_dollars": 0.38,
+    "yes_bid_qty": 5067.47,
+    "no_ask_dollars": 0.62,
+    "volume_total": 220322,
+    "volume_24h": 10699,
+    "proposed_resting_price_cents": 31,
+    "proposed_resting_qty": 16,
+    "proposed_notional_usd": 4.96,
+    "existing_depth_at_proposed_price_qty": 3800.0,
+    "rationale": "Best-in-class long-dated binary market on Kalshi with deepest book depth (thousands of shares on multiple levels both sides). yes_ask=39c, resting at 31c is 8c below ask and 7c below best bid (38c) - guaranteed to rest in queue behind existing 3800 qty at that level. Closes Nov 2029."
+  },
+  "runner_up": {
+    "ticker": "KXFED-27APR-T3.50",
+    "title": "Will the upper bound of the federal funds rate be above 3.50% following the Fed's April 2027 meeting?",
+    "close_time": "2027-04-28T00:00:00Z",
+    "yes_ask_dollars": 0.53,
+    "yes_bid_dollars": 0.52,
+    "volume_total": 10106,
+    "volume_24h": 637,
+    "proposed_resting_price_cents": 45,
+    "proposed_resting_qty": 11,
+    "proposed_notional_usd": 4.95,
+    "rationale": "Long-lived Fed binary (12+ months out). Less depth than presidential but still 2-sided with thousands of qty. Good fallback if KXPRESPARTY unavailable in demo."
+  }
+}

@@ -1,0 +1,762 @@
+[
+  {
+    "slug": "will-james-talarico-win-the-2028-democratic-presidential-nomination",
+    "question": "Will James Talarico win the 2028 Democratic presidential nomination?",
+    "category": null,
+    "liquidity": "397674.88419",
+    "volume24hr": 8279.767867,
+    "outcomes": "[\"Yes\", \"No\"]",
+    "token_id": "52535923606561722941567320365820395300598958985353103429657683100920373025261",
+    "outcome_idx": 0,
+    "outcomePrices_meta": "[\"0.0215\", \"0.9785\"]",
+    "best_ask_price": 0.022,
+    "best_ask_size": 71328.57,
+    "top5_asks": [
+      [
+        0.022,
+        71328.57
+      ],
+      [
+        0.023,
+        30439.56
+      ],
+      [
+        0.024,
+        2305.59
+      ],
+      [
+        0.025,
+        9646.08
+      ],
+      [
+        0.026,
+        9423.59
+      ]
+    ],
+    "orderMinSize": 5,
+    "observed_at": "2026-04-17T08:11:36.675717+00:00",
+    "depth_at_best_ask": 71328.57
+  },
+  {
+    "slug": "will-the-toronto-blue-jays-win-the-2026-world-series",
+    "question": "Will the Toronto Blue Jays win the 2026 World Series?",
+    "category": null,
+    "liquidity": "226140.9711",
+    "volume24hr": 1083.783332,
+    "outcomes": "[\"Yes\", \"No\"]",
+    "token_id": "20185194104192616169187819782503597513535305745542761219511845807955606694791",
+    "outcome_idx": 0,
+    "outcomePrices_meta": "[\"0.055\", \"0.945\"]",
+    "best_ask_price": 0.06,
+    "best_ask_size": 53225.76,
+    "top5_asks": [
+      [
+        0.06,
+        53225.76
+      ],
+      [
+        0.07,
+        30425.08
+      ],
+      [
+        0.08,
+        1269.6
+      ],
+      [
+        0.11,
+        10121.61
+      ],
+      [
+        0.13,
+        100.0
+      ]
+    ],
+    "orderMinSize": 5,
+    "observed_at": "2026-04-17T08:11:36.675717+00:00",
+    "depth_at_best_ask": 53225.76
+  },
+  {
+    "slug": "kharg-island-no-longer-under-iranian-control-by-june-30-561-854",
+    "question": "Kharg Island no longer under Iranian control by June 30?",
+    "category": null,
+    "liquidity": "173685.5725",
+    "volume24hr": 111896.87607899998,
+    "outcomes": "[\"Yes\", \"No\"]",
+    "token_id": "29245464513969532033634287470900755719499302279516205593200700547528308197658",
+    "outcome_idx": 0,
+    "outcomePrices_meta": "[\"0.105\", \"0.895\"]",
+    "best_ask_price": 0.11,
+    "best_ask_size": 28634.05,
+    "top5_asks": [
+      [
+        0.11,
+        28634.05
+      ],
+      [
+        0.12,
+        14426.32
+      ],
+      [
+        0.13,
+        30984.37
+      ],
+      [
+        0.14,
+        12829.06
+      ],
+      [
+        0.15,
+        1843.55
+      ]
+    ],
+    "orderMinSize": 5,
+    "observed_at": "2026-04-17T08:11:36.675717+00:00",
+    "depth_at_best_ask": 28634.05
+  },
+  {
+    "slug": "sea-int-cag-2026-04-17-draw",
+    "question": "Will FC Internazionale Milano vs. Cagliari Calcio end in a draw?",
+    "category": null,
+    "liquidity": "986137.0971",
+    "volume24hr": 6654.608358,
+    "outcomes": "[\"Yes\", \"No\"]",
+    "token_id": "61748753503141854225539924235995178690958401963102840700211097813412855973585",
+    "outcome_idx": 0,
+    "outcomePrices_meta": "[\"0.145\", \"0.855\"]",
+    "best_ask_price": 0.15,
+    "best_ask_size": 26793.52,
+    "top5_asks": [
+      [
+        0.15,
+        26793.52
+      ],
+      [
+        0.16,
+        261420.58
+      ],
+      [
+        0.17,
+        16561.91
+      ],
+      [
+        0.18,
+        7144.09
+      ],
+      [
+        0.19,
+        700.0
+      ]
+    ],
+    "orderMinSize": 5,
+    "observed_at": "2026-04-17T08:11:36.675717+00:00",
+    "depth_at_best_ask": 26793.52
+  },
+  {
+    "slug": "fed-rate-hike-in-2026",
+    "question": "Fed rate hike in 2026?",
+    "category": null,
+    "liquidity": "86324.2504",
+    "volume24hr": 3768.3593769999998,
+    "outcomes": "[\"Yes\", \"No\"]",
+    "token_id": "75028752776148090296091099469912621384650554615761384992997579209329182670110",
+    "outcome_idx": 0,
+    "outcomePrices_meta": "[\"0.145\", \"0.855\"]",
+    "best_ask_price": 0.15,
+    "best_ask_size": 23489.6,
+    "top5_asks": [
+      [
+        0.15,
+        23489.6
+      ],
+      [
+        0.16,
+        7832.85
+      ],
+      [
+        0.17,
+        25890.67
+      ],
+      [
+        0.18,
+        1251.96
+      ],
+      [
+        0.19,
+        1496.75
+      ]
+    ],
+    "orderMinSize": 5,
+    "observed_at": "2026-04-17T08:11:36.675717+00:00",
+    "depth_at_best_ask": 23489.6
+  },
+  {
+    "slug": "2026-balance-of-power-r-senate-r-house-537",
+    "question": "2026 Balance of Power: R Senate, R House",
+    "category": null,
+    "liquidity": "169032.1567",
+    "volume24hr": 1950.9694870000003,
+    "outcomes": "[\"Yes\", \"No\"]",
+    "token_id": "103704141773947678931823410030956181918562062788486034785782641603149828893320",
+    "outcome_idx": 0,
+    "outcomePrices_meta": "[\"0.125\", \"0.875\"]",
+    "best_ask_price": 0.13,
+    "best_ask_size": 18390.34,
+    "top5_asks": [
+      [
+        0.13,
+        18390.34
+      ],
+      [
+        0.14,
+        24078.32
+      ],
+      [
+        0.15,
+        4556.16
+      ],
+      [
+        0.16,
+        508.78
+      ],
+      [
+        0.17,
+        4600.0
+      ]
+    ],
+    "orderMinSize": 5,
+    "observed_at": "2026-04-17T08:11:36.675717+00:00",
+    "depth_at_best_ask": 18390.34
+  },
+  {
+    "slug": "will-the-minnesota-wild-win-the-2026-nhl-stanley-cup",
+    "question": "Will the Minnesota Wild win the 2026 NHL Stanley Cup?",
+    "category": null,
+    "liquidity": "204033.86971",
+    "volume24hr": 21733.89059999999,
+    "outcomes": "[\"Yes\", \"No\"]",
+    "token_id": "52393600221905688380980180540161090876971894580569515967716227210336633318551",
+    "outcome_idx": 0,
+    "outcomePrices_meta": "[\"0.0415\", \"0.9585\"]",
+    "best_ask_price": 0.042,
+    "best_ask_size": 15878.86,
+    "top5_asks": [
+      [
+        0.042,
+        15878.86
+      ],
+      [
+        0.043,
+        9838.48
+      ],
+      [
+        0.044,
+        96613.04
+      ],
+      [
+        0.045,
+        54.02
+      ],
+      [
+        0.046,
+        82.0
+      ]
+    ],
+    "orderMinSize": 5,
+    "observed_at": "2026-04-17T08:11:36.675717+00:00",
+    "depth_at_best_ask": 15878.86
+  },
+  {
+    "slug": "will-3-fed-rate-cuts-happen-in-2026",
+    "question": "Will 3 Fed rate cuts happen in 2026?",
+    "category": null,
+    "liquidity": "127892.8113",
+    "volume24hr": 1815.956604,
+    "outcomes": "[\"Yes\", \"No\"]",
+    "token_id": "95835705062472305459663741402900736177330733688944910993896545106260819635212",
+    "outcome_idx": 0,
+    "outcomePrices_meta": "[\"0.085\", \"0.915\"]",
+    "best_ask_price": 0.09,
+    "best_ask_size": 15349.85,
+    "top5_asks": [
+      [
+        0.09,
+        15349.85
+      ],
+      [
+        0.1,
+        7569.7
+      ],
+      [
+        0.11,
+        17746.16
+      ],
+      [
+        0.12,
+        685.78
+      ],
+      [
+        0.13,
+        9168.13
+      ]
+    ],
+    "orderMinSize": 5,
+    "observed_at": "2026-04-17T08:11:36.675717+00:00",
+    "depth_at_best_ask": 15349.85
+  },
+  {
+    "slug": "will-the-us-acquire-any-part-of-greenland-in-2026",
+    "question": "Will the US acquire part of Greenland in 2026?",
+    "category": null,
+    "liquidity": "193873.7867",
+    "volume24hr": 7413.311397999999,
+    "outcomes": "[\"Yes\", \"No\"]",
+    "token_id": "60745476350338574489643206785963608049827415658137795738920858026399504782388",
+    "outcome_idx": 0,
+    "outcomePrices_meta": "[\"0.165\", \"0.835\"]",
+    "best_ask_price": 0.17,
+    "best_ask_size": 9195.61,
+    "top5_asks": [
+      [
+        0.17,
+        9195.61
+      ],
+      [
+        0.18,
+        8734.45
+      ],
+      [
+        0.19,
+        12390.83
+      ],
+      [
+        0.2,
+        7651.46
+      ],
+      [
+        0.21,
+        25879.24
+      ]
+    ],
+    "orderMinSize": 5,
+    "observed_at": "2026-04-17T08:11:36.675717+00:00",
+    "depth_at_best_ask": 9195.61
+  },
+  {
+    "slug": "will-bitcoin-reach-500000-by-december-31-2026-864",
+    "question": "Will Bitcoin reach $500,000 by December 31, 2026?",
+    "category": null,
+    "liquidity": "104977.21394",
+    "volume24hr": 14076.169895000003,
+    "outcomes": "[\"Yes\", \"No\"]",
+    "token_id": "91920414851381703961459336798965934286338468050347816160274927361190904665656",
+    "outcome_idx": 0,
+    "outcomePrices_meta": "[\"0.0205\", \"0.9795\"]",
+    "best_ask_price": 0.021,
+    "best_ask_size": 8033.39,
+    "top5_asks": [
+      [
+        0.021,
+        8033.39
+      ],
+      [
+        0.022,
+        2775.93
+      ],
+      [
+        0.023,
+        2594.53
+      ],
+      [
+        0.024,
+        1267.24
+      ],
+      [
+        0.025,
+        822.27
+      ]
+    ],
+    "orderMinSize": 5,
+    "observed_at": "2026-04-17T08:11:36.675717+00:00",
+    "depth_at_best_ask": 8033.39
+  },
+  {
+    "slug": "will-the-baltimore-orioles-win-the-2026-world-series",
+    "question": "Will the Baltimore Orioles win the 2026 World Series?",
+    "category": null,
+    "liquidity": "118140.1323",
+    "volume24hr": 11285.544513,
+    "outcomes": "[\"Yes\", \"No\"]",
+    "token_id": "76901108251634167363891633800845596864827549489351737120636456747135280488503",
+    "outcome_idx": 0,
+    "outcomePrices_meta": "[\"0.023\", \"0.977\"]",
+    "best_ask_price": 0.024,
+    "best_ask_size": 5926.23,
+    "top5_asks": [
+      [
+        0.024,
+        5926.23
+      ],
+      [
+        0.025,
+        938.9
+      ],
+      [
+        0.026,
+        174.86
+      ],
+      [
+        0.027,
+        580.01
+      ],
+      [
+        0.028,
+        192.3
+      ]
+    ],
+    "orderMinSize": 5,
+    "observed_at": "2026-04-17T08:11:36.675717+00:00",
+    "depth_at_best_ask": 5926.23
+  },
+  {
+    "slug": "will-ethereum-reach-7500-by-december-31-2026",
+    "question": "Will Ethereum reach $7,500 by December 31, 2026?",
+    "category": null,
+    "liquidity": "41291.0929",
+    "volume24hr": 13.68,
+    "outcomes": "[\"Yes\", \"No\"]",
+    "token_id": "59266530915734656657758247952199625227176177933992066491540382258500351132441",
+    "outcome_idx": 0,
+    "outcomePrices_meta": "[\"0.065\", \"0.935\"]",
+    "best_ask_price": 0.07,
+    "best_ask_size": 5280.6,
+    "top5_asks": [
+      [
+        0.07,
+        5280.6
+      ],
+      [
+        0.08,
+        5313.13
+      ],
+      [
+        0.09,
+        747.44
+      ],
+      [
+        0.1,
+        100.0
+      ],
+      [
+        0.11,
+        500.0
+      ]
+    ],
+    "orderMinSize": 5,
+    "observed_at": "2026-04-17T08:11:36.675717+00:00",
+    "depth_at_best_ask": 5280.6
+  },
+  {
+    "slug": "will-mara-corina-machado-be-the-leader-of-venezuela-end-of-2026",
+    "question": "Will Mar\u00eda Corina Machado be the leader of Venezuela end of 2026?",
+    "category": null,
+    "liquidity": "121380.5866",
+    "volume24hr": 6405.140065,
+    "outcomes": "[\"Yes\", \"No\"]",
+    "token_id": "111206023652925249192617904527998565944558514529537236601741996492948632883698",
+    "outcome_idx": 0,
+    "outcomePrices_meta": "[\"0.085\", \"0.915\"]",
+    "best_ask_price": 0.09,
+    "best_ask_size": 4673.87,
+    "top5_asks": [
+      [
+        0.09,
+        4673.87
+      ],
+      [
+        0.1,
+        3018.0
+      ],
+      [
+        0.11,
+        4791.3
+      ],
+      [
+        0.12,
+        5045.3
+      ],
+      [
+        0.13,
+        3590.92
+      ]
+    ],
+    "orderMinSize": 5,
+    "observed_at": "2026-04-17T08:11:36.675717+00:00",
+    "depth_at_best_ask": 4673.87
+  },
+  {
+    "slug": "will-the-republican-party-win-the-pa-06-house-seat",
+    "question": "Will the Republican Party win the PA-06 House seat?",
+    "category": null,
+    "liquidity": "31948.6377",
+    "volume24hr": null,
+    "outcomes": "[\"Yes\", \"No\"]",
+    "token_id": "103216649439909747539634744833870771773796311223780039337207063004466684088373",
+    "outcome_idx": 0,
+    "outcomePrices_meta": "[\"0.07\", \"0.93\"]",
+    "best_ask_price": 0.08,
+    "best_ask_size": 4605.0,
+    "top5_asks": [
+      [
+        0.08,
+        4605.0
+      ],
+      [
+        0.09,
+        4867.37
+      ],
+      [
+        0.1,
+        1800.0
+      ],
+      [
+        0.13,
+        1607.0
+      ],
+      [
+        0.2,
+        161.0
+      ]
+    ],
+    "orderMinSize": 5,
+    "observed_at": "2026-04-17T08:11:36.675717+00:00",
+    "depth_at_best_ask": 4605.0
+  },
+  {
+    "slug": "will-the-democratic-party-win-the-ca-44-house-seat",
+    "question": "Will the Democratic Party win the CA-44 House seat?",
+    "category": null,
+    "liquidity": "38375.3928",
+    "volume24hr": null,
+    "outcomes": "[\"Yes\", \"No\"]",
+    "token_id": "17587481021516488548972474364144707222200340921820439492819599240682330636480",
+    "outcome_idx": 1,
+    "outcomePrices_meta": "[\"0.935\", \"0.065\"]",
+    "best_ask_price": 0.07,
+    "best_ask_size": 4436.55,
+    "top5_asks": [
+      [
+        0.07,
+        4436.55
+      ],
+      [
+        0.08,
+        1443.48
+      ],
+      [
+        0.09,
+        106.38
+      ],
+      [
+        0.1,
+        110.0
+      ],
+      [
+        0.11,
+        125.0
+      ]
+    ],
+    "orderMinSize": 5,
+    "observed_at": "2026-04-17T08:11:36.675717+00:00",
+    "depth_at_best_ask": 4436.55
+  },
+  {
+    "slug": "new-stranger-things-episode-released-by-december-31-587-657-824",
+    "question": "New \"Stranger Things\" episode released by December 31? ",
+    "category": null,
+    "liquidity": "51579.4415",
+    "volume24hr": 1114.520868,
+    "outcomes": "[\"Yes\", \"No\"]",
+    "token_id": "32659009526475659897371564072228315909246519607913270143285466073749111434555",
+    "outcome_idx": 0,
+    "outcomePrices_meta": "[\"0.085\", \"0.915\"]",
+    "best_ask_price": 0.09,
+    "best_ask_size": 4015.53,
+    "top5_asks": [
+      [
+        0.09,
+        4015.53
+      ],
+      [
+        0.1,
+        9241.95
+      ],
+      [
+        0.11,
+        6070.0
+      ],
+      [
+        0.12,
+        1839.34
+      ],
+      [
+        0.13,
+        5000.0
+      ]
+    ],
+    "orderMinSize": 5,
+    "observed_at": "2026-04-17T08:11:36.675717+00:00",
+    "depth_at_best_ask": 4015.53
+  },
+  {
+    "slug": "will-the-republican-party-win-the-ri-01-house-seat",
+    "question": "Will the Republican Party win the RI-01 House seat?",
+    "category": null,
+    "liquidity": "49961.8286",
+    "volume24hr": null,
+    "outcomes": "[\"Yes\", \"No\"]",
+    "token_id": "50346580458950518916001498765660508568252611954050141840278830023642648805953",
+    "outcome_idx": 0,
+    "outcomePrices_meta": "[\"0.065\", \"0.935\"]",
+    "best_ask_price": 0.07,
+    "best_ask_size": 3932.4,
+    "top5_asks": [
+      [
+        0.07,
+        3932.4
+      ],
+      [
+        0.08,
+        5290.65
+      ],
+      [
+        0.09,
+        150.0
+      ],
+      [
+        0.1,
+        2000.0
+      ],
+      [
+        0.11,
+        1750.0
+      ]
+    ],
+    "orderMinSize": 5,
+    "observed_at": "2026-04-17T08:11:36.675717+00:00",
+    "depth_at_best_ask": 3932.4
+  },
+  {
+    "slug": "will-the-democratic-party-win-the-mn-03-house-seat",
+    "question": "Will the Democratic Party win the MN-03 House seat?",
+    "category": null,
+    "liquidity": "34264.3254",
+    "volume24hr": null,
+    "outcomes": "[\"Yes\", \"No\"]",
+    "token_id": "98831069934705418837486043571764355845079816001066971004974451860745640205542",
+    "outcome_idx": 1,
+    "outcomePrices_meta": "[\"0.915\", \"0.085\"]",
+    "best_ask_price": 0.09,
+    "best_ask_size": 3919.44,
+    "top5_asks": [
+      [
+        0.09,
+        3919.44
+      ],
+      [
+        0.1,
+        2203.02
+      ],
+      [
+        0.11,
+        56.3
+      ],
+      [
+        0.14,
+        1862.0
+      ],
+      [
+        0.21,
+        435.0
+      ]
+    ],
+    "orderMinSize": 5,
+    "observed_at": "2026-04-17T08:11:36.675717+00:00",
+    "depth_at_best_ask": 3919.44
+  },
+  {
+    "slug": "will-the-democratic-party-win-the-ca-26-house-seat",
+    "question": "Will the Democratic Party win the CA-26 House seat?",
+    "category": null,
+    "liquidity": "34297.6828",
+    "volume24hr": 1.07,
+    "outcomes": "[\"Yes\", \"No\"]",
+    "token_id": "19660207623869102823602164174299738258720903736068296075045270803212404860025",
+    "outcome_idx": 1,
+    "outcomePrices_meta": "[\"0.935\", \"0.065\"]",
+    "best_ask_price": 0.07,
+    "best_ask_size": 3835.47,
+    "top5_asks": [
+      [
+        0.07,
+        3835.47
+      ],
+      [
+        0.08,
+        4293.77
+      ],
+      [
+        0.09,
+        156.38
+      ],
+      [
+        0.12,
+        2692.0
+      ],
+      [
+        0.14,
+        18.0
+      ]
+    ],
+    "orderMinSize": 5,
+    "observed_at": "2026-04-17T08:11:36.675717+00:00",
+    "depth_at_best_ask": 3835.47
+  },
+  {
+    "slug": "fr2-mon-gre-2026-04-17-gre",
+    "question": "Will Grenoble Foot 38 win on 2026-04-17?",
+    "category": null,
+    "liquidity": "209736.6468",
+    "volume24hr": 35.68292100000001,
+    "outcomes": "[\"Yes\", \"No\"]",
+    "token_id": "105188587151728670897024325284956174387755813450646747929284690073574982992973",
+    "outcome_idx": 0,
+    "outcomePrices_meta": "[\"0.185\", \"0.815\"]",
+    "best_ask_price": 0.19,
+    "best_ask_size": 3731.87,
+    "top5_asks": [
+      [
+        0.19,
+        3731.87
+      ],
+      [
+        0.2,
+        4162.11
+      ],
+      [
+        0.21,
+        664.19
+      ],
+      [
+        0.22,
+        201.0
+      ],
+      [
+        0.23,
+        12887.0
+      ]
+    ],
+    "orderMinSize": 5,
+    "observed_at": "2026-04-17T08:11:36.675717+00:00",
+    "depth_at_best_ask": 3731.87
+  }
+]

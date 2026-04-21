@@ -1,0 +1,239 @@
+{
+  "happy": {
+    "slug": "will-james-talarico-win-the-2028-democratic-presidential-nomination",
+    "question": "Will James Talarico win the 2028 Democratic presidential nomination?",
+    "token_id": "52535923606561722941567320365820395300598958985353103429657683100920373025261",
+    "best_ask": 0.022,
+    "depth_at_best_ask": 71328.57,
+    "min_order_size": 5,
+    "category": "politics",
+    "tags_raw": [
+      {
+        "id": "30829",
+        "ticker": "democratic-presidential-nominee-2028",
+        "slug": "democratic-presidential-nominee-2028",
+        "title": "Democratic Presidential Nominee 2028",
+        "description": "This market will resolve to \u201cYes\u201d if the named individual wins and accepts the 2028 nomination of the Democratic Party for U.S. president. Otherwise, this market will resolve to \u201cNo\u201d.\n\nThe resolution source for this market will be a consensus of official Democratic Party sources.\n\nAny replacement of the democratic nominee before election day will not change the resolution of the market.",
+        "resolutionSource": "",
+        "startDate": "2025-07-11T18:41:17.827458Z",
+        "creationDate": "2025-07-11T18:41:17.827389Z",
+        "endDate": "2028-11-07T00:00:00Z",
+        "image": "https://polymarket-upload.s3.us-east-2.amazonaws.com/democrats+2028+donkey.png",
+        "icon": "https://polymarket-upload.s3.us-east-2.amazonaws.com/democrats+2028+donkey.png",
+        "active": true,
+        "closed": false,
+        "archived": false,
+        "new": false,
+        "featured": true,
+        "restricted": true,
+        "liquidity": 47281094.89211,
+        "volume": 1055876642.0108045,
+        "openInterest": 13906115.165485997,
+        "sortBy": "price",
+        "createdAt": "2025-07-03T20:36:57.824243Z",
+        "updatedAt": "2026-04-17T08:09:52.93461Z",
+        "competitive": 0.952424265008242,
+        "volume24hr": 5147810.8357609995,
+        "volume1wk": 38964730.65638501,
+        "volume1mo": 213955446.83895862,
+        "volume1yr": 1055876642.0108,
+        "enableOrderBook": true,
+        "liquidityClob": 47281094.89211,
+        "negRisk": true,
+        "negRiskMarketID": "0x2c3d7e0eee6f058be3006baabf0d54a07da254ba47fe6e3e095e7990c7814700",
+        "commentCount": 674,
+        "cyom": false,
+        "showAllOutcomes": true,
+        "showMarketImages": true,
+        "enableNegRisk": true,
+        "automaticallyActive": true,
+        "startTime": "2028-11-07T12:00:00Z",
+        "gmpChartMode": "default",
+        "negRiskAugmented": true,
+        "countryName": "U.S.",
+        "electionType": "Democratic Nomination",
+        "featuredOrder": 18,
+        "estimateValue": false,
+        "cumulativeMarkets": false,
+        "pendingDeployment": false,
+        "deploying": false,
+        "deployingTimestamp": "2025-07-11T18:14:44.108448Z",
+        "requiresTranslation": false,
+        "eventMetadata": {
+          "context_description": "Trader consensus on Polymarket crowns California Governor Gavin Newsom as the clear frontrunner at 28% implied probability for the 2028 Democratic presidential nomination, driven by his national fundraising momentum among Hollywood and coastal donors, aggressive media critiques of Trump administration policies, and strong showings in early-state polls like a March New Hampshire tie for second and a commanding California lead over Kamala Harris. Recent YouGov polling (April 13) shows Harris edging Newsom as Democrats' ideal choice at 24% versus 12%, yet markets discount her post-2024 loss baggage despite her April 11 reaffirmation of interest amid \"run again\" chants at the National Action Network. Alexandria Ocasio-Cortez trails at 9% on progressive youth appeal but faces electability doubts; governors like Shapiro, Beshear, and Whitmer lag due to regional profiles. Consolidation hinges on 2026 midterm outcomes for battleground incumbents, fundraising tallies, and DNC primary calendar shifts, keeping the field wide open absent a dominant catalyst.",
+          "context_requires_regen": true,
+          "context_updated_at": "2026-04-17T08:01:20.370Z"
+        }
+      }
+    ],
+    "qty": 227,
+    "cost_usd": 4.994,
+    "detail_tags_debug": [
+      {
+        "id": "30829",
+        "ticker": "democratic-presidential-nominee-2028",
+        "slug": "democratic-presidential-nominee-2028",
+        "title": "Democratic Presidential Nominee 2028",
+        "description": "This market will resolve to \u201cYes\u201d if the named individual wins and accepts the 2028 nomination of the Democratic Party for U.S. president. Otherwise, this market will resolve to \u201cNo\u201d.\n\nThe resolution source for this market will be a consensus of official Democratic Party sources.\n\nAny replacement of the democratic nominee before election day will not change the resolution of the market.",
+        "resolutionSource": "",
+        "startDate": "2025-07-11T18:41:17.827458Z",
+        "creationDate": "2025-07-11T18:41:17.827389Z",
+        "endDate": "2028-11-07T00:00:00Z",
+        "image": "https://polymarket-upload.s3.us-east-2.amazonaws.com/democrats+2028+donkey.png",
+        "icon": "https://polymarket-upload.s3.us-east-2.amazonaws.com/democrats+2028+donkey.png",
+        "active": true,
+        "closed": false,
+        "archived": false,
+        "new": false,
+        "featured": true,
+        "restricted": true,
+        "liquidity": 47281094.89211,
+        "volume": 1055876642.0108045,
+        "openInterest": 13906115.165485997,
+        "sortBy": "price",
+        "createdAt": "2025-07-03T20:36:57.824243Z",
+        "updatedAt": "2026-04-17T08:09:52.93461Z",
+        "competitive": 0.952424265008242,
+        "volume24hr": 5147810.8357609995,
+        "volume1wk": 38964730.65638501,
+        "volume1mo": 213955446.83895862,
+        "volume1yr": 1055876642.0108,
+        "enableOrderBook": true,
+        "liquidityClob": 47281094.89211,
+        "negRisk": true,
+        "negRiskMarketID": "0x2c3d7e0eee6f058be3006baabf0d54a07da254ba47fe6e3e095e7990c7814700",
+        "commentCount": 674,
+        "cyom": false,
+        "showAllOutcomes": true,
+        "showMarketImages": true,
+        "enableNegRisk": true,
+        "automaticallyActive": true,
+        "startTime": "2028-11-07T12:00:00Z",
+        "gmpChartMode": "default",
+        "negRiskAugmented": true,
+        "countryName": "U.S.",
+        "electionType": "Democratic Nomination",
+        "featuredOrder": 18,
+        "estimateValue": false,
+        "cumulativeMarkets": false,
+        "pendingDeployment": false,
+        "deploying": false,
+        "deployingTimestamp": "2025-07-11T18:14:44.108448Z",
+        "requiresTranslation": false,
+        "eventMetadata": {
+          "context_description": "Trader consensus on Polymarket crowns California Governor Gavin Newsom as the clear frontrunner at 28% implied probability for the 2028 Democratic presidential nomination, driven by his national fundraising momentum among Hollywood and coastal donors, aggressive media critiques of Trump administration policies, and strong showings in early-state polls like a March New Hampshire tie for second and a commanding California lead over Kamala Harris. Recent YouGov polling (April 13) shows Harris edging Newsom as Democrats' ideal choice at 24% versus 12%, yet markets discount her post-2024 loss baggage despite her April 11 reaffirmation of interest amid \"run again\" chants at the National Action Network. Alexandria Ocasio-Cortez trails at 9% on progressive youth appeal but faces electability doubts; governors like Shapiro, Beshear, and Whitmer lag due to regional profiles. Consolidation hinges on 2026 midterm outcomes for battleground incumbents, fundraising tallies, and DNC primary calendar shifts, keeping the field wide open absent a dominant catalyst.",
+          "context_requires_regen": true,
+          "context_updated_at": "2026-04-17T08:01:20.370Z"
+        }
+      }
+    ],
+    "reverify": {
+      "best_ask_now": 0.022,
+      "depth_now": 71328.57,
+      "top5_asks": [
+        {
+          "price": 0.022,
+          "size": 71328.57
+        },
+        {
+          "price": 0.023,
+          "size": 30439.56
+        },
+        {
+          "price": 0.024,
+          "size": 2305.59
+        },
+        {
+          "price": 0.025,
+          "size": 9646.08
+        },
+        {
+          "price": 0.026,
+          "size": 9423.59
+        }
+      ],
+      "top5_bids": [
+        {
+          "price": 0.021,
+          "size": 4497.0
+        },
+        {
+          "price": 0.02,
+          "size": 12251.31
+        },
+        {
+          "price": 0.019,
+          "size": 2743.8
+        },
+        {
+          "price": 0.018,
+          "size": 6688.29
+        },
+        {
+          "price": 0.017,
+          "size": 27518.61
+        }
+      ],
+      "observed_at": "2026-04-17T08:13:40.784256+00:00"
+    }
+  },
+  "fok": {
+    "slug": "will-merab-dvalishvili-fight-umar-nurmagomedov-next",
+    "question": "Will Merab Dvalishvili fight Umar Nurmagomedov next?",
+    "token_id": "17959000899640626011040672387324587275485475350236808280316235961737226934659",
+    "best_ask": 0.029,
+    "depth_at_best_ask": 5.0,
+    "min_order_size": 5,
+    "qty": 10,
+    "cost_usd": 0.29000000000000004,
+    "reverify": {
+      "best_ask_now": 0.028,
+      "depth_now": 9.56,
+      "top5_asks": [
+        {
+          "price": 0.028,
+          "size": 9.56
+        },
+        {
+          "price": 0.029,
+          "size": 5.0
+        },
+        {
+          "price": 0.03,
+          "size": 5.0
+        },
+        {
+          "price": 0.058,
+          "size": 15.3
+        },
+        {
+          "price": 0.06,
+          "size": 6.52
+        }
+      ],
+      "top5_bids": [
+        {
+          "price": 0.005,
+          "size": 110.77
+        },
+        {
+          "price": 0.004,
+          "size": 20.0
+        },
+        {
+          "price": 0.003,
+          "size": 109.0
+        },
+        {
+          "price": 0.002,
+          "size": 31.29
+        },
+        {
+          "price": 0.001,
+          "size": 310.0
+        }
+      ],
+      "observed_at": "2026-04-17T08:13:40.990259+00:00"
+    }
+  }
+}
