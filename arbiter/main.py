@@ -356,6 +356,34 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
             except Exception as exc:
                 logger.warning("Failed to emit orphaned-order incident: %s", exc)
 
+    # ── AutoExecutor (Phase 6 Plan 06-01) ──────────────────────
+    # Subscribes to scanner, executes on opportunities that pass all 7 policy
+    # gates (enabled, is_armed, requires_manual, allow_auto_trade, duplicate,
+    # notional cap, bootstrap cap). DEFAULT OFF — must set AUTO_EXECUTE_ENABLED=true.
+    from .execution.auto_executor import (
+        make_auto_executor_from_env,
+        make_settings_mapping_adapter,
+    )
+    from .config.settings import MARKET_MAP
+
+    auto_executor = make_auto_executor_from_env(
+        scanner=scanner,
+        engine=engine,
+        supervisor=safety,
+        mapping_store=make_settings_mapping_adapter(MARKET_MAP),
+        config_env=os.environ,
+    )
+    logger.info(
+        f"  Auto-execute: {'✓ ENABLED' if auto_executor._config.enabled else '✗ disabled (AUTO_EXECUTE_ENABLED=false)'}"
+    )
+    logger.info(
+        f"  Max position: ${auto_executor._config.max_position_usd:.2f}"
+    )
+    if auto_executor._config.bootstrap_trades is not None:
+        logger.info(
+            f"  Bootstrap cap: {auto_executor._config.bootstrap_trades} trades"
+        )
+
     # ── Launch all tasks ───────────────────────────────────────
     tasks = []
 
@@ -369,6 +397,8 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
             asyncio.create_task(portfolio.run(), name="portfolio-monitor"),
             asyncio.create_task(engine.polymarket_heartbeat_loop(), name="poly-heartbeat"),
         ])
+        # Auto-executor only runs outside api_only mode (it needs scanner+engine).
+        await auto_executor.start()
 
     tasks.append(asyncio.create_task(profitability.run(), name="profitability-validator"))
     tasks.append(asyncio.create_task(run_reconciliation_loop(reconciler, monitor, engine), name="pnl-reconciler"))
@@ -434,6 +464,7 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
 
     # Cleanup
     engine.stop_heartbeat()
+    await auto_executor.stop()
     await kalshi.stop()
     await polymarket.stop()
     await scanner.stop()
