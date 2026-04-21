@@ -39,6 +39,20 @@ except ImportError:
 from arbiter.auth.ed25519_signer import Ed25519Signer, SignatureError  # type: ignore
 
 
+def _balances_endpoint(base_url: str) -> tuple[str, str, str]:
+    """Normalize the configured base URL for the balances check.
+
+    Returns:
+    - base URL for the final request URL
+    - request path to append to the base URL
+    - signature path that must match the real on-wire HTTP path
+    """
+    base = base_url.rstrip("/")
+    if base.endswith("/v1"):
+        return base, "/account/balances", "/v1/account/balances"
+    return base, "/v1/account/balances", "/v1/account/balances"
+
+
 async def _check() -> int:
     key_id = os.getenv("POLYMARKET_US_API_KEY_ID", "").strip()
     secret_b64 = os.getenv("POLYMARKET_US_API_SECRET", "").strip()
@@ -81,9 +95,9 @@ async def _check() -> int:
         return 1
 
     # ── 4. Signed round-trip ─────────────────────────────────────────────
-    path = "/v1/account/balances"
-    headers = signer.headers("GET", path)
-    url = f"{base_url}{path}"
+    base_url, request_path, signature_path = _balances_endpoint(base_url)
+    headers = signer.headers("GET", signature_path)
+    url = f"{base_url}{request_path}"
     print(f"url:           {url}")
 
     try:

@@ -152,6 +152,27 @@ async def test_5b_fail_with_low_balance(monkeypatch):
     assert "5.00" in item.detail
 
 
+async def test_5b_pass_with_v1_base_url(monkeypatch):
+    """5b accepts POLYMARKET_US_API_URL values that already include /v1."""
+    monkeypatch.setenv("POLYMARKET_VARIANT", "us")
+    monkeypatch.setenv("POLYMARKET_US_API_KEY_ID", VALID_KEY_ID)
+    monkeypatch.setenv("POLYMARKET_US_API_SECRET", VALID_SECRET_B64)
+    monkeypatch.setenv("PREFLIGHT_ALLOW_LIVE", "1")
+    monkeypatch.setenv("POLYMARKET_US_API_URL", "https://api.polymarket.us/v1")
+
+    with aioresponses() as m:
+        m.get(
+            "https://api.polymarket.us/v1/account/balances",
+            payload={"currentBalance": 100.0},
+            status=200,
+        )
+        item = await _check_05b_polymarket_us_balance()
+
+    assert item.passed is True
+    assert item.blocking is True
+    assert "100.00" in item.detail
+
+
 async def test_disabled_variant_skips_both(monkeypatch):
     """When POLYMARKET_VARIANT=disabled, both 5a and 5b are 'not applicable' (non-blocking)."""
     monkeypatch.setenv("POLYMARKET_VARIANT", "disabled")

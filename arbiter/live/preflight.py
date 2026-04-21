@@ -315,6 +315,14 @@ def _check_05a_polymarket_us_credentials() -> PreflightItem:
     )
 
 
+def _polymarket_us_balances_endpoint(base_url: str) -> tuple[str, str, str]:
+    """Support both api base styles used in the repo for live balance checks."""
+    base = base_url.rstrip("/")
+    if base.endswith("/v1"):
+        return base, "/account/balances", "/v1/account/balances"
+    return base, "/v1/account/balances", "/v1/account/balances"
+
+
 async def _check_05b_polymarket_us_balance() -> PreflightItem:
     """Check 5b: Live signed GET /v1/account/balances; assert currentBalance >= $20.
 
@@ -394,12 +402,12 @@ async def _check_05b_polymarket_us_balance() -> PreflightItem:
         )
 
     base_url = os.getenv("POLYMARKET_US_API_URL", "https://api.polymarket.us").rstrip("/")
-    path = "/v1/account/balances"
-    headers = signer.headers("GET", path)
+    base_url, request_path, signature_path = _polymarket_us_balances_endpoint(base_url)
+    headers = signer.headers("GET", signature_path)
 
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
-            async with session.get(f"{base_url}{path}", headers=headers) as resp:
+            async with session.get(f"{base_url}{request_path}", headers=headers) as resp:
                 status = resp.status
                 if status == 401:
                     return PreflightItem(

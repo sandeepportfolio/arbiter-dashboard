@@ -20,7 +20,7 @@ from aioresponses import aioresponses
 _REPO_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 sys.path.insert(0, _REPO_ROOT)
 
-from scripts.setup.check_polymarket_us import _check  # noqa: E402
+from scripts.setup.check_polymarket_us import _balances_endpoint, _check  # noqa: E402
 
 # ── Test credentials ────────────────────────────────────────────────────────
 # 32 zero bytes base64-encoded — a structurally valid Ed25519 seed.
@@ -129,3 +129,10 @@ def test_secret_never_in_stderr():
     assert _LEAK_SECRET_RAW not in result.stderr, (
         f"SECRET LEAKED to stderr!\nstderr: {result.stderr[:500]}"
     )
+
+
+def test_balances_endpoint_supports_v1_base_url():
+    base, request_path, signature_path = _balances_endpoint("https://api.polymarket.us/v1")
+    assert base == "https://api.polymarket.us/v1"
+    assert request_path == "/account/balances"
+    assert signature_path == "/v1/account/balances"
