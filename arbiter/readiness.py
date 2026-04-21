@@ -121,7 +121,7 @@ class OperationalReadiness:
         if not kalshi_ready:
             failures.append("Kalshi API credentials are not configured")
 
-        if not self.config.polymarket.private_key:
+        if not getattr(self.config.polymarket, "private_key", None):
             failures.append("Polymarket private key is not configured")
 
         return failures
@@ -172,7 +172,7 @@ class OperationalReadiness:
             getattr(getattr(kalshi, "auth", None), "is_authenticated", False)
             or (self.config.kalshi.api_key_id and self.config.kalshi.private_key_path)
         )
-        polymarket_ready = bool(self.config.polymarket.private_key)
+        polymarket_ready = bool(getattr(self.config.polymarket, "private_key", None))
         details = {
             "kalshi_authenticated": kalshi_ready,
             "polymarket_private_key": polymarket_ready,

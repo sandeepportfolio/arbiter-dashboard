@@ -1279,25 +1279,26 @@ class ExecutionEngine:
     def _get_poly_clob_client(self):
         if self._poly_clob_client is not None:
             return self._poly_clob_client
-        if not self.config.polymarket.private_key:
+        poly_cfg = self.config.polymarket
+        if not getattr(poly_cfg, "private_key", None):
             return None
         try:
             from py_clob_client.client import ClobClient
 
             self._poly_clob_client = ClobClient(
-                host=self.config.polymarket.clob_url,
-                key=self.config.polymarket.private_key,
-                chain_id=self.config.polymarket.chain_id,
-                signature_type=self.config.polymarket.signature_type,
-                funder=self.config.polymarket.funder,
+                host=poly_cfg.clob_url,
+                key=poly_cfg.private_key,
+                chain_id=poly_cfg.chain_id,
+                signature_type=poly_cfg.signature_type,
+                funder=poly_cfg.funder,
             )
             if hasattr(self._poly_clob_client, "create_or_derive_api_creds"):
                 creds = self._poly_clob_client.create_or_derive_api_creds()
                 if hasattr(self._poly_clob_client, "set_api_creds"):
                     self._poly_clob_client.set_api_creds(creds)
             logger.info("Polymarket ClobClient initialized (sig_type=%d, funder=%s)",
-                        self.config.polymarket.signature_type,
-                        self.config.polymarket.funder[:8] + "..." if self.config.polymarket.funder else "none")
+                        poly_cfg.signature_type,
+                        poly_cfg.funder[:8] + "..." if poly_cfg.funder else "none")
             return self._poly_clob_client
         except Exception as exc:
             logger.error("Failed to initialize Polymarket CLOB client: %s", exc)

@@ -333,7 +333,7 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     logger.info(f"  Min edge: {config.scanner.min_edge_cents}¢")
     logger.info(f"  Max position: ${config.scanner.max_position_usd}")
     logger.info(f"  Kalshi auth: {'✓' if kalshi.auth.is_authenticated else '✗ (public data only)'}")
-    logger.info(f"  Polymarket wallet: {'✓' if config.polymarket.private_key else '✗'}")
+    logger.info(f"  Polymarket wallet: {'✓' if getattr(config.polymarket, 'private_key', None) else '✗'}")
     logger.info(f"  Telegram alerts: {'✓' if config.alerts.telegram_bot_token else '✗'}")
     logger.info("=" * 60)
 

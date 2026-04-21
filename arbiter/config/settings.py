@@ -9,7 +9,7 @@ import re
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional, Tuple
+from typing import Any, Dict, Iterable, Optional, Tuple, Union
 
 try:
     from dotenv import load_dotenv
@@ -417,6 +417,17 @@ class PolymarketConfig:
 
 
 @dataclass
+class PolymarketUSConfig:
+    """Polymarket US (CFTC-regulated DCM) configuration. Uses Ed25519 key auth."""
+    api_url: str = field(default_factory=lambda: os.getenv("POLYMARKET_US_API_URL", "https://api.polymarket.us/v1"))
+    ws_url: str = field(default_factory=lambda: os.getenv("POLYMARKET_US_WS_URL", "wss://api.polymarket.us/v1/ws/markets"))
+    api_key_id: str = field(default_factory=lambda: os.getenv("POLYMARKET_US_API_KEY_ID", ""))
+    api_secret: str = field(default_factory=lambda: os.getenv("POLYMARKET_US_API_SECRET", ""))
+    poll_interval: float = 1.0
+    ws_enabled: bool = True
+
+
+@dataclass
 class AlertConfig:
     telegram_bot_token: str = field(default_factory=lambda: os.getenv("TELEGRAM_BOT_TOKEN", ""))
     telegram_chat_id: str = field(default_factory=lambda: os.getenv("TELEGRAM_CHAT_ID", ""))
@@ -478,7 +489,7 @@ class PostgresConfig:
 @dataclass
 class ArbiterConfig:
     kalshi: KalshiConfig = field(default_factory=KalshiConfig)
-    polymarket: PolymarketConfig = field(default_factory=PolymarketConfig)
+    polymarket: Optional[Union[PolymarketConfig, PolymarketUSConfig]] = field(default_factory=PolymarketConfig)
     alerts: AlertConfig = field(default_factory=AlertConfig)
     scanner: ScannerConfig = field(default_factory=ScannerConfig)
     safety: SafetyConfig = field(default_factory=SafetyConfig)
@@ -504,7 +515,21 @@ def polymarket_us_order_fee(price: float, qty: float, intent: str = "taker") -> 
 
 
 def load_config() -> ArbiterConfig:
+    # Select Polymarket variant before constructing ArbiterConfig so the right
+    # config class is used. Defaults to "us" to align with the CFTC-regulated
+    # DCM path. Set POLYMARKET_VARIANT=legacy to use the legacy CLOB path, or
+    # POLYMARKET_VARIANT=disabled to disable Polymarket entirely.
+    variant = os.getenv("POLYMARKET_VARIANT", "us").lower()
+    if variant == "disabled":
+        polymarket_cfg: Optional[Union[PolymarketConfig, PolymarketUSConfig]] = None
+    elif variant == "legacy":
+        polymarket_cfg = PolymarketConfig()
+    else:  # "us" (default)
+        polymarket_cfg = PolymarketUSConfig()
+
     cfg = ArbiterConfig()
+    cfg.polymarket = polymarket_cfg
+
     if cfg.kalshi.private_key_path and not os.path.isabs(cfg.kalshi.private_key_path):
         config_root = _DOTENV_PATH.parent if _DOTENV_PATH else Path(__file__).resolve().parent.parent
         cfg.kalshi.private_key_path = str((config_root / cfg.kalshi.private_key_path).resolve())
