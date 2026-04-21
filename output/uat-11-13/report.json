@@ -1,0 +1,107 @@
+{
+  "test11": {
+    "result": "pass",
+    "screenshots": [
+      "C:/Users/sande/Documents/arbiter-dashboard/output/uat-11-13/test11-pre-arm.png",
+      "C:/Users/sande/Documents/arbiter-dashboard/output/uat-11-13/test11-armed.png",
+      "C:/Users/sande/Documents/arbiter-dashboard/output/uat-11-13/test11-reset.png"
+    ],
+    "preBadge": {
+      "text": "Disarmed",
+      "className": "utility-pill kill-switch-badge status-ok"
+    },
+    "armedBadge": {
+      "text": "ARMED",
+      "className": "utility-pill kill-switch-badge status-critical",
+      "armHidden": true,
+      "resetHidden": false,
+      "resetDisabled": true
+    },
+    "resetBadge": {
+      "text": "Disarmed",
+      "className": "utility-pill kill-switch-badge status-ok",
+      "armHidden": false,
+      "resetHidden": true
+    },
+    "armStatus": 200,
+    "resetStatus": 200,
+    "method": "API POST + WS-driven UI observation"
+  },
+  "test12": {
+    "result": "pass",
+    "screenshots": [
+      "C:/Users/sande/Documents/arbiter-dashboard/output/uat-11-13/test12-pre-shutdown.png",
+      "C:/Users/sande/Documents/arbiter-dashboard/output/uat-11-13/test12-shutting-down.png",
+      "C:/Users/sande/Documents/arbiter-dashboard/output/uat-11-13/test12-complete.png"
+    ],
+    "preState": {
+      "hidden": true,
+      "text": "Server shutting down…"
+    },
+    "duringState": {
+      "hidden": false,
+      "text": "Server shutting down — cancelling open orders",
+      "display": "block"
+    },
+    "completeState": {
+      "text": "Server shutdown complete",
+      "hidden": false
+    },
+    "method": "synthetic WS message injection via shimmed WebSocket",
+    "codePath": {
+      "renderer": "arbiter/web/dashboard.js:1449-1466 (renderShutdownBanner)",
+      "wsDispatch": "arbiter/web/dashboard.js:1142-1143 (shutdown_state handler)",
+      "markup": "index.html:195-196 (#shutdownBanner, #shutdownBannerText)"
+    }
+  },
+  "test13": {
+    "result": "partial",
+    "screenshots": [
+      "C:/Users/sande/Documents/arbiter-dashboard/output/uat-11-13/test13-idle-green.png",
+      "C:/Users/sande/Documents/arbiter-dashboard/output/uat-11-13/test13-warn-amber.png",
+      "C:/Users/sande/Documents/arbiter-dashboard/output/uat-11-13/test13-both-warn.png",
+      "C:/Users/sande/Documents/arbiter-dashboard/output/uat-11-13/test13-recovered-green.png"
+    ],
+    "tonesSeen": [
+      "ok",
+      "warn"
+    ],
+    "idleSnap": [
+      {
+        "text": "Kalshi: 10/10 · idle",
+        "className": "rate-limit-pill ok"
+      },
+      {
+        "text": "Polymarket: 20/20 · idle",
+        "className": "rate-limit-pill ok"
+      }
+    ],
+    "warnSnap": [
+      {
+        "text": "Kalshi: 4/10 · 5.0s cooldown",
+        "className": "rate-limit-pill warn"
+      },
+      {
+        "text": "Polymarket: 20/20 · idle",
+        "className": "rate-limit-pill ok"
+      }
+    ],
+    "critSnap": [
+      {
+        "text": "Kalshi: 0/10 · 30.0s cooldown",
+        "className": "rate-limit-pill warn"
+      },
+      {
+        "text": "Polymarket: 0/20 · 30.0s cooldown",
+        "className": "rate-limit-pill warn"
+      }
+    ],
+    "hostState": {
+      "existed": false,
+      "injected": true
+    },
+    "method": "synthetic WS rate_limit_state injection + DOM inspection",
+    "note": "dashboard-view-model.js intentionally maps to only `ok` and `warn` tones today. `crit` is reserved for circuit-open state (see comment at line 242). #rateLimitIndicators container is not rendered in index.html by default; the host element was injected for this UAT — flagging as a wiring gap."
+  },
+  "consoleMessages": []
+}
