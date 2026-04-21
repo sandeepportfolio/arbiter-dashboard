@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest", "--caps", "vision"]
+    },
+    "computer-use": {
+      "command": "npx",
+      "args": ["-y", "@github/computer-use-mcp", "--yolo"]
+    }
+  }
+}
