@@ -1,6 +1,8 @@
 import asyncio
 import inspect
 
+import pytest
+
 
 # Moved to root conftest — pytest 8+ deprecates pytest_plugins in non-top-level conftests.
 # Sandbox + live fixture modules are loaded as plugins here; individual test modules
@@ -22,12 +24,27 @@ def pytest_addoption(parser):
         default=False,
         help="Run live-marked scenarios against configured endpoints.",
     )
+    parser.addoption(
+        "--run-slow",
+        action="store_true",
+        default=False,
+        help="Run slow-marked integration tests (e.g. 30s scale tests).",
+    )
 
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "asyncio: run the test inside an asyncio event loop")
     config.addinivalue_line("markers", "live: live-fire scenario (opt-in via --live)")
     config.addinivalue_line("markers", "legacy_polymarket: legacy non-US CLOB tests")
+    config.addinivalue_line("markers", "slow: slow integration tests (excluded by default)")
+
+
+def pytest_collection_modifyitems(config, items):
+    if not config.getoption("--run-slow"):
+        skip_slow = pytest.mark.skip(reason="slow test — pass --run-slow to run")
+        for item in items:
+            if item.get_closest_marker("slow"):
+                item.add_marker(skip_slow)
 
 
 def pytest_pyfunc_call(pyfuncitem):
