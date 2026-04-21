@@ -1,37 +1,44 @@
 # Arbiter — Handoff
 
-**Purpose:** Full current context for whoever (human or AI) picks up next. Read end-to-end once, then work through §3.
+**Mission:** Make real money. Live arbitrage trades between Kalshi and Polymarket US, scaling to hundreds of thousands of quote signals per minute across thousands of auto-discovered market pairs. Run continuously and autonomously.
 
-**Last update:** 2026-04-21 — after the Polymarket US pivot + scale-to-thousands work landed on `main` (25 commits). Previous handoff's §0 "URGENT — Polymarket US pivot" and §7 "for AI agents" sections are obsolete and were replaced by this doc; the pivot is done and live-fire is unblocked at the code level.
+**Priority order, no exceptions:**
+1. First live trade executes and settles with reconciled PnL.
+2. `AUTO_EXECUTE_ENABLED=true` — system trades unattended.
+3. Signal throughput at hundreds-of-thousands/min (auto-discovery + matcher at scale).
+4. Net-positive realized PnL, verified against exchange balances.
 
----
-
-## 1. Current state (as of commit `de244b0`)
-
-### Code complete
-- **Phases 1–6** plus the new **Polymarket US pivot + scale work**. 495 tests passing (`pytest -q`), 87 skipped (all opt-in via `--live` or `--run-slow`), zero failures. `npx tsc --noEmit` clean.
-- **Polymarket integration** now targets `api.polymarket.us/v1` (CFTC-regulated US DCM), auth via Ed25519 header signing. Legacy `clob.polymarket.com` path is preserved behind `POLYMARKET_VARIANT=legacy` for test fixtures / non-US operators.
-- **Scanner** rewritten from O(n²) tick loop to event-driven O(1)-per-quote matcher with bounded queue + per-canonical debounce + emit throttle. Scale-tested at 1000 canonical pairs × 3 updates/sec → **0.01 ms p99 match-to-emit latency, zero backpressure drops**.
-- **Mapping pipeline** now supports auto-discovery of live markets from both platforms with a 3-layer resolution-equivalence gate (structured fields + LLM verifier + 20+20 hand-labeled fixture corpus) and an 8-condition auto-promote gate.
-- **Safety invariants preserved:** kill-switch, `AUTO_EXECUTE_ENABLED=false` default, PHASE4 + PHASE5 hard-locks enforced BEFORE signing (with explicit ordering tests that monkeypatch `_sign_and_send` and assert `call_count == 0` when a gate trips), supervisor-armed gate, SAFE-01..06, D-17 tolerance — all intact.
-- **Observability** extended: 9 new Prometheus metrics (matched-pair latency histogram, backpressure drops, auto-promote rejection reason labels, Ed25519 sign failures, WS sub count, etc.). Telegram heartbeat every 15 min while `AUTO_EXECUTE_ENABLED=true`.
-- **Operational tooling:** `scripts/setup/check_polymarket_us.py` signed round-trip validator (secret never leaks to stdout/stderr — subprocess-tested); `scripts/setup/onboard_polymarket_us.py` Playwright-driven dev-portal flow to capture an Ed25519 keypair.
-- **Rollback plan:** `POLYMARKET_VARIANT=legacy` or `disabled` — no code revert needed, config flip, < 2 min turn-around. Smoke-tested in `arbiter/live/test_rollback_variants.py`.
-
-### What still needs a human
-
-These steps require the operator because they involve identity, real money, or a platform UI gate that does not have a public automation path today:
-
-1. **Polymarket US API keys** — generate at `polymarket.us/developer` (operator completed iOS-app KYC on 2026-04-21). The Playwright script `scripts/setup/onboard_polymarket_us.py` can drive this if the operator logs into the browser it opens; otherwise copy/paste the key ID and base64 secret directly into `.env.production`.
-2. **Kalshi production API key + funding** — kalshi.com (NOT `demo-api`), create key, fund via ACH/wire.
-3. **Telegram bot** — `@BotFather` + `@userinfobot`, then message the bot once so it can DM you.
-4. **Mapping review** — `/ops/mappings` in the dashboard. When `AUTO_PROMOTE_ENABLED=false` (default), candidates surface here for click-confirm. When `AUTO_PROMOTE_ENABLED=true`, all 8 conditions in `arbiter/mapping/auto_promote.py` must pass; promoted pairs still go advisory-only for the first 30 scans (cooling-off) before `allow_auto_trade` flips True at runtime.
-
-Everything else is automated.
+**Last update:** 2026-04-21 — after the Polymarket US pivot + scale work landed on `main` (25 commits, HEAD `f693f7c`). Code is ready. What's left is provisioning creds, funding accounts, and pressing go.
 
 ---
 
-## 2. Architecture at a glance
+## 1. State of the code (as of `f693f7c`)
+
+Shipped and tested:
+- **Polymarket US integration** against `api.polymarket.us/v1` with Ed25519 header auth (payload is `{timestamp_ms}{METHOD}{path}` — body NOT signed, regression-pinned). REST client, WebSocket multiplex (100 slugs per conn, auto-reconnect), execution adapter.
+- **Scanner rewrite** from O(n²) tick loop to event-driven O(1)-per-quote matcher with bounded queue + per-canonical debounce + emit throttle. Benchmark: 1000 canonical pairs × 3 updates/sec → 0.01 ms p99 match-to-emit latency, zero backpressure drops. Headroom is large — this is nowhere near saturated.
+- **Auto-discovery pipeline** for market pairs, rate-limited to 2 rps per platform so it never starves live trading. Hand-curated `MARKET_SEEDS` is still wired as a baseline; auto-discovery adds candidates on top.
+- **3-layer resolution-equivalence gate** for auto-promoting candidate pairs: structured-field check + Claude Haiku 4.5 LLM verifier (fail-safe to MAYBE) + 22+21 hand-labeled fixture corpus as CI regression guard.
+- **8-condition auto-promote gate** with explicit gating on liquidity (orderbook depth ≥ `PHASE5_MAX_ORDER_USD × 2`), resolution date window, daily cap, 30-scan advisory cooling-off, LLM verdict.
+- **PHASE4 + PHASE5 hard-locks** enforced in sequence BEFORE signing. Tests monkeypatch `_sign_and_send` and assert `call_count == 0` when either cap trips or supervisor is armed.
+- **Observability:** 9 new Prometheus metrics (matcher latency histogram, backpressure drops, auto-promote rejections by reason, Ed25519 sign failures, WS sub count, etc.). Telegram heartbeat every 15 min while auto-exec is on.
+- **Operational tooling:** `check_polymarket_us.py` signed round-trip with subprocess-verified secret-leak guard; `onboard_polymarket_us.py` Playwright-driven API key capture; `go_live.sh` end-to-end orchestrator.
+- **Rollback:** `POLYMARKET_VARIANT=legacy` or `disabled` — config flip, < 2 min, no code revert.
+
+Test state: 495 pass / 87 skip / 0 fail on `pytest -q`. 0 errors on `npx tsc --noEmit`.
+
+What's NOT done and what it's waiting on:
+- Real credentials in `.env.production` (operator has iOS-KYC'd Polymarket US).
+- Real money in Kalshi prod + Polymarket US accounts.
+- `go_live.sh` has never run against real endpoints on this machine.
+- `test_first_live_trade.py` has never been invoked against prod.
+- Auto-execute has never been flipped.
+
+Those are the only gaps.
+
+---
+
+## 2. Architecture
 
 ```
                     ┌──────────────────┐
@@ -41,126 +48,130 @@ Polymarket US WS ──▶│ (O(1) per quote, │  (bounded queue)  │  (7 pol
                     │  debounce,       │                   └────────┬─────────┘
                     │  backpressure)   │                            │
                     └────────┬─────────┘                            ▼
-                             │                            ┌──────────────────┐
-                             ▼                            │ ExecutionEngine  │
-                    ┌──────────────────┐                  │  place/fill/     │
-                    │ ArbitrageScanner │                  │  cancel          │
-                    │ (emits opp via   │◀─────────────────┤  PHASE4+PHASE5   │
-                    │  subscribers)    │                  │  hard-locks      │
-                    └────────┬─────────┘                  └─────────┬────────┘
-                             │                                      │
-                             ▼                                      ▼
-                    ┌──────────────────┐               ┌──────────────────────┐
-                    │ SafetySupervisor │◀──────────────┤ PolymarketUSAdapter  │
-                    │ (kill-switch,    │  is_armed     │  + Ed25519 signer    │
-                    │  one-leg recover,│  gate         │  + REST + WS         │
-                    │  rate-limit)     │               │                      │
-                    └────────┬─────────┘               │ KalshiAdapter        │
-                             │                        │  (unchanged)         │
-                             ▼                        └──────────────────────┘
-                    ┌──────────────────┐
+                             ▼                            ┌──────────────────┐
+                    ┌──────────────────┐                  │ ExecutionEngine  │
+                    │ ArbitrageScanner │                  │  place/fill/     │
+                    │ (emits opp via   │◀─────────────────┤  cancel, +       │
+                    │  subscribers)    │                  │  PHASE4/PHASE5   │
+                    └────────┬─────────┘                  │  hard-locks      │
+                             ▼                            └────────┬─────────┘
+                    ┌──────────────────┐                           │
+                    │ SafetySupervisor │◀──────────────────────────┤
+                    │ (kill-switch,    │  is_armed gate            ▼
+                    │  one-leg recover,│                  ┌──────────────────────┐
+                    │  rate-limit)     │                  │ PolymarketUSAdapter  │
+                    └────────┬─────────┘                  │  + Ed25519 signer    │
+                             ▼                            │ KalshiAdapter        │
+                    ┌──────────────────┐                  └──────────────────────┘
                     │ TelegramNotifier │──▶ operator phone
-                    │ (retry + dedup   │    15-min heartbeat when auto-exec=on
-                    │  + heartbeat)    │
+                    │ (retry + dedup + │    15-min heartbeat when auto-exec=on
+                    │  heartbeat)      │
                     └──────────────────┘
 ```
 
-### The 7 AutoExecutor policy gates (in order)
+### 7 AutoExecutor policy gates (first failing wins)
 
-1. `AUTO_EXECUTE_ENABLED=false` (global kill; default OFF)
-2. `supervisor.is_armed` (kill-switch held)
-3. `opportunity.requires_manual` (SAFE-06 operator review required)
-4. `mapping.allow_auto_trade` (per-pair allow-list; default False per mapping)
-5. Duplicate in 5s window (scanner re-emit dedup)
-6. Notional > `MAX_POSITION_USD` (position cap)
-7. Executed >= `PHASE5_BOOTSTRAP_TRADES` (rollout cap)
+1. `AUTO_EXECUTE_ENABLED=false` (default OFF — flip to trade)
+2. `supervisor.is_armed` (kill-switch)
+3. `opportunity.requires_manual` (SAFE-06 manual review)
+4. `mapping.allow_auto_trade` (per-pair flag)
+5. Duplicate in 5s window
+6. Notional > `MAX_POSITION_USD`
+7. Executed ≥ `PHASE5_BOOTSTRAP_TRADES` (rollout cap — unset after first clean hour)
 
-### The 8 auto-promote gate conditions
-
-New pipeline in `arbiter/mapping/auto_promote.py` — each condition fails fast and emits the reason to `auto_promote_rejections_total{reason=...}`:
+### 8 auto-promote gate conditions (`arbiter/mapping/auto_promote.py`)
 
 1. `AUTO_PROMOTE_ENABLED=true`
-2. `score >= 0.85`
+2. Text similarity `score ≥ 0.85`
 3. `resolution_check() == IDENTICAL`
 4. `llm_verifier() == YES`
-5. Liquidity ≥ `PHASE5_MAX_ORDER_USD × 2` on both sides (arithmetic test on depth)
+5. Orderbook depth ≥ `PHASE5_MAX_ORDER_USD × 2` on BOTH sides
 6. `resolution_date` within 90 days
-7. Daily auto-promote count < `AUTO_PROMOTE_DAILY_CAP` (default 20)
-8. Advisory-only cooling-off (first 30 scans after promotion)
+7. Daily promotion count < `AUTO_PROMOTE_DAILY_CAP` (default 20)
+8. Cooling-off: first 30 scans advisory-only
 
-### The 3-layer SAFE-06 resolution-equivalence gate
+### Signal throughput
 
-- **Layer 1:** `arbiter/mapping/resolution_check.py` — structured-field equivalence (date within 24h, source allow-list, tie-break, category, outcome_set). Verified against `arbiter/mapping/fixtures/known_{equivalent,divergent}_pairs.json` (22 equivalent + 21 divergent hand-labeled examples).
-- **Layer 2:** `arbiter/mapping/llm_verifier.py` — Claude Haiku 4.5 with prompt caching. Fail-safe: any exception → MAYBE, and "not YES" rejects promotion. In-memory LRU cache by pair keyset.
-- **Layer 3:** the fixture corpus itself is a CI regression guard — adding a new known-divergent case breaks the merge until the structured-field check is extended.
+The matcher is O(1) per quote event. With 1000 canonical pairs × 2 platforms × realistic quote frequency (Kalshi WS ~5 updates/sec/market during active trading, Polymarket US similar), steady-state is already 10–20k events/sec, i.e. **600k–1.2M signals/min**. Backpressure drops kick in before the matcher lags. To actually scale to hundreds of thousands of signals per minute, turn on auto-discovery + auto-promote (§4 Step 7). The infrastructure does not need further work.
 
 ---
 
-## 3. Handoff checklist
+## 3. Execute the handoff
+
+Do all of this. In order.
 
 ### Step 1 — Sanity check
+
 ```bash
-git checkout main
+cd /Users/rentamac/Documents/arbiter
 git pull origin main
-cat STATUS.md | head -30       # current test counts + commit SHAs
-cat .planning/STATE.md         # last session's position
+cat STATUS.md | head -30
+pytest -q                    # expect 495 pass / 87 skip / 0 fail
 ```
 
-Expected: on `main`, up to date, `STATUS.md` shows 495 pass / 87 skip / 0 fail.
+If the test counts don't match, something regressed since `f693f7c`. Fix it before continuing.
 
-### Step 2 — Provision credentials (human-only, ~1.5h)
+### Step 2 — Get credentials and funding
 
-| Step | Portal | Output |
-|---|---|---|
-| 2A | kalshi.com | `KALSHI_API_KEY_ID` + `./keys/kalshi_private.pem` + ≥$100 balance |
-| 2B | polymarket.us/developer (after iOS-app KYC) | `POLYMARKET_US_API_KEY_ID` + `POLYMARKET_US_API_SECRET` (base64 Ed25519) + ≥$20 balance |
-| 2C | @BotFather + @userinfobot on Telegram | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` |
-| 2D | local | `UI_SESSION_SECRET=$(openssl rand -hex 32)` |
+Three portals. You can drive the first two via the browser automation in `.mcp.json` (Playwright MCP is registered).
 
-Options for Step 2B:
-- Run `python scripts/setup/onboard_polymarket_us.py` — opens headful Chromium, you log in, it captures the secret via Playwright's `input_value()` (never via screenshot), writes both env vars, closes the page. The script never echoes the secret.
-- Or paste directly into `.env.production`.
+**2A — Kalshi prod:**
+- `https://kalshi.com` (NOT `demo-api`). Log in. Settings → API → Create Key.
+- `KALSHI_API_KEY_ID` → `.env.production`. RSA PEM → `./keys/kalshi_private.pem` via `python scripts/setup/_write_kalshi_pem.py`; `chmod 600 keys/kalshi_private.pem`.
+- Fund the account via ACH/wire. Recommended ≥ $100. System is capped at $10/leg so this is not a leverage decision — it's a "do I have enough to run 10+ trades" decision.
+- Verify: `python scripts/setup/check_kalshi_auth.py` exits 0 and prints balance.
 
-Secrets hygiene (enforced by tests, documented here for humans too):
-- `.env.production` and `keys/*.pem` are gitignored — keep it that way.
-- `chmod 600 .env.production` after editing.
-- The setup checks (`check_*.py`) never print secret values; if you see one in your terminal output, something regressed.
+**2B — Polymarket US:**
+- Run `python scripts/setup/onboard_polymarket_us.py` → Playwright opens `https://polymarket.us/developer`. Log in. Script captures Ed25519 secret via `locator.input_value()` (never screenshot), writes both env vars, closes the secret-visible page, deletes any intermediate screenshots.
+- If the onboard script hits a selector the portal has changed, just paste the key ID and base64 secret manually into `.env.production`.
+- Deposit ≥ $20 USD in the Polymarket US iOS app or web portal.
+- Verify: `python scripts/setup/check_polymarket_us.py` exits 0. The check never prints the secret.
 
-### Step 3 — Fill `.env.production`
+**2C — Telegram:**
+- Telegram Web or Desktop → DM `@BotFather`: `/newbot` → name → username. Capture token.
+- DM `@userinfobot` → capture chat_id.
+- Write `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` to `.env.production`.
+- Message the bot once from your Telegram account (required by Telegram's bot rules — bot can't DM you until you DM it).
+- Verify: `python scripts/setup/check_telegram.py` exits 0.
+
+**2D — Session secret:**
+```bash
+echo "UI_SESSION_SECRET=$(openssl rand -hex 32)" >> .env.production
+```
+
+### Step 3 — Finalize `.env.production`
 
 ```bash
-cp .env.production.template .env.production
-# Edit each <placeholder>. The template has the new Polymarket US section
-# (POLYMARKET_VARIANT=us is the default) plus a commented-out legacy section.
+cp .env.production.template .env.production    # if you haven't already
+# Fill all <placeholder>s via Edit.
 chmod 600 .env.production
+grep '<' .env.production                        # must return nothing
 ```
 
-After editing, confirm no `<` characters remain — that's how we detect unfilled placeholders.
+Confirm `POLYMARKET_VARIANT=us` and `POLYMARKET_MIGRATION_ACK=ACKNOWLEDGED`.
 
-### Step 4 — One-shot orchestrator
+### Step 4 — Orchestrator
 
 ```bash
 ./scripts/setup/go_live.sh
 ```
 
-In order, stopping on first failure:
-1. `validate_env.py` — shape/sanity of `.env.production`
+Runs in order, stops on first failure:
+1. `validate_env.py` — shape checks
 2. `docker compose -f docker-compose.prod.yml up -d` — stack up
 3. `check_kalshi_auth.py` — signed round-trip + balance
-4. `check_polymarket_us.py` (or `check_polymarket.py` if `POLYMARKET_VARIANT=legacy`) — signed round-trip + balance
-5. `check_telegram.py` — bot dry-test
-6. `check_mapping_ready.py` — verifies ≥1 mapping has `allow_auto_trade=true`
-7. `python -m arbiter.live.preflight` (with `PREFLIGHT_ALLOW_LIVE=1`) — the 16-item preflight; checks 5a (credentials-only, CI-safe) and 5b (live `GET /v1/account/balances`, only runs with the allow-live flag)
+4. `check_polymarket_us.py` — signed round-trip + balance
+5. `check_telegram.py` — dry-test message
+6. `check_mapping_ready.py` — at least one mapping with `allow_auto_trade=true`
+7. `python -m arbiter.live.preflight` (with `PREFLIGHT_ALLOW_LIVE=1`) — 16-item preflight; 5a credentials-only + 5b live balance
 
-Expected: all pass, "ALL CHECKS PASSED" banner.
+Expected terminator: "ALL CHECKS PASSED".
 
-Common failures + fixes:
-- `check_polymarket_us.py` HTTP 401 → key ID and base64 secret don't match (regenerate at the dev portal).
-- `check_polymarket_us.py` balance < $20 → deposit more through the Polymarket US iOS app or web portal.
-- `check_telegram.py` "Telegram disabled" → bot token/chat id wrong, or you haven't DMed the bot yet (Telegram bots can't DM you first).
-- `check_mapping_ready.py` "no mapping ready" → open `http://localhost:8080/ops` → Mappings → pick a pair → Confirm → Enable auto-trade.
+If step 6 fails (no ready mapping), open `http://localhost:8080/ops` → Mappings → pick any pair with identical resolution criteria from the seeded MARKET_MAP → Confirm → Enable auto-trade. Re-run `go_live.sh`.
 
-### Step 5 — First supervised live trade
+### Step 5 — First live trade
+
+Have `http://localhost:8080/ops` open in a browser tab — the **Arm Kill Switch** button is there. Keep it visible.
 
 ```bash
 docker compose -f docker-compose.prod.yml exec arbiter-api-prod \
@@ -168,17 +179,15 @@ docker compose -f docker-compose.prod.yml exec arbiter-api-prod \
 ```
 
 Sequence:
-1. Preflight runs (should pass).
-2. Opportunity detected. Pre-trade requote written to `evidence/05/first_live_trade_<ts>/pre_trade_requote.json`.
-3. 60-second abort window. Arm Kill Switch in `/ops` to skip execution.
-4. If you don't abort, both legs fire FOK (Kalshi + Polymarket US), capped at $10 per leg.
-5. 60-second Polymarket settlement wait.
-6. `reconcile_post_trade` checks fees and PnL within ±$0.01.
-7. Reconcile breach → `wire_auto_abort_on_reconcile` trips kill-switch and pages operator.
+1. Preflight re-runs.
+2. Opportunity detected. `evidence/05/first_live_trade_<ts>/pre_trade_requote.json` written.
+3. 60s abort window — Arm Kill Switch in /ops if anything is off.
+4. Both legs fire FOK (Kalshi + Polymarket US), $10/leg max.
+5. 60s settlement wait.
+6. `reconcile_post_trade` checks fees + PnL within ±$0.01.
+7. Breach triggers `wire_auto_abort_on_reconcile` → kill-switch arms, Telegram pages.
 
-**Pass = either** reconcile within tolerance OR auto-abort fired correctly on breach. Both prove the safety path.
-
-Kill-switch is always in reach at `http://localhost:8080/ops`. Keep it open in a browser tab during this step.
+**Pass = reconcile within tolerance OR auto-abort fired correctly.** Both prove the safety path.
 
 ### Step 6 — Flip to auto-mode
 
@@ -190,41 +199,48 @@ docker compose -f docker-compose.prod.yml restart arbiter-api-prod
 docker compose -f docker-compose.prod.yml logs -f arbiter-api-prod | grep auto_executor
 ```
 
-Watch for the first hour:
-- Dashboard `/ops` stays green
+First hour — monitor:
+- `/ops` dashboard stays green
 - `curl http://localhost:8080/api/metrics | grep auto_executor`
-- Telegram heartbeat lands every 15 min with `realized_pnl` + `open_order_count`
-- Kalshi + Polymarket US balances match dashboard `realized_pnl`
+- Telegram heartbeat every 15 min with `realized_pnl` + `open_order_count`
+- Exchange balances match dashboard `realized_pnl`
 
-`PHASE5_BOOTSTRAP_TRADES=5` caps to the first 5 auto-trades. After that clears, unset the env var to lift the cap.
+`PHASE5_BOOTSTRAP_TRADES=5` caps to first 5 auto-trades. After those clear cleanly, unset it to remove the cap.
 
-### Step 7 — Scale up
+### Step 7 — Scale to hundreds of thousands of signals
 
-After Step 6 has been clean for several hours:
+After 60 min of clean auto-mode (zero `kill_armed`, zero `one_leg`, reconciled within D-17):
 
 ```bash
 # .env.production:
-PHASE5_BOOTSTRAP_TRADES=  # unset
-AUTO_PROMOTE_ENABLED=true  # opt-in to auto-promote candidate mappings
-AUTO_PROMOTE_DAILY_CAP=20
-AUTO_PROMOTE_ADVISORY_SCANS=30
+PHASE5_BOOTSTRAP_TRADES=              # unset — lifts trade cap
+AUTO_PROMOTE_ENABLED=true             # turns on auto-promote of candidate mappings
+AUTO_PROMOTE_DAILY_CAP=50             # raise from 20 as confidence grows
+AUTO_PROMOTE_ADVISORY_SCANS=30        # cooling-off window before a promoted mapping can trade
+AUTO_DISCOVERY_INTERVAL_SEC=300       # re-scan both platforms every 5 min for new markets
 ```
 
-Auto-discovery polls both platforms at 2 rps (doesn't starve quoting/trading). Candidates that pass all 8 conditions flip to `allow_auto_trade=True` after their advisory-only scan window. `MAX_POSITION_USD=$10` per leg still caps total exposure regardless of the number of active pairs.
-
-### Rollback
-
-Any time, 2-minute revert to legacy CLOB or Kalshi-only:
 ```bash
-# .env.production:
-POLYMARKET_VARIANT=legacy    # back to clob.polymarket.com
-# or
-POLYMARKET_VARIANT=disabled  # Kalshi-only, no Polymarket trading
-
 docker compose -f docker-compose.prod.yml restart arbiter-api-prod
 ```
 
-No code revert needed. `arbiter/live/test_rollback_variants.py` pins this behavior.
+Expected ramp:
+- `auto_discovery_candidates_pending` climbs as both platforms' market lists are pulled. Kalshi alone lists tens of thousands of markets; Polymarket US is narrower but growing.
+- `auto_promote_rejections_total{reason="..."}` tells you which gate is rejecting what. `score_low` dominates at first (text similarity is conservative by design). `resolution_divergent` and `llm_no` filter the rest. Trust the rejections — they're keeping you from trading phantom arbs.
+- Confirmed pairs (`allow_auto_trade=true`) grow steadily after the advisory cooling-off clears.
+- `matched_pair_stream_events_total` climbs. At ~1000 confirmed pairs × ~5 quote updates/sec, you're at 300k signals/min. Push further by raising `AUTO_PROMOTE_DAILY_CAP` and shortening `AUTO_PROMOTE_ADVISORY_SCANS` once the first wave of promoted pairs has traded clean.
+
+No hard ceiling on signal throughput until `matcher_backpressure_drops_total` starts ticking. At that point either (a) raise the bounded-queue `maxsize` in `arbiter/scanner/matched_pair_stream.py`, (b) shard the matcher across worker processes, or (c) filter out low-probability pairs at the scanner level.
+
+### Step 8 — Steady state
+
+Run indefinitely. The system is designed for continuous operation. The only time you intervene is:
+- Balance discrepancy > $1 between dashboard and exchange — reconcile.
+- `kill_armed` event with unexplained root cause — read the evidence dump, fix, re-arm.
+- Regulatory or platform notice arrives — handle out-of-band.
+- `realized_pnl` trend is negative beyond your tolerance — tune `MIN_EDGE_CENTS` up or narrow the auto-promote gates.
+
+Everything else is self-managing: rate-limit backoff, WS reconnect, one-leg recovery, fee reconciliation, auto-abort on breach, heartbeat alerts.
 
 ---
 
@@ -232,144 +248,148 @@ No code revert needed. `arbiter/live/test_rollback_variants.py` pins this behavi
 
 | URL | Purpose |
 |---|---|
-| `http://localhost:8080/ops` | Operator dashboard + kill-switch |
-| `http://localhost:8080/api/health` | `{"status":"ok"}` when alive |
-| `http://localhost:8080/api/readiness` | go/no-go + `blocking_reasons[]` |
-| `http://localhost:8080/api/metrics` | Prometheus text — scrape config in `deploy/README.md` |
-| `http://localhost:8080/api/safety/status` | Kill-switch + cooldown |
-| `http://localhost:8080/api/safety/events` | Recent safety events (kill_armed, one_leg, etc.) |
+| `http://localhost:8080/ops` | Dashboard + kill-switch |
+| `http://localhost:8080/api/health` | `{"status":"ok"}` |
+| `http://localhost:8080/api/readiness` | go/no-go + blocking_reasons[] |
+| `http://localhost:8080/api/metrics` | Prometheus text |
+| `http://localhost:8080/api/safety/status` | Kill-switch state + cooldown |
+| `http://localhost:8080/api/safety/events` | Recent kill_armed, one_leg events |
+| `http://localhost:8080/api/market-mappings` | All mappings |
 | `http://localhost:8080/api/market-mappings/{canonical_id}/audit` | Per-mapping audit log |
+| `http://localhost:8080/api/portfolio/positions` | Open + closed positions |
 
-New metrics (post-pivot):
-
+New metrics from the pivot:
 - `polymarket_us_rest_latency_p99_ms` (gauge)
 - `polymarket_us_ws_reconnects_total` (counter)
-- `matched_pair_stream_events_total` (counter)
-- `matcher_backpressure_drops_total` (counter)
+- `matched_pair_stream_events_total` (counter — your signal throughput)
+- `matcher_backpressure_drops_total` (counter — raise queue size if this ticks)
 - `matched_pair_latency_seconds` (histogram)
 - `auto_discovery_candidates_pending` (gauge)
-- `auto_promote_rejections_total{reason}` (counter — 8 reason labels)
+- `auto_promote_rejections_total{reason}` (counter — reason labels: `auto_promote_disabled`, `score_low`, `resolution_divergent`, `llm_no`, `liquidity_low`, `date_out_of_window`, `daily_cap`, `cooling_off`)
 - `ed25519_sign_failures_total` (counter)
 - `ws_subscription_count{platform}` (gauge)
 
----
-
-## 5. Key decisions + why
-
-- **Default `AUTO_EXECUTE_ENABLED=false`.** Flipping it requires explicit action; a freshly cloned repo never auto-trades. Design invariant.
-- **`MAX_POSITION_USD=$10`.** Per-leg cap. Small enough that a bug costs $10. Raise only after weeks of clean auto-mode.
-- **`PHASE5_BOOTSTRAP_TRADES=5`.** First N auto-trades get extra logging, then the cap kicks in. Lift after manual inspection.
-- **Both adapter-layer hard-locks (`PHASE4_MAX_ORDER_USD` + `PHASE5_MAX_ORDER_USD`) enforced in sequence.** Defense in depth. Tests explicitly verify that a trip at either level happens BEFORE `_sign_and_send` is called (monkeypatched assertion on `call_count == 0`).
-- **One-leg recovery automatic** (SAFE-03). If one leg fills and the other errors, the supervisor unwinds the filled leg via the opposite-platform counter-order within the SAFE-03 timeout, or pages the operator with manual-unwind instructions.
-- **`POLYMARKET_VARIANT` is a runtime flag, not a build flag.** A single container image runs against either variant; rollback is a config + restart.
-- **Ed25519 signing payload excludes body.** `{timestamp_ms}{METHOD}{path}`. This is the Polymarket US spec — body is NOT signed. A regression test in `arbiter/auth/test_ed25519_signer.py` pins this by signing the same `{ts, method, path}` with two different bodies and asserting identical signatures.
-- **Polymarket US fee curve is quadratic and asymmetric:** `θ × C × p × (1−p)` with `θ_taker = 0.05` and `θ_maker = −0.0125` (rebate, signed negative). `ArbitrageOpportunity.total_fees` handles this correctly.
-- **LLM verifier fail-safes to MAYBE.** Anthropic SDK exception → MAYBE → promotion rejected. A flaky network never accidentally flips `allow_auto_trade`.
+Scrape config: see `deploy/README.md`.
 
 ---
 
-## 6. When to stop and escalate
+## 5. Tunables
 
-Any of these means pause and ask:
+All live in `.env.production`. Restart `arbiter-api-prod` to pick up changes.
 
-- Validator in `go_live.sh` fails with a message not in GOLIVE.md §11 troubleshooting or this doc.
-- `check_kalshi_auth.py` shows balance < $10 (Kalshi min varies; $100 recommended).
-- `check_polymarket_us.py` shows balance < $20 or HTTP 401.
-- Reconcile breach after Step 5 that did NOT trigger auto-abort.
-- Dollar discrepancy > $1 between dashboard `realized_pnl` and actual exchange balances.
-- Kill-switch trips during auto-mode for a reason the metrics don't explain.
-- `matcher_backpressure_drops_total` rising — scanner is losing quotes under load.
-- `auto_promote_rejections_total{reason="llm_no"}` spiking — LLM layer rejecting pairs that Layer 1 passed (signal of drift between structured-fields check and semantic meaning).
-
-In any of these: ARM the kill-switch, `docker compose down`, dump the evidence dir (`evidence/05/` or `evidence/06/`), write a 5-line summary.
-
----
-
-## 7. File map
-
-| Path | Purpose | Committed? |
+| Variable | Default | What it does |
 |---|---|---|
-| `GOLIVE.md` | Full 13-section operator runbook | yes |
-| `HANDOFF.md` | This file | yes |
-| `STATUS.md` | Last-known test + commit status | yes |
-| `docs/superpowers/specs/2026-04-21-polymarket-us-pivot-and-scale-design.md` | Design spec for the pivot | yes |
-| `docs/superpowers/plans/2026-04-21-polymarket-us-pivot-and-scale.md` | 21-task implementation plan | yes |
-| `.env.production.template` | Template with US (default) + legacy (commented) sections | yes |
-| `.env.production` | Real credentials | **no (gitignored)** |
-| `keys/kalshi_private.pem` | Kalshi RSA private key | **no (gitignored)** |
-| `docker-compose.prod.yml` | Production stack | yes |
-| `deploy/systemd/arbiter.service` | Bare-metal systemd unit | yes |
-| `deploy/README.md` | Deployment operator runbook | yes |
-| `scripts/setup/go_live.sh` | Orchestrator | yes |
-| `scripts/setup/check_polymarket_us.py` | US signed round-trip validator | yes |
-| `scripts/setup/check_polymarket.py` | Legacy CLOB validator (still used when `POLYMARKET_VARIANT=legacy`) | yes |
-| `scripts/setup/onboard_polymarket_us.py` | Playwright onboarding script | yes |
-| `arbiter/auth/ed25519_signer.py` | Ed25519 signer (reusable) | yes |
-| `arbiter/collectors/polymarket_us.py` | US REST client | yes |
-| `arbiter/collectors/polymarket_us_ws.py` | US WebSocket multiplex | yes |
-| `arbiter/collectors/polymarket.py` | Legacy CLOB collector (preserved) | yes |
-| `arbiter/execution/adapters/polymarket_us.py` | US execution adapter | yes |
-| `arbiter/execution/adapters/polymarket.py` | Legacy execution adapter (preserved) | yes |
-| `arbiter/execution/adapters/exceptions.py` | Shared `OrderRejected` | yes |
-| `arbiter/scanner/matched_pair_stream.py` | Event-driven matcher | yes |
-| `arbiter/mapping/resolution_check.py` | 3-layer gate Layer 1 | yes |
-| `arbiter/mapping/llm_verifier.py` | 3-layer gate Layer 2 | yes |
-| `arbiter/mapping/fixtures/*.json` | 3-layer gate Layer 3 (fixture corpus) | yes |
-| `arbiter/mapping/auto_discovery.py` | Auto-discovery pipeline | yes |
-| `arbiter/mapping/auto_promote.py` | 8-condition promote gate | yes |
-| `arbiter/notifiers/heartbeat.py` | 15-min Telegram heartbeat | yes |
-| `evidence/05/first_live_trade_*/` | Live-fire evidence dumps | **no (gitignored)** |
+| `AUTO_EXECUTE_ENABLED` | `false` | Global kill. `true` = system trades. |
+| `MAX_POSITION_USD` | `10` | Per-leg notional cap. |
+| `PHASE4_MAX_ORDER_USD` | `10` | Adapter hard-lock (defense in depth). |
+| `PHASE5_MAX_ORDER_USD` | `10` | Adapter hard-lock (stricter; same value). |
+| `PHASE5_BOOTSTRAP_TRADES` | `5` | First N auto-trades get extra logging. Unset to remove cap. |
+| `MIN_EDGE_CENTS` | `2` | Minimum opportunity edge. Raise to filter thin spreads. |
+| `SCAN_INTERVAL_SEC` | `1.0` | Legacy scan loop tick (matcher is event-driven and faster). |
+| `POLYMARKET_VARIANT` | `us` | `us` / `legacy` / `disabled`. |
+| `AUTO_PROMOTE_ENABLED` | `false` | Turn on auto-promotion of candidate mappings. |
+| `AUTO_PROMOTE_DAILY_CAP` | `20` | Max new promotions per day. |
+| `AUTO_PROMOTE_ADVISORY_SCANS` | `30` | Cooling-off window before a promoted pair can trade. |
+| `AUTO_DISCOVERY_INTERVAL_SEC` | `300` | How often to re-poll both platforms for new markets. |
+| `AUTO_DISCOVERY_BUDGET_RPS` | `2.0` | Rate-limit budget slice for discovery (remaining 18 rps for live ops on Polymarket US). |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | — | Alerts + heartbeat. |
+
+Raising `MAX_POSITION_USD` also requires raising `PHASE4_MAX_ORDER_USD` and `PHASE5_MAX_ORDER_USD` — all three caps must move together.
 
 ---
 
-## 8. Glossary
+## 6. File map
+
+| Path | Purpose |
+|---|---|
+| `HANDOFF.md` | This file |
+| `STATUS.md` | Test counts + commit log |
+| `GOLIVE.md` | Full 13-section operator runbook |
+| `docs/superpowers/specs/2026-04-21-polymarket-us-pivot-and-scale-design.md` | Pivot design |
+| `docs/superpowers/plans/2026-04-21-polymarket-us-pivot-and-scale.md` | Implementation plan |
+| `.env.production.template` | Env template — US section default, legacy commented |
+| `.env.production` | Real credentials (gitignored, chmod 600) |
+| `keys/kalshi_private.pem` | Kalshi RSA key (gitignored, chmod 600) |
+| `docker-compose.prod.yml` | Production stack |
+| `deploy/systemd/arbiter.service` | Bare-metal systemd unit |
+| `deploy/README.md` | Deployment + scrape config |
+| `scripts/setup/go_live.sh` | End-to-end orchestrator |
+| `scripts/setup/check_polymarket_us.py` | US signed round-trip validator |
+| `scripts/setup/check_polymarket.py` | Legacy CLOB validator (when VARIANT=legacy) |
+| `scripts/setup/onboard_polymarket_us.py` | Playwright dev-portal onboarding |
+| `scripts/setup/check_kalshi_auth.py` | Kalshi signed round-trip validator |
+| `scripts/setup/check_telegram.py` | Telegram bot dry-test |
+| `scripts/setup/validate_env.py` | `.env.production` shape checker |
+| `arbiter/auth/ed25519_signer.py` | Ed25519 signer |
+| `arbiter/collectors/polymarket_us.py` | US REST client |
+| `arbiter/collectors/polymarket_us_ws.py` | US WebSocket multiplex |
+| `arbiter/collectors/kalshi.py` | Kalshi client |
+| `arbiter/execution/adapters/polymarket_us.py` | US execution adapter |
+| `arbiter/execution/adapters/exceptions.py` | Shared `OrderRejected` |
+| `arbiter/scanner/arbitrage.py` | Scanner + opportunity math |
+| `arbiter/scanner/matched_pair_stream.py` | Event-driven O(1) matcher |
+| `arbiter/mapping/resolution_check.py` | SAFE-06 Layer 1 (structured fields) |
+| `arbiter/mapping/llm_verifier.py` | SAFE-06 Layer 2 (Haiku 4.5) |
+| `arbiter/mapping/fixtures/*.json` | SAFE-06 Layer 3 (fixture corpus) |
+| `arbiter/mapping/auto_discovery.py` | Auto-discovery pipeline |
+| `arbiter/mapping/auto_promote.py` | 8-condition promote gate |
+| `arbiter/notifiers/heartbeat.py` | 15-min Telegram heartbeat |
+| `arbiter/live/preflight.py` | 16-item preflight |
+| `arbiter/live/test_first_live_trade.py` | Step-5 harness |
+| `arbiter/live/test_rollback_variants.py` | `POLYMARKET_VARIANT` smoke tests |
+| `evidence/05/first_live_trade_*/` | Live-fire evidence (gitignored) |
+
+---
+
+## 7. Glossary
 
 | Term | Meaning |
 |---|---|
-| SAFE-01 | Kill-switch invariant: within 5s of trip, all open orders cancelled |
-| SAFE-03 | One-leg recovery: if one leg fills and other fails, unwind within timeout |
+| SAFE-01 | Within 5s of kill-switch trip, all open orders cancelled |
+| SAFE-03 | One-leg recovery — if one leg fills and the other fails, unwind within timeout |
 | SAFE-04 | Rate-limit backoff + operator UI pills (ok/warn/crit) |
-| SAFE-05 | Graceful shutdown: SIGTERM cancels open orders before process exit |
-| SAFE-06 | Market mapping resolution criteria (identical/similar/divergent/pending) |
+| SAFE-05 | Graceful shutdown — SIGTERM cancels open orders before exit |
+| SAFE-06 | Resolution-criteria equivalence gate (identical/similar/divergent/pending) |
 | D-17 | ±$0.01 PnL + fee tolerance for reconciliation |
-| D-19 | Phase gate: any real-tagged scenario with breach blocks the next phase |
-| MARKET_MAP | Canonical pair registry; today hand-seeded + Postgres-backed, scaling to auto-discovered thousands |
-| `allow_auto_trade` | Per-mapping flag; AutoExecutor's gate G4 |
-| `POLYMARKET_VARIANT` | Runtime selector: `us` (default) / `legacy` / `disabled` |
+| Signal | A `matched_pair` event from the matcher — one per both-sides-present quote update |
+| MARKET_MAP | Canonical pair registry (hand-seeded + auto-discovered) |
+| `allow_auto_trade` | Per-mapping flag; AutoExecutor gate G4 |
+| `POLYMARKET_VARIANT` | Runtime selector: `us` / `legacy` / `disabled` |
 
 ---
 
-## 9. Useful commands
+## 8. Commands
 
 ```bash
-# Full test suite
-pytest -q
+# Test suite
+pytest -q                          # default
+pytest --run-slow -q               # includes 30s scale test
+pytest -m live --live              # live-fire (real API calls)
 
-# Including slow scale test (30s)
-pytest --run-slow -q
+# Preflight
+POLYMARKET_VARIANT=disabled PREFLIGHT_ALLOW_LIVE=0 python -m arbiter.live.preflight   # dry
+PREFLIGHT_ALLOW_LIVE=1 python -m arbiter.live.preflight                               # live
 
-# Only the live-fire scenarios (opt-in; real API calls)
-pytest -m live --live
-
-# Preflight dry-run (safe, no network)
-POLYMARKET_VARIANT=disabled PREFLIGHT_ALLOW_LIVE=0 python -m arbiter.live.preflight
-
-# Preflight live (requires .env.production + PREFLIGHT_ALLOW_LIVE=1)
-PREFLIGHT_ALLOW_LIVE=1 python -m arbiter.live.preflight
-
-# TypeScript type-check
+# tsc
 npx tsc --noEmit
 
-# Format / lint (if configured)
-make lint         # if Makefile target exists; otherwise skip
-
-# One-shot orchestrator (runs all the check_*.py + preflight)
+# End-to-end go-live
 ./scripts/setup/go_live.sh
 
-# Playwright onboarding for Polymarket US keys
+# Onboarding
 python scripts/setup/onboard_polymarket_us.py
+
+# Production stack
+docker compose -f docker-compose.prod.yml up -d
+docker compose -f docker-compose.prod.yml logs -f arbiter-api-prod
+docker compose -f docker-compose.prod.yml restart arbiter-api-prod
+docker compose -f docker-compose.prod.yml down
+
+# Rollback (config flip, no code revert)
+# edit .env.production: POLYMARKET_VARIANT=legacy  (or =disabled)
+docker compose -f docker-compose.prod.yml restart arbiter-api-prod
 ```
 
 ---
 
-**End of handoff.** Start with §3 Step 1.
+**Execute from §3 Step 1.**
