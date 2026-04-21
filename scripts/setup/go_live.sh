@@ -93,9 +93,17 @@ if ! python scripts/setup/check_kalshi_auth.py; then
 fi
 
 # ─── 4. Polymarket wallet ─────────────────────────────────────────────
-step "4. Polymarket wallet + USDC balance + CLOB auth"
-if ! python scripts/setup/check_polymarket.py; then
-    fail "Polymarket check failed — see output above"
+step "4. Polymarket wallet / credentials check"
+# Task 17: route to check_polymarket_us.py for US DCM variant, legacy otherwise.
+_POLY_VARIANT="${POLYMARKET_VARIANT:-legacy}"
+if [ "$_POLY_VARIANT" = "us" ]; then
+    if ! python scripts/setup/check_polymarket_us.py; then
+        fail "Polymarket US check failed — see output above"
+    fi
+else
+    if ! python scripts/setup/check_polymarket.py; then
+        fail "Polymarket check failed — see output above"
+    fi
 fi
 
 # ─── 5. Telegram dry-test ─────────────────────────────────────────────
