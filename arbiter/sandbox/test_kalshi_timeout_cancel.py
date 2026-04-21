@@ -351,10 +351,20 @@ async def test_kalshi_timeout_triggers_cancel_via_client_order_id(
     )
 
     # Verification: order should no longer appear as open after cancel.
-    post_orphans = await adapter.list_open_orders_by_client_id(effective_client_order_id)
+    # Kalshi demo is eventually-consistent on the resting-orders list endpoint:
+    # a DELETE can return 200 but list_open_orders may still include the order
+    # for 1-3 seconds afterward. Poll for up to 5 seconds to tolerate that lag
+    # (the GET /portfolio/orders/{id} endpoint reports status="canceled"
+    # immediately; it's the list endpoint that lags).
+    post_orphans = []
+    for _ in range(10):
+        post_orphans = await adapter.list_open_orders_by_client_id(effective_client_order_id)
+        if not post_orphans:
+            break
+        await asyncio.sleep(0.5)
     assert not post_orphans, (
-        f"Cancel did not stick: list_open_orders_by_client_id still returns an open "
-        f"order after cancel. post_orphans: {post_orphans}"
+        f"Cancel did not stick after 5s: list_open_orders_by_client_id still returns an open "
+        f"order. post_orphans: {post_orphans}"
     )
 
     # Evidence + scenario manifest.

@@ -402,8 +402,29 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     except NotImplementedError:
         logger.info(
             "signal.add_signal_handler unavailable on this platform; "
-            "relying on KeyboardInterrupt for shutdown",
+            "installing SIGBREAK via signal.signal() for CTRL_BREAK_EVENT "
+            "compatibility (SAFE-05 graceful-shutdown subprocess test relies "
+            "on this for Windows CI)",
         )
+        # Windows fallback: synchronous signal.signal() handler that schedules
+        # the shutdown on the running loop. SIGBREAK is raised by CTRL_BREAK_EVENT
+        # on processes created with CREATE_NEW_PROCESS_GROUP — which is how
+        # Scenario 9 sends the shutdown signal. Without this, CTRL_BREAK falls
+        # through Python's default handler and terminates the process with
+        # STATUS_CONTROL_C_EXIT (0xC000013A) before any shutdown sequence runs.
+        loop = asyncio.get_event_loop()
+        def _win_signal_handler(sig_num, _frame):
+            try:
+                sig_enum = signal.Signals(sig_num)
+            except (ValueError, AttributeError):
+                sig_enum = sig_num
+            loop.call_soon_threadsafe(handle_shutdown, sig_enum)
+        for sig in (getattr(signal, "SIGBREAK", None), signal.SIGINT, signal.SIGTERM):
+            if sig is not None:
+                try:
+                    signal.signal(sig, _win_signal_handler)
+                except (ValueError, OSError):
+                    pass
 
     # Wait for shutdown signal.
     await shutdown_event.wait()
