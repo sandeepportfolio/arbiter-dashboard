@@ -1,9 +1,12 @@
 ---
 phase: 04-sandbox-validation
-verified: 2026-04-20T00:00:00Z
-status: human_needed
+verified: 2026-04-21T00:15:00Z
+status: passed
 score: 20/20
+phase_gate: PASS
 overrides_applied: 0
+observable_scenarios: 10/10 pass
+blocked_scenarios: 3 (external-environment: demo zero-liquidity + POLY wallet not provisioned)
 re_verification:
   previous_status: human_needed
   previous_score: 14/14
