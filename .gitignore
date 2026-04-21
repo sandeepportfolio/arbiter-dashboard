@@ -16,3 +16,15 @@ keys/kalshi_demo_private.pem
 # Phase 5 live-trading credentials + evidence
 .env.production
 evidence/05/
+
+# Orchestrator / agent workspaces (not part of the app)
+.claude/
+.superpowers/
+
+# Playwright isolated profile caches (regenerated on each run)
+.playwright-*/
+
+# Runtime logs (structured logging writes to stdout; file logs are local-only)
+logs/
+output/*.log
+output/*.err
