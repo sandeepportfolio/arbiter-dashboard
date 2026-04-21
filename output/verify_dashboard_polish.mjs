@@ -84,6 +84,12 @@ async function auditScenario(browser, scenario) {
         const cardRect = rectData(card);
         const actionButtons = [...card.querySelectorAll('.action-button')].map((button) => {
           const buttonRect = rectData(button);
+          const buttonStyle = getComputedStyle(button);
+          const hiddenDisclosure = Boolean(button.closest('details:not([open])'));
+          const hidden = hiddenDisclosure || !buttonRect || buttonRect.width < 1 || buttonRect.height < 1 || buttonStyle.display === 'none' || buttonStyle.visibility === 'hidden';
+          if (hidden) {
+            return null;
+          }
           const buttonOverflow = !!cardRect && !!buttonRect && (
             buttonRect.left < cardRect.left - 1 ||
             buttonRect.right > cardRect.right + 1 ||
@@ -98,7 +104,7 @@ async function auditScenario(browser, scenario) {
             scrollHeight: button.scrollHeight,
             buttonOverflow,
           };
-        });
+        }).filter(Boolean);
         return {
           id: card.getAttribute('data-manual-id') || card.getAttribute('data-incident-id') || card.getAttribute('data-mapping-id') || '',
           text: card.textContent.replace(/\s+/g, ' ').trim(),
@@ -121,6 +127,20 @@ async function auditScenario(browser, scenario) {
       heroStatus: (() => {
         const el = document.querySelector('.hero-status');
         return el ? { clientWidth: el.clientWidth, scrollWidth: el.scrollWidth } : null;
+      })(),
+      accessPill: (() => {
+        const pill = document.querySelector('.pill-access');
+        const value = pill?.querySelector('.value');
+        const primary = pill?.querySelector('.value-primary');
+        const secondary = pill?.querySelector('.value-secondary');
+        return pill ? {
+          pillRect: rectData(pill),
+          valueRect: rectData(value),
+          primaryRect: rectData(primary),
+          secondaryRect: rectData(secondary),
+          secondaryClientWidth: secondary?.clientWidth || 0,
+          secondaryScrollWidth: secondary?.scrollWidth || 0,
+        } : null;
       })(),
       firstLogEntry: (() => {
         const entry = document.querySelector('.log-entry');
@@ -188,23 +208,70 @@ async function auditScenario(browser, scenario) {
         const categoryAtlas = document.querySelector('#logCategoryAtlas');
         const filterBar = document.querySelector('#logFilterBar');
         const firstEntry = document.querySelector('#logTimeline .log-entry');
+        const summaryRail = document.querySelector('.log-stage-summary #logCategoryAtlas');
+        const atlasAside = document.querySelector('.log-atlas #logCategoryAtlas');
         return categoryAtlas ? {
           categoryInteractive: Boolean(categoryAtlas.querySelector('button, [role="button"], a[href]')),
           categoryCardCount: categoryAtlas.children.length,
           filterButtonCount: filterBar ? filterBar.querySelectorAll('button').length : 0,
           firstEntryRect: rectData(firstEntry),
+          summaryInTopRail: Boolean(summaryRail),
+          summaryStillInAside: Boolean(atlasAside),
         } : null;
+      })(),
+      opsQueues: (() => {
+        const panels = [...document.querySelectorAll('#opsSection > article')];
+        const manualQueue = document.querySelector('#manualQueue');
+        const incidentList = document.querySelector('#incidentList');
+        return panels.length ? {
+          panelRects: panels.map(rectData).filter(Boolean),
+          manualOverflowY: manualQueue ? getComputedStyle(manualQueue).overflowY : null,
+          incidentOverflowY: incidentList ? getComputedStyle(incidentList).overflowY : null,
+        } : null;
+      })(),
+      emergencyControls: (() => {
+        const toolbar = document.querySelector('#killSwitchToolbar');
+        const panel = document.querySelector('[data-kill-switch-panel]');
+        const oneLeg = document.querySelector('.desk-shell > #oneLegAlertPanel');
+        const rect = rectData(toolbar);
+        return {
+          toolbarInActions: Boolean(document.querySelector('.app-actions #killSwitchToolbar')),
+          toolbarVisible: Boolean(toolbar && rect && rect.width > 1 && rect.height > 1 && !toolbar.classList.contains('hidden')),
+          panelPresent: Boolean(panel),
+          oneLegStandalone: Boolean(oneLeg),
+        };
       })(),
       infraPanels: (() => {
         const infraPanels = [...document.querySelectorAll('#infraSection > article')];
         const mappingList = document.querySelector('#mappingList');
         const collectorList = document.querySelector('#collectorList');
+        const mappingControls = document.querySelector('#mappingControls');
+        const mappingSelect = mappingList?.querySelector('.criteria-match-select');
+        const closedDisclosureBody = mappingList?.querySelector('.mapping-disclosure:not([open]) .mapping-disclosure-body');
+        const portfolioPanel = document.querySelector('#portfolioPanel');
+        const portfolioBadge = document.querySelector('#portfolioExposureBadge');
         return infraPanels.length ? {
           panelRects: infraPanels.map(rectData).filter(Boolean),
           mappingOverflowY: mappingList ? getComputedStyle(mappingList).overflowY : null,
           collectorOverflowY: collectorList ? getComputedStyle(collectorList).overflowY : null,
           mappingScrollHeight: mappingList?.scrollHeight || 0,
           mappingClientHeight: mappingList?.clientHeight || 0,
+          mappingRowRects: [...(mappingList?.querySelectorAll('.mapping-card') || [])].slice(0, 3).map(rectData).filter(Boolean),
+          mappingSearchPresent: Boolean(mappingControls?.querySelector('#mappingSearchInput')),
+          mappingStatusFilterCount: mappingControls?.querySelectorAll('[data-mapping-filter-group="status"]').length || 0,
+          mappingTradeFilterCount: mappingControls?.querySelectorAll('[data-mapping-filter-group="trade"]').length || 0,
+          mappingSelectStyle: mappingSelect ? {
+            colorScheme: getComputedStyle(mappingSelect).colorScheme,
+            color: getComputedStyle(mappingSelect).color,
+            backgroundColor: getComputedStyle(mappingSelect).backgroundColor,
+          } : null,
+          mappingOptionStyles: mappingSelect ? [...mappingSelect.options].map((option) => ({
+            color: getComputedStyle(option).color,
+            backgroundColor: getComputedStyle(option).backgroundColor,
+          })) : [],
+          closedDisclosureBodyDisplay: closedDisclosureBody ? getComputedStyle(closedDisclosureBody).display : null,
+          portfolioPanelClasses: portfolioPanel ? [...portfolioPanel.classList] : [],
+          portfolioBadgeClasses: portfolioBadge ? [...portfolioBadge.classList] : [],
         } : null;
       })(),
     };
@@ -236,6 +303,12 @@ const scenarios = [
     name: 'mobile-public',
     url: 'http://127.0.0.1:8090/',
     context: devices['iPhone 13'],
+  },
+  {
+    name: 'mobile-ops-authenticated',
+    url: 'http://127.0.0.1:8090/?route=%2Fops',
+    context: devices['iPhone 13'],
+    opsAuth: true,
   },
 ];
 
@@ -321,8 +394,20 @@ for (const result of results) {
     if (audit.activityAtlas.filterButtonCount < 2) {
       failures.push(`${name}: activity atlas filter rail is missing category controls.`);
     }
+    if (!audit.activityAtlas.summaryInTopRail || audit.activityAtlas.summaryStillInAside) {
+      failures.push(`${name}: atlas summary is not promoted into the top summary rail.`);
+    }
     if (name.startsWith('desktop') && audit.activityAtlas.firstEntryRect?.height > 140) {
       failures.push(`${name}: activity atlas rows are still too tall for desktop density.`);
+    }
+  }
+  if (audit.opsQueues && name.startsWith('desktop')) {
+    const heights = audit.opsQueues.panelRects.map((rect) => rect.height);
+    if (heights.length >= 2 && Math.abs(heights[0] - heights[1]) > 8) {
+      failures.push(`${name}: PredictIt operator queue and incident queue panels are not height-matched.`);
+    }
+    if (!['auto', 'scroll'].includes(audit.opsQueues.manualOverflowY) || !['auto', 'scroll'].includes(audit.opsQueues.incidentOverflowY)) {
+      failures.push(`${name}: ops queues are not internally scrollable.`);
     }
   }
   if (audit.infraPanels) {
@@ -336,6 +421,26 @@ for (const result of results) {
     if (!['auto', 'scroll'].includes(audit.infraPanels.collectorOverflowY)) {
       failures.push(`${name}: platform health list is not internally scrollable.`);
     }
+    if (!audit.infraPanels.mappingSearchPresent || audit.infraPanels.mappingStatusFilterCount < 4 || audit.infraPanels.mappingTradeFilterCount < 3) {
+      failures.push(`${name}: canonical market map filters are incomplete.`);
+    }
+    if (name.startsWith('desktop') && audit.infraPanels.mappingRowRects?.some((row) => row.height > 145)) {
+      failures.push(`${name}: canonical market map rows are still too tall for dense review.`);
+    }
+    if (name === 'desktop-ops-authenticated') {
+      if (!audit.infraPanels.mappingSelectStyle || !/dark/i.test(audit.infraPanels.mappingSelectStyle.colorScheme || '')) {
+        failures.push(`${name}: mapping review dropdown is not using dark color-scheme rendering.`);
+      }
+      if ((audit.infraPanels.mappingOptionStyles || []).some((option) => /rgb\\(255, 255, 255\\)|rgba\\(255, 255, 255, 1\\)/.test(option.backgroundColor || ''))) {
+        failures.push(`${name}: mapping review dropdown options still render with a white background.`);
+      }
+    }
+    if (audit.infraPanels.closedDisclosureBodyDisplay && audit.infraPanels.closedDisclosureBodyDisplay !== 'none') {
+      failures.push(`${name}: hidden mapping disclosure content is still rendering behind the summary rows.`);
+    }
+    if (!audit.infraPanels.portfolioPanelClasses?.includes('risk-panel')) {
+      failures.push(`${name}: risk and exposure panel lost its dedicated risk styling hook.`);
+    }
   }
   for (const hoverCheck of audit.hoverChecks || []) {
     const delta = rectDelta(hoverCheck.before, hoverCheck.after);
@@ -346,6 +451,34 @@ for (const result of results) {
     const moved = Object.values(delta).some((value) => Math.abs(value) > 0.5);
     if (moved) {
       failures.push(`${name}: ${hoverCheck.selector} hover geometry drifted: ${hoverCheck.text || hoverCheck.index} ${JSON.stringify(delta)}`);
+    }
+  }
+  if (audit.accessPill && name.includes('ops-authenticated')) {
+    const { pillRect, primaryRect, secondaryRect, secondaryClientWidth, secondaryScrollWidth } = audit.accessPill;
+    if (!primaryRect || !secondaryRect || !pillRect) {
+      failures.push(`${name}: access pill is missing the operator identity stack.`);
+    } else {
+      if (Math.abs(primaryRect.left - secondaryRect.left) > 2) {
+        failures.push(`${name}: operator name and email are not left-aligned in the access pill.`);
+      }
+      if (secondaryRect.right > pillRect.right + 1 || secondaryScrollWidth > secondaryClientWidth + 1) {
+        failures.push(`${name}: operator email is overflowing or truncating incorrectly in the access pill.`);
+      }
+    }
+  }
+  if (audit.emergencyControls) {
+    if (name.includes('ops-authenticated')) {
+      if (!audit.emergencyControls.toolbarInActions || !audit.emergencyControls.toolbarVisible) {
+        failures.push(`${name}: kill switch is not visible in the top utility bar for authenticated ops mode.`);
+      }
+      if (audit.emergencyControls.panelPresent) {
+        failures.push(`${name}: legacy kill switch panel is still present in the main desk body.`);
+      }
+      if (!audit.emergencyControls.oneLegStandalone) {
+        failures.push(`${name}: one-leg exposure alert is not preserved as its own standalone panel.`);
+      }
+    } else if (audit.emergencyControls.toolbarVisible) {
+      failures.push(`${name}: kill switch is visible outside authenticated ops mode.`);
     }
   }
   for (const card of audit.operatorCards || []) {
