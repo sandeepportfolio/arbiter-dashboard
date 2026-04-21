@@ -4,6 +4,7 @@ import os
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 
@@ -37,6 +38,8 @@ def test_api_and_dashboard_contracts():
     env = dict(os.environ)
     env["ARBITER_UI_SMOKE_SEED"] = "1"
     env["DRY_RUN"] = "true"
+    settings_path = os.path.join(tempfile.gettempdir(), f"arbiter-operator-settings-{time.time_ns()}.json")
+    env["ARBITER_OPERATOR_SETTINGS_PATH"] = settings_path
     # Isolate the subprocess from the developer's .env — the contract test runs
     # arbiter.main in its in-memory fallback mode so it doesn't require a
     # live Postgres/Redis. Empty string (not pop) forces the fallback because
@@ -104,6 +107,8 @@ def test_api_and_dashboard_contracts():
         assert "profitability" in system
         assert "readiness" in system
         assert "reconciliation" in system
+        assert "settings" in system
+        assert system["settings"]["mode"]["dry_run"] is True
         assert "counts" in system
         assert "series" in system
         assert "profitability" in system["series"]
@@ -173,6 +178,11 @@ def test_api_and_dashboard_contracts():
         assert preflight_status == 204
         assert preflight_headers["Access-Control-Allow-Headers"] == "Authorization, Content-Type"
 
+        settings = get_json("/api/settings")
+        assert settings["mode"]["dry_run"] is True
+        assert settings["auto_executor"]["enabled"] is False
+        assert settings["scanner"]["min_edge_cents"] >= 0
+
         mappings = get_json("/api/market-mappings")
         assert isinstance(mappings, list)
         assert len(mappings) >= 1
@@ -200,6 +210,25 @@ def test_api_and_dashboard_contracts():
             headers=auth_headers,
         )
         assert resolved["status"] == "resolved"
+
+        settings_update = post_json(
+            "/api/settings",
+            {
+                "scanner": {"min_edge_cents": 4.2, "persistence_scans": 5},
+                "alerts": {"kalshi_low": 75, "cooldown": 900},
+                "auto_executor": {"enabled": True, "max_position_usd": 42},
+            },
+            headers=auth_headers,
+        )
+        assert settings_update["scanner"]["min_edge_cents"] == 4.2
+        assert settings_update["scanner"]["persistence_scans"] == 5
+        assert settings_update["alerts"]["kalshi_low"] == 75.0
+        assert settings_update["alerts"]["cooldown"] == 900.0
+        assert settings_update["auto_executor"]["enabled"] is True
+        assert settings_update["auto_executor"]["max_position_usd"] == 42.0
+        persisted_settings = get_json("/api/settings")
+        assert persisted_settings["scanner"]["min_edge_cents"] == 4.2
+        assert persisted_settings["meta"]["persisted"] is True
 
         mapping_update = post_json(
             "/api/market-mappings/DEM_HOUSE_2026",
@@ -235,6 +264,8 @@ def test_api_and_dashboard_contracts():
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             proc.kill()
+        if os.path.exists(settings_path):
+            os.unlink(settings_path)
 
 
 # ─── SAFE-04: rate-limit broadcast + /api/system inclusion ───────────────

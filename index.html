@@ -64,6 +64,7 @@
             <a class="primary-nav-link" href="#opportunitiesSection">Scanner</a>
             <a class="primary-nav-link" href="#opsSection">Trade</a>
             <a class="primary-nav-link" href="#riskSection">Portfolio</a>
+            <a class="primary-nav-link hidden" data-ops-only="true" href="#settingsSection">Settings</a>
             <a class="primary-nav-link" href="#infraSection">Infra</a>
           </nav>
         </div>
@@ -370,6 +371,30 @@
             <div id="logTimeline" class="log-timeline"></div>
           </section>
         </div>
+      </section>
+
+      <section id="settingsSection" class="panel-grid panel-grid-single ops-only hidden" data-ops-only="true">
+        <article class="panel infra-panel settings-panel">
+          <div class="panel-header settings-panel-header">
+            <div>
+              <p class="panel-kicker">Settings</p>
+              <h2>Operator runtime settings</h2>
+            </div>
+            <span id="settingsDirtyBadge" class="panel-badge">Synced</span>
+          </div>
+          <p class="panel-copy">Tune execution guardrails, scanner thresholds, and alert posture from the desk. Secrets and the final live-mode switch stay outside the UI on purpose.</p>
+          <div id="settingsSummary" class="settings-summary-grid"></div>
+          <form id="settingsForm" class="settings-form">
+            <div id="settingsCards" class="settings-card-grid"></div>
+            <div class="settings-form-footer">
+              <p id="settingsMessage" class="panel-copy compact-copy settings-message" role="status" aria-live="polite"></p>
+              <div class="action-row settings-action-row">
+                <button id="settingsReset" type="button" class="ghost-button">Reset changes</button>
+                <button id="settingsSave" type="submit" class="auth-button">Save settings</button>
+              </div>
+            </div>
+          </form>
+        </article>
       </section>
 
       <section id="infraSection" class="panel-grid panel-grid-tight">

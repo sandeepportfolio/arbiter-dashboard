@@ -8,11 +8,13 @@
 3. Signal throughput at hundreds-of-thousands/min (auto-discovery + matcher at scale).
 4. Net-positive realized PnL, verified against exchange balances.
 
-**Last update:** 2026-04-21 — after the Polymarket US pivot + scale work landed on `main` (25 commits, HEAD `f693f7c`). Code is ready. What's left is provisioning creds, funding accounts, and pressing go.
+**Last update:** 2026-04-21 — after the Polymarket US pivot + scale work landed on `main` (25 commits, current checked-out base `1e0d345`). Code is ready. What's left is provisioning creds, funding accounts, and pressing go.
+
+> **Host note:** `HANDOFF.md`, `STATUS.md`, and `GOLIVE.md` are the current operator docs. `CLAUDE.md` and older planning docs still reference `/gsd-*` entrypoints, but those commands are not available on this host. Use the concrete shell commands in this repo instead.
 
 ---
 
-## 1. State of the code (as of `f693f7c`)
+## 1. State of the code (as of `1e0d345`)
 
 Shipped and tested:
 - **Polymarket US integration** against `api.polymarket.us/v1` with Ed25519 header auth (payload is `{timestamp_ms}{METHOD}{path}` — body NOT signed, regression-pinned). REST client, WebSocket multiplex (100 slugs per conn, auto-reconnect), execution adapter.
@@ -22,10 +24,11 @@ Shipped and tested:
 - **8-condition auto-promote gate** with explicit gating on liquidity (orderbook depth ≥ `PHASE5_MAX_ORDER_USD × 2`), resolution date window, daily cap, 30-scan advisory cooling-off, LLM verdict.
 - **PHASE4 + PHASE5 hard-locks** enforced in sequence BEFORE signing. Tests monkeypatch `_sign_and_send` and assert `call_count == 0` when either cap trips or supervisor is armed.
 - **Observability:** 9 new Prometheus metrics (matcher latency histogram, backpressure drops, auto-promote rejections by reason, Ed25519 sign failures, WS sub count, etc.). Telegram heartbeat every 15 min while auto-exec is on.
+- **Operator desk settings:** authenticated runtime editing for non-secret scanner, alert, and auto-executor knobs, backed by a persisted JSON store and exposed in both same-origin and static-hosted dashboard modes.
 - **Operational tooling:** `check_polymarket_us.py` signed round-trip with subprocess-verified secret-leak guard; `onboard_polymarket_us.py` Playwright-driven API key capture; `go_live.sh` end-to-end orchestrator.
 - **Rollback:** `POLYMARKET_VARIANT=legacy` or `disabled` — config flip, < 2 min, no code revert.
 
-Test state: 495 pass / 87 skip / 0 fail on `pytest -q`. 0 errors on `npx tsc --noEmit`.
+Current local verification on this host: `make verify-full` passes (`478 passed, 87 skipped` in Python, `npx tsc --noEmit` clean, Vitest `40` tests green, API smoke green, `./scripts/ui-smoke.sh` green, `./scripts/static-smoke.sh` green).
 
 What's NOT done and what it's waiting on:
 - Real credentials in `.env.production` (operator has iOS-KYC'd Polymarket US).
@@ -167,7 +170,10 @@ Runs in order, stops on first failure:
 
 Expected terminator: "ALL CHECKS PASSED".
 
-If step 6 fails (no ready mapping), open `http://localhost:8080/ops` → Mappings → pick any pair with identical resolution criteria from the seeded MARKET_MAP → Confirm → Enable auto-trade. Re-run `go_live.sh`.
+If step 6 fails (no ready mapping), open `http://localhost:8080/ops`.
+- In **Settings**, you can now tune non-secret runtime knobs like scanner thresholds, alert cooldowns, and auto-executor caps before going live.
+- In **Mappings**, pick any pair with identical resolution criteria from the seeded `MARKET_MAP`, then **Confirm** and **Enable auto-trade**.
+Re-run `go_live.sh`.
 
 ### Step 5 — First live trade
 
@@ -248,7 +254,7 @@ Everything else is self-managing: rate-limit backoff, WS reconnect, one-leg reco
 
 | URL | Purpose |
 |---|---|
-| `http://localhost:8080/ops` | Dashboard + kill-switch |
+| `http://localhost:8080/ops` | Dashboard + kill-switch + operator runtime settings |
 | `http://localhost:8080/api/health` | `{"status":"ok"}` |
 | `http://localhost:8080/api/readiness` | go/no-go + blocking_reasons[] |
 | `http://localhost:8080/api/metrics` | Prometheus text |

@@ -1,27 +1,34 @@
 # Polymarket US Pivot — Final Status
 
-## Final Commit
+## Operator Notes
+
+- Current source of truth for operators: `HANDOFF.md`, `GOLIVE.md`, and this file.
+- `.planning/*`, `docs/ARBITER.md`, and `docs/future-agent-production-test-plan.md` are historical snapshots unless they explicitly say otherwise.
+- `CLAUDE.md` still mentions `/gsd-*` entrypoints, but those commands are not available on this host.
+- Current checked-out base on this host is `1e0d345` (`docs(handoff): rewrite as direct mission-first runbook`). The commit block below is the pivot baseline, not the latest docs-only commit.
+
+## Pivot Baseline Commit
 
 ```
 de244b0e18f5f8abc5e83aa2c0258366e96e7792
 test(rollback): smoke tests for POLYMARKET_VARIANT=us|legacy|disabled
 ```
 
-## Test Counts
+## Current Local Verification Snapshot (2026-04-21)
 
-| Suite                        | Pass | Skip | Fail |
-|------------------------------|------|------|------|
-| Default (`pytest -q`)        |  495 |   87 |    0 |
-| With slow (`--run-slow`)     |  496 |   86 |    0 |
+| Surface | Result |
+|---|---|
+| Python repo suite (`make verify-full`) | `478 passed, 87 skipped, 0 failed` |
+| TypeScript typecheck | pass |
+| Vitest | `5 files, 40 tests` passed |
+| API smoke | pass |
+| Same-origin browser smoke (`./scripts/ui-smoke.sh`) | pass |
+| Static-shell browser smoke (`./scripts/static-smoke.sh`) | pass |
 
 Notes:
-- Baseline (pre-pivot): 483 passed, 83 skipped
-- 12 new tests from Task 19 (onboarding script unit tests in `scripts/setup/`)
-- 4 new tests from Task 19.5 (rollback smoke tests in `arbiter/live/`) — these pass in isolation
-  but are counted as "skipped" in the full suite because `arbiter/sandbox/conftest.py`'s
-  `pytest_collection_modifyitems` skips all tests in paths containing "live" unless
-  `--live` is passed. This is pre-existing behavior, not introduced by this work.
-- The 1 slow test (`test_scale_1000`) moves from skipped→passed with `--run-slow`.
+- The operator desk now includes an authenticated runtime settings surface for non-secret scanner, alert, and auto-executor knobs.
+- The new settings flow is verified in both same-origin and static-hosted modes, including draft state, save, websocket refresh, and persisted reload.
+- The static root `index.html` was brought back into sync with `arbiter/web/dashboard.html`, so static hosting exercises the same settings section as the server-rendered dashboard.
 
 ## TypeScript Check
 
@@ -50,7 +57,7 @@ Runner completed without crashing. Expected failures (no creds, no DB, no deploy
 
 Checks 5 and 16 (Polymarket US / 5a / 5b) correctly show "not applicable" for `disabled` variant.
 
-## Git Log (0501d69..HEAD)
+## Git Log (0501d69..de244b0 pivot baseline)
 
 ```
 de244b0 test(rollback): smoke tests for POLYMARKET_VARIANT=us|legacy|disabled

@@ -20,6 +20,7 @@ from aiohttp.web_exceptions import HTTPUnauthorized
 from .config.settings import MARKET_MAP, ArbiterConfig, update_market_mapping
 from .execution.engine import ArbExecution, ExecutionEngine, ExecutionIncident
 from .monitor.balance import BalanceMonitor
+from .operator_settings import OperatorSettingsStore
 from .portfolio import PortfolioMonitor
 from .profitability import ProfitabilityValidator
 from .readiness import OperationalReadiness
@@ -177,9 +178,21 @@ class ArbiterAPI:
         self._ws_clients: list[web.WebSocketResponse] = []
         self._site_index = Path(__file__).resolve().parent.parent / "index.html"
         self._dashboard_dir = Path(__file__).resolve().parent / "web"
+        self.auto_executor = None
+        self._operator_settings_store = OperatorSettingsStore()
+        self._operator_settings_meta = {
+            "persisted": False,
+            "updated_at": None,
+            "updated_by": None,
+        }
         # SAFE-04: periodic broadcaster task for rate_limit_state events.
         # Started in serve(); cancelled on shutdown.
         self._rate_limit_task: Optional[asyncio.Task] = None
+        self._restore_operator_settings()
+
+    def attach_auto_executor(self, auto_executor) -> None:
+        self.auto_executor = auto_executor
+        self._restore_operator_settings()
 
     async def serve(self):
         app = web.Application(middlewares=[self._cors_middleware])
@@ -200,6 +213,8 @@ class ArbiterAPI:
         app.router.add_get("/api/market-mappings", self.handle_market_mappings)
         app.router.add_post("/api/market-mappings/{canonical_id}", self.handle_market_mapping_action)
         app.router.add_get("/api/market-mappings/{canonical_id}/audit", self.handle_market_mapping_audit)
+        app.router.add_get("/api/settings", self.handle_settings)
+        app.router.add_post("/api/settings", self.handle_settings_update)
         app.router.add_get("/api/errors", self.handle_errors)
         app.router.add_post("/api/errors/{incident_id}", self.handle_incident_action)
         app.router.add_get("/api/manual-positions", self.handle_manual_positions)
@@ -469,6 +484,19 @@ class ArbiterAPI:
             )
 
         return web.json_response(mapping)
+
+    async def handle_settings(self, request):
+        return web.json_response(self._settings_snapshot())
+
+    async def handle_settings_update(self, request):
+        actor = await require_auth(request)
+        payload = await self._read_json_body(request)
+        try:
+            snapshot = self._update_operator_settings(payload, actor=actor)
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        await self._broadcast_json({"type": "settings", "payload": snapshot})
+        return web.json_response(snapshot)
 
     async def handle_incident_action(self, request):
         await require_auth(request)
@@ -1090,6 +1118,189 @@ class ArbiterAPI:
                 if client in self._ws_clients:
                     self._ws_clients.remove(client)
 
+    def _restore_operator_settings(self) -> None:
+        payload = self._operator_settings_store.load()
+        settings = payload.get("settings") if isinstance(payload, dict) else None
+        if not isinstance(settings, dict) or not settings:
+            return
+        try:
+            patch = self._normalize_settings_patch(settings)
+            self._apply_operator_settings_patch(patch)
+        except ValueError as exc:
+            logger.warning("Ignoring invalid persisted operator settings: %s", exc)
+            return
+        self._operator_settings_meta = {
+            "persisted": True,
+            "updated_at": payload.get("updated_at"),
+            "updated_by": payload.get("updated_by") or "system",
+        }
+
+    def _editable_settings_payload(self) -> dict:
+        auto_executor = getattr(self, "auto_executor", None)
+        return {
+            "scanner": {
+                "min_edge_cents": float(self.config.scanner.min_edge_cents),
+                "confidence_threshold": float(self.config.scanner.confidence_threshold),
+                "max_position_usd": float(self.config.scanner.max_position_usd),
+                "scan_interval": float(self.config.scanner.scan_interval),
+                "max_quote_age_seconds": float(self.config.scanner.max_quote_age_seconds),
+                "min_liquidity": float(self.config.scanner.min_liquidity),
+                "slippage_tolerance": float(self.config.scanner.slippage_tolerance),
+                "persistence_scans": int(self.config.scanner.persistence_scans),
+            },
+            "alerts": {
+                "kalshi_low": float(self.config.alerts.kalshi_low),
+                "polymarket_low": float(self.config.alerts.polymarket_low),
+                "cooldown": float(self.config.alerts.cooldown),
+            },
+            "auto_executor": {
+                "enabled": bool(getattr(getattr(auto_executor, "_config", None), "enabled", False)),
+                "max_position_usd": float(
+                    getattr(getattr(auto_executor, "_config", None), "max_position_usd", self.config.scanner.max_position_usd)
+                ),
+                "bootstrap_trades": getattr(getattr(auto_executor, "_config", None), "bootstrap_trades", None),
+            },
+        }
+
+    def _settings_snapshot(self) -> dict:
+        editable = self._editable_settings_payload()
+        auto_executor = editable["auto_executor"]
+        return {
+            "mode": {
+                "dry_run": bool(self.config.scanner.dry_run),
+                "label": "Dry run" if self.config.scanner.dry_run else "Live trading",
+                "live_switch_editable": False,
+                "live_switch_note": "Trading mode still flips via CLI plus preflight, not the dashboard.",
+            },
+            "scanner": editable["scanner"],
+            "alerts": editable["alerts"],
+            "auto_executor": auto_executor,
+            "meta": {
+                "persisted": bool(self._operator_settings_meta.get("persisted")),
+                "updated_at": self._operator_settings_meta.get("updated_at"),
+                "updated_by": self._operator_settings_meta.get("updated_by"),
+                "storage_label": "operator runtime store",
+            },
+        }
+
+    @staticmethod
+    def _coerce_bool(value, *, label: str) -> bool:
+        if isinstance(value, bool):
+            return value
+        raise ValueError(f"{label} must be true or false")
+
+    @staticmethod
+    def _coerce_float(value, *, label: str, minimum: float | None = None, maximum: float | None = None) -> float:
+        try:
+            number = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{label} must be a number") from exc
+        if minimum is not None and number < minimum:
+            raise ValueError(f"{label} must be >= {minimum}")
+        if maximum is not None and number > maximum:
+            raise ValueError(f"{label} must be <= {maximum}")
+        return number
+
+    @staticmethod
+    def _coerce_int(value, *, label: str, minimum: int | None = None, maximum: int | None = None) -> int:
+        try:
+            number = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{label} must be an integer") from exc
+        if minimum is not None and number < minimum:
+            raise ValueError(f"{label} must be >= {minimum}")
+        if maximum is not None and number > maximum:
+            raise ValueError(f"{label} must be <= {maximum}")
+        return number
+
+    def _normalize_settings_patch(self, payload: dict) -> dict:
+        if not isinstance(payload, dict):
+            raise ValueError("settings payload must be an object")
+
+        patch: dict = {}
+
+        scanner = payload.get("scanner")
+        if scanner is not None:
+            if not isinstance(scanner, dict):
+                raise ValueError("scanner settings must be an object")
+            scanner_patch = {}
+            if "min_edge_cents" in scanner:
+                scanner_patch["min_edge_cents"] = self._coerce_float(scanner["min_edge_cents"], label="min_edge_cents", minimum=0.1, maximum=100.0)
+            if "confidence_threshold" in scanner:
+                scanner_patch["confidence_threshold"] = self._coerce_float(scanner["confidence_threshold"], label="confidence_threshold", minimum=0.0, maximum=1.0)
+            if "max_position_usd" in scanner:
+                scanner_patch["max_position_usd"] = self._coerce_float(scanner["max_position_usd"], label="max_position_usd", minimum=1.0, maximum=100000.0)
+            if "scan_interval" in scanner:
+                scanner_patch["scan_interval"] = self._coerce_float(scanner["scan_interval"], label="scan_interval", minimum=0.1, maximum=60.0)
+            if "max_quote_age_seconds" in scanner:
+                scanner_patch["max_quote_age_seconds"] = self._coerce_float(scanner["max_quote_age_seconds"], label="max_quote_age_seconds", minimum=1.0, maximum=300.0)
+            if "min_liquidity" in scanner:
+                scanner_patch["min_liquidity"] = self._coerce_float(scanner["min_liquidity"], label="min_liquidity", minimum=0.0, maximum=1000000.0)
+            if "slippage_tolerance" in scanner:
+                scanner_patch["slippage_tolerance"] = self._coerce_float(scanner["slippage_tolerance"], label="slippage_tolerance", minimum=0.0, maximum=1.0)
+            if "persistence_scans" in scanner:
+                scanner_patch["persistence_scans"] = self._coerce_int(scanner["persistence_scans"], label="persistence_scans", minimum=1, maximum=20)
+            if scanner_patch:
+                patch["scanner"] = scanner_patch
+
+        alerts = payload.get("alerts")
+        if alerts is not None:
+            if not isinstance(alerts, dict):
+                raise ValueError("alerts settings must be an object")
+            alerts_patch = {}
+            if "kalshi_low" in alerts:
+                alerts_patch["kalshi_low"] = self._coerce_float(alerts["kalshi_low"], label="kalshi_low", minimum=0.0, maximum=1000000.0)
+            if "polymarket_low" in alerts:
+                alerts_patch["polymarket_low"] = self._coerce_float(alerts["polymarket_low"], label="polymarket_low", minimum=0.0, maximum=1000000.0)
+            if "cooldown" in alerts:
+                alerts_patch["cooldown"] = self._coerce_float(alerts["cooldown"], label="cooldown", minimum=0.0, maximum=86400.0)
+            if alerts_patch:
+                patch["alerts"] = alerts_patch
+
+        auto_executor = payload.get("auto_executor")
+        if auto_executor is not None:
+            if not isinstance(auto_executor, dict):
+                raise ValueError("auto_executor settings must be an object")
+            auto_patch = {}
+            if "enabled" in auto_executor:
+                auto_patch["enabled"] = self._coerce_bool(auto_executor["enabled"], label="auto_executor.enabled")
+            if "max_position_usd" in auto_executor:
+                auto_patch["max_position_usd"] = self._coerce_float(auto_executor["max_position_usd"], label="auto_executor.max_position_usd", minimum=1.0, maximum=100000.0)
+            if auto_patch:
+                patch["auto_executor"] = auto_patch
+
+        return patch
+
+    def _apply_operator_settings_patch(self, patch: dict) -> None:
+        scanner_patch = patch.get("scanner") or {}
+        for key, value in scanner_patch.items():
+            setattr(self.config.scanner, key, value)
+
+        alerts_patch = patch.get("alerts") or {}
+        for key, value in alerts_patch.items():
+            setattr(self.config.alerts, key, value)
+        if alerts_patch:
+            self.monitor._thresholds["kalshi"] = float(self.config.alerts.kalshi_low)
+            self.monitor._thresholds["polymarket"] = float(self.config.alerts.polymarket_low)
+
+        auto_patch = patch.get("auto_executor") or {}
+        if auto_patch and getattr(self, "auto_executor", None) is not None:
+            for key, value in auto_patch.items():
+                setattr(self.auto_executor._config, key, value)
+
+    def _update_operator_settings(self, payload: dict, *, actor: str) -> dict:
+        patch = self._normalize_settings_patch(payload)
+        if not patch:
+            raise ValueError("No editable settings were provided")
+        self._apply_operator_settings_patch(patch)
+        persisted_payload = self._operator_settings_store.save(self._editable_settings_payload(), updated_by=actor)
+        self._operator_settings_meta = {
+            "persisted": True,
+            "updated_at": persisted_payload.get("updated_at"),
+            "updated_by": persisted_payload.get("updated_by") or actor,
+        }
+        return self._settings_snapshot()
+
     async def _build_system_snapshot(self) -> dict:
         balances = {
             platform: {
@@ -1114,6 +1325,7 @@ class ArbiterAPI:
             "profitability": self._profitability_snapshot(),
             "readiness": self._readiness_snapshot(),
             "reconciliation": self._reconciliation_snapshot(),
+            "settings": self._settings_snapshot(),
             "collectors": self._collector_snapshot(),
             "balances": balances,
             "safety": (

@@ -1,5 +1,7 @@
 # ARBITER Future Agent Prompt
 
+> **Historical agent prompt.** This file predates PredictIt removal and the Polymarket US pivot, so it is no longer an accurate current-state runbook. Keep it for historical context only. Use `HANDOFF.md`, `STATUS.md`, and `GOLIVE.md` for active guidance.
+
 Generated: 2026-04-15  
 Workspace: `/Users/rentamac/Documents/arbiter`  
 Pinned commit: `8c0003748dee80fb1b14e72871dc3b50ec9154af`

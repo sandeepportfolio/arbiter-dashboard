@@ -817,6 +817,225 @@ h2 {
   grid-template-columns: 1fr;
 }
 
+.settings-panel {
+  background:
+    linear-gradient(180deg, rgba(10, 24, 32, 0.92), rgba(7, 18, 25, 0.98)),
+    radial-gradient(circle at top right, rgba(215, 255, 31, 0.08), transparent 34%);
+}
+
+.settings-panel-header {
+  align-items: center;
+}
+
+.settings-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.settings-summary-card {
+  display: grid;
+  gap: 6px;
+  padding: 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: linear-gradient(180deg, rgba(14, 31, 41, 0.76), rgba(9, 19, 26, 0.94));
+}
+
+.settings-summary-label {
+  color: var(--muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.settings-summary-value {
+  color: var(--text);
+  font-size: 1.1rem;
+  font-weight: 800;
+}
+
+.settings-summary-copy {
+  color: rgba(237, 247, 244, 0.72);
+  font-size: 0.82rem;
+}
+
+.settings-form {
+  display: grid;
+  gap: 16px;
+}
+
+.settings-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+}
+
+.settings-card {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: linear-gradient(180deg, rgba(14, 31, 41, 0.76), rgba(9, 19, 26, 0.94));
+}
+
+.settings-card-header {
+  display: grid;
+  gap: 6px;
+}
+
+.settings-card-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 1rem;
+  font-weight: 800;
+}
+
+.settings-card-copy {
+  margin: 0;
+  color: rgba(237, 247, 244, 0.72);
+  font-size: 0.84rem;
+}
+
+.settings-field-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.settings-field {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-field label,
+.settings-toggle-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.settings-field-name,
+.settings-toggle-title {
+  color: var(--text);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.settings-field-copy,
+.settings-toggle-hint,
+.settings-inline-note {
+  color: rgba(237, 247, 244, 0.68);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.settings-field input[type="number"] {
+  min-height: 44px;
+  width: 100%;
+  padding: 0 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(6, 12, 17, 0.88);
+  color: var(--text);
+  font: inherit;
+}
+
+.settings-field input[type="number"]:focus,
+.settings-toggle input[type="checkbox"]:focus-visible + .settings-switch-track {
+  outline: none;
+  border-color: rgba(215, 255, 31, 0.34);
+  box-shadow: 0 0 0 3px rgba(215, 255, 31, 0.12);
+}
+
+.settings-toggle {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.settings-toggle-control {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.settings-toggle input[type="checkbox"] {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.settings-switch-track {
+  position: relative;
+  width: 52px;
+  height: 32px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.06);
+  transition: background var(--transition), border-color var(--transition);
+}
+
+.settings-switch-track::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #edf7f4;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.24);
+  transition: transform var(--transition);
+}
+
+.settings-toggle input[type="checkbox"]:checked + .settings-switch-track {
+  border-color: rgba(140, 224, 207, 0.26);
+  background: rgba(140, 224, 207, 0.18);
+}
+
+.settings-toggle input[type="checkbox"]:checked + .settings-switch-track::after {
+  transform: translateX(20px);
+}
+
+.settings-mode-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(237, 247, 244, 0.86);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.settings-form-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.settings-message {
+  margin: 0;
+}
+
+.settings-message.is-error {
+  color: #ffb7b2;
+}
+
+.settings-action-row {
+  justify-content: flex-end;
+}
+
 .panel {
   padding: 20px;
 }

@@ -1,5 +1,7 @@
 # ARBITER Handover And Live-Status Context
 
+> **Historical snapshot from 2026-04-15.** This document predates PredictIt removal and the completed Polymarket US pivot. Do not use it for current operator decisions. Use `HANDOFF.md`, `STATUS.md`, and `GOLIVE.md` instead.
+
 Last updated: 2026-04-15
 
 ## What This Pass Changed

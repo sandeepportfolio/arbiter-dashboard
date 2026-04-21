@@ -73,6 +73,10 @@ const state = {
   mappingUpdates: {},
   portfolio: null,
   profitability: null,
+  settings: null,
+  settingsDraft: null,
+  settingsMessage: "",
+  settingsMessageIsError: false,
   safety: { killSwitch: { armed: false }, rateLimits: {} },
   oneLegExposures: [],
   acknowledgedOneLegIds: readAcknowledgedOneLegIds(),
@@ -194,6 +198,56 @@ const MAPPING_TRADE_FILTERS = [
   { key: "held", label: "Held" },
 ];
 
+const SETTINGS_SECTIONS = [
+  {
+    key: "execution",
+    title: "Execution controls",
+    copy: "Runtime execution policy that stays editable in the desk while keeping the final live-mode switch outside the UI.",
+    fields: [
+      {
+        path: "auto_executor.enabled",
+        type: "checkbox",
+        label: "Enable auto-trade",
+        help: "Allows the auto-executor to submit confirmed routes without per-trade manual approval.",
+      },
+      {
+        path: "auto_executor.max_position_usd",
+        type: "number",
+        label: "Auto-trade cap (USD)",
+        help: "Hard ceiling for the auto-executor before it skips a route.",
+        min: 1,
+        max: 100000,
+        step: 1,
+      },
+    ],
+  },
+  {
+    key: "scanner",
+    title: "Scanner guardrails",
+    copy: "Tighten or loosen route qualification without touching the shell.",
+    fields: [
+      { path: "scanner.min_edge_cents", type: "number", label: "Minimum edge (cents)", help: "Scanner floor before a route becomes actionable.", min: 0.1, max: 100, step: 0.1 },
+      { path: "scanner.confidence_threshold", type: "number", label: "Confidence threshold", help: "Minimum confidence required before a non-manual route is tradable.", min: 0, max: 1, step: 0.01 },
+      { path: "scanner.max_position_usd", type: "number", label: "Scanner max position (USD)", help: "Risk ceiling used by the scanner and execution engine sizing logic.", min: 1, max: 100000, step: 1 },
+      { path: "scanner.scan_interval", type: "number", label: "Scan interval (sec)", help: "How frequently the scanner reevaluates market state.", min: 0.1, max: 60, step: 0.1 },
+      { path: "scanner.max_quote_age_seconds", type: "number", label: "Quote max age (sec)", help: "Quotes older than this are treated as stale.", min: 1, max: 300, step: 1 },
+      { path: "scanner.min_liquidity", type: "number", label: "Minimum liquidity (USD)", help: "Liquidity below this level can block fresh opportunities.", min: 0, max: 1000000, step: 1 },
+      { path: "scanner.slippage_tolerance", type: "number", label: "Slippage tolerance", help: "Allowed slippage before a route is rejected as unsafe.", min: 0, max: 1, step: 0.001 },
+      { path: "scanner.persistence_scans", type: "number", label: "Persistence scans", help: "How many consecutive qualifying scans a route needs before promotion.", min: 1, max: 20, step: 1 },
+    ],
+  },
+  {
+    key: "alerts",
+    title: "Alert posture",
+    copy: "Funding warnings and notification cooldowns that keep operations calm instead of noisy.",
+    fields: [
+      { path: "alerts.kalshi_low", type: "number", label: "Kalshi low-balance threshold (USD)", help: "Balance floor before Arbiter warns that Kalshi funding is low.", min: 0, max: 1000000, step: 1 },
+      { path: "alerts.polymarket_low", type: "number", label: "Polymarket low-balance threshold (USD)", help: "Balance floor before Arbiter warns that Polymarket funding is low.", min: 0, max: 1000000, step: 1 },
+      { path: "alerts.cooldown", type: "number", label: "Alert cooldown (sec)", help: "Minimum time between repeated alerts for the same condition.", min: 0, max: 86400, step: 1 },
+    ],
+  },
+];
+
 const PUBLISHED_TYPES = [
   { key: "system", label: "system", detail: "bootstrap + snapshot" },
   { key: "quote", label: "quote", detail: "market pulse" },
@@ -263,6 +317,13 @@ const logScopeTabsEl = document.getElementById("logScopeTabs");
 const logSearchInputEl = document.getElementById("logSearchInput");
 const logResultSummaryEl = document.getElementById("logResultSummary");
 const mappingControlsEl = document.getElementById("mappingControls");
+const settingsSummaryEl = document.getElementById("settingsSummary");
+const settingsCardsEl = document.getElementById("settingsCards");
+const settingsFormEl = document.getElementById("settingsForm");
+const settingsMessageEl = document.getElementById("settingsMessage");
+const settingsSaveEl = document.getElementById("settingsSave");
+const settingsResetEl = document.getElementById("settingsReset");
+const settingsDirtyBadgeEl = document.getElementById("settingsDirtyBadge");
 
 const formatUsd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
 const formatWhole = new Intl.NumberFormat("en-US");
@@ -278,6 +339,74 @@ function isOpsMode() {
 
 function hasOperatorAccess() {
   return isOpsMode() && state.operatorAuthenticated;
+}
+
+function cloneJson(value) {
+  return value ? JSON.parse(JSON.stringify(value)) : value;
+}
+
+function getSettingValue(source, path) {
+  return path.split(".").reduce((current, key) => (current == null ? undefined : current[key]), source);
+}
+
+function setSettingValue(target, path, value) {
+  const parts = path.split(".");
+  let cursor = target;
+  for (let index = 0; index < parts.length - 1; index += 1) {
+    const key = parts[index];
+    if (!cursor[key] || typeof cursor[key] !== "object") {
+      cursor[key] = {};
+    }
+    cursor = cursor[key];
+  }
+  cursor[parts[parts.length - 1]] = value;
+}
+
+function editableSettingsSnapshot(snapshot = state.settings) {
+  if (!snapshot) return null;
+  return {
+    scanner: cloneJson(snapshot.scanner || {}),
+    alerts: cloneJson(snapshot.alerts || {}),
+    auto_executor: cloneJson(snapshot.auto_executor || {}),
+  };
+}
+
+function ensureSettingsDraft() {
+  if (!state.settingsDraft && state.settings) {
+    state.settingsDraft = editableSettingsSnapshot(state.settings);
+  }
+  return state.settingsDraft;
+}
+
+function settingsAreDirty() {
+  if (!state.settings || !state.settingsDraft) return false;
+  return JSON.stringify(editableSettingsSnapshot(state.settings)) !== JSON.stringify(state.settingsDraft);
+}
+
+function setSettingsMessage(message, isError = false) {
+  state.settingsMessage = message || "";
+  state.settingsMessageIsError = Boolean(isError);
+  if (settingsMessageEl) {
+    settingsMessageEl.textContent = state.settingsMessage;
+    settingsMessageEl.classList.toggle("is-error", state.settingsMessageIsError);
+  }
+}
+
+function syncSettingsDraftFromControl(control) {
+  const path = control?.dataset?.settingsPath;
+  if (!path) return false;
+  const field = SETTINGS_SECTIONS.flatMap((section) => section.fields).find((candidate) => candidate.path === path);
+  if (!field) return false;
+  const draft = ensureSettingsDraft();
+  if (!draft) return false;
+  const rawValue = field.type === "checkbox" ? Boolean(control.checked) : control.value;
+  setSettingValue(draft, path, coerceSettingsDraftValue(field, rawValue));
+  const dirty = settingsAreDirty();
+  setSettingsMessage(dirty ? "Unsaved settings changes" : "All changes saved");
+  if (settingsDirtyBadgeEl) settingsDirtyBadgeEl.textContent = dirty ? "Draft" : "Synced";
+  if (settingsSaveEl) settingsSaveEl.disabled = !dirty;
+  if (settingsResetEl) settingsResetEl.disabled = !dirty;
+  return true;
 }
 
 function getPublicHref() {
@@ -661,8 +790,7 @@ function buildDeskMenuItems(entries) {
   const infraCount = Object.keys(state.system?.collectors || {}).length + state.mappings.length;
   const opsCount = state.manualPositions.length + openIncidents;
   const activityCount = entries.length;
-
-  return [
+  const items = [
     {
       key: "overview",
       href: "#statusBand",
@@ -698,6 +826,19 @@ function buildDeskMenuItems(entries) {
       value: hasOperatorAccess() ? formatWhole.format(opsCount) : (isOpsMode() ? "Locked" : "Open"),
       copy: hasOperatorAccess() ? "manual queue and incidents" : "operator desk and controls",
     },
+  ];
+
+  if (hasOperatorAccess()) {
+    items.push({
+      key: "settings",
+      href: "#settingsSection",
+      label: "Settings",
+      value: settingsAreDirty() ? "Draft" : "Synced",
+      copy: "runtime controls in the desk",
+    });
+  }
+
+  items.push(
     {
       key: "activity",
       href: "#logsSection",
@@ -712,7 +853,9 @@ function buildDeskMenuItems(entries) {
       value: formatWhole.format(infraCount),
       copy: "collectors and mappings",
     },
-  ];
+  );
+
+  return items;
 }
 
 function buildMarketEntry() {
@@ -1042,7 +1185,8 @@ async function refreshOperatorSession() {
 }
 
 async function loadSnapshot() {
-  const [system, opportunities, trades, incidents, manualPositions, mappings, portfolio, profitability] = await Promise.all([
+  const hadDirtySettings = settingsAreDirty();
+  const [system, opportunities, trades, incidents, manualPositions, mappings, portfolio, profitability, settings] = await Promise.all([
     fetchJson("/api/system"),
     fetchJson("/api/opportunities"),
     fetchJson("/api/trades"),
@@ -1051,7 +1195,9 @@ async function loadSnapshot() {
     fetchJson("/api/market-mappings"),
     fetchJson("/api/portfolio"),
     fetchJson("/api/profitability"),
+    fetchJson("/api/settings"),
   ]);
+  const effectiveSettings = settings || system?.settings || null;
   state.system = system;
   state.opportunities = opportunities;
   state.trades = trades;
@@ -1060,6 +1206,11 @@ async function loadSnapshot() {
   state.mappings = mappings;
   state.portfolio = portfolio;
   state.profitability = profitability;
+  state.settings = effectiveSettings;
+  if (!hadDirtySettings || !state.settingsDraft) {
+    state.settingsDraft = editableSettingsSnapshot(effectiveSettings);
+    setSettingsMessage("");
+  }
   render();
 }
 
@@ -1108,9 +1259,16 @@ function connectWebSocket() {
 
   socket.addEventListener("message", (event) => {
     const message = JSON.parse(event.data);
+    const hadDirtySettings = settingsAreDirty();
     if (message.type === "bootstrap" || message.type === "system") {
       state.system = message.payload;
       state.profitability = message.payload?.profitability || state.profitability;
+      if (message.payload?.settings) {
+        state.settings = message.payload.settings;
+        if (!hadDirtySettings || !state.settingsDraft) {
+          state.settingsDraft = editableSettingsSnapshot(message.payload.settings);
+        }
+      }
     } else if (message.type === "quote") {
       state.lastQuoteAt = message.payload.timestamp;
       if (state.system?.counts) {
@@ -1148,6 +1306,11 @@ function connectWebSocket() {
       if (message.payload && message.payload.canonical_id) {
         state.mappingUpdates[message.payload.canonical_id] = message.payload;
       }
+    } else if (message.type === "settings") {
+      state.settings = message.payload;
+      if (!hadDirtySettings || !state.settingsDraft) {
+        state.settingsDraft = editableSettingsSnapshot(message.payload);
+      }
     } else if (message.type === "heartbeat") {
       state.lastQuoteAt = message.payload.timestamp;
     }
@@ -1180,6 +1343,7 @@ function render() {
   renderShutdownBanner();
   renderProfitabilityPanel();
   renderPortfolioPanel();
+  renderSettings();
   renderOpportunities();
   renderManualQueue();
   renderIncidentQueue();
@@ -1538,6 +1702,136 @@ function renderPortfolioPanel() {
   portfolioListEl.innerHTML = [...violationCards, ...venueCards].join("") || emptyState("No positions or violations are active.");
 }
 
+function formatSettingsValue(field, value) {
+  if (field.type === "checkbox") {
+    return value ? "Enabled" : "Disabled";
+  }
+  if (field.path.includes("usd") || field.path.includes("_low")) {
+    return formatUsd.format(Number(value || 0));
+  }
+  if (field.path.includes("confidence") || field.path.includes("slippage")) {
+    return Number(value || 0).toFixed(2);
+  }
+  if (field.path.includes("interval") || field.path.includes("age") || field.path.includes("cooldown")) {
+    return `${Number(value || 0).toFixed(field.step && field.step < 1 ? 1 : 0)}s`;
+  }
+  if (field.path.includes("edge")) {
+    return `${Number(value || 0).toFixed(1)}c`;
+  }
+  if (field.path.includes("liquidity")) {
+    return formatUsd.format(Number(value || 0));
+  }
+  return String(value ?? "");
+}
+
+function coerceSettingsDraftValue(field, rawValue) {
+  if (field.type === "checkbox") {
+    return Boolean(rawValue);
+  }
+  const numeric = Number(rawValue);
+  return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function settingsSummaryCards(snapshot) {
+  if (!snapshot) return [];
+  return [
+    {
+      label: "Trading mode",
+      value: snapshot.mode?.label || "Unknown",
+      copy: snapshot.mode?.live_switch_note || "Mode switching is controlled outside the desk.",
+    },
+    {
+      label: "Auto-trade",
+      value: snapshot.auto_executor?.enabled ? "Enabled" : "Disabled",
+      copy: `Cap ${formatUsd.format(snapshot.auto_executor?.max_position_usd || 0)}`,
+    },
+    {
+      label: "Scanner floor",
+      value: `${Number(snapshot.scanner?.min_edge_cents || 0).toFixed(1)}c`,
+      copy: `${Number(snapshot.scanner?.confidence_threshold || 0).toFixed(2)} confidence`,
+    },
+    {
+      label: "Balance alerts",
+      value: `${formatUsd.format(snapshot.alerts?.kalshi_low || 0)} / ${formatUsd.format(snapshot.alerts?.polymarket_low || 0)}`,
+      copy: `Cooldown ${Math.round(snapshot.alerts?.cooldown || 0)}s`,
+    },
+  ];
+}
+
+function renderSettings() {
+  if (!settingsSummaryEl || !settingsCardsEl || !settingsDirtyBadgeEl) return;
+  const snapshot = state.settings || state.system?.settings;
+  const draft = ensureSettingsDraft();
+
+  settingsDirtyBadgeEl.textContent = settingsAreDirty() ? "Draft" : "Synced";
+  settingsDirtyBadgeEl.classList.toggle("status-badge", settingsAreDirty());
+
+  if (!snapshot || !draft) {
+    settingsSummaryEl.innerHTML = emptyState("Settings will appear when the operator runtime finishes loading.");
+    settingsCardsEl.innerHTML = "";
+    setSettingsMessage(state.settingsMessage, state.settingsMessageIsError);
+    return;
+  }
+
+  settingsSummaryEl.innerHTML = settingsSummaryCards(snapshot).map((card) => `
+    <article class="settings-summary-card">
+      <span class="settings-summary-label">${escapeHtml(card.label)}</span>
+      <strong class="settings-summary-value">${escapeHtml(card.value)}</strong>
+      <span class="settings-summary-copy">${escapeHtml(card.copy)}</span>
+    </article>
+  `).join("");
+
+  settingsCardsEl.innerHTML = SETTINGS_SECTIONS.map((section) => `
+    <section class="settings-card" data-settings-section="${escapeHtml(section.key)}">
+      <div class="settings-card-header">
+        <h3 class="settings-card-title">${escapeHtml(section.title)}</h3>
+        <p class="settings-card-copy">${escapeHtml(section.copy)}</p>
+      </div>
+      <div class="settings-field-grid">
+        ${section.fields.map((field) => {
+          const value = getSettingValue(draft, field.path);
+          if (field.type === "checkbox") {
+            return `
+              <div class="settings-toggle">
+                <div class="settings-toggle-copy">
+                  <span class="settings-toggle-title">${escapeHtml(field.label)}</span>
+                  <span class="settings-toggle-hint">${escapeHtml(field.help)}</span>
+                </div>
+                <label class="settings-toggle-control" aria-label="${escapeHtml(field.label)}">
+                  <input type="checkbox" data-settings-path="${escapeHtml(field.path)}" ${value ? "checked" : ""}>
+                  <span class="settings-switch-track"></span>
+                </label>
+              </div>
+            `;
+          }
+          return `
+            <div class="settings-field">
+              <label>
+                <span class="settings-field-name">${escapeHtml(field.label)}</span>
+                <span class="settings-field-copy">${escapeHtml(field.help)}</span>
+              </label>
+              <input
+                type="number"
+                inputmode="decimal"
+                min="${field.min}"
+                max="${field.max}"
+                step="${field.step}"
+                value="${escapeHtml(String(value ?? ""))}"
+                data-settings-path="${escapeHtml(field.path)}"
+              >
+              <span class="settings-inline-note">Current desk value: ${escapeHtml(formatSettingsValue(field, getSettingValue(snapshot, field.path)))}</span>
+            </div>
+          `;
+        }).join("")}
+      </div>
+    </section>
+  `).join("");
+
+  if (settingsSaveEl) settingsSaveEl.disabled = !settingsAreDirty();
+  if (settingsResetEl) settingsResetEl.disabled = !settingsAreDirty();
+  setSettingsMessage(state.settingsMessage, state.settingsMessageIsError);
+}
+
 function renderStatusBand() {
   if (!statusBandEl || !state.system) return;
 
@@ -1850,7 +2144,13 @@ function renderLogExperience(entries = buildLogEntries()) {
       const definition = LOG_DEFINITIONS[key];
       const count = categoryCounts[key] || 0;
       return `
-        <article class="log-category-card log-category-summary ${state.activeLogFilter === key ? "is-active" : ""}" aria-current="${state.activeLogFilter === key ? "true" : "false"}">
+        <article
+          class="log-category-card log-category-summary ${state.activeLogFilter === key ? "is-active" : ""}"
+          data-log-filter="${escapeHtml(key)}"
+          aria-current="${state.activeLogFilter === key ? "true" : "false"}"
+          role="button"
+          tabindex="0"
+        >
           <div class="log-category-top">
             <span class="log-category-name">${escapeHtml(definition.label)}</span>
             <span class="log-category-count">${escapeHtml(formatWhole.format(count))}</span>
@@ -1858,7 +2158,7 @@ function renderLogExperience(entries = buildLogEntries()) {
           <p>${escapeHtml(definition.description)}</p>
           <div class="log-category-footer">
             <span class="log-category-source">${escapeHtml(definition.source)}</span>
-            <span class="log-category-state">${escapeHtml(state.activeLogFilter === key ? "Active in timeline" : "Use filter rail")}</span>
+            <span class="log-category-state">${escapeHtml(state.activeLogFilter === key ? "Active in timeline" : "Select to focus timeline")}</span>
           </div>
         </article>
       `;
@@ -2598,6 +2898,12 @@ if (logSearchInputEl) {
 }
 
 document.addEventListener("input", (event) => {
+  const settingsField = event.target.closest("[data-settings-path]");
+  if (settingsField && settingsField.type !== "checkbox") {
+    syncSettingsDraftFromControl(settingsField);
+    return;
+  }
+
   const mappingSearch = event.target.closest("#mappingSearchInput");
   if (!mappingSearch) return;
   state.mappingQuery = mappingSearch.value || "";
@@ -2611,6 +2917,18 @@ document.addEventListener("input", (event) => {
 });
 
 document.addEventListener("change", (event) => {
+  const settingsField = event.target.closest("[data-settings-path]");
+  if (settingsField) {
+    if (!hasOperatorAccess()) {
+      showAuthOverlay("Sign in to update operator settings.");
+      return;
+    }
+    if (settingsField.type === "checkbox") {
+      syncSettingsDraftFromControl(settingsField);
+      return;
+    }
+  }
+
   const select = event.target.closest("select.criteria-match-select");
   if (!select) return;
   if (!hasOperatorAccess()) {
@@ -2684,6 +3002,46 @@ if (connectionResetEl) {
   });
 }
 
+if (settingsFormEl) {
+  settingsFormEl.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (!hasOperatorAccess()) {
+      showAuthOverlay("Sign in to save operator settings.");
+      return;
+    }
+    if (!settingsAreDirty() || !state.settingsDraft) {
+      setSettingsMessage("No settings changes to save.");
+      return;
+    }
+
+    void (async () => {
+      if (settingsSaveEl) settingsSaveEl.disabled = true;
+      setSettingsMessage("Saving operator settings...");
+      try {
+        const payload = await postJson("/api/settings", state.settingsDraft);
+        state.settings = payload;
+        if (state.system) state.system.settings = payload;
+        state.settingsDraft = editableSettingsSnapshot(payload);
+        setSettingsMessage("Settings saved and applied live.");
+        render();
+      } catch (error) {
+        setSettingsMessage(error instanceof Error ? error.message : "Unable to save settings.", true);
+        renderSettings();
+      } finally {
+        if (settingsSaveEl) settingsSaveEl.disabled = false;
+      }
+    })();
+  });
+}
+
+if (settingsResetEl) {
+  settingsResetEl.addEventListener("click", () => {
+    state.settingsDraft = editableSettingsSnapshot(state.settings);
+    setSettingsMessage("Draft reset to the last saved settings.");
+    renderSettings();
+  });
+}
+
 if (edgeChartEl && equityChartEl) {
   const resizeObserver = new ResizeObserver(() => renderCharts());
   resizeObserver.observe(edgeChartEl);
@@ -2699,6 +3057,8 @@ async function refreshAllData() {
     state.system = null;
     state.portfolio = null;
     state.profitability = null;
+    state.settings = null;
+    state.settingsDraft = null;
     state.opportunities = [];
     state.trades = [];
     state.manualPositions = [];
@@ -2716,6 +3076,8 @@ async function refreshAllData() {
     state.system = null;
     state.portfolio = null;
     state.profitability = null;
+    state.settings = null;
+    state.settingsDraft = null;
     state.opportunities = [];
     state.trades = [];
     state.manualPositions = [];

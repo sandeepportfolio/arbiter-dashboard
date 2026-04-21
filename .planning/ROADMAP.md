@@ -1,5 +1,7 @@
 # Roadmap: Arbiter Dashboard
 
+> **Historical planning artifact.** Status details below were part of the pre-pivot planning ledger and are no longer the authoritative live-state view. Use `HANDOFF.md`, `STATUS.md`, and `GOLIVE.md` for current operator truth. `/gsd-*` references in this file are historical only on this host.
+
 ## Overview
 
 Take the existing untested arbitrage system from "code that compiles" to "system that trades live without losing money." The path is: fix broken API integrations that block all trading, harden execution and operational infrastructure, layer on safety mechanisms, validate everything in sandbox environments, then execute the first live arbitrage trade under operator supervision.

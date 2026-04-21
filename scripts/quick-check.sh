@@ -4,6 +4,11 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PORT="${ARBITER_SMOKE_PORT:-8092}"
 SERVER_LOG="$(mktemp -t arbiter-quick-check.XXXXXX.log)"
+PYTHON_BIN="${ARBITER_PYTHON:-$ROOT_DIR/.venv/bin/python}"
+
+if [[ ! -x "$PYTHON_BIN" ]]; then
+  PYTHON_BIN="$(command -v python3)"
+fi
 
 cleanup() {
   if [[ -n "${SERVER_PID:-}" ]] && kill -0 "$SERVER_PID" >/dev/null 2>&1; then
@@ -15,11 +20,12 @@ trap cleanup EXIT
 
 cd "$ROOT_DIR"
 
+echo "[quick-check] python: $PYTHON_BIN ($($PYTHON_BIN --version 2>&1))"
 echo "[quick-check] compile package"
-python3 -m compileall arbiter >/dev/null
+"$PYTHON_BIN" -m compileall arbiter >/dev/null
 
 echo "[quick-check] syntax check critical Python entrypoints"
-python3 -m py_compile \
+"$PYTHON_BIN" -m py_compile \
   arbiter/api.py \
   arbiter/main.py \
   arbiter/portfolio/monitor.py \
@@ -32,7 +38,7 @@ if command -v node >/dev/null 2>&1; then
 fi
 
 echo "[quick-check] run python package tests"
-python3 -m pytest -q arbiter
+"$PYTHON_BIN" -m pytest -q arbiter
 
 if [[ -d node_modules ]]; then
   echo "[quick-check] run TypeScript typecheck"
@@ -44,7 +50,7 @@ else
 fi
 
 echo "[quick-check] smoke test API server"
-python3 -m arbiter.main --api-only --port "$PORT" >"$SERVER_LOG" 2>&1 &
+"$PYTHON_BIN" -m arbiter.main --api-only --port "$PORT" >"$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
 
 for _ in {1..30}; do

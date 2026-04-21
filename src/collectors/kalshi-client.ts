@@ -1,7 +1,11 @@
 /**
- * Kalshi API client — stub implementation.
- * Requires API key + RSA private key for authentication.
- * When credentials are not available, returns empty data gracefully.
+ * Kalshi collector adapter for the TypeScript demo pipeline.
+ *
+ * Current repo truth:
+ * - Live Kalshi auth and trading checks exist in the Python stack under arbiter/.
+ * - This TypeScript client does not sign or issue real Kalshi requests yet.
+ * - If credentials are present, fail fast so operators do not mistake an empty
+ *   response for a healthy live connection.
  */
 
 import type { PricePoint } from "../types.js";
@@ -11,6 +15,9 @@ export interface KalshiConfig {
   privateKeyPath?: string;
   dryRun: boolean;
 }
+
+export const KALSHI_TS_CLIENT_BLOCKER =
+  "Kalshi TypeScript collector is not implemented. The live path uses the Python stack; add signed REST calls here before relying on src/cli.ts for Kalshi market data.";
 
 export class KalshiClient {
   private readonly config: KalshiConfig;
@@ -30,10 +37,7 @@ export class KalshiClient {
       return [];
     }
 
-    // TODO: Implement real Kalshi API calls with RSA auth
-    // For now, return empty — will be implemented when credentials are configured
-    console.log("[Kalshi] API client initialized (credentials found, but full API integration pending)");
-    return [];
+    throw new Error(KALSHI_TS_CLIENT_BLOCKER);
   }
 }
 

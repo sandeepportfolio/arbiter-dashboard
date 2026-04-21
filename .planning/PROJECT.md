@@ -1,5 +1,7 @@
 # Arbiter Dashboard
 
+> **Historical planning snapshot.** This document predates the completed Polymarket US pivot + scale work. It remains useful for rationale/history, but not for current operator instructions. Use `HANDOFF.md`, `STATUS.md`, and `GOLIVE.md` for live state. Any `/gsd-*` references below are historical only on this host.
+
 ## What This Is
 
 A cross-platform prediction market arbitrage system that detects price discrepancies across Kalshi and Polymarket, then executes trades to capture the spread. It includes a real-time WebSocket dashboard for monitoring prices, opportunities, positions, and execution. The system is built but untested against live APIs.

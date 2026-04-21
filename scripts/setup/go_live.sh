@@ -24,7 +24,20 @@
 
 set -euo pipefail
 
-cd "$(git rev-parse --show-toplevel)"
+ROOT_DIR="$(git rev-parse --show-toplevel)"
+cd "$ROOT_DIR"
+
+PYTHON_BIN="${ARBITER_PYTHON:-$ROOT_DIR/.venv/bin/python}"
+if [ ! -x "$PYTHON_BIN" ]; then
+    if command -v python3 >/dev/null 2>&1; then
+        PYTHON_BIN="$(command -v python3)"
+    elif command -v python >/dev/null 2>&1; then
+        PYTHON_BIN="$(command -v python)"
+    else
+        echo "No Python interpreter found. Run ./scripts/setup/bootstrap_python.sh first." >&2
+        exit 1
+    fi
+fi
 
 # ─── Colors ───────────────────────────────────────────────────────────
 if [ -t 1 ]; then
@@ -55,6 +68,11 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 pass "docker available"
 
+if ! "$PYTHON_BIN" --version >/dev/null 2>&1; then
+    fail "selected Python is not runnable: $PYTHON_BIN"
+fi
+pass "python available via $PYTHON_BIN ($($PYTHON_BIN --version 2>&1))"
+
 # Source env so subsequent python calls see the values
 set -a
 # shellcheck disable=SC1091
@@ -63,7 +81,7 @@ set +a
 
 # ─── 1. validate_env.py ───────────────────────────────────────────────
 step "1. Validate .env.production shape + sanity"
-if ! python scripts/setup/validate_env.py; then
+if ! "$PYTHON_BIN" scripts/setup/validate_env.py; then
     fail "validate_env.py reported FAIL rows. Fix them and re-run."
 fi
 
@@ -88,7 +106,7 @@ done
 
 # ─── 3. Kalshi auth round-trip ────────────────────────────────────────
 step "3. Kalshi prod authentication + balance check"
-if ! python scripts/setup/check_kalshi_auth.py; then
+if ! "$PYTHON_BIN" scripts/setup/check_kalshi_auth.py; then
     fail "Kalshi auth check failed — see output above"
 fi
 
@@ -97,24 +115,24 @@ step "4. Polymarket wallet / credentials check"
 # Task 17: route to check_polymarket_us.py for US DCM variant, legacy otherwise.
 _POLY_VARIANT="${POLYMARKET_VARIANT:-legacy}"
 if [ "$_POLY_VARIANT" = "us" ]; then
-    if ! python scripts/setup/check_polymarket_us.py; then
+    if ! "$PYTHON_BIN" scripts/setup/check_polymarket_us.py; then
         fail "Polymarket US check failed — see output above"
     fi
 else
-    if ! python scripts/setup/check_polymarket.py; then
+    if ! "$PYTHON_BIN" scripts/setup/check_polymarket.py; then
         fail "Polymarket check failed — see output above"
     fi
 fi
 
 # ─── 5. Telegram dry-test ─────────────────────────────────────────────
 step "5. Telegram dry-test (a message should land in your chat)"
-if ! python scripts/setup/check_telegram.py; then
+if ! "$PYTHON_BIN" scripts/setup/check_telegram.py; then
     fail "Telegram dry-test failed — see output above. Fix BOT_TOKEN/CHAT_ID, or message the bot first."
 fi
 
 # ─── 6. MARKET_MAP readiness ──────────────────────────────────────────
 step "6. MARKET_MAP: at least one auto-trade-ready pair"
-if ! python scripts/setup/check_mapping_ready.py; then
+if ! "$PYTHON_BIN" scripts/setup/check_mapping_ready.py; then
     echo "${YELLOW}Open http://localhost:8080/ops, log in, navigate to Mappings panel.${NC}"
     echo "${YELLOW}Pick one pair with identical resolution criteria, click Confirm, then Enable auto-trade.${NC}"
     echo "${YELLOW}Re-run this script.${NC}"
@@ -126,7 +144,7 @@ step "7. Arbiter preflight (16 checks)"
 # Preflight in-process (not via docker exec) so we use the same env we just validated.
 # PREFLIGHT_ALLOW_LIVE=1 enables the 5b live balance check (safe here — we already
 # verified credentials in step 4, and go_live.sh always runs with full env).
-if ! PREFLIGHT_ALLOW_LIVE=1 python -m arbiter.live.preflight; then
+if ! PREFLIGHT_ALLOW_LIVE=1 "$PYTHON_BIN" -m arbiter.live.preflight; then
     fail "Preflight reported blockers — fix them and re-run"
 fi
 

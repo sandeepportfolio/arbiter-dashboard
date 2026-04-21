@@ -1,5 +1,7 @@
 # Requirements: Arbiter Dashboard
 
+> **Historical requirements ledger.** This file preserves the original phase-mapping view and intentionally still shows pre-closure requirement states. For the current live operator picture after the Polymarket US pivot, use `HANDOFF.md`, `STATUS.md`, and `GOLIVE.md`.
+
 **Defined:** 2026-04-16
 **Core Value:** Execute live arbitrage trades across both platforms (Kalshi, Polymarket) without losing money to bugs, stale prices, or partial fills.
 

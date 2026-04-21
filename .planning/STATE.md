@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 4 complete (phase_gate=PASS, Phase 5 D-19 gate flipped); Plan 05-02 live-fire now unblocked
-last_updated: "2026-04-21T00:20:00Z"
+stopped_at: Polymarket US pivot shipped; operator go-live pending production credentials, funding, and first supervised live trade
+last_updated: "2026-04-21T08:15:00Z"
 last_activity: 2026-04-21
 progress:
   total_phases: 7
@@ -16,18 +16,20 @@ progress:
 
 # Project State
 
+> **Current-use note:** This file is now a light state snapshot plus historical planning context. For active operator guidance, trust `HANDOFF.md`, `STATUS.md`, and `GOLIVE.md`. References to `/gsd-*` workflows elsewhere in `.planning/` are historical and not runnable on this host.
+
 ## Project Reference
 
 See: .planning/PROJECT.md (updated 2026-04-16)
 
-**Core value:** Execute live arbitrage trades across all three platforms without losing money to bugs, stale prices, or partial fills.
-**Current focus:** Phase 05 — live-trading (Phase 4 D-19 gate PASSED)
+**Core value:** Execute live arbitrage trades across Kalshi and Polymarket without losing money to bugs, stale prices, or partial fills.
+**Current focus:** Operator provisioning and first supervised Polymarket US live trade, then controlled auto-mode enable
 
 ## Current Position
 
-Phase: 05-live-trading
-Plan: 05-01 complete; 05-02 UNBLOCKED (Phase 4 D-19 PASS, 2026-04-21)
-Status: All Phase 4 observable scenarios verified end-to-end against demo.kalshi.co. Plan 05-02 live-fire now cleared to execute.
+Phase: 05-live-trading / 06-production-automation
+Plan: 05-02 code complete but awaiting operator credentials and funding; Phase 6 automation code already landed on `main`
+Status: Code path is ready for Polymarket US go-live. Remaining work is human-only provisioning, mapping confirmation, and the first supervised live-fire execution.
 Last activity: 2026-04-21
 
 Progress: [##########] 100% (Plan 05-01 done, Wave 0 of 05-VALIDATION.md complete)
@@ -87,11 +89,11 @@ None yet.
 
 ### Blockers/Concerns
 
-- Polymarket platform decision (international vs US) must be resolved before SDK selection in Phase 1 (API-06)
-- Kalshi demo environment may still accept legacy pricing fields -- passing demo does NOT guarantee production works
+- Human-only production prerequisites remain: Kalshi prod key/funding, Polymarket US developer key/funding, Telegram bot, and at least one confirmed live mapping
+- `CLAUDE.md` and some planning docs still reference `/gsd-*` commands that are unavailable on this host
 
 ## Session Continuity
 
-Last session: 2026-04-20T22:37:58Z
-Stopped at: Phase 5 Plan 05-01 complete — scaffolding landed, ready for Plan 05-02 once Phase 4 D-19 flips to PASS
-Resume file: .planning/phases/05-live-trading/05-01-SUMMARY.md
+Last session: 2026-04-21T08:15:00Z
+Stopped at: Docs/state reconciled after the completed Polymarket US pivot; operator should resume from `HANDOFF.md` §3 and `GOLIVE.md`
+Resume file: HANDOFF.md

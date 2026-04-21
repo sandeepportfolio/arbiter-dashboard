@@ -6,6 +6,19 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+PYTHON_BIN="${ARBITER_PYTHON:-$ROOT_DIR/.venv/bin/python}"
+
+if [[ ! -x "$PYTHON_BIN" ]]; then
+  if command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN="$(command -v python3)"
+  elif command -v python >/dev/null 2>&1; then
+    PYTHON_BIN="$(command -v python)"
+  else
+    echo "[start] ERROR: no Python interpreter found. Run ./scripts/setup/bootstrap_python.sh first." >&2
+    exit 1
+  fi
+fi
+
 cd "$ROOT_DIR"
 
 # ─── Colours ────────────────────────────────────────────────────────────
@@ -16,8 +29,8 @@ warn() { echo -e "${YELLOW}[start]${NC} WARNING: $*" >&2; }
 die()  { echo -e "${RED}[start]${NC} ERROR: $*" >&2; exit 1; }
 
 # ─── Check env ─────────────────────────────────────────────────────────
-log "Validating environment..."
-python3 scripts/migrate.py --check-env || die "Environment validation failed"
+log "Validating environment with $PYTHON_BIN ($($PYTHON_BIN --version 2>&1))..."
+"$PYTHON_BIN" scripts/migrate.py --check-env || die "Environment validation failed"
 
 # ─── DRY_RUN guard ────────────────────────────────────────────────────
 if [[ "${DRY_RUN:-true}" != "false" ]]; then
@@ -30,7 +43,7 @@ fi
 
 # ─── Migrations ───────────────────────────────────────────────────────
 log "Running database migrations..."
-python3 scripts/migrate.py --apply || die "Migrations failed"
+"$PYTHON_BIN" scripts/migrate.py --apply || die "Migrations failed"
 
 # ─── PID file ─────────────────────────────────────────────────────────
 PID_FILE="${PID_FILE:-/tmp/arbiter-server.pid}"
@@ -50,7 +63,7 @@ PORT="${ARBITER_PORT:-8090}"
 LAN_IP="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true)"
 
 log "Starting API server on ${HOST}:${PORT}..."
-CMD=(python3 -m arbiter.main --host "$HOST" --port "$PORT" --log-level "${LOG_LEVEL:-INFO}")
+CMD=("$PYTHON_BIN" -m arbiter.main --host "$HOST" --port "$PORT" --log-level "${LOG_LEVEL:-INFO}")
 if [[ "${DRY_RUN:-true}" == "false" ]]; then
   CMD+=(--live)
 fi

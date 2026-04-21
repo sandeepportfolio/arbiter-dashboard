@@ -5,6 +5,7 @@ Two supported paths: **docker-compose** (recommended, self-contained) or **syste
 Both paths assume:
 - `.env.production` has been populated from `.env.production.template`
 - `./keys/kalshi_private.pem` exists (NOT committed; referenced by `KALSHI_PRIVATE_KEY_PATH`)
+- default venue config is `POLYMARKET_VARIANT=us` with Polymarket US API credentials (`POLYMARKET_US_API_KEY_ID`, `POLYMARKET_US_API_SECRET`)
 - Postgres + Redis are reachable (managed by compose, or provisioned externally for systemd)
 
 ---
@@ -20,7 +21,8 @@ Single file: `docker-compose.prod.yml`. Includes Postgres 16 (alpine), Redis 7 (
 cp .env.production.template .env.production
 # Fill in all <placeholder> values, especially:
 #   KALSHI_API_KEY_ID, KALSHI_PRIVATE_KEY_PATH (= ./keys/kalshi_private.pem)
-#   POLY_PRIVATE_KEY, POLY_FUNDER
+#   POLYMARKET_VARIANT=us
+#   POLYMARKET_US_API_KEY_ID, POLYMARKET_US_API_SECRET
 #   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 #   UI_SESSION_SECRET (openssl rand -hex 32)
 
@@ -37,7 +39,7 @@ docker compose -f docker-compose.prod.yml logs -f arbiter-api-prod
 # 5. Dry Telegram test
 docker compose -f docker-compose.prod.yml exec arbiter-api-prod python -m arbiter.notifiers.telegram
 
-# 6. Run 15-item preflight
+# 6. Run preflight
 docker compose -f docker-compose.prod.yml exec arbiter-api-prod python -m arbiter.live.preflight
 ```
 
@@ -155,4 +157,5 @@ On startup, `arbiter.main` calls `reconcile_non_terminal_orders` to reconcile an
 - On the server, `/etc/arbiter/arbiter.env` should be `0600` owned by `arbiter:arbiter`.
 - Rotate `UI_SESSION_SECRET` on a cadence; active sessions are invalidated on restart.
 - Kalshi API key: regenerate quarterly via the Kalshi account portal.
-- Polymarket wallet key: single-purpose throwaway wallet only; never your personal wallet.
+- Polymarket US API secret: treat like a production trading credential, never print it to logs/chat, rotate immediately if exposed.
+- Legacy Polygon wallet secrets only matter if you intentionally run `POLYMARKET_VARIANT=legacy`.

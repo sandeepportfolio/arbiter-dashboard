@@ -4,11 +4,10 @@ Behavior:
     1. Open headful Chromium to https://polymarket.us/developer.
     2. Poll the URL for a dev-portal-internal path, waiting up to 5 minutes
        for the operator to complete login manually.
-    3. Navigate to the "Create API Key" flow.
-       TODO: Confirm the exact CSS/text selector for the "Create API Key" button
-             once the real portal UI is available (e.g. 'button:has-text("Create API Key")').
-       Fallback: If the automatic selector fails, the script pauses and prints
-                 "Operator: please click Create API Key in the browser, then press Enter."
+    3. Attempt the "Create API Key" flow using best-effort selectors.
+       Because the portal is login-gated and may drift, the script always keeps
+       a manual fallback: if the automatic selector fails, it pauses and prints
+       "Operator: please click Create API Key in the browser, then press Enter."
     4. Capture the secret from the on-screen field using Playwright's
        locator.input_value() directly into a Python variable — never via screenshot.
     5. Edit .env.production to set POLYMARKET_US_API_KEY_ID and
@@ -111,11 +110,12 @@ _PORTAL_INTERNAL_PATHS = ("/developer/keys", "/developer/api", "/api-keys", "/de
 _LOGIN_TIMEOUT_S = 300  # 5 minutes
 _POLL_INTERVAL_S = 2
 
-# TODO: Replace these selectors with the confirmed portal selectors once the
-#       real Polymarket US dev portal UI is inspected.
-_CREATE_KEY_SELECTOR = 'button:has-text("Create API Key")'  # TODO: confirm selector
-_KEY_ID_SELECTOR = '[data-testid="api-key-id"], input[name="keyId"], .api-key-id'  # TODO: confirm
-_SECRET_SELECTOR = '[data-testid="api-secret"], input[name="secret"], .api-secret'  # TODO: confirm
+# Best-effort selectors for the login-gated Polymarket US portal. These are not
+# treated as a hard dependency because the flow explicitly falls back to manual
+# operator click/paste when the UI drifts.
+_CREATE_KEY_SELECTOR = 'button:has-text("Create API Key")'
+_KEY_ID_SELECTOR = '[data-testid="api-key-id"], input[name="keyId"], .api-key-id'
+_SECRET_SELECTOR = '[data-testid="api-secret"], input[name="secret"], .api-secret'
 
 
 def _wait_for_login(page) -> bool:
