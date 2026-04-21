@@ -285,14 +285,51 @@ def update_market_mapping(
     allow_auto_trade: bool | None = None,
     resolution_criteria: dict | None = None,
     resolution_match_status: str | None = None,
+    actor: str | None = None,
 ) -> dict | None:
+    """Mutate MARKET_MAP[canonical_id] live.
+
+    Phase 6 Plan 06-05: append an audit-log entry per changed field so operator
+    actions are durable across the in-process lifetime. Entries have shape:
+
+        {
+          "ts": <float unix>,
+          "actor": "<email or 'system'>",
+          "field": "status" | "allow_auto_trade" | "resolution_*",
+          "old": <prior value>,
+          "new": <new value>,
+          "note": "<operator-supplied note, if any>"
+        }
+
+    Audit entries are stored on the mapping itself at key ``audit_log`` capped
+    at 50 entries per mapping (FIFO eviction).
+    """
     mapping = MARKET_MAP.get(canonical_id)
     if not mapping:
         return None
 
+    audit_actor = (actor or "system").strip() or "system"
+    audit_note = (note or "").strip() or None
+    now = time.time()
+    audit_entries: list[dict] = list(mapping.get("audit_log") or [])
+
+    def _record(field: str, old, new) -> None:
+        if old == new:
+            return
+        audit_entries.append({
+            "ts": now,
+            "actor": audit_actor,
+            "field": field,
+            "old": old,
+            "new": new,
+            "note": audit_note,
+        })
+
     if status is not None:
+        _record("status", mapping.get("status"), status)
         mapping["status"] = status
     if allow_auto_trade is not None:
+        _record("allow_auto_trade", mapping.get("allow_auto_trade"), bool(allow_auto_trade))
         mapping["allow_auto_trade"] = bool(allow_auto_trade)
     if note:
         mapping["review_note"] = str(note).strip()
@@ -301,13 +338,33 @@ def update_market_mapping(
     # resolution_match_status mirrors criteria.criteria_match unless the
     # caller passes an explicit status (explicit kwarg wins).
     if resolution_criteria is not None:
+        _record(
+            "resolution_criteria",
+            mapping.get("resolution_criteria"),
+            resolution_criteria,
+        )
         mapping["resolution_criteria"] = resolution_criteria
         criteria_match = resolution_criteria.get("criteria_match")
         if criteria_match and resolution_match_status is None:
+            _record(
+                "resolution_match_status",
+                mapping.get("resolution_match_status"),
+                criteria_match,
+            )
             mapping["resolution_match_status"] = criteria_match
     if resolution_match_status is not None:
+        _record(
+            "resolution_match_status",
+            mapping.get("resolution_match_status"),
+            resolution_match_status,
+        )
         mapping["resolution_match_status"] = resolution_match_status
-    mapping["updated_at"] = time.time()
+
+    # Cap audit trail at 50 entries per mapping (FIFO eviction).
+    if len(audit_entries) > 50:
+        audit_entries = audit_entries[-50:]
+    mapping["audit_log"] = audit_entries
+    mapping["updated_at"] = now
     return mapping
 
 

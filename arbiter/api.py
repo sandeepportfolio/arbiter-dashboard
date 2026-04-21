@@ -199,6 +199,7 @@ class ArbiterAPI:
         app.router.add_get("/api/markets", self.handle_market_mappings)
         app.router.add_get("/api/market-mappings", self.handle_market_mappings)
         app.router.add_post("/api/market-mappings/{canonical_id}", self.handle_market_mapping_action)
+        app.router.add_get("/api/market-mappings/{canonical_id}/audit", self.handle_market_mapping_audit)
         app.router.add_get("/api/errors", self.handle_errors)
         app.router.add_post("/api/errors/{incident_id}", self.handle_incident_action)
         app.router.add_get("/api/manual-positions", self.handle_manual_positions)
@@ -345,8 +346,24 @@ class ArbiterAPI:
     async def handle_reconciliation(self, request):
         return web.json_response(self._reconciliation_snapshot())
 
-    async def handle_market_mapping_action(self, request):
+    async def handle_market_mapping_audit(self, request):
+        """Return the audit log for a single mapping (Phase 6 Plan 06-05).
+
+        Operator-only (require_auth). Response shape:
+            { "canonical_id": "...", "audit_log": [ {ts, actor, field, old, new, note}, ... ] }
+        """
         await require_auth(request)
+        canonical_id = request.match_info["canonical_id"]
+        if canonical_id not in MARKET_MAP:
+            return web.json_response({"error": f"Unknown mapping: {canonical_id}"}, status=404)
+        mapping = MARKET_MAP[canonical_id]
+        return web.json_response({
+            "canonical_id": canonical_id,
+            "audit_log": list(mapping.get("audit_log") or []),
+        })
+
+    async def handle_market_mapping_action(self, request):
+        actor = await require_auth(request)
         canonical_id = request.match_info["canonical_id"]
         if canonical_id not in MARKET_MAP:
             return web.json_response({"error": f"Unknown mapping: {canonical_id}"}, status=404)
@@ -398,6 +415,7 @@ class ArbiterAPI:
                 canonical_id,
                 status="confirmed",
                 note=note or "Confirmed from the operator desk.",
+                actor=actor,
                 **update_kwargs,
             )
         elif action == "review":
@@ -406,6 +424,7 @@ class ArbiterAPI:
                 status="review",
                 allow_auto_trade=False,
                 note=note or "Returned to review from the operator desk.",
+                actor=actor,
                 **update_kwargs,
             )
         elif action == "enable_auto_trade":
@@ -414,6 +433,7 @@ class ArbiterAPI:
                 status="confirmed",
                 allow_auto_trade=True,
                 note=note or "Auto-trade enabled from the operator desk.",
+                actor=actor,
                 **update_kwargs,
             )
         elif action == "disable_auto_trade":
@@ -421,6 +441,7 @@ class ArbiterAPI:
                 canonical_id,
                 allow_auto_trade=False,
                 note=note or "Auto-trade held from the operator desk.",
+                actor=actor,
                 **update_kwargs,
             )
         else:
