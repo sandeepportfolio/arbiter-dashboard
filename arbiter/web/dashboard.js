@@ -393,7 +393,7 @@ const balanceTickerFreshnessEl = document.getElementById("balanceTickerFreshness
 const navToggleEl = document.getElementById("navToggle");
 const navCloseEl = document.getElementById("navClose");
 const navScrimEl = document.getElementById("navScrim");
-const primaryNavEl = document.getElementById("primaryNav");
+const primaryNavEl = document.getElementById("primaryNavDrawer");
 const balanceSessionStart = Object.create(null);
 const balanceLastSnapshot = Object.create(null);
 const balanceFlashTimers = Object.create(null);
@@ -3432,7 +3432,7 @@ if (navScrimEl) {
 
 if (primaryNavEl) {
   primaryNavEl.addEventListener("click", (event) => {
-    const link = event.target instanceof Element ? event.target.closest("a.primary-nav-link") : null;
+    const link = event.target instanceof Element ? event.target.closest("a.primary-nav-drawer-link") : null;
     if (link) setNavOpen(false);
   });
 }
