@@ -114,10 +114,10 @@ OPS_STATE="$(${PWCLI[@]} eval "(async () => {
     if (ready) break;
     await sleep(120);
   }
-  const statusText = () => document.querySelector('[data-mapping-id="DEM_HOUSE_2026"] [data-mapping-status]')?.textContent?.trim().toLowerCase() || '';
-  const tradeText = () => document.querySelector('[data-mapping-id="DEM_HOUSE_2026"] .platform-chip.mapping-trade-pill')?.textContent?.trim().toLowerCase() || '';
+  const statusText = () => document.querySelector('[data-mapping-id="GOP_HOUSE_2026"] [data-mapping-status]')?.textContent?.trim().toLowerCase() || '';
+  const tradeText = () => document.querySelector('[data-mapping-id="GOP_HOUSE_2026"] .platform-chip.mapping-trade-pill')?.textContent?.trim().toLowerCase() || '';
   const before = { status: statusText(), trade: tradeText() };
-  document.querySelector('[data-mapping-id="DEM_HOUSE_2026"] [data-mapping-action="enable_auto_trade"]')?.click();
+  document.querySelector('[data-mapping-id="GOP_HOUSE_2026"] [data-mapping-action="enable_auto_trade"]')?.click();
   for (let attempt = 0; attempt < 40; attempt += 1) {
     if (statusText() === 'confirmed' && tradeText().includes('auto-trade')) {
       return {

@@ -259,30 +259,32 @@ fi
 echo "[ui-smoke] exercising mapping buttons"
 MAPPING_ACTION_STATE="$(${PWCLI[@]} eval "(async () => {
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const statusText = () => document.querySelector('[data-mapping-id="DEM_HOUSE_2026"] [data-mapping-status]')?.textContent?.trim().toLowerCase() || '';
-  const tradeText = () => document.querySelector('[data-mapping-id="DEM_HOUSE_2026"] .platform-chip.mapping-trade-pill')?.textContent?.trim().toLowerCase() || '';
-  const confirmBtn = document.querySelector('[data-mapping-id="DEM_HOUSE_2026"] [data-mapping-action="confirm"]');
+  const guardStatus = () => document.querySelector('[data-mapping-id=\"DEM_HOUSE_2026\"] [data-mapping-status]')?.textContent?.trim().toLowerCase() || '';
+  const readyStatus = () => document.querySelector('[data-mapping-id=\"GOP_HOUSE_2026\"] [data-mapping-status]')?.textContent?.trim().toLowerCase() || '';
+  const readyTrade = () => document.querySelector('[data-mapping-id=\"GOP_HOUSE_2026\"] .platform-chip.mapping-trade-pill')?.textContent?.trim().toLowerCase() || '';
+  const confirmBtn = document.querySelector('[data-mapping-id=\"DEM_HOUSE_2026\"] [data-mapping-action=\"confirm\"]');
   const confirmBlocked = !!confirmBtn?.disabled;
   const confirmReason = confirmBtn?.title || '';
-  document.querySelector('[data-mapping-id="DEM_HOUSE_2026"] [data-mapping-action="enable_auto_trade"]')?.click();
+  document.querySelector('[data-mapping-id=\"GOP_HOUSE_2026\"] [data-mapping-action=\"enable_auto_trade\"]')?.click();
   for (let attempt = 0; attempt < 40; attempt += 1) {
-    if (statusText() === 'confirmed' && tradeText().includes('auto-trade')) break;
+    if (readyTrade().includes('auto-trade')) break;
     await sleep(120);
   }
-  const enabledStatus = statusText();
-  const enabledTrade = tradeText();
-  document.querySelector('[data-mapping-id="DEM_HOUSE_2026"] [data-mapping-action="review"]')?.click();
+  const enabledStatus = readyStatus();
+  const enabledTrade = readyTrade();
+  document.querySelector('[data-mapping-id=\"GOP_HOUSE_2026\"] [data-mapping-action=\"review\"]')?.click();
   for (let attempt = 0; attempt < 40; attempt += 1) {
-    if (statusText() === 'review') break;
+    if (readyStatus() === 'review') break;
     await sleep(120);
   }
   return {
+    guardMappingStatus: guardStatus(),
     confirmBlocked,
     confirmReason,
     enabledStatus,
     enabledTrade,
-    reviewStatus: statusText(),
-    reviewTrade: tradeText(),
+    reviewStatus: readyStatus(),
+    reviewTrade: readyTrade(),
   };
 })()")"
 echo "$MAPPING_ACTION_STATE"

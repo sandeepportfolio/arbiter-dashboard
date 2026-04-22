@@ -987,6 +987,38 @@ async def seed_dashboard_fixture(
         if manual_opportunity is not None:
             await engine.execute_opportunity(manual_opportunity)
 
+    from .config.settings import update_market_mapping
+
+    update_market_mapping(
+        "DEM_HOUSE_2026",
+        status="review",
+        allow_auto_trade=False,
+        resolution_criteria={
+            "kalshi": {
+                "source": "Kalshi rulebook / Speaker of the House on 2027-02-01",
+                "rule": "If the Democratic Party has won control of the House in 2026, the market resolves Yes.",
+                "settlement_date": "2027-02-01",
+            },
+            "polymarket": {
+                "source": "Polymarket US retail market metadata",
+                "rule": "Will the Democratic Party win the House in the 2026 Midterms?",
+                "settlement_date": "2027-02-01",
+            },
+            "criteria_match": "pending_operator_review",
+            "operator_note": "Smoke fixture pending-review state for confirm-guard coverage.",
+        },
+        resolution_match_status="pending_operator_review",
+        actor="smoke-fixture",
+    )
+
+    update_market_mapping(
+        "GOP_HOUSE_2026",
+        status="confirmed",
+        allow_auto_trade=False,
+        resolution_match_status="identical",
+        actor="smoke-fixture",
+    )
+
     await engine.record_incident(
         arb_id="ARB-SEED-RECOVERY",
         canonical_id="DEM_HOUSE_2026",
