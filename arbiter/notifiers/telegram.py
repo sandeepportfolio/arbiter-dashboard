@@ -2,13 +2,14 @@
 
   $ python -m arbiter.notifiers.telegram
 
-Reads TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID from the environment, sends a
-single test message, and prints pass/fail. Used by Plan 06-06's GOLIVE.md as
-the "Telegram dry test" gate before running the first live trade.
+Reads TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID (pairing DM), and optional
+TELEGRAM_ALERTS_CHAT_ID (dedicated arbitrage-alerts channel) from the
+environment. Sends a dry-test to EACH configured chat so live-trading
+operators can confirm both routes before flipping AUTO_EXECUTE_ENABLED.
 
 Exit codes:
-  0 — message sent OK
-  1 — disabled mode (missing token/chat_id) or send returned False
+  0 — every configured chat received the message
+  1 — disabled mode (missing token/chat ids) or any send returned False
   2 — unexpected exception
 """
 from __future__ import annotations
@@ -23,9 +24,32 @@ from ..monitor.balance import TelegramNotifier
 __all__ = ["TelegramNotifier"]
 
 
+async def _send_to(token: str, chat_id: str, label: str, ts: str) -> bool:
+    notifier = TelegramNotifier(token, chat_id)
+    try:
+        ok = await notifier.send(
+            f"🧪 <b>Arbiter Telegram dry-test — {label}</b>\n"
+            f"If you are reading this, {label} routing is wired.\n"
+            f"Timestamp: {ts}",
+            dedup_key=f"arbiter.dry_test.{label}",
+        )
+        if ok:
+            print(f"Telegram dry-test OK [{label}] — message delivered to chat {chat_id}.")
+        else:
+            print(
+                f"Telegram dry-test FAILED [{label}] — send() returned False for chat {chat_id}. "
+                f"Check TELEGRAM_BOT_TOKEN and that the bot is a member/admin of the chat.",
+                file=sys.stderr,
+            )
+        return ok
+    finally:
+        await notifier.close()
+
+
 async def _dry_test() -> int:
     token = os.getenv("TELEGRAM_BOT_TOKEN", "")
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    alerts_chat_id = os.getenv("TELEGRAM_ALERTS_CHAT_ID", "").strip()
 
     if not token or not chat_id:
         print(
@@ -35,30 +59,27 @@ async def _dry_test() -> int:
         )
         return 1
 
-    notifier = TelegramNotifier(token, chat_id)
+    ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
     try:
-        ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        ok = await notifier.send(
-            f"🧪 <b>Arbiter Telegram dry-test</b>\n"
-            f"If you are reading this, Telegram alerting is wired.\n"
-            f"Timestamp: {ts}",
-            dedup_key="arbiter.dry_test",
-        )
-        if ok:
-            print("Telegram dry-test OK — message delivered.")
-            return 0
-        print(
-            "Telegram dry-test FAILED — send() returned False. "
-            "Check TELEGRAM_BOT_TOKEN (valid?) and TELEGRAM_CHAT_ID (bot is "
-            "in the chat? messaged the bot at least once?).",
-            file=sys.stderr,
-        )
-        return 1
+        pairing_ok = await _send_to(token, chat_id, "pairing DM", ts)
+
+        if alerts_chat_id and alerts_chat_id != chat_id:
+            alerts_ok = await _send_to(token, alerts_chat_id, "arbitrage alerts channel", ts)
+        else:
+            if not alerts_chat_id:
+                print(
+                    "WARNING: TELEGRAM_ALERTS_CHAT_ID not set — live alerts will fall "
+                    "back to TELEGRAM_CHAT_ID. For live trading, create a dedicated "
+                    "channel (see scripts/setup/setup_telegram_alerts_channel.py).",
+                    file=sys.stderr,
+                )
+            alerts_ok = True
+
+        return 0 if (pairing_ok and alerts_ok) else 1
     except Exception as exc:  # noqa: BLE001 — CLI wants a readable error
         print(f"Telegram dry-test ERROR: {exc!r}", file=sys.stderr)
         return 2
-    finally:
-        await notifier.close()
 
 
 def main() -> int:

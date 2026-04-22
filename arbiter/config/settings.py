@@ -489,10 +489,27 @@ class PolymarketUSConfig:
     ws_enabled: bool = True
 
 
+def _resolve_alerts_chat_id() -> str:
+    """Return the dedicated arbitrage-alerts chat id, falling back to TELEGRAM_CHAT_ID.
+
+    Arbiter posts live-trading alerts (balance, kill-switch, executions,
+    heartbeat, opportunities) to a dedicated Telegram channel so they don't
+    mingle with pairing/dry-test traffic or operator-user DMs. Set
+    ``TELEGRAM_ALERTS_CHAT_ID`` in .env.production to that channel's id.
+    When unset we fall back to ``TELEGRAM_CHAT_ID`` to preserve existing
+    single-channel deployments.
+    """
+    alerts = os.getenv("TELEGRAM_ALERTS_CHAT_ID", "").strip()
+    if alerts:
+        return alerts
+    return os.getenv("TELEGRAM_CHAT_ID", "")
+
+
 @dataclass
 class AlertConfig:
     telegram_bot_token: str = field(default_factory=lambda: os.getenv("TELEGRAM_BOT_TOKEN", ""))
     telegram_chat_id: str = field(default_factory=lambda: os.getenv("TELEGRAM_CHAT_ID", ""))
+    telegram_alerts_chat_id: str = field(default_factory=_resolve_alerts_chat_id)
     kalshi_low: float = 50.0
     polymarket_low: float = 25.0
     cooldown: float = 300.0

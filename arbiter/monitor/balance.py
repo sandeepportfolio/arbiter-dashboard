@@ -148,7 +148,8 @@ class BalanceMonitor:
         """
         self.config = config
         self.collectors = collectors
-        self.notifier = TelegramNotifier(config.telegram_bot_token, config.telegram_chat_id)
+        alerts_chat_id = getattr(config, "telegram_alerts_chat_id", "") or config.telegram_chat_id
+        self.notifier = TelegramNotifier(config.telegram_bot_token, alerts_chat_id)
         self._running = False
         self._balances: Dict[str, BalanceSnapshot] = {}
         self._last_alert_time: Dict[str, float] = {}
