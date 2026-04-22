@@ -386,6 +386,17 @@ const dockOpsLinkEl = document.getElementById("dockOpsLink");
 const heroTitleEl = document.getElementById("heroTitle");
 const heroSubtitleEl = document.getElementById("heroSubtitle");
 const heroBalanceStripEl = document.getElementById("heroBalanceStrip");
+const balanceTickerEl = document.getElementById("balanceTicker");
+const balanceTickerItemsEl = document.getElementById("balanceTickerItems");
+const balanceTickerTotalEl = document.getElementById("balanceTickerTotal");
+const balanceTickerFreshnessEl = document.getElementById("balanceTickerFreshness");
+const navToggleEl = document.getElementById("navToggle");
+const navCloseEl = document.getElementById("navClose");
+const navScrimEl = document.getElementById("navScrim");
+const primaryNavEl = document.getElementById("primaryNav");
+const balanceSessionStart = Object.create(null);
+const balanceLastSnapshot = Object.create(null);
+const balanceFlashTimers = Object.create(null);
 const heroValueEl = document.getElementById("heroValue");
 const heroDeltaEl = document.getElementById("heroDelta");
 const heroUpdatedEl = document.getElementById("heroUpdated");
@@ -649,8 +660,20 @@ function platformLabel(platform) {
   const labels = {
     kalshi: "Kalshi",
     polymarket: "Polymarket",
+    polymarket_us: "Polymarket US",
+    "polymarket-us": "Polymarket US",
   };
-  return labels[platform] || titleCase(platform);
+  return labels[platform] || titleCase(String(platform).replace(/_/g, " "));
+}
+
+function platformShortCode(platform) {
+  const codes = {
+    kalshi: "KSH",
+    polymarket: "POLY",
+    polymarket_us: "POLY·US",
+    "polymarket-us": "POLY·US",
+  };
+  return codes[platform] || String(platform || "").slice(0, 4).toUpperCase();
 }
 
 function statusClass(status) {
@@ -1551,6 +1574,7 @@ function renderOverview() {
       heroBalanceStripEl.innerHTML = "";
       heroBalanceStripEl.classList.add("hidden");
     }
+    renderBalanceTicker([]);
     if (riskUpdatedEl) riskUpdatedEl.innerHTML = "Updated<br>Waiting";
     if (riskScoreBarEl) riskScoreBarEl.style.width = "0%";
     if (riskSummaryEl) riskSummaryEl.textContent = "Risk posture is loading.";
@@ -1603,35 +1627,136 @@ function renderOverview() {
 }
 
 function renderHeroBalances() {
-  if (!heroBalanceStripEl) return;
   const balances = Object.entries(state.system?.balances || {});
-  if (!balances.length) {
-    heroBalanceStripEl.innerHTML = "";
-    heroBalanceStripEl.classList.add("hidden");
+  if (heroBalanceStripEl) {
+    if (!balances.length) {
+      heroBalanceStripEl.innerHTML = "";
+      heroBalanceStripEl.classList.add("hidden");
+    } else {
+      heroBalanceStripEl.classList.remove("hidden");
+      heroBalanceStripEl.innerHTML = balances
+        .slice(0, 3)
+        .map(([platform, snapshot]) => {
+          const low = Boolean(snapshot?.is_low);
+          const threshold = Number(platform === "kalshi"
+            ? state.settings?.alerts?.kalshi_low
+            : state.settings?.alerts?.polymarket_low);
+          const updated = relTime(snapshot?.timestamp || state.system?.timestamp || Date.now() / 1000);
+          return `
+            <article class="hero-balance-card ${low ? "is-low" : "is-healthy"}">
+              <div class="hero-balance-meta">
+                <span class="hero-balance-label">${escapeHtml(platformLabel(platform))}</span>
+                <span class="hero-balance-state">${low ? "Needs funding" : "Funded"}</span>
+              </div>
+              <strong class="hero-balance-value">${escapeHtml(formatUsd.format(snapshot?.balance || 0))}</strong>
+              <p class="hero-balance-copy">${low ? "Below" : "Above"} alert floor${Number.isFinite(threshold) ? ` of ${escapeHtml(formatUsd.format(threshold))}` : ""} • updated ${escapeHtml(updated)}</p>
+            </article>
+          `;
+        })
+        .join("");
+    }
+  }
+  renderBalanceTicker(balances);
+}
+
+function renderBalanceTicker(entries) {
+  if (!balanceTickerEl || !balanceTickerItemsEl) return;
+
+  if (!entries || !entries.length) {
+    balanceTickerEl.setAttribute("data-state", state.wsConnected ? "stale" : "offline");
+    balanceTickerItemsEl.innerHTML = '<p class="balance-ticker-placeholder">Awaiting live balance feed…</p>';
+    if (balanceTickerTotalEl) balanceTickerTotalEl.textContent = "—";
+    if (balanceTickerFreshnessEl) balanceTickerFreshnessEl.textContent = state.wsConnected ? "Live · waiting" : "Offline";
     return;
   }
 
-  heroBalanceStripEl.classList.remove("hidden");
-  heroBalanceStripEl.innerHTML = balances
-    .slice(0, 3)
-    .map(([platform, snapshot]) => {
-      const low = Boolean(snapshot?.is_low);
-      const threshold = Number(platform === "kalshi"
-        ? state.settings?.alerts?.kalshi_low
-        : state.settings?.alerts?.polymarket_low);
-      const updated = relTime(snapshot?.timestamp || state.system?.timestamp || Date.now() / 1000);
-      return `
-        <article class="hero-balance-card ${low ? "is-low" : "is-healthy"}">
-          <div class="hero-balance-meta">
-            <span class="hero-balance-label">${escapeHtml(platformLabel(platform))}</span>
-            <span class="hero-balance-state">${low ? "Needs funding" : "Funded"}</span>
-          </div>
-          <strong class="hero-balance-value">${escapeHtml(formatUsd.format(snapshot?.balance || 0))}</strong>
-          <p class="hero-balance-copy">${low ? "Below" : "Above"} alert floor${Number.isFinite(threshold) ? ` of ${escapeHtml(formatUsd.format(threshold))}` : ""} • updated ${escapeHtml(updated)}</p>
-        </article>
-      `;
-    })
-    .join("");
+  const preferredOrder = ["kalshi", "polymarket_us", "polymarket-us", "polymarket"];
+  const ordered = entries.slice().sort(([a], [b]) => {
+    const ai = preferredOrder.indexOf(a);
+    const bi = preferredOrder.indexOf(b);
+    const ar = ai === -1 ? 999 : ai;
+    const br = bi === -1 ? 999 : bi;
+    return ar - br;
+  });
+
+  let total = 0;
+  let newestTs = 0;
+  let anyLow = false;
+
+  const cellsHtml = ordered.map(([platform, snapshot]) => {
+    const balance = Number(snapshot?.balance) || 0;
+    total += balance;
+    const ts = Number(snapshot?.timestamp) || 0;
+    if (ts > newestTs) newestTs = ts;
+    const low = Boolean(snapshot?.is_low);
+    if (low) anyLow = true;
+
+    if (balanceSessionStart[platform] === undefined) {
+      balanceSessionStart[platform] = balance;
+    }
+    const sessionDelta = balance - balanceSessionStart[platform];
+    const prev = balanceLastSnapshot[platform];
+    const changed = prev !== undefined && Math.abs(balance - prev) > 0.005;
+    const flashClass = changed
+      ? (balance > prev ? "is-flash-up" : "is-flash-down")
+      : "";
+    balanceLastSnapshot[platform] = balance;
+
+    const deltaFormatted = Math.abs(sessionDelta) >= 0.01
+      ? `${sessionDelta > 0 ? "+" : "−"}${formatUsd.format(Math.abs(sessionDelta))}`
+      : "flat";
+    const deltaCls = Math.abs(sessionDelta) < 0.01
+      ? ""
+      : sessionDelta > 0 ? "is-up" : "is-down";
+    const arrow = Math.abs(sessionDelta) < 0.01 ? "•" : sessionDelta > 0 ? "▲" : "▼";
+
+    if (changed && balanceFlashTimers[platform]) {
+      window.clearTimeout(balanceFlashTimers[platform]);
+    }
+    if (changed) {
+      balanceFlashTimers[platform] = window.setTimeout(() => {
+        const cell = balanceTickerItemsEl?.querySelector(`[data-balance-platform="${platform}"]`);
+        if (cell) cell.classList.remove("is-flash-up", "is-flash-down");
+      }, 1200);
+    }
+
+    return `
+      <article class="balance-cell ${low ? "is-low" : ""} ${flashClass}" role="listitem" data-balance-platform="${escapeHtml(platform)}" title="${escapeHtml(platformLabel(platform))} — last update ${escapeHtml(relTime(ts || state.system?.timestamp || Date.now() / 1000))}">
+        <span class="balance-cell-platform">
+          <span class="balance-cell-code">${escapeHtml(platformShortCode(platform))}</span>
+          ${low ? '<span class="balance-cell-badge">LOW</span>' : ""}
+        </span>
+        <span class="balance-cell-value">${escapeHtml(formatUsd.format(balance))}</span>
+        <span class="balance-cell-delta ${deltaCls}" aria-label="Session delta">
+          <span class="balance-cell-delta-arrow" aria-hidden="true">${arrow}</span>
+          <span>${escapeHtml(deltaFormatted)}</span>
+        </span>
+      </article>
+    `;
+  }).join("");
+
+  balanceTickerItemsEl.innerHTML = cellsHtml;
+  if (balanceTickerTotalEl) {
+    balanceTickerTotalEl.textContent = formatUsd.format(total);
+  }
+
+  const now = Date.now() / 1000;
+  const ageSec = newestTs ? Math.max(0, now - newestTs) : Infinity;
+  let dataState = "live";
+  if (!state.wsConnected) dataState = "offline";
+  else if (ageSec > 45) dataState = "stale";
+  else if (anyLow) dataState = "warn";
+  balanceTickerEl.setAttribute("data-state", dataState);
+
+  if (balanceTickerFreshnessEl) {
+    if (!state.wsConnected) {
+      balanceTickerFreshnessEl.textContent = "Offline";
+    } else if (!newestTs) {
+      balanceTickerFreshnessEl.textContent = "Live · waiting";
+    } else {
+      balanceTickerFreshnessEl.textContent = `Live · ${relTime(newestTs)}`;
+    }
+  }
 }
 
 function renderRecentTradeCard(trade) {
@@ -2354,7 +2479,7 @@ function renderLogExperience(entries = buildLogEntries()) {
 
   if (!timeline) return;
   if (!filteredEntries.length) {
-    timeline.innerHTML = emptyState(query
+    timeline.innerHTML = emptyState(normalizedQuery
       ? "No events match the current activity search."
       : "No events match this activity view right now.");
     return;
@@ -3283,6 +3408,46 @@ function startPolling() {
 }
 
 window.addEventListener("resize", compactTopbar);
+
+function setNavOpen(open) {
+  document.body.classList.toggle("is-nav-open", Boolean(open));
+  if (navToggleEl) navToggleEl.setAttribute("aria-expanded", open ? "true" : "false");
+  if (primaryNavEl) primaryNavEl.setAttribute("aria-hidden", open ? "false" : "true");
+  if (navScrimEl) navScrimEl.setAttribute("aria-hidden", open ? "false" : "true");
+}
+
+if (navToggleEl) {
+  navToggleEl.addEventListener("click", () => {
+    setNavOpen(!document.body.classList.contains("is-nav-open"));
+  });
+}
+
+if (navCloseEl) {
+  navCloseEl.addEventListener("click", () => setNavOpen(false));
+}
+
+if (navScrimEl) {
+  navScrimEl.addEventListener("click", () => setNavOpen(false));
+}
+
+if (primaryNavEl) {
+  primaryNavEl.addEventListener("click", (event) => {
+    const link = event.target instanceof Element ? event.target.closest("a.primary-nav-link") : null;
+    if (link) setNavOpen(false);
+  });
+}
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && document.body.classList.contains("is-nav-open")) {
+    setNavOpen(false);
+  }
+});
+
+window.addEventListener("resize", () => {
+  if (window.innerWidth > 860 && document.body.classList.contains("is-nav-open")) {
+    setNavOpen(false);
+  }
+});
 
 renderChrome();
 setWsLabel("Connecting", true);
