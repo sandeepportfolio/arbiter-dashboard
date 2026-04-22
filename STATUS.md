@@ -1,87 +1,132 @@
-# Polymarket US Pivot — Final Status
+# Arbiter Dashboard — Current Status
 
-## Operator Notes
+Updated: 2026-04-22 00:58 PDT
+Repo root: `/Users/rentamac/Documents/arbiter`
 
-- Current source of truth for operators: `HANDOFF.md`, `GOLIVE.md`, and this file.
-- `.planning/*`, `docs/ARBITER.md`, and `docs/future-agent-production-test-plan.md` are historical snapshots unless they explicitly say otherwise.
-- `CLAUDE.md` still mentions `/gsd-*` entrypoints, but those commands are not available on this host.
-- Current checked-out base on this host is `1e0d345` (`docs(handoff): rewrite as direct mission-first runbook`). The commit block below is the pivot baseline, not the latest docs-only commit.
+## Source of truth
 
-## Pivot Baseline Commit
+Use these in order:
+1. `STATUS.md` (this file)
+2. `HANDOFF.md`
+3. `GOLIVE.md`
+4. `LIVE_MAPPING_AUDIT.md`
 
+Older planning docs are useful background, but not the current operator truth unless revalidated.
+
+## Git truth
+
+- Branch: `main`
+- Remote: `origin https://github.com/sandeepportfolio/arbiter-dashboard.git`
+- Current HEAD before this status-doc commit: `6b2634d` (`feat(arbiter): ship mapping expansion and ops dashboard updates`)
+- Divergence vs `origin/main`: `0 ahead / 0 behind`
+- Working tree before this status-doc update: clean
+
+## What is safely checked into git
+
+Checked in on `main`:
+- Arbiter Python runtime
+- Dashboard frontend and operator desk UI
+- Mapping expansion and auto-discovery code
+- Runtime settings persistence, SQL helpers, startup scripts, and docs
+- Templates such as `.env.production.template`
+- Live-state / handoff / go-live documentation
+
+Intentionally **not** checked into git:
+- `.env`
+- `.env.production`
+- `keys/kalshi_private.pem`
+- Any live API keys, bot tokens, session secrets, or other auth material
+
+That split is deliberate. The repo is portable; secrets stay private.
+
+## Current verification snapshot
+
+Fresh checks run on this machine tonight:
+- Python repo tests: `501 passed, 88 skipped`
+- TypeScript typecheck: pass
+- Vitest: `5 files, 40 tests` passed
+- API smoke: pass
+
+UI verification state:
+- Public desk render: pass
+- Mobile public layout smoke: pass
+- Operator desk auth/render smoke: pass
+- Log filter smoke: pass
+- Mapping action smoke: **currently red**
+  - `./scripts/ui-smoke.sh` reports: `mapping confirm guard did not disable an unsafe confirm action`
+  - Because of that, `make verify-full` is not green right now
+  - `./scripts/static-smoke.sh` was not re-run after this failure because the full chain stopped at the UI smoke failure
+
+## Current runtime / live state on this host
+
+Current local machine state at the time of this update:
+- No listener responding on `127.0.0.1:8080`
+- No listener responding on `127.0.0.1:8090`
+- No listener responding on `127.0.0.1:8100`
+- `docker` is currently unavailable on this host (`docker: unavailable`)
+- Repo `.venv` is present and healthy on Python `3.12.12`
+
+Practical meaning:
+- The codebase is present and testable locally
+- The live dashboard/runtime is **not currently running** on this machine
+- A live bring-up from this host is still blocked until Docker is available again and private credentials are supplied locally
+
+## Recent meaningful commits already on `main`
+
+- `6b2634d` `feat(arbiter): ship mapping expansion and ops dashboard updates`
+- `1454bc9` `fix(live): normalize polymarket us readiness checks`
+- `1f04522` `feat(ops): persist runtime settings and restore local verification`
+
+## What another machine needs
+
+A second machine can fully reproduce the repo state from GitHub, but it still needs private credential material copied over out-of-band.
+
+### Needed from git
+```bash
+git clone https://github.com/sandeepportfolio/arbiter-dashboard.git
+cd arbiter-dashboard
 ```
-de244b0e18f5f8abc5e83aa2c0258366e96e7792
-test(rollback): smoke tests for POLYMARKET_VARIANT=us|legacy|disabled
+
+### Needed privately, not from git
+Copy these from a trusted machine using a secure channel:
+- `.env.production`
+- `keys/kalshi_private.pem`
+- any other local-only operator secret files you actually rely on
+
+Do **not** commit those files.
+
+## New-machine bring-up checklist
+
+```bash
+cd arbiter-dashboard
+./scripts/setup/bootstrap_python.sh
+npm install
+cp .env.production.template .env.production   # then replace placeholders from your secure copy if needed
 ```
 
-## Current Local Verification Snapshot (2026-04-21)
+Then restore the real secret files privately and verify:
 
-| Surface | Result |
-|---|---|
-| Python repo suite (`make verify-full`) | `478 passed, 87 skipped, 0 failed` |
-| TypeScript typecheck | pass |
-| Vitest | `5 files, 40 tests` passed |
-| API smoke | pass |
-| Same-origin browser smoke (`./scripts/ui-smoke.sh`) | pass |
-| Static-shell browser smoke (`./scripts/static-smoke.sh`) | pass |
-
-Notes:
-- The operator desk now includes an authenticated runtime settings surface for non-secret scanner, alert, and auto-executor knobs.
-- The new settings flow is verified in both same-origin and static-hosted modes, including draft state, save, websocket refresh, and persisted reload.
-- The static root `index.html` was brought back into sync with `arbiter/web/dashboard.html`, so static hosting exercises the same settings section as the server-rendered dashboard.
-
-## TypeScript Check
-
-```
-npx tsc --noEmit
+```bash
+python scripts/setup/validate_env.py
+python scripts/setup/check_kalshi_auth.py
+python scripts/setup/check_polymarket_us.py
+python scripts/setup/check_telegram.py
 ```
 
-Exit 0, zero errors.
+If Docker is available on the destination machine:
 
-## Preflight Dry-run
-
-```
-POLYMARKET_VARIANT=disabled PREFLIGHT_ALLOW_LIVE=0 python -m arbiter.live.preflight
+```bash
+./scripts/setup/go_live.sh
 ```
 
-Runner completed without crashing. Expected failures (no creds, no DB, no deployed API):
-- Check 2: Phase 4 scenarios missing (6/9 observed, expected in dev)
-- Check 4: Kalshi credentials unset (expected)
-- Check 7: DATABASE_URL unset (expected)
-- Check 8: PHASE5_MAX_ORDER_USD unset (expected)
-- Check 10: Telegram unset (expected)
-- Checks 11-12: API unreachable (expected — service not running)
-- Check 13: Polymarket migration ack missing (expected)
-- Check 14: No identical-resolution market mapping (expected)
-- Check 15: Runbook not acknowledged (expected)
+## Current blocker list
 
-Checks 5 and 16 (Polymarket US / 5a / 5b) correctly show "not applicable" for `disabled` variant.
+1. Secrets are intentionally not in git, so another machine still needs a private secret handoff
+2. Docker is unavailable on this host, so live stack bring-up cannot happen here right now
+3. UI smoke currently catches a mapping-confirm guard issue, so `make verify-full` is not fully green
 
-## Git Log (0501d69..de244b0 pivot baseline)
+## Recommendation
 
-```
-de244b0 test(rollback): smoke tests for POLYMARKET_VARIANT=us|legacy|disabled
-d62bc5d feat(setup): Playwright onboarding script for Polymarket US dev portal
-bf21f01 feat(ops): Prometheus metrics (+9) and Telegram heartbeat (15-min, auto-exec-gated)
-fad9e9e feat(setup): check_polymarket_us.py with Ed25519 round-trip + secret-leak guard tests
-fff359d feat(preflight): split Polymarket check into 5a credentials + 5b live balance
-ec64c00 feat(mapping): 8-condition auto-promote gate (8 negative paths tested)
-4311332 feat(mapping): auto-discovery pipeline (2 rps budget, candidate-only)
-fa9fbb6 feat(mapping): LLM verifier (Haiku 4.5 with prompt cache, fail-safe to MAYBE)
-a8c5109 feat(mapping): resolution-check Layer 1 + hand-labeled fixture corpus (20+20 pairs)
-e980079 test(scanner): scale test at n=1000 pairs × 3 updates/sec (0.01ms p99)
-fe09bb1 feat(scanner): matcher backpressure + debounce + emit throttle
-2a555eb feat(scanner): MatchedPairStream — event-driven O(1) matcher
-af69bdd test(adapter): Phase 5 hard-lock suite ported to Polymarket US adapter
-304ab1c feat(adapter): PolymarketUSAdapter with ordered hard-lock gates
-49e5778 feat(collectors): Polymarket US WebSocket multiplex (100 slugs/conn, reconnect, merged stream)
-ff31f66 feat(collectors): Polymarket US REST client (signed, paginated, 429-retry)
-38eeae6 docs(env): Polymarket US variant default in production template
-57a2330 feat(config): POLYMARKET_VARIANT flag + PolymarketUSConfig class
-428ece1 feat(fees): polymarket_us_order_fee with signed maker rebate
-371685c fix(conftest): move pytest_plugins to root for pytest 8+ compat
-da07281 feat(auth): Ed25519 signer for Polymarket US
-93f707c docs(plan): v2 - per-task regression gate, hard-lock order test, rollback smoke (plan review round 1 fixes)
-5c428ba docs(plan): 21-task implementation plan for Polymarket US pivot + scale
-aaa3fdb docs(spec): Polymarket US pivot + scale-to-thousands design
-```
+Treat `main` as the correct code-and-docs source of truth.
+Use a secure private transfer for the live secret files.
+Before trading from any machine, fix the mapping-confirm guard regression and re-run the full verification chain.
