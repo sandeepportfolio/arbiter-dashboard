@@ -301,6 +301,42 @@ MARKET_SEEDS: Tuple[MarketMappingRecord, ...] = (
     ),
 )
 
+def _load_auto_seeds() -> Tuple[MarketMappingRecord, ...]:
+    """Load auto-discovered candidate mappings from the JSON fixture file."""
+    import json
+
+    fixture = Path(__file__).resolve().parent.parent / "mapping" / "fixtures" / "market_seeds_auto.json"
+    if not fixture.exists():
+        return ()
+    try:
+        raw = json.loads(fixture.read_text())
+    except Exception:
+        return ()
+    records = []
+    for item in raw:
+        try:
+            records.append(
+                MarketMappingRecord(
+                    canonical_id=item["canonical_id"],
+                    description=item.get("description", ""),
+                    status=item.get("status", "candidate"),
+                    allow_auto_trade=bool(item.get("allow_auto_trade", False)),
+                    aliases=tuple(item.get("aliases", [])),
+                    tags=tuple(item.get("tags", [])),
+                    kalshi=item.get("kalshi", ""),
+                    polymarket=item.get("polymarket", ""),
+                    polymarket_question=item.get("polymarket_question", ""),
+                    notes=item.get("notes", ""),
+                    resolution_match_status="pending_operator_review",
+                )
+            )
+        except Exception:
+            continue
+    return tuple(records)
+
+
+MARKET_SEEDS = MARKET_SEEDS + _load_auto_seeds()
+
 MARKET_MAP: Dict[str, Dict[str, object]] = {
     record.canonical_id: record.to_dict()
     for record in MARKET_SEEDS
