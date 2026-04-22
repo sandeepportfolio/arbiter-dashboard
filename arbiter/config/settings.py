@@ -28,20 +28,37 @@ def _load_project_dotenv(anchor_file: Path | None = None) -> Path | None:
     if load_dotenv is None:
         return None
 
-    anchor = (anchor_file or Path(__file__)).resolve()
-    config_dir = anchor.parent
-    candidate_paths = (
-        config_dir.parent.parent / ".env",
-        config_dir.parent / ".env",
-    )
-    for candidate in candidate_paths:
+    explicit_env = os.getenv("ARBITER_ENV_FILE", "").strip()
+    if explicit_env:
+        candidate = Path(explicit_env).expanduser()
+        if not candidate.is_absolute():
+            candidate = ((anchor_file or Path(__file__)).resolve().parent.parent.parent / candidate).resolve()
         if candidate.exists():
-            # override=False so explicit shell vars (including subprocess envs
-            # that deliberately clear a var) win over the repo .env. Fixes
-            # WR-02 from the Phase 4 code review.
             load_dotenv(candidate, override=False)
             return candidate
-    return None
+        return None
+
+    anchor = (anchor_file or Path(__file__)).resolve()
+    config_dir = anchor.parent
+
+    def _first_existing(*paths: Path) -> Path | None:
+        for path in paths:
+            if path.exists():
+                return path
+        return None
+
+    repo_root = config_dir.parent.parent
+    package_root = config_dir.parent
+    loaded: Path | None = None
+
+    primary = _first_existing(repo_root / ".env", package_root / ".env")
+    if primary is not None:
+        # override=False so explicit shell vars (including subprocess envs
+        # that deliberately clear a var) win over dotenv-loaded values.
+        load_dotenv(primary, override=False)
+        loaded = primary
+
+    return loaded
 
 
 _DOTENV_PATH = _load_project_dotenv()
@@ -185,85 +202,102 @@ MARKET_SEEDS: Tuple[MarketMappingRecord, ...] = (
     MarketMappingRecord(
         canonical_id="DEM_HOUSE_2026",
         description="Democrats win House 2026 midterms",
-        status="candidate",
-        allow_auto_trade=False,
-        aliases=("democrats house 2026", "house control 2026 democrats"),
+        aliases=("democrats house 2026", "house control 2026 democrats", "u.s. house midterm winner democratic"),
         tags=("politics", "midterms", "house"),
-        kalshi="KXPRESPARTY-2028",
-        polymarket="which-party-will-win-the-house-in-2026",
-        polymarket_question="Democratic Party",
-        notes="Kalshi lacks a true confirmed 2026 House mapping, so this stays review-only.",
+        kalshi="CONTROLH-2026-D",
+        polymarket="paccc-usho-midterms-2026-11-03-dem",
+        polymarket_question="Will the Democratic Party win the House in the 2026 Midterms?",
+        notes="Live Kalshi/Polymarket US overlap validated on 2026-04-21 and approved for live trading by Sandeep.",
+        resolution_criteria={
+            "kalshi": {
+                "source": "Kalshi rulebook / Speaker of the House on 2027-02-01",
+                "rule": "If the Democratic Party has won control of the House in 2026, the market resolves Yes.",
+                "settlement_date": "2027-02-01",
+            },
+            "polymarket": {
+                "source": "Polymarket US retail market metadata",
+                "rule": "Will the Democratic Party win the House in the 2026 Midterms?",
+                "settlement_date": "2027-02-01",
+            },
+            "criteria_match": "identical",
+            "operator_note": "Approved for live use by Sandeep on 2026-04-21 after live catalog audit.",
+        },
+        resolution_match_status="identical",
+    ),
+    MarketMappingRecord(
+        canonical_id="GOP_HOUSE_2026",
+        description="Republicans win House 2026 midterms",
+        aliases=("republicans house 2026", "gop house 2026", "u.s. house midterm winner republican"),
+        tags=("politics", "midterms", "house"),
+        kalshi="CONTROLH-2026-R",
+        polymarket="paccc-usho-midterms-2026-11-03-rep",
+        polymarket_question="Will the Republican Party win the House in the 2026 Midterms?",
+        notes="Live Kalshi/Polymarket US overlap validated on 2026-04-21 and approved for live trading by Sandeep.",
+        resolution_criteria={
+            "kalshi": {
+                "source": "Kalshi rulebook / Speaker of the House on 2027-02-01",
+                "rule": "If the Republican Party has won control of the House in 2026, the market resolves Yes.",
+                "settlement_date": "2027-02-01",
+            },
+            "polymarket": {
+                "source": "Polymarket US retail market metadata",
+                "rule": "Will the Republican Party win the House in the 2026 Midterms?",
+                "settlement_date": "2027-02-01",
+            },
+            "criteria_match": "identical",
+            "operator_note": "Approved for live use by Sandeep on 2026-04-21 after live catalog audit.",
+        },
+        resolution_match_status="identical",
     ),
     MarketMappingRecord(
         canonical_id="DEM_SENATE_2026",
         description="Democrats win Senate 2026 midterms",
-        status="confirmed",
-        allow_auto_trade=False,
-        aliases=("democrats senate 2026", "senate control 2026 democrats"),
+        aliases=("democrats senate 2026", "senate control 2026 democrats", "u.s. senate midterm winner democratic"),
         tags=("politics", "midterms", "senate"),
-        polymarket="which-party-will-win-the-senate-in-2026",
-        polymarket_question="Democratic Party",
-        notes="Polymarket only, so keep manual-only until a confirmed Kalshi leg exists.",
+        kalshi="CONTROLS-2026-D",
+        polymarket="paccc-usse-midterms-2026-11-03-dem",
+        polymarket_question="Will the Democratic Party win the Senate in the 2026 Midterms?",
+        notes="Live Kalshi/Polymarket US overlap validated on 2026-04-21 and approved for live trading by Sandeep.",
+        resolution_criteria={
+            "kalshi": {
+                "source": "Kalshi rulebook / President pro tempore on 2027-02-01",
+                "rule": "If the Democratic Party has won control of the U.S. Senate in 2026, the market resolves Yes.",
+                "settlement_date": "2027-02-01",
+            },
+            "polymarket": {
+                "source": "Polymarket US retail market metadata",
+                "rule": "Will the Democratic Party win the Senate in the 2026 Midterms?",
+                "settlement_date": "2027-02-01",
+            },
+            "criteria_match": "identical",
+            "operator_note": "Approved for live use by Sandeep on 2026-04-21 after live catalog audit.",
+        },
+        resolution_match_status="identical",
     ),
     MarketMappingRecord(
         canonical_id="GOP_SENATE_2026",
         description="Republicans win Senate 2026 midterms",
-        status="confirmed",
-        allow_auto_trade=False,
-        aliases=("republicans senate 2026", "gop senate 2026"),
+        aliases=("republicans senate 2026", "gop senate 2026", "u.s. senate midterm winner republican"),
         tags=("politics", "midterms", "senate"),
-        polymarket="which-party-will-win-the-senate-in-2026",
-        polymarket_question="Republican Party",
-    ),
-    MarketMappingRecord(
-        canonical_id="VANCE_NOM_2028",
-        description="JD Vance wins 2028 GOP presidential nomination",
-        status="confirmed",
-        allow_auto_trade=False,
-        aliases=("vance nominee 2028", "jd vance republican nominee"),
-        tags=("politics", "president", "nomination"),
-        polymarket="republican-presidential-nominee-2028",
-        polymarket_question="J.D. Vance",
-    ),
-    MarketMappingRecord(
-        canonical_id="RUBIO_NOM_2028",
-        description="Marco Rubio wins 2028 GOP presidential nomination",
-        status="confirmed",
-        allow_auto_trade=False,
-        aliases=("rubio nominee 2028", "marco rubio republican nominee"),
-        tags=("politics", "president", "nomination"),
-        polymarket="republican-presidential-nominee-2028",
-        polymarket_question="Marco Rubio",
-    ),
-    MarketMappingRecord(
-        canonical_id="NEWSOM_NOM_2028",
-        description="Gavin Newsom wins 2028 Democratic presidential nomination",
-        status="confirmed",
-        allow_auto_trade=False,
-        aliases=("newsom nominee 2028", "gavin newsom democratic nominee"),
-        tags=("politics", "president", "nomination"),
-        polymarket="democratic-presidential-nominee-2028",
-        polymarket_question="Gavin Newsom",
-    ),
-    MarketMappingRecord(
-        canonical_id="GA_SEN_2026",
-        description="Georgia Senate 2026 Democratic win",
-        status="confirmed",
-        allow_auto_trade=False,
-        aliases=("georgia senate 2026 democrats", "ga senate 2026"),
-        tags=("politics", "senate", "georgia"),
-        polymarket="georgia-senate-election-winner",
-        polymarket_question="Democrats win",
-    ),
-    MarketMappingRecord(
-        canonical_id="MI_SEN_2026",
-        description="Michigan Senate 2026 Democratic win",
-        status="confirmed",
-        allow_auto_trade=False,
-        aliases=("michigan senate 2026 democrats", "mi senate 2026"),
-        tags=("politics", "senate", "michigan"),
-        polymarket="michigan-senate-election-winner",
-        polymarket_question="Democrats win",
+        kalshi="CONTROLS-2026-R",
+        polymarket="paccc-usse-midterms-2026-11-03-rep",
+        polymarket_question="Will the Republican Party win the Senate in the 2026 Midterms?",
+        notes="Live Kalshi/Polymarket US overlap validated on 2026-04-21 and approved for live trading by Sandeep.",
+        resolution_criteria={
+            "kalshi": {
+                "source": "Kalshi rulebook / President pro tempore on 2027-02-01",
+                "rule": "If the Republican Party has won control of the U.S. Senate in 2026, the market resolves Yes.",
+                "settlement_date": "2027-02-01",
+            },
+            "polymarket": {
+                "source": "Polymarket US retail market metadata",
+                "rule": "Will the Republican Party win the Senate in the 2026 Midterms?",
+                "settlement_date": "2027-02-01",
+            },
+            "criteria_match": "identical",
+            "operator_note": "Approved for live use by Sandeep on 2026-04-21 after live catalog audit.",
+        },
+        resolution_match_status="identical",
     ),
 )
 
@@ -271,6 +305,33 @@ MARKET_MAP: Dict[str, Dict[str, object]] = {
     record.canonical_id: record.to_dict()
     for record in MARKET_SEEDS
 }
+
+
+def upsert_runtime_market_mapping(canonical_id: str, payload: Dict[str, Any]) -> dict:
+    """Merge a mapping payload into the legacy in-process MARKET_MAP cache."""
+    current = dict(MARKET_MAP.get(canonical_id) or {})
+    merged: Dict[str, Any] = {**current, **dict(payload)}
+    merged.setdefault("description", current.get("description", canonical_id))
+    merged.setdefault("status", current.get("status", "candidate"))
+    merged.setdefault("allow_auto_trade", bool(current.get("allow_auto_trade", False)))
+    merged.setdefault("aliases", list(current.get("aliases") or []))
+    merged.setdefault("tags", list(current.get("tags") or []))
+    if "mapping_score" not in merged and "confidence" in merged:
+        merged["mapping_score"] = merged.get("confidence", 0.0)
+    merged.setdefault("resolution_criteria", current.get("resolution_criteria"))
+    merged.setdefault(
+        "resolution_match_status",
+        current.get("resolution_match_status", "pending_operator_review"),
+    )
+    MARKET_MAP[canonical_id] = merged
+    return merged
+
+
+def replace_runtime_market_map(mappings: Iterable[tuple[str, Dict[str, Any]]]) -> None:
+    """Replace the in-process MARKET_MAP cache with a fresh snapshot."""
+    MARKET_MAP.clear()
+    for canonical_id, payload in mappings:
+        upsert_runtime_market_mapping(canonical_id, payload)
 
 
 def get_market_mapping(canonical_id: str) -> dict | None:
@@ -420,6 +481,7 @@ class PolymarketConfig:
 class PolymarketUSConfig:
     """Polymarket US (CFTC-regulated DCM) configuration. Uses Ed25519 key auth."""
     api_url: str = field(default_factory=lambda: os.getenv("POLYMARKET_US_API_URL", "https://api.polymarket.us/v1"))
+    gateway_url: str = field(default_factory=lambda: os.getenv("POLYMARKET_US_GATEWAY_URL", "https://gateway.polymarket.us"))
     ws_url: str = field(default_factory=lambda: os.getenv("POLYMARKET_US_WS_URL", "wss://api.polymarket.us/v1/ws/markets"))
     api_key_id: str = field(default_factory=lambda: os.getenv("POLYMARKET_US_API_KEY_ID", ""))
     api_secret: str = field(default_factory=lambda: os.getenv("POLYMARKET_US_API_SECRET", ""))

@@ -24,6 +24,8 @@ from typing import Any, Optional
 
 import structlog
 
+from arbiter.collectors.polymarket_us import _amount_value
+
 from ..engine import Order, OrderStatus
 from .exceptions import OrderRejected
 
@@ -48,7 +50,10 @@ class PolymarketUSAdapter:
         property. When provided, Gate 3 checks ``supervisor.is_armed``.
     """
 
-    platform = "polymarket-us"
+    # Keep the platform key stable for the rest of the runtime. The venue is
+    # still "polymarket" from the scanner/engine/readiness perspective even
+    # though the transport is the US retail API.
+    platform = "polymarket"
 
     def __init__(
         self,
@@ -61,6 +66,8 @@ class PolymarketUSAdapter:
         self._phase4_max_usd = phase4_max_usd
         self._phase5_max_usd = phase5_max_usd
         self._supervisor = supervisor
+        self.rate_limiter = getattr(client, "live_rate_limiter", None)
+        self.circuit = getattr(client, "circuit", None)
 
     # ─── place_fok ────────────────────────────────────────────────────────
 
@@ -134,11 +141,11 @@ class PolymarketUSAdapter:
 
         ``market_id`` is used as the Polymarket US market slug.
         """
-        intent = self._us_intent(side)
+        intent, request_price = self._us_order_params(side, price)
         response = await self._client.place_order(
             slug=market_id,
             intent=intent,
-            price=price,
+            price=request_price,
             qty=qty,
             tif="FILL_OR_KILL",
         )
@@ -165,7 +172,10 @@ class PolymarketUSAdapter:
             # available, otherwise fall through to SUBMITTED (not critical for FOK).
             if hasattr(self._client, "get_order"):
                 resp = await self._client.get_order(order.order_id)
-                api_status = str(resp.get("status", "")).upper()
+                payload = resp.get("order", resp) if isinstance(resp, dict) else {}
+                api_status = str(
+                    payload.get("state", payload.get("status", ""))
+                ).upper()
                 order.status = self._map_status(api_status, order.status)
         except Exception as exc:
             logger.warning(
@@ -199,6 +209,16 @@ class PolymarketUSAdapter:
 
     async def cancel_all(self) -> list[str]:
         """Cancel all open orders.  Best-effort; never raises."""
+        try:
+            if hasattr(self._client, "cancel_all_open_orders"):
+                resp = await self._client.cancel_all_open_orders()
+                order_ids = resp.get("canceledOrderIds") or resp.get("cancelledOrderIds") or []
+                return [str(order_id) for order_id in order_ids]
+        except Exception as exc:
+            logger.warning(
+                "polymarket_us.cancel_all.failed",
+                err=str(exc),
+            )
         return []
 
     # ─── check_depth ──────────────────────────────────────────────────────
@@ -217,18 +237,32 @@ class PolymarketUSAdapter:
             )
             return (False, 0.0)
 
-        # For a BUY order we need offers (asks); for a SELL we need bids.
-        levels_key = "offers" if str(side).lower() in ("buy", "yes") else "bids"
-        levels = book.get(levels_key, [])
+        market_data = book.get("marketData", book) if isinstance(book, dict) else {}
+
+        # For BUY YES we consume long-side offers. For BUY NO we consume the
+        # inverse of long-side bids.
+        side_is_yes = str(side).lower() in ("buy", "yes")
+        levels_key = "offers" if side_is_yes else "bids"
+        levels = list(market_data.get(levels_key, []))
         if not levels:
             return (False, 0.0)
 
         cumulative = 0.0
         best_price = 0.0
-        for lvl in sorted(levels, key=lambda x: float(x.get("px", x.get("price", 0)))):
+        sort_reverse = not side_is_yes
+        for lvl in sorted(
+            levels,
+            key=lambda x: _amount_value(x.get("px", x.get("price"))),
+            reverse=sort_reverse,
+        ):
+            raw_price = _amount_value(lvl.get("px", lvl.get("price")))
+            level_price = raw_price if side_is_yes else max(1.0 - raw_price, 0.0)
             if best_price == 0.0:
-                best_price = float(lvl.get("px", lvl.get("price", 0)))
-            cumulative += float(lvl.get("qty", lvl.get("size", 0)))
+                best_price = level_price
+            try:
+                cumulative += float(lvl.get("qty", lvl.get("size", 0)))
+            except (TypeError, ValueError):
+                continue
             if cumulative >= float(required_qty):
                 return (True, best_price)
         return (False, best_price)
@@ -249,28 +283,37 @@ class PolymarketUSAdapter:
     # ─── helpers ──────────────────────────────────────────────────────────
 
     @staticmethod
-    def _us_intent(side: str) -> str:
-        """Map canonical side ('yes'|'no'|'BUY'|'SELL') to US intent string."""
-        s = str(side).upper()
-        if s in ("YES", "BUY"):
-            return "BUY_LONG"
-        if s in ("NO", "SELL"):
-            return "SELL_LONG"
-        return "BUY_LONG"
+    def _us_order_params(side: str, price: float) -> tuple[str, float]:
+        """Map the engine's YES/NO leg semantics into Polymarket US order fields.
+
+        The engine passes NO-leg prices as NO probabilities. Polymarket US
+        expects every request price on the long/YES scale, so NO-leg buys use
+        ``ORDER_INTENT_BUY_SHORT`` with ``price.value = 1 - no_price``.
+        """
+        s = str(side).strip().upper()
+        clipped_price = min(max(float(price), 0.0), 1.0)
+        if s == "NO":
+            return ("BUY_SHORT", max(1.0 - clipped_price, 0.0))
+        if s in ("SELL_YES", "SELL_LONG"):
+            return ("SELL_LONG", clipped_price)
+        if s in ("SELL_NO", "SELL_SHORT"):
+            return ("SELL_SHORT", max(1.0 - clipped_price, 0.0))
+        return ("BUY_LONG", clipped_price)
 
     @staticmethod
     def _map_status(api_status: str, default: OrderStatus) -> OrderStatus:
-        status_map = {
-            "FILLED":    OrderStatus.FILLED,
-            "MATCHED":   OrderStatus.FILLED,
-            "EXECUTED":  OrderStatus.FILLED,
-            "CANCELED":  OrderStatus.CANCELLED,
-            "CANCELLED": OrderStatus.CANCELLED,
-            "REJECTED":  OrderStatus.FAILED,
-            "LIVE":      OrderStatus.SUBMITTED,
-            "OPEN":      OrderStatus.SUBMITTED,
-        }
-        return status_map.get(api_status.upper(), default)
+        normalized = api_status.upper()
+        if "PARTIALLY_FILLED" in normalized:
+            return OrderStatus.PARTIAL
+        if normalized in {"FILLED", "MATCHED", "EXECUTED", "ORDER_STATE_FILLED"}:
+            return OrderStatus.FILLED
+        if normalized in {"CANCELED", "CANCELLED", "ORDER_STATE_CANCELED", "ORDER_STATE_CANCELLED"}:
+            return OrderStatus.CANCELLED
+        if normalized in {"REJECTED", "ORDER_STATE_REJECTED"}:
+            return OrderStatus.FAILED
+        if normalized in {"LIVE", "OPEN", "ORDER_STATE_OPEN", "ORDER_STATE_LIVE"}:
+            return OrderStatus.SUBMITTED
+        return default
 
     def _order_from_response(
         self,
@@ -286,7 +329,7 @@ class PolymarketUSAdapter:
         if not isinstance(response, dict):
             return Order(
                 order_id=f"{arb_id}-{side.upper()}-POLYUS",
-                platform="polymarket-us",
+                platform="polymarket",
                 market_id=market_id,
                 canonical_id=canonical_id,
                 side=side,
@@ -298,28 +341,60 @@ class PolymarketUSAdapter:
                 external_client_order_id=None,
             )
 
-        # Both "orderId" (US API) and "orderID" (legacy) accepted for safety
+        execution_order = {}
+        executions = response.get("executions") or []
+        if executions and isinstance(executions[0], dict):
+            execution_order = executions[0].get("order") or {}
+
+        # Current docs return top-level "id"; keep legacy aliases as fallbacks.
         order_id = str(
-            response.get("orderId", response.get("orderID", f"{arb_id}-{side.upper()}-POLYUS"))
+            response.get(
+                "id",
+                response.get(
+                    "orderId",
+                    response.get(
+                        "orderID",
+                        execution_order.get("id", f"{arb_id}-{side.upper()}-POLYUS"),
+                    ),
+                ),
+            )
         )
-        api_status = str(response.get("status", "FILLED")).upper()
+        api_status = str(
+            response.get(
+                "state",
+                response.get(
+                    "status",
+                    execution_order.get("state", execution_order.get("status", "OPEN")),
+                ),
+            )
+        ).upper()
         mapped_status = self._map_status(api_status, OrderStatus.SUBMITTED)
 
         try:
-            fill_qty = float(response.get("filledQty", response.get("size_matched", qty)))
+            fill_qty = float(
+                execution_order.get(
+                    "cumQuantity",
+                    response.get("filledQty", response.get("size_matched", 0)),
+                )
+            )
         except (TypeError, ValueError):
+            fill_qty = 0.0
+
+        avg_px_payload = execution_order.get("avgPx") or {}
+        fill_price = _amount_value(avg_px_payload) or price
+        if mapped_status == OrderStatus.FILLED and fill_qty == 0.0:
             fill_qty = float(qty)
 
         return Order(
             order_id=order_id,
-            platform="polymarket-us",
+            platform="polymarket",
             market_id=market_id,
             canonical_id=canonical_id,
             side=side,
             price=price,
             quantity=qty,
             status=mapped_status,
-            fill_price=price,
+            fill_price=fill_price,
             fill_qty=fill_qty,
             timestamp=now,
             external_client_order_id=None,

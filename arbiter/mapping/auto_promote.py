@@ -27,6 +27,14 @@ from arbiter.mapping.resolution_check import MarketFacts, ResolutionMatch
 
 logger = logging.getLogger("arbiter.mapping.auto_promote")
 
+
+def _setting(settings: dict, *keys: str, default):
+    for key in keys:
+        if key in settings:
+            return settings[key]
+    return default
+
+
 # ─── Try to import Prometheus counter (optional — no-op if unavailable) ───────
 try:
     from prometheus_client import Counter as _Counter
@@ -70,15 +78,20 @@ def _orderbook_depth_usd(orderbook: dict) -> float:
 
 # ─── Resolution-facts extractor ───────────────────────────────────────────────
 
-def _candidate_to_market_facts(candidate: dict) -> MarketFacts:
-    """Build a MarketFacts from a candidate dict for Layer 1 check."""
+def _candidate_to_market_facts(candidate: dict, side: str) -> MarketFacts:
+    """Build side-specific MarketFacts from a candidate dict for Layer 1 check."""
+    prefix = f"{side}_"
+    question = candidate.get("kalshi_title") if side == "kalshi" else candidate.get("poly_question")
     return MarketFacts(
-        question=candidate.get("kalshi_title") or candidate.get("poly_question") or "",
-        resolution_date=candidate.get("resolution_date"),
-        resolution_source=candidate.get("resolution_source"),
-        tie_break_rule=candidate.get("tie_break_rule"),
-        category=candidate.get("category"),
-        outcome_set=tuple(candidate.get("outcome_set", ("Yes", "No"))),
+        question=question or "",
+        resolution_date=candidate.get(f"{prefix}resolution_date") or candidate.get("resolution_date"),
+        resolution_source=candidate.get(f"{prefix}resolution_source") or candidate.get("resolution_source"),
+        tie_break_rule=candidate.get(f"{prefix}tie_break_rule") or candidate.get("tie_break_rule"),
+        category=candidate.get(f"{side}_category") or candidate.get("category"),
+        outcome_set=tuple(
+            candidate.get(f"{prefix}outcome_set")
+            or candidate.get("outcome_set", ("Yes", "No"))
+        ),
     )
 
 
@@ -127,25 +140,18 @@ async def maybe_promote(
         return PromotionResult(promoted=False, reason=reason)
 
     # ── Gate 1: AUTO_PROMOTE_ENABLED ──────────────────────────────────────────
-    if not settings.get("AUTO_PROMOTE_ENABLED", False):
+    if not _setting(settings, "AUTO_PROMOTE_ENABLED", "auto_promote_enabled", default=False):
         return _reject("auto_promote_disabled")
 
-    # ── Gate 2: score >= 0.85 ─────────────────────────────────────────────────
+    # ── Gate 2: score >= configured threshold ──────────────────────────────────
+    min_score = float(_setting(settings, "AUTO_PROMOTE_MIN_SCORE", "auto_promote_min_score", default=0.85))
     score = float(candidate.get("score", 0.0))
-    if score < 0.85:
+    if score < min_score:
         return _reject("score_low")
 
     # ── Gate 3: resolution_check == IDENTICAL ─────────────────────────────────
-    kalshi_facts = _candidate_to_market_facts(candidate)
-    # Use poly_question as the "b" side facts for structured comparison
-    poly_facts = MarketFacts(
-        question=candidate.get("poly_question") or "",
-        resolution_date=candidate.get("resolution_date"),
-        resolution_source=candidate.get("resolution_source"),
-        tie_break_rule=candidate.get("tie_break_rule"),
-        category=candidate.get("category"),
-        outcome_set=tuple(candidate.get("outcome_set", ("Yes", "No"))),
-    )
+    kalshi_facts = _candidate_to_market_facts(candidate, "kalshi")
+    poly_facts = _candidate_to_market_facts(candidate, "polymarket")
     resolution_result = resolution_checker(kalshi_facts, poly_facts)
     if resolution_result != ResolutionMatch.IDENTICAL:
         return _reject("resolution_divergent")
@@ -158,7 +164,7 @@ async def maybe_promote(
         return _reject("llm_no")
 
     # ── Gate 5: Liquidity depth ≥ PHASE5_MAX_ORDER_USD × 2 ────────────────────
-    phase5_max = float(settings.get("PHASE5_MAX_ORDER_USD", 50.0))
+    phase5_max = float(_setting(settings, "PHASE5_MAX_ORDER_USD", "phase5_max_order_usd", default=50.0))
     required_depth = phase5_max * 2.0
 
     kalshi_ob = orderbooks.get("kalshi", {})
@@ -175,12 +181,13 @@ async def maybe_promote(
         return _reject("liquidity_low")
 
     # ── Gate 6: resolution_date within 90 days ────────────────────────────────
-    resolution_date_str = candidate.get("resolution_date")
+    max_days = int(_setting(settings, "AUTO_PROMOTE_MAX_DAYS", "auto_promote_max_days", default=90))
+    resolution_date_str = candidate.get("resolution_date") or candidate.get("kalshi_resolution_date") or candidate.get("polymarket_resolution_date")
     if resolution_date_str:
         try:
             res_date = date.fromisoformat(resolution_date_str)
             days_until = (res_date - date.today()).days
-            if days_until > 90:
+            if days_until > max_days:
                 return _reject("date_out_of_window")
         except (ValueError, TypeError):
             # Can't parse date → treat as out of window (safe-fail)
@@ -188,13 +195,13 @@ async def maybe_promote(
     # If no resolution date provided, skip this gate (insufficient data)
 
     # ── Gate 7: daily cap ─────────────────────────────────────────────────────
-    daily_cap = int(settings.get("AUTO_PROMOTE_DAILY_CAP", 20))
+    daily_cap = int(_setting(settings, "AUTO_PROMOTE_DAILY_CAP", "auto_promote_daily_cap", default=20))
     if today_promoted_count >= daily_cap:
         return _reject("daily_cap")
 
     # ── Gate 8: cooling-off ───────────────────────────────────────────────────
     ticker = candidate.get("kalshi_ticker", "")
-    advisory_scans = int(settings.get("AUTO_PROMOTE_ADVISORY_SCANS", 30))
+    advisory_scans = int(_setting(settings, "AUTO_PROMOTE_ADVISORY_SCANS", "auto_promote_advisory_scans", default=30))
     if ticker and ticker in cooling_state:
         scans_so_far = int(cooling_state[ticker])
         if scans_so_far < advisory_scans:

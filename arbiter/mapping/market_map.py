@@ -5,6 +5,7 @@ Replaces the in-memory MARKET_MAP dict from settings.py.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -15,7 +16,15 @@ from enum import Enum
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import asyncpg
-from ..config.settings import MARKET_SEEDS, MarketMappingRecord, normalize_market_text, similarity_score
+from ..config.settings import (
+    MARKET_SEEDS,
+    MarketMappingRecord,
+    normalize_market_text,
+    replace_runtime_market_map,
+    similarity_score,
+    upsert_runtime_market_mapping,
+)
+from ..sql.connection import create_pool
 
 logger = logging.getLogger("arbiter.mapping")
 
@@ -26,6 +35,7 @@ def utc_now() -> datetime:
 
 class MappingStatus(str, Enum):
     CANDIDATE = "candidate"   # Auto-detected, needs review
+    REVIEW = "review"         # Operator is evaluating; never auto-tradable
     CONFIRMED = "confirmed"    # Reviewed and approved
     REJECTED = "rejected"      # Reviewed and rejected
     EXPIRED = "expired"        # Revalidation failed / market resolved
@@ -98,10 +108,11 @@ class MarketMapping:
     @classmethod
     def from_record(cls, record: MarketMappingRecord) -> "MarketMapping":
         score = similarity_score(record.description, " ".join(record.aliases)) if record.aliases else 0.0
+        criteria_json = json.dumps(record.resolution_criteria) if record.resolution_criteria is not None else ""
         return cls(
             canonical_id=record.canonical_id,
             description=record.description,
-            status=MappingStatus.CONFIRMED if record.status == "confirmed" else MappingStatus(record.status),
+            status=_coerce_status(record.status),
             allow_auto_trade=record.allow_auto_trade,
             aliases=record.aliases,
             tags=record.tags,
@@ -111,7 +122,44 @@ class MarketMapping:
             notes=record.notes,
             mapping_score=score,
             confidence=score,
+            resolution_criteria_json=criteria_json,
+            resolution_match_status=record.resolution_match_status or "pending_operator_review",
         )
+
+    @classmethod
+    def from_dict(cls, canonical_id: str, payload: dict[str, Any]) -> "MarketMapping":
+        criteria = payload.get("resolution_criteria")
+        criteria_json = json.dumps(criteria) if criteria is not None else ""
+        return cls(
+            canonical_id=canonical_id,
+            description=str(payload.get("description", canonical_id)),
+            status=_coerce_status(str(payload.get("status", "candidate"))),
+            allow_auto_trade=bool(payload.get("allow_auto_trade", False)),
+            aliases=tuple(payload.get("aliases") or ()),
+            tags=tuple(payload.get("tags") or ()),
+            kalshi_market_id=str(payload.get("kalshi", "") or payload.get("kalshi_market_id", "") or ""),
+            polymarket_slug=str(payload.get("polymarket", "") or payload.get("polymarket_slug", "") or ""),
+            polymarket_question=str(payload.get("polymarket_question", "") or ""),
+            notes=str(payload.get("notes", "") or ""),
+            review_note=str(payload.get("review_note", "") or ""),
+            mapping_score=float(payload.get("mapping_score", payload.get("confidence", 0.0)) or 0.0),
+            confidence=float(payload.get("confidence", payload.get("mapping_score", 0.0)) or 0.0),
+            resolution_criteria_json=criteria_json,
+            resolution_match_status=str(
+                payload.get("resolution_match_status", "pending_operator_review")
+                or "pending_operator_review"
+            ),
+        )
+
+
+def _coerce_status(value: str | MappingStatus | None) -> MappingStatus:
+    if isinstance(value, MappingStatus):
+        return value
+    try:
+        return MappingStatus(str(value or MappingStatus.CANDIDATE.value))
+    except ValueError:
+        logger.warning("Unknown mapping status %r, falling back to candidate", value)
+        return MappingStatus.CANDIDATE
 
 
 SQL_INIT = """
@@ -192,7 +240,7 @@ class MarketMappingStore:
 
     async def connect(self) -> None:
         if self._pool is None:
-            self._pool = await asyncpg.create_pool(
+            self._pool = await create_pool(
                 self.database_url,
                 min_size=2,
                 max_size=10,
@@ -246,14 +294,18 @@ class MarketMappingStore:
                     continue
 
                 mapping = MarketMapping.from_record(record)
+                criteria_value = mapping.resolution_criteria_json or None
                 await conn.execute(
                     """
                     INSERT INTO market_mappings (
                         canonical_id, description, status, allow_auto_trade,
                         aliases, tags, kalshi_market_id, polymarket_slug,
                         polymarket_question,
-                        notes, mapping_score, confidence, updated_at
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW()
+                        notes, mapping_score, confidence, updated_at,
+                        resolution_criteria, resolution_match_status
+                    ) VALUES (
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(),
+                        $13::jsonb, $14
                     ) ON CONFLICT (canonical_id) DO UPDATE SET
                         description = EXCLUDED.description,
                         status = EXCLUDED.status,
@@ -266,6 +318,8 @@ class MarketMappingStore:
                         notes = EXCLUDED.notes,
                         mapping_score = EXCLUDED.mapping_score,
                         confidence = EXCLUDED.confidence,
+                        resolution_criteria = EXCLUDED.resolution_criteria,
+                        resolution_match_status = EXCLUDED.resolution_match_status,
                         updated_at = NOW()
                     """,
                     mapping.canonical_id,
@@ -280,10 +334,13 @@ class MarketMappingStore:
                     mapping.notes,
                     mapping.mapping_score,
                     mapping.confidence,
+                    criteria_value,
+                    mapping.resolution_match_status or "pending_operator_review",
                 )
                 inserted += 1
 
             logger.info(f"MarketMappingStore: seeded {inserted}/{len(records)} records")
+            await self.refresh_runtime_cache()
             return inserted
 
         finally:
@@ -368,6 +425,7 @@ class MarketMappingStore:
                 mapping.resolution_match_status or "pending_operator_review",
             )
             mapping.updated_at = now
+            upsert_runtime_market_mapping(mapping.canonical_id, mapping.to_dict())
             return mapping
 
         finally:
@@ -401,6 +459,10 @@ class MarketMappingStore:
                 "DELETE FROM market_mappings WHERE canonical_id = $1",
                 canonical_id,
             )
+            if result == "DELETE 1":
+                from ..config.settings import MARKET_MAP
+
+                MARKET_MAP.pop(canonical_id, None)
             return result == "DELETE 1"
 
         finally:
@@ -452,6 +514,27 @@ class MarketMappingStore:
             )
             return self._row_to_mapping(row) if row else None
 
+        finally:
+            await self._pool.release(conn)
+
+    async def get_by_exact_pair(
+        self,
+        *,
+        kalshi_market_id: str,
+        polymarket_slug: str,
+    ) -> Optional[MarketMapping]:
+        """Return the mapping that already binds this exact venue pair."""
+        conn = await self.acquire()
+        try:
+            row = await conn.fetchrow(
+                """
+                SELECT * FROM market_mappings
+                WHERE kalshi_market_id = $1 AND polymarket_slug = $2
+                """,
+                kalshi_market_id,
+                polymarket_slug,
+            )
+            return self._row_to_mapping(row) if row else None
         finally:
             await self._pool.release(conn)
 
@@ -545,6 +628,73 @@ class MarketMappingStore:
         finally:
             await self._pool.release(conn)
 
+    async def count_candidates(self) -> int:
+        """Return the number of candidate/review mappings currently pending operator action."""
+        conn = await self.acquire()
+        try:
+            row = await conn.fetchrow(
+                """
+                SELECT COUNT(*) AS total
+                FROM market_mappings
+                WHERE status IN ('candidate', 'review')
+                """
+            )
+            return int(row["total"] if row else 0)
+        finally:
+            await self._pool.release(conn)
+
+    async def write_candidates(self, candidates: List[Dict[str, Any]]) -> int:
+        """Upsert discovery candidates into the canonical market_mappings table.
+
+        Discovery is never allowed to auto-enable trading or silently promote a
+        confirmed mapping. New rows always land as ``candidate`` with
+        ``allow_auto_trade=False``; existing non-confirmed rows are updated in
+        place so the dashboard and scanner see the freshest venue IDs + score.
+        """
+        written = 0
+        for candidate in candidates:
+            mapping = await self._mapping_from_candidate(candidate)
+            if mapping is None:
+                continue
+            await self.upsert(mapping)
+            written += 1
+        return written
+
+    async def sync_candidates(self, candidates: List[Dict[str, Any]]) -> int:
+        """Upsert the latest discovery pass and expire stale auto candidates.
+
+        Auto-discovery is a rolling snapshot of the current live venue catalogs.
+        When heuristics improve or markets rotate, old auto-generated candidate
+        pairs should fall out of the queue instead of accumulating forever.
+        """
+        written = await self.write_candidates(candidates)
+        active_pairs = {
+            (
+                str(candidate.get("kalshi_ticker", "") or "").strip(),
+                str(candidate.get("poly_slug", "") or "").strip(),
+            )
+            for candidate in candidates
+            if str(candidate.get("kalshi_ticker", "") or "").strip()
+            and str(candidate.get("poly_slug", "") or "").strip()
+        }
+
+        existing_candidates = await self.all(status=MappingStatus.CANDIDATE.value, limit=5000)
+        for mapping in existing_candidates:
+            if not self._is_expirable_auto_candidate(mapping):
+                continue
+            pair = (
+                str(mapping.kalshi_market_id or "").strip(),
+                str(mapping.polymarket_slug or "").strip(),
+            )
+            if not pair[0] or not pair[1] or pair in active_pairs:
+                continue
+            mapping.status = MappingStatus.EXPIRED
+            mapping.allow_auto_trade = False
+            mapping.review_note = "Expired by latest discovery sync."
+            await self.upsert(mapping)
+
+        return written
+
     async def review_candidate(
         self,
         candidate_id: int,
@@ -616,7 +766,111 @@ class MarketMappingStore:
         finally:
             await self._pool.release(conn)
 
+    async def refresh_runtime_cache(self) -> int:
+        """Mirror all durable mappings into the legacy in-process MARKET_MAP."""
+        rows = await self.all(limit=5000)
+        replace_runtime_market_map(
+            (mapping.canonical_id, mapping.to_dict()) for mapping in rows
+        )
+        return len(rows)
+
     # ─── Helpers ─────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _is_expirable_auto_candidate(mapping: MarketMapping) -> bool:
+        if mapping.status != MappingStatus.CANDIDATE:
+            return False
+        if mapping.allow_auto_trade:
+            return False
+        if mapping.canonical_id.startswith("AUTO_"):
+            return True
+        return "Auto-discovered candidate mapping" in str(mapping.notes or "")
+
+    async def _mapping_from_candidate(self, candidate: Dict[str, Any]) -> Optional[MarketMapping]:
+        kalshi_ticker = str(candidate.get("kalshi_ticker", "") or "").strip()
+        poly_slug = str(candidate.get("poly_slug", "") or "").strip()
+        if not kalshi_ticker or not poly_slug:
+            return None
+
+        pair_mapping = await self.get_by_exact_pair(
+            kalshi_market_id=kalshi_ticker,
+            polymarket_slug=poly_slug,
+        )
+        kalshi_mapping = await self.get_by_platform("kalshi", kalshi_ticker)
+        poly_mapping = await self.get_by_platform("polymarket", poly_slug)
+
+        existing = pair_mapping
+        if existing is None and kalshi_mapping and poly_mapping:
+            if kalshi_mapping.canonical_id == poly_mapping.canonical_id:
+                existing = kalshi_mapping
+        if existing is None:
+            if (
+                kalshi_mapping is not None
+                and not kalshi_mapping.polymarket_slug
+                and kalshi_mapping.status != MappingStatus.CONFIRMED
+            ):
+                existing = kalshi_mapping
+            elif (
+                poly_mapping is not None
+                and not poly_mapping.kalshi_market_id
+                and poly_mapping.status != MappingStatus.CONFIRMED
+            ):
+                existing = poly_mapping
+
+        if existing is None:
+            canonical_id = str(candidate.get("canonical_id", "") or "").strip()
+            if not canonical_id:
+                canonical_id = self._generated_candidate_id(kalshi_ticker, poly_slug)
+            existing = MarketMapping(
+                canonical_id=canonical_id,
+                description=self._candidate_description(candidate),
+                status=MappingStatus.CANDIDATE,
+                allow_auto_trade=False,
+            )
+
+        score = float(candidate.get("score", 0.0) or 0.0)
+        candidate_status = _coerce_status(candidate.get("status", MappingStatus.CANDIDATE.value))
+        candidate_allow_auto = bool(candidate.get("allow_auto_trade", False))
+        existing.description = self._candidate_description(candidate, fallback=existing.description)
+        existing.kalshi_market_id = kalshi_ticker
+        existing.polymarket_slug = poly_slug
+        existing.polymarket_question = str(
+            candidate.get("poly_question", "") or existing.polymarket_question or ""
+        )
+        existing.mapping_score = score
+        existing.confidence = score
+        existing.notes = str(candidate.get("notes", "") or existing.notes or "Auto-discovered candidate mapping.")
+        criteria = candidate.get("resolution_criteria")
+        if criteria is not None:
+            existing.resolution_criteria_json = json.dumps(criteria)
+        existing.resolution_match_status = str(
+            candidate.get("resolution_match_status", existing.resolution_match_status or "pending_operator_review")
+            or "pending_operator_review"
+        )
+        if existing.status == MappingStatus.CONFIRMED:
+            existing.allow_auto_trade = existing.allow_auto_trade
+        elif candidate_status == MappingStatus.CONFIRMED:
+            existing.status = MappingStatus.CONFIRMED
+            existing.allow_auto_trade = candidate_allow_auto
+        else:
+            existing.allow_auto_trade = False
+            if existing.status not in {MappingStatus.REJECTED, MappingStatus.EXPIRED, MappingStatus.REVIEW}:
+                existing.status = MappingStatus.CANDIDATE
+        return existing
+
+    @staticmethod
+    def _candidate_description(candidate: Dict[str, Any], fallback: str = "") -> str:
+        for field in ("poly_question", "kalshi_title", "description"):
+            value = str(candidate.get(field, "") or "").strip()
+            if value:
+                return value
+        return fallback or "Auto-discovered market candidate"
+
+    @staticmethod
+    def _generated_candidate_id(kalshi_ticker: str, poly_slug: str) -> str:
+        digest = hashlib.sha1(f"{kalshi_ticker}|{poly_slug}".encode("utf-8")).hexdigest()[:12]
+        base = normalize_market_text(kalshi_ticker).replace(" ", "_").upper()[:24] or "MARKET"
+        return f"AUTO_{base}_{digest}"
 
     def _row_to_mapping(self, row: asyncpg.Record) -> Optional[MarketMapping]:
         if row is None:
@@ -637,7 +891,7 @@ class MarketMappingStore:
         return MarketMapping(
             canonical_id=row["canonical_id"],
             description=row["description"],
-            status=MappingStatus(row["status"]) if row["status"] else MappingStatus.CANDIDATE,
+            status=_coerce_status(row["status"]),
             allow_auto_trade=row["allow_auto_trade"],
             aliases=tuple(row["aliases"]) if row["aliases"] else (),
             tags=tuple(row["tags"]) if row["tags"] else (),

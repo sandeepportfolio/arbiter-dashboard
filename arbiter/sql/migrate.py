@@ -5,7 +5,7 @@ Usage:
     python -m arbiter.sql.migrate --status          # show what is/isn't applied
 
 Migrations live in arbiter/sql/migrations/ as `NNN_name.sql` files. The runner
-applies them in filename-sorted order, recording each in a `schema_migrations`
+applies them in filename-sorted order, recording each in an `execution_schema_migrations`
 table. Already-applied migrations are skipped.
 
 Migrations are append-only -- never edit a file after applying it to any env.
@@ -25,12 +25,16 @@ from typing import Iterable
 
 import asyncpg
 
+from .connection import connect
+
 logger = logging.getLogger("arbiter.sql.migrate")
 
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 
-SCHEMA_MIGRATIONS_DDL = """
-CREATE TABLE IF NOT EXISTS schema_migrations (
+SCHEMA_MIGRATIONS_TABLE = "execution_schema_migrations"
+
+SCHEMA_MIGRATIONS_DDL = f"""
+CREATE TABLE IF NOT EXISTS {SCHEMA_MIGRATIONS_TABLE} (
     filename    TEXT PRIMARY KEY,
     applied_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -44,13 +48,13 @@ def _list_migration_files() -> list[Path]:
 
 
 async def _applied_filenames(conn: asyncpg.Connection) -> set[str]:
-    rows = await conn.fetch("SELECT filename FROM schema_migrations")
+    rows = await conn.fetch(f"SELECT filename FROM {SCHEMA_MIGRATIONS_TABLE}")
     return {row["filename"] for row in rows}
 
 
 async def apply_pending(database_url: str) -> list[str]:
     """Connect, apply any unapplied migrations in order, return list of applied filenames."""
-    conn = await asyncpg.connect(database_url)
+    conn = await connect(database_url)
     try:
         await conn.execute(SCHEMA_MIGRATIONS_DDL)
         already = await _applied_filenames(conn)
@@ -64,7 +68,7 @@ async def apply_pending(database_url: str) -> list[str]:
             async with conn.transaction():
                 await conn.execute(sql)
                 await conn.execute(
-                    "INSERT INTO schema_migrations (filename) VALUES ($1)", path.name
+                    f"INSERT INTO {SCHEMA_MIGRATIONS_TABLE} (filename) VALUES ($1)", path.name
                 )
             applied.append(path.name)
         return applied
@@ -74,7 +78,7 @@ async def apply_pending(database_url: str) -> list[str]:
 
 async def status(database_url: str) -> tuple[list[str], list[str]]:
     """Return (applied, pending) filenames."""
-    conn = await asyncpg.connect(database_url)
+    conn = await connect(database_url)
     try:
         await conn.execute(SCHEMA_MIGRATIONS_DDL)
         already = await _applied_filenames(conn)

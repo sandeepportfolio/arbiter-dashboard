@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import secrets
+import socket
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -20,7 +21,7 @@ from aiohttp.web_exceptions import HTTPUnauthorized
 from .config.settings import MARKET_MAP, ArbiterConfig, update_market_mapping
 from .execution.engine import ArbExecution, ExecutionEngine, ExecutionIncident
 from .monitor.balance import BalanceMonitor
-from .operator_settings import OperatorSettingsStore
+from .operator_settings import OperatorSettingsStore, load_market_discovery_settings
 from .portfolio import PortfolioMonitor
 from .profitability import ProfitabilityValidator
 from .readiness import OperationalReadiness
@@ -38,11 +39,27 @@ def _hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
 
-UI_ALLOWED_USERS = {
-    os.getenv("UI_USER_EMAIL", "sparx.sandeep@gmail.com"): _hash_password(
-        os.getenv("UI_USER_PASSWORD", "saibaba")
-    ),
-}
+def _build_allowed_users() -> Dict[str, str]:
+    """Load operator credentials, preferring production OPS_* names."""
+    users: Dict[str, str] = {}
+    for email_key, password_key in (
+        ("OPS_EMAIL", "OPS_PASSWORD"),
+        ("UI_USER_EMAIL", "UI_USER_PASSWORD"),
+    ):
+        email = os.getenv(email_key, "").strip().lower()
+        password = os.getenv(password_key, "")
+        if email and password:
+            users[email] = _hash_password(password)
+
+    if users:
+        return users
+
+    return {
+        "sparx.sandeep@gmail.com": _hash_password("saibaba"),
+    }
+
+
+UI_ALLOWED_USERS = _build_allowed_users()
 
 
 def _get_secret() -> str:
@@ -155,6 +172,7 @@ class ArbiterAPI:
         host: str = "0.0.0.0",
         port: int = 8080,
         safety: Optional[SafetySupervisor] = None,
+        mapping_store=None,
     ):
         self.store = price_store
         self.scanner = scanner
@@ -170,6 +188,7 @@ class ArbiterAPI:
         self.host = host
         self.port = port
         self.safety = safety
+        self.mapping_store = mapping_store
         # SafetyEventStore exposes list_events() for GET /api/safety/events;
         # supervisor holds the reference on ``_safety_store`` (may be None in
         # dev mode without Postgres).
@@ -179,7 +198,9 @@ class ArbiterAPI:
         self._site_index = Path(__file__).resolve().parent.parent / "index.html"
         self._dashboard_dir = Path(__file__).resolve().parent / "web"
         self.auto_executor = None
+        self._broadcast_task: Optional[asyncio.Task] = None
         self._operator_settings_store = OperatorSettingsStore()
+        self._market_discovery_settings = load_market_discovery_settings(self._operator_settings_store)
         self._operator_settings_meta = {
             "persisted": False,
             "updated_at": None,
@@ -188,6 +209,8 @@ class ArbiterAPI:
         # SAFE-04: periodic broadcaster task for rate_limit_state events.
         # Started in serve(); cancelled on shutdown.
         self._rate_limit_task: Optional[asyncio.Task] = None
+        self._startup_event = asyncio.Event()
+        self._startup_error: Optional[BaseException] = None
         self._restore_operator_settings()
 
     def attach_auto_executor(self, auto_executor) -> None:
@@ -197,6 +220,8 @@ class ArbiterAPI:
     async def serve(self):
         app = web.Application(middlewares=[self._cors_middleware])
         app.router.add_get("/", self.handle_site_index)
+        app.router.add_get("/health", self.handle_liveness)
+        app.router.add_get("/ready", self.handle_service_ready)
         app.router.add_get("/ops", self.handle_dashboard)
         app.router.add_get("/favicon.ico", self.handle_favicon)
         if self._dashboard_dir.exists():
@@ -237,27 +262,81 @@ class ArbiterAPI:
         app.router.add_get("/ws", self.handle_websocket)
 
         runner = web.AppRunner(app)
-        await runner.setup()
-        site = web.TCPSite(runner, self.host, self.port)
-        await site.start()
-
-        logger.info("ARBITER API listening at http://%s:%s", self.host, self.port)
-        asyncio.create_task(self._broadcast_loop())
-        # SAFE-04: launch the periodic rate_limit_state broadcaster.
-        self._rate_limit_task = asyncio.create_task(self._rate_limit_broadcast_loop())
-
         try:
+            await runner.setup()
+            await self._start_site(runner)
+            logger.info("ARBITER API listening at http://%s:%s", self.host, self.port)
+            self._startup_error = None
+            self._startup_event.set()
+            self._broadcast_task = asyncio.create_task(self._broadcast_loop(), name="api-broadcast")
+            # SAFE-04: launch the periodic rate_limit_state broadcaster.
+            self._rate_limit_task = asyncio.create_task(
+                self._rate_limit_broadcast_loop(),
+                name="api-rate-limit-broadcast",
+            )
             while True:
                 await asyncio.sleep(3600)
+        except Exception as exc:
+            self._startup_error = exc
+            self._startup_event.set()
+            raise
         finally:
+            await self._cancel_background_task(self._broadcast_task)
+            self._broadcast_task = None
             # Cancel the rate-limit broadcaster on shutdown so the asyncio loop
             # doesn't report a pending task on exit.
-            if self._rate_limit_task is not None and not self._rate_limit_task.done():
-                self._rate_limit_task.cancel()
-                try:
-                    await self._rate_limit_task
-                except (asyncio.CancelledError, BaseException):
-                    pass
+            await self._cancel_background_task(self._rate_limit_task)
+            self._rate_limit_task = None
+            await runner.cleanup()
+
+    async def wait_until_started(self, timeout: float = 10.0) -> None:
+        await asyncio.wait_for(self._startup_event.wait(), timeout=timeout)
+        if self._startup_error is not None:
+            raise RuntimeError(
+                f"ARBITER API failed to start on {self.host}:{self.port}: {self._startup_error}"
+            ) from self._startup_error
+
+    async def _start_site(self, runner: web.AppRunner) -> None:
+        site = web.TCPSite(runner, self.host, self.port)
+        try:
+            await site.start()
+        except OSError as exc:
+            if not self._should_retry_with_socksite(exc):
+                raise
+
+            logger.warning(
+                "aiohttp TCPSite start failed on %s:%s (%s); retrying with SockSite fallback",
+                self.host,
+                self.port,
+                exc,
+            )
+            listen_socket = self._create_listen_socket()
+            fallback_site = web.SockSite(runner, listen_socket)
+            try:
+                await fallback_site.start()
+            except Exception:
+                listen_socket.close()
+                raise
+
+    def _create_listen_socket(self) -> socket.socket:
+        sock = socket.create_server((self.host, self.port), reuse_port=False, backlog=128)
+        sock.setblocking(False)
+        return sock
+
+    @staticmethod
+    def _should_retry_with_socksite(exc: OSError) -> bool:
+        text = str(exc).lower()
+        return exc.errno == 22 and ("keepalive" in text or "invalid argument" in text)
+
+    @staticmethod
+    async def _cancel_background_task(task: Optional[asyncio.Task]) -> None:
+        if task is None or task.done():
+            return
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, BaseException):
+            pass
 
     @web.middleware
     async def _cors_middleware(self, request, handler):
@@ -293,16 +372,27 @@ class ArbiterAPI:
     async def handle_favicon(self, request):
         return web.Response(status=204)
 
+    async def handle_liveness(self, request):
+        return web.json_response(self._service_health_snapshot())
+
+    async def handle_service_ready(self, request):
+        payload = self._service_ready_snapshot()
+        return web.json_response(payload, status=200 if payload["ready"] else 503)
+
     async def handle_health(self, request):
+        readiness = self._readiness_snapshot()
         return web.json_response(
             {
                 "status": "ok",
+                "probe": "liveness",
+                "service_ready": True,
+                "live_trading_ready": readiness.get("ready_for_live_trading", False),
                 "uptime_seconds": round(time.time() - self.started_at, 1),
                 "scanner": self.scanner.stats,
                 "execution": self.engine.stats,
                 "audit": self.engine.stats.get("audit", {}),
                 "profitability": self._profitability_snapshot(),
-                "readiness": self._readiness_snapshot(),
+                "readiness": readiness,
                 "reconciliation": self._reconciliation_snapshot(),
             }
         )
@@ -334,16 +424,36 @@ class ArbiterAPI:
 
     async def handle_market_mappings(self, request):
         payload = []
-        for canonical_id, mapping in MARKET_MAP.items():
-            row = {"canonical_id": canonical_id}
-            row.update(mapping)
+        if self.mapping_store is not None:
+            try:
+                status = str(request.query.get("status", "") or "").strip() or None
+                raw_limit = request.query.get("limit", "500")
+                limit = min(max(int(raw_limit), 1), 5000)
+                payload = [
+                    mapping.to_dict()
+                    for mapping in await self.mapping_store.all(status=status, limit=limit)
+                ]
+            except Exception as exc:
+                logger.warning(
+                    "Failed to load market mappings from store, falling back to runtime cache: %s",
+                    exc,
+                )
+                payload = []
+
+        if not payload:
+            for canonical_id, mapping in MARKET_MAP.items():
+                row = {"canonical_id": canonical_id}
+                row.update(mapping)
+                payload.append(row)
+
+        for row in payload:
             # SAFE-06 (plan 03-06): every mapping row exposes resolution_criteria
             # and resolution_match_status so the dashboard can render the
             # side-by-side comparison (plan 03-07). Entries without the new
             # fields fall back to sane defaults — never raise KeyError.
             row.setdefault("resolution_criteria", None)
             row.setdefault("resolution_match_status", "pending_operator_review")
-            payload.append(row)
+
         return web.json_response(payload)
 
     async def handle_errors(self, request):
@@ -425,6 +535,17 @@ class ArbiterAPI:
         if resolution_match_status is not None:
             update_kwargs["resolution_match_status"] = resolution_match_status
 
+        current_mapping = MARKET_MAP[canonical_id]
+        effective_match_status = (
+            resolution_match_status
+            or (
+                resolution_criteria.get("criteria_match")
+                if isinstance(resolution_criteria, dict)
+                else None
+            )
+            or current_mapping.get("resolution_match_status", "pending_operator_review")
+        )
+
         if action == "confirm":
             mapping = update_market_mapping(
                 canonical_id,
@@ -443,9 +564,18 @@ class ArbiterAPI:
                 **update_kwargs,
             )
         elif action == "enable_auto_trade":
+            if str(current_mapping.get("status", "candidate")).lower() != "confirmed":
+                return web.json_response(
+                    {"error": "enable_auto_trade requires an already confirmed mapping"},
+                    status=400,
+                )
+            if str(effective_match_status or "").lower() != "identical":
+                return web.json_response(
+                    {"error": "enable_auto_trade requires resolution_match_status=identical"},
+                    status=400,
+                )
             mapping = update_market_mapping(
                 canonical_id,
-                status="confirmed",
                 allow_auto_trade=True,
                 note=note or "Auto-trade enabled from the operator desk.",
                 actor=actor,
@@ -461,6 +591,13 @@ class ArbiterAPI:
             )
         else:
             return web.json_response({"error": f"Unsupported mapping action: {action or 'unknown'}"}, status=400)
+
+        if mapping is not None and self.mapping_store is not None:
+            from .mapping.market_map import MarketMapping
+
+            await self.mapping_store.upsert(
+                MarketMapping.from_dict(canonical_id, mapping)
+            )
 
         # SAFE-06: emit a `mapping_state` WS event whenever the criteria or
         # match status changed so dashboards can refresh without polling.
@@ -1160,6 +1297,18 @@ class ArbiterAPI:
                 ),
                 "bootstrap_trades": getattr(getattr(auto_executor, "_config", None), "bootstrap_trades", None),
             },
+            "mapping": {
+                "auto_discovery_enabled": bool(self._market_discovery_settings.get("auto_discovery_enabled", True)),
+                "auto_discovery_interval_seconds": float(self._market_discovery_settings.get("auto_discovery_interval_seconds", 300.0)),
+                "auto_discovery_budget_rps": float(self._market_discovery_settings.get("auto_discovery_budget_rps", 2.0)),
+                "auto_discovery_min_score": float(self._market_discovery_settings.get("auto_discovery_min_score", 0.25)),
+                "auto_discovery_max_candidates": int(self._market_discovery_settings.get("auto_discovery_max_candidates", 500)),
+                "auto_promote_enabled": bool(self._market_discovery_settings.get("auto_promote_enabled", False)),
+                "auto_promote_min_score": float(self._market_discovery_settings.get("auto_promote_min_score", 0.78)),
+                "auto_promote_daily_cap": int(self._market_discovery_settings.get("auto_promote_daily_cap", 250)),
+                "auto_promote_advisory_scans": int(self._market_discovery_settings.get("auto_promote_advisory_scans", 0)),
+                "auto_promote_max_days": int(self._market_discovery_settings.get("auto_promote_max_days", 400)),
+            },
         }
 
     def _settings_snapshot(self) -> dict:
@@ -1175,6 +1324,7 @@ class ArbiterAPI:
             "scanner": editable["scanner"],
             "alerts": editable["alerts"],
             "auto_executor": auto_executor,
+            "mapping": editable["mapping"],
             "meta": {
                 "persisted": bool(self._operator_settings_meta.get("persisted")),
                 "updated_at": self._operator_settings_meta.get("updated_at"),
@@ -1269,6 +1419,34 @@ class ArbiterAPI:
             if auto_patch:
                 patch["auto_executor"] = auto_patch
 
+        mapping = payload.get("mapping")
+        if mapping is not None:
+            if not isinstance(mapping, dict):
+                raise ValueError("mapping settings must be an object")
+            mapping_patch = {}
+            if "auto_discovery_enabled" in mapping:
+                mapping_patch["auto_discovery_enabled"] = self._coerce_bool(mapping["auto_discovery_enabled"], label="mapping.auto_discovery_enabled")
+            if "auto_discovery_interval_seconds" in mapping:
+                mapping_patch["auto_discovery_interval_seconds"] = self._coerce_float(mapping["auto_discovery_interval_seconds"], label="mapping.auto_discovery_interval_seconds", minimum=15.0, maximum=3600.0)
+            if "auto_discovery_budget_rps" in mapping:
+                mapping_patch["auto_discovery_budget_rps"] = self._coerce_float(mapping["auto_discovery_budget_rps"], label="mapping.auto_discovery_budget_rps", minimum=0.1, maximum=20.0)
+            if "auto_discovery_min_score" in mapping:
+                mapping_patch["auto_discovery_min_score"] = self._coerce_float(mapping["auto_discovery_min_score"], label="mapping.auto_discovery_min_score", minimum=0.0, maximum=1.0)
+            if "auto_discovery_max_candidates" in mapping:
+                mapping_patch["auto_discovery_max_candidates"] = self._coerce_int(mapping["auto_discovery_max_candidates"], label="mapping.auto_discovery_max_candidates", minimum=1, maximum=5000)
+            if "auto_promote_enabled" in mapping:
+                mapping_patch["auto_promote_enabled"] = self._coerce_bool(mapping["auto_promote_enabled"], label="mapping.auto_promote_enabled")
+            if "auto_promote_min_score" in mapping:
+                mapping_patch["auto_promote_min_score"] = self._coerce_float(mapping["auto_promote_min_score"], label="mapping.auto_promote_min_score", minimum=0.0, maximum=1.0)
+            if "auto_promote_daily_cap" in mapping:
+                mapping_patch["auto_promote_daily_cap"] = self._coerce_int(mapping["auto_promote_daily_cap"], label="mapping.auto_promote_daily_cap", minimum=1, maximum=5000)
+            if "auto_promote_advisory_scans" in mapping:
+                mapping_patch["auto_promote_advisory_scans"] = self._coerce_int(mapping["auto_promote_advisory_scans"], label="mapping.auto_promote_advisory_scans", minimum=0, maximum=5000)
+            if "auto_promote_max_days" in mapping:
+                mapping_patch["auto_promote_max_days"] = self._coerce_int(mapping["auto_promote_max_days"], label="mapping.auto_promote_max_days", minimum=1, maximum=2000)
+            if mapping_patch:
+                patch["mapping"] = mapping_patch
+
         return patch
 
     def _apply_operator_settings_patch(self, patch: dict) -> None:
@@ -1287,6 +1465,13 @@ class ArbiterAPI:
         if auto_patch and getattr(self, "auto_executor", None) is not None:
             for key, value in auto_patch.items():
                 setattr(self.auto_executor._config, key, value)
+
+        mapping_patch = patch.get("mapping") or {}
+        if mapping_patch:
+            self._market_discovery_settings = {
+                **self._market_discovery_settings,
+                **mapping_patch,
+            }
 
     def _update_operator_settings(self, payload: dict, *, actor: str) -> dict:
         patch = self._normalize_settings_patch(payload)
@@ -1368,6 +1553,26 @@ class ArbiterAPI:
                 "reasons": ["Profitability validator is not configured"],
             }
         return self.profitability.get_snapshot().to_dict()
+
+    def _service_health_snapshot(self) -> dict:
+        return {
+            "status": "ok",
+            "probe": "liveness",
+            "mode": "dry-run" if self.config.scanner.dry_run else "live",
+            "uptime_seconds": round(time.time() - self.started_at, 1),
+        }
+
+    def _service_ready_snapshot(self) -> dict:
+        readiness = self._readiness_snapshot()
+        return {
+            "status": "ready",
+            "probe": "service_readiness",
+            "ready": True,
+            "mode": "dry-run" if self.config.scanner.dry_run else "live",
+            "uptime_seconds": round(time.time() - self.started_at, 1),
+            "live_trading_ready": readiness.get("ready_for_live_trading", False),
+            "live_trading_endpoint": "/api/readiness",
+        }
 
     def _readiness_snapshot(self) -> dict:
         if not self.readiness:
@@ -1524,6 +1729,7 @@ def create_api_server(
     host="0.0.0.0",
     port=8080,
     safety=None,
+    mapping_store=None,
 ) -> ArbiterAPI:
     return ArbiterAPI(
         price_store,
@@ -1540,4 +1746,5 @@ def create_api_server(
         host=host,
         port=port,
         safety=safety,
+        mapping_store=mapping_store,
     )

@@ -7,6 +7,8 @@ STATIC_PORT="${ARBITER_STATIC_PORT:-8092}"
 API_LOG="$(mktemp -t arbiter-static-api.XXXXXX.log)"
 STATIC_LOG="$(mktemp -t arbiter-static-host.XXXXXX.log)"
 SETTINGS_PATH="$(mktemp -t arbiter-static-settings.XXXXXX.json)"
+OPS_EMAIL_VALUE="${OPS_EMAIL:-${UI_USER_EMAIL:-sparx.sandeep@gmail.com}}"
+OPS_PASSWORD_VALUE="${OPS_PASSWORD:-${UI_USER_PASSWORD:-saibaba}}"
 rm -f "$SETTINGS_PATH"
 PWCLI=(npx --yes --package @playwright/cli playwright-cli)
 PYTHON_BIN="${ARBITER_PYTHON:-$ROOT_DIR/.venv/bin/python}"
@@ -104,8 +106,8 @@ OPS_STATE="$(${PWCLI[@]} eval "(async () => {
     if (document.getElementById('authForm')) break;
     await sleep(100);
   }
-  document.getElementById('authEmail').value = 'sparx.sandeep@gmail.com';
-  document.getElementById('authPassword').value = 'saibaba';
+  document.getElementById('authEmail').value = '${OPS_EMAIL_VALUE}';
+  document.getElementById('authPassword').value = '${OPS_PASSWORD_VALUE}';
   document.getElementById('authForm').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
   for (let attempt = 0; attempt < 60; attempt += 1) {
     const ready = !!document.querySelector('[data-mapping-action="enable_auto_trade"]');

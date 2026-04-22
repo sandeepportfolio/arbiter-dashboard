@@ -246,6 +246,97 @@ const SETTINGS_SECTIONS = [
       { path: "alerts.cooldown", type: "number", label: "Alert cooldown (sec)", help: "Minimum time between repeated alerts for the same condition.", min: 0, max: 86400, step: 1 },
     ],
   },
+  {
+    key: "mapping",
+    title: "Discovery engine",
+    copy: "Expand or slow candidate-market discovery without touching env files or restarting the desk.",
+    fields: [
+      {
+        path: "mapping.auto_discovery_enabled",
+        type: "checkbox",
+        label: "Enable auto-discovery",
+        help: "Continuously scan Kalshi and Polymarket catalogs and write new candidate mappings.",
+      },
+      {
+        path: "mapping.auto_discovery_interval_seconds",
+        type: "number",
+        label: "Discovery interval (sec)",
+        help: "How often Arbiter runs a fresh discovery pass.",
+        min: 15,
+        max: 3600,
+        step: 1,
+      },
+      {
+        path: "mapping.auto_discovery_budget_rps",
+        type: "number",
+        label: "Discovery request budget (rps)",
+        help: "API request rate budget for catalog discovery across venues.",
+        min: 0.1,
+        max: 20,
+        step: 0.1,
+      },
+      {
+        path: "mapping.auto_discovery_min_score",
+        type: "number",
+        label: "Candidate score floor",
+        help: "Lower this to surface more possible matches, raise it to keep the queue tighter.",
+        min: 0,
+        max: 1,
+        step: 0.01,
+      },
+      {
+        path: "mapping.auto_discovery_max_candidates",
+        type: "number",
+        label: "Max candidates per pass",
+        help: "Upper bound on how many scored candidates survive each discovery sync.",
+        min: 1,
+        max: 5000,
+        step: 1,
+      },
+      {
+        path: "mapping.auto_promote_enabled",
+        type: "checkbox",
+        label: "Enable auto-promotion",
+        help: "Promote candidate mappings straight to confirmed auto-trade when they clear structured, LLM, and liquidity checks.",
+      },
+      {
+        path: "mapping.auto_promote_min_score",
+        type: "number",
+        label: "Auto-promote score floor",
+        help: "Higher is safer, lower is broader. This is the confidence bar for automatic promotion.",
+        min: 0,
+        max: 1,
+        step: 0.01,
+      },
+      {
+        path: "mapping.auto_promote_daily_cap",
+        type: "number",
+        label: "Auto-promote daily cap",
+        help: "Maximum mappings Arbiter can auto-promote in one day-equivalent run budget.",
+        min: 1,
+        max: 5000,
+        step: 1,
+      },
+      {
+        path: "mapping.auto_promote_advisory_scans",
+        type: "number",
+        label: "Advisory scans before promote",
+        help: "How many discovery passes a candidate must survive before auto-promotion is allowed.",
+        min: 0,
+        max: 5000,
+        step: 1,
+      },
+      {
+        path: "mapping.auto_promote_max_days",
+        type: "number",
+        label: "Max days to resolution",
+        help: "Lets long-dated contracts stay eligible for auto-promotion instead of getting clipped at 90 days.",
+        min: 1,
+        max: 2000,
+        step: 1,
+      },
+    ],
+  },
 ];
 
 const PUBLISHED_TYPES = [
@@ -294,6 +385,7 @@ const logoutButtonEl = document.getElementById("logoutButton");
 const dockOpsLinkEl = document.getElementById("dockOpsLink");
 const heroTitleEl = document.getElementById("heroTitle");
 const heroSubtitleEl = document.getElementById("heroSubtitle");
+const heroBalanceStripEl = document.getElementById("heroBalanceStrip");
 const heroValueEl = document.getElementById("heroValue");
 const heroDeltaEl = document.getElementById("heroDelta");
 const heroUpdatedEl = document.getElementById("heroUpdated");
@@ -368,6 +460,7 @@ function editableSettingsSnapshot(snapshot = state.settings) {
     scanner: cloneJson(snapshot.scanner || {}),
     alerts: cloneJson(snapshot.alerts || {}),
     auto_executor: cloneJson(snapshot.auto_executor || {}),
+    mapping: cloneJson(snapshot.mapping || {}),
   };
 }
 
@@ -1354,6 +1447,21 @@ function render() {
   renderCharts();
 }
 
+function compactTopbar() {
+  const compact = window.innerWidth <= 640;
+  if (opsShortcutEl) {
+    opsShortcutEl.textContent = isOpsMode()
+      ? (compact ? "Public" : "Back to public desk")
+      : (compact ? "Ops" : "Open ops desk");
+    opsShortcutEl.setAttribute("aria-label", isOpsMode() ? "Back to public desk" : "Open ops desk");
+    opsShortcutEl.title = isOpsMode() ? "Back to public desk" : "Open ops desk";
+  }
+  const armBtn = document.getElementById("killSwitchArm");
+  const resetBtn = document.getElementById("killSwitchReset");
+  if (armBtn) armBtn.textContent = compact ? "Arm" : "Arm kill switch";
+  if (resetBtn) resetBtn.textContent = compact ? "Reset" : "Reset kill switch";
+}
+
 function renderChrome() {
   const publicHref = getPublicHref();
   const opsHref = getOpsHref();
@@ -1369,7 +1477,6 @@ function renderChrome() {
   }
   if (opsShortcutEl) {
     opsShortcutEl.href = isOpsMode() ? publicHref : opsHref;
-    opsShortcutEl.textContent = isOpsMode() ? "Back to public desk" : "Open ops desk";
   }
   if (authPublicLinkEl) {
     authPublicLinkEl.href = publicHref;
@@ -1428,6 +1535,8 @@ function renderChrome() {
   if (killSwitchToolbarEl) {
     killSwitchToolbarEl.classList.toggle("hidden", !hasOperatorAccess());
   }
+
+  compactTopbar();
 }
 
 function renderOverview() {
@@ -1438,6 +1547,10 @@ function renderOverview() {
       heroDeltaEl.classList.remove("is-negative");
     }
     if (heroUpdatedEl) heroUpdatedEl.textContent = "Awaiting live data";
+    if (heroBalanceStripEl) {
+      heroBalanceStripEl.innerHTML = "";
+      heroBalanceStripEl.classList.add("hidden");
+    }
     if (riskUpdatedEl) riskUpdatedEl.innerHTML = "Updated<br>Waiting";
     if (riskScoreBarEl) riskScoreBarEl.style.width = "0%";
     if (riskSummaryEl) riskSummaryEl.textContent = "Risk posture is loading.";
@@ -1468,6 +1581,8 @@ function renderOverview() {
   }
   if (heroUpdatedEl) heroUpdatedEl.textContent = overview.heroUpdated;
 
+  renderHeroBalances();
+
   if (riskUpdatedEl) riskUpdatedEl.innerHTML = overview.risk.updatedLabel.replace("\n", "<br>");
   if (riskScoreBarEl) riskScoreBarEl.style.width = `${overview.risk.percent}%`;
   if (riskSummaryEl) riskSummaryEl.textContent = overview.risk.summary;
@@ -1485,6 +1600,38 @@ function renderOverview() {
       ? overview.recentTrades.map(renderRecentTradeCard).join("")
       : emptyState("No recent trades have settled yet.");
   }
+}
+
+function renderHeroBalances() {
+  if (!heroBalanceStripEl) return;
+  const balances = Object.entries(state.system?.balances || {});
+  if (!balances.length) {
+    heroBalanceStripEl.innerHTML = "";
+    heroBalanceStripEl.classList.add("hidden");
+    return;
+  }
+
+  heroBalanceStripEl.classList.remove("hidden");
+  heroBalanceStripEl.innerHTML = balances
+    .slice(0, 3)
+    .map(([platform, snapshot]) => {
+      const low = Boolean(snapshot?.is_low);
+      const threshold = Number(platform === "kalshi"
+        ? state.settings?.alerts?.kalshi_low
+        : state.settings?.alerts?.polymarket_low);
+      const updated = relTime(snapshot?.timestamp || state.system?.timestamp || Date.now() / 1000);
+      return `
+        <article class="hero-balance-card ${low ? "is-low" : "is-healthy"}">
+          <div class="hero-balance-meta">
+            <span class="hero-balance-label">${escapeHtml(platformLabel(platform))}</span>
+            <span class="hero-balance-state">${low ? "Needs funding" : "Funded"}</span>
+          </div>
+          <strong class="hero-balance-value">${escapeHtml(formatUsd.format(snapshot?.balance || 0))}</strong>
+          <p class="hero-balance-copy">${low ? "Below" : "Above"} alert floor${Number.isFinite(threshold) ? ` of ${escapeHtml(formatUsd.format(threshold))}` : ""} • updated ${escapeHtml(updated)}</p>
+        </article>
+      `;
+    })
+    .join("");
 }
 
 function renderRecentTradeCard(trade) {
@@ -1709,7 +1856,7 @@ function formatSettingsValue(field, value) {
   if (field.path.includes("usd") || field.path.includes("_low")) {
     return formatUsd.format(Number(value || 0));
   }
-  if (field.path.includes("confidence") || field.path.includes("slippage")) {
+  if (field.path.includes("confidence") || field.path.includes("slippage") || field.path.includes("min_score") || field.path.includes("budget_rps")) {
     return Number(value || 0).toFixed(2);
   }
   if (field.path.includes("interval") || field.path.includes("age") || field.path.includes("cooldown")) {
@@ -1754,6 +1901,16 @@ function settingsSummaryCards(snapshot) {
       label: "Balance alerts",
       value: `${formatUsd.format(snapshot.alerts?.kalshi_low || 0)} / ${formatUsd.format(snapshot.alerts?.polymarket_low || 0)}`,
       copy: `Cooldown ${Math.round(snapshot.alerts?.cooldown || 0)}s`,
+    },
+    {
+      label: "Discovery",
+      value: snapshot.mapping?.auto_discovery_enabled ? "Running" : "Paused",
+      copy: `${Number(snapshot.mapping?.auto_discovery_min_score || 0).toFixed(2)} floor • ${Math.round(snapshot.mapping?.auto_discovery_interval_seconds || 0)}s • max ${Math.round(snapshot.mapping?.auto_discovery_max_candidates || 0)}`,
+    },
+    {
+      label: "Auto-promote",
+      value: snapshot.mapping?.auto_promote_enabled ? "Armed" : "Off",
+      copy: `${Number(snapshot.mapping?.auto_promote_min_score || 0).toFixed(2)} floor • ${Math.round(snapshot.mapping?.auto_promote_max_days || 0)}d window • cap ${Math.round(snapshot.mapping?.auto_promote_daily_cap || 0)}`,
     },
   ];
 }
@@ -3124,6 +3281,8 @@ function startPolling() {
     loadSnapshot().catch((error) => console.error(error));
   }, 7000);
 }
+
+window.addEventListener("resize", compactTopbar);
 
 renderChrome();
 setWsLabel("Connecting", true);

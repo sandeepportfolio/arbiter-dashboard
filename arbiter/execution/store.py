@@ -18,6 +18,7 @@ from typing import Any, List, Optional
 
 import asyncpg
 
+from ..sql.connection import create_pool
 from ..sql.migrate import apply_pending
 from .engine import ArbExecution, ExecutionIncident, Order, OrderStatus
 
@@ -59,7 +60,7 @@ class ExecutionStore:
 
     async def connect(self) -> None:
         if self._pool is None:
-            self._pool = await asyncpg.create_pool(
+            self._pool = await create_pool(
                 self.database_url,
                 min_size=2,
                 max_size=10,

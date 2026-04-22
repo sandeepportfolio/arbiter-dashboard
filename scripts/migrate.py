@@ -7,14 +7,42 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import asyncpg
 import logging
 import os
 import sys
 from pathlib import Path
 
+import asyncpg
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from arbiter.sql.connection import connect as connect_postgres
+
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    load_dotenv = None
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 logger = logging.getLogger("arbiter.migrate")
+
+
+def _load_startup_env() -> None:
+    if load_dotenv is None:
+        return
+    explicit = os.getenv("ARBITER_ENV_FILE", "").strip()
+    if explicit:
+        load_dotenv(explicit, override=False)
+        return
+    for candidate in (Path(".env.production"), Path(".env")):
+        if candidate.exists():
+            load_dotenv(candidate, override=False)
+            return
+
+
+_load_startup_env()
 
 
 MIGRATIONS = [
@@ -164,7 +192,7 @@ async def apply_migration(conn: asyncpg.Connection, version: int, sql: str):
 async def run_migrations(database_url: str, dry_run: bool = False):
     """Run all pending migrations."""
     logger.info(f"Connecting to database...")
-    conn = await asyncpg.connect(database_url, timeout=30)
+    conn = await connect_postgres(database_url, timeout=30)
 
     try:
         # Ensure migrations tracking table exists
@@ -209,7 +237,7 @@ async def run_migrations(database_url: str, dry_run: bool = False):
 async def verify_database(database_url: str) -> bool:
     """Verify database connectivity and required extensions."""
     try:
-        conn = await asyncpg.connect(database_url, timeout=10)
+        conn = await connect_postgres(database_url, timeout=10)
         try:
             await conn.fetchval("SELECT 1")
             # Check required tables

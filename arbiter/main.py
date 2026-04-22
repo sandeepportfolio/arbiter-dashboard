@@ -14,6 +14,7 @@ import os
 import signal
 import sys
 import time
+from contextlib import suppress
 from pathlib import Path
 from typing import Optional
 
@@ -37,6 +38,8 @@ from .readiness import OperationalReadiness
 from .safety.persistence import SafetyEventStore
 from .safety.supervisor import SafetySupervisor
 from .utils.retry import CircuitBreaker, RateLimiter
+from .mapping.auto_discovery import discover as discover_market_mappings
+from .mapping.market_map import MarketMappingStore
 
 import sentry_sdk
 from sentry_sdk.integrations.aiohttp import AioHttpIntegration
@@ -44,6 +47,8 @@ from sentry_sdk.integrations.asyncio import AsyncioIntegration
 from sentry_sdk.integrations.logging import LoggingIntegration
 
 from .config.settings import PolymarketConfig, PolymarketUSConfig
+from .operator_settings import OperatorSettingsStore, load_market_discovery_settings
+from .runtime_lock import RuntimeLockError, acquire_runtime_lock
 
 
 def build_polymarket_component(config: ArbiterConfig):
@@ -75,7 +80,11 @@ def build_polymarket_component(config: ArbiterConfig):
             # Stub signer for test/dry-run contexts where no real credentials exist
             signer = None  # type: ignore[assignment]
 
-        client = PolymarketUSClient(base_url=cfg.api_url, signer=signer)  # type: ignore[arg-type]
+        client = PolymarketUSClient(
+            base_url=cfg.api_url,
+            public_base_url=cfg.gateway_url,
+            signer=signer,
+        )
         return PolymarketUSAdapter(client=client)
 
     if isinstance(config.polymarket, PolymarketConfig):
@@ -89,6 +98,90 @@ def build_polymarket_component(config: ArbiterConfig):
             clob_client_factory=lambda: None,
             rate_limiter=None,  # type: ignore[arg-type]
             circuit=None,       # type: ignore[arg-type]
+        )
+
+    return None
+
+
+def _float_env(name: str) -> Optional[float]:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return 0.0
+
+
+def build_polymarket_collector(config: ArbiterConfig, price_store: PriceStore):
+    """Return the correct Polymarket collector for the current runtime variant."""
+    if config.polymarket is None:
+        return None
+
+    if isinstance(config.polymarket, PolymarketUSConfig):
+        from .auth.ed25519_signer import Ed25519Signer
+        from .collectors.polymarket_us import PolymarketUSClient, PolymarketUSCollector
+
+        cfg = config.polymarket
+        signer = None
+        if cfg.api_key_id and cfg.api_secret:
+            signer = Ed25519Signer(key_id=cfg.api_key_id, secret_b64=cfg.api_secret)
+        client = PolymarketUSClient(
+            base_url=cfg.api_url,
+            public_base_url=cfg.gateway_url,
+            signer=signer,
+        )
+        return PolymarketUSCollector(config=cfg, store=price_store, client=client)
+
+    if isinstance(config.polymarket, PolymarketConfig):
+        return PolymarketCollector(config.polymarket, price_store)
+
+    return None
+
+
+def build_polymarket_adapter(
+    config: ArbiterConfig,
+    *,
+    engine: Optional[ExecutionEngine] = None,
+    collector=None,
+    rate_limiter=None,
+    circuit=None,
+):
+    """Return the correct Polymarket adapter for the current runtime variant."""
+    if config.polymarket is None:
+        return None
+
+    if isinstance(config.polymarket, PolymarketUSConfig):
+        from .auth.ed25519_signer import Ed25519Signer
+        from .collectors.polymarket_us import PolymarketUSClient
+        from .execution.adapters.polymarket_us import PolymarketUSAdapter
+
+        cfg = config.polymarket
+        client = getattr(collector, "client", None)
+        if client is None:
+            signer = None
+            if cfg.api_key_id and cfg.api_secret:
+                signer = Ed25519Signer(key_id=cfg.api_key_id, secret_b64=cfg.api_secret)
+            client = PolymarketUSClient(
+                base_url=cfg.api_url,
+                public_base_url=cfg.gateway_url,
+                signer=signer,
+            )
+        return PolymarketUSAdapter(
+            client=client,
+            phase4_max_usd=_float_env("PHASE4_MAX_ORDER_USD"),
+            phase5_max_usd=_float_env("PHASE5_MAX_ORDER_USD"),
+        )
+
+    if isinstance(config.polymarket, PolymarketConfig):
+        clob_client_factory = (
+            (lambda: engine._get_poly_clob_client()) if engine is not None else (lambda: None)
+        )
+        return PolymarketAdapter(
+            config=config,
+            clob_client_factory=clob_client_factory,
+            rate_limiter=rate_limiter,
+            circuit=circuit,
         )
 
     return None
@@ -152,6 +245,49 @@ async def run_reconciliation_loop(
             await asyncio.sleep(min(reconciler.check_interval, 10.0))
 
 
+async def cleanup_runtime(
+    *,
+    logger: logging.Logger,
+    engine: ExecutionEngine,
+    auto_executor,
+    kalshi: KalshiCollector,
+    polymarket,
+    scanner: ArbitrageScanner,
+    monitor: BalanceMonitor,
+    portfolio: PortfolioMonitor,
+    profitability: ProfitabilityValidator,
+    store: Optional[ExecutionStore],
+    mapping_store: Optional[MarketMappingStore],
+    shared_session: aiohttp.ClientSession,
+) -> None:
+    """Best-effort teardown for shutdown and failed startup paths."""
+
+    async def _await_cleanup(label: str, awaitable) -> None:
+        try:
+            await awaitable
+        except Exception as exc:
+            logger.warning("Cleanup step %s failed: %s", label, exc)
+
+    engine.stop_heartbeat()
+    await _await_cleanup("auto_executor.stop", auto_executor.stop())
+    await _await_cleanup("kalshi.stop", kalshi.stop())
+    if polymarket is not None:
+        await _await_cleanup("polymarket.stop", polymarket.stop())
+    await _await_cleanup("scanner.stop", scanner.stop())
+    await _await_cleanup("monitor.stop", monitor.stop())
+    await _await_cleanup("engine.stop", engine.stop())
+    with suppress(Exception):
+        portfolio.stop()
+    with suppress(Exception):
+        profitability.stop()
+    if store is not None:
+        await _await_cleanup("store.disconnect", store.disconnect())
+    if mapping_store is not None:
+        await _await_cleanup("mapping_store.disconnect", mapping_store.disconnect())
+    if not shared_session.closed:
+        await _await_cleanup("shared_session.close", shared_session.close())
+
+
 async def run_shutdown_sequence(
     safety: SafetySupervisor,
     tasks: list,
@@ -194,6 +330,108 @@ async def run_shutdown_sequence(
     await asyncio.gather(*tasks, return_exceptions=True)
 
 
+def arm_critical_task_watch(
+    task: asyncio.Task,
+    *,
+    shutdown_event: asyncio.Event,
+    shutdown_state: dict,
+    logger: logging.Logger,
+    fatal_error_holder: Optional[dict] = None,
+) -> None:
+    """Turn unexpected task exit into a full-process shutdown.
+
+    Without this guard, a failed ``api-server`` task can leave the live engine,
+    collectors, and auto-executor running headless. That is exactly the class of
+    failure that can produce a duplicate live engine after a restart attempt.
+    """
+
+    def _on_done(done_task: asyncio.Task) -> None:
+        if shutdown_state.get("in_progress"):
+            return
+        if done_task.cancelled():
+            return
+
+        task_name = done_task.get_name() or "unnamed-task"
+        try:
+            exc = done_task.exception()
+        except asyncio.CancelledError:
+            return
+
+        if exc is None:
+            logger.error(
+                "Critical task %s exited unexpectedly, initiating shutdown",
+                task_name,
+            )
+        else:
+            logger.error(
+                "Critical task %s crashed, initiating shutdown: %s",
+                task_name,
+                exc,
+                exc_info=(type(exc), exc, exc.__traceback__),
+            )
+            if fatal_error_holder is not None and fatal_error_holder.get("exc") is None:
+                fatal_error_holder["exc"] = exc
+
+        shutdown_state["in_progress"] = True
+        shutdown_event.set()
+
+    task.add_done_callback(_on_done)
+
+
+async def run_market_discovery_loop(
+    kalshi: KalshiCollector,
+    polymarket,
+    mapping_store: MarketMappingStore,
+    *,
+    metrics: Optional[dict] = None,
+) -> None:
+    """Continuously refresh candidate mappings through the canonical store."""
+    logger = logging.getLogger("arbiter.main.discovery")
+    settings_store = OperatorSettingsStore()
+    poly_client = getattr(polymarket, "client", polymarket)
+
+    while True:
+        runtime = load_market_discovery_settings(settings_store)
+        interval_seconds = float(runtime["auto_discovery_interval_seconds"])
+
+        try:
+            if not runtime["auto_discovery_enabled"]:
+                logger.info("Market discovery paused by operator runtime settings")
+                if metrics is not None:
+                    metrics["auto_discovery_last_written"] = 0
+                await asyncio.sleep(interval_seconds)
+                continue
+
+            written = await discover_market_mappings(
+                kalshi,
+                poly_client,
+                mapping_store,
+                budget_rps=float(runtime["auto_discovery_budget_rps"]),
+                min_score=float(runtime["auto_discovery_min_score"]),
+                max_candidates=int(runtime["auto_discovery_max_candidates"]),
+                promotion_settings=runtime,
+            )
+            pending = await mapping_store.count_candidates()
+            if metrics is not None:
+                metrics["auto_discovery_candidates_pending"] = pending
+                metrics["auto_discovery_last_written"] = written
+            logger.info(
+                "Market discovery pass complete: wrote=%s pending_candidates=%s interval=%.1fs budget_rps=%.2f min_score=%.2f max_candidates=%s",
+                written,
+                pending,
+                interval_seconds,
+                float(runtime["auto_discovery_budget_rps"]),
+                float(runtime["auto_discovery_min_score"]),
+                int(runtime["auto_discovery_max_candidates"]),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error("Market discovery pass failed: %s", exc)
+
+        await asyncio.sleep(interval_seconds)
+
+
 async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = "0.0.0.0", port: int = 8080):
     """Start all ARBITER components."""
     logger = logging.getLogger("arbiter.main")
@@ -202,9 +440,26 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     # ── Core infrastructure ────────────────────────────────────
     price_store = PriceStore(redis_client=None, ttl=30)
 
+    # Shared aiohttp session for adapter HTTP calls. Engine keeps its own
+    # internal session for legacy paths; Phase 3 can consolidate.
+    shared_session = aiohttp.ClientSession()
+
+    kalshi_circuit = CircuitBreaker(
+        name="kalshi-exec", failure_threshold=5, recovery_timeout=30.0,
+    )
+    kalshi_rate_limiter = RateLimiter(
+        name="kalshi-exec", max_requests=10, window_seconds=1.0,
+    )
+    poly_circuit = CircuitBreaker(
+        name="poly-exec", failure_threshold=5, recovery_timeout=30.0,
+    )
+    poly_rate_limiter = RateLimiter(
+        name="poly-exec", max_requests=5, window_seconds=1.0,
+    )
+
     # ── Collectors ─────────────────────────────────────────────
     kalshi = KalshiCollector(config.kalshi, price_store)
-    polymarket = PolymarketCollector(config.polymarket, price_store)
+    polymarket = build_polymarket_collector(config, price_store)
 
     # ── Scanner ────────────────────────────────────────────────
     scanner = ArbitrageScanner(config.scanner, price_store)
@@ -214,18 +469,27 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     # ── Monitor ────────────────────────────────────────────────
     collectors_dict = {
         "kalshi": kalshi,
-        "polymarket": polymarket,
     }
+    if polymarket is not None:
+        collectors_dict["polymarket"] = polymarket
     monitor = BalanceMonitor(config.alerts, collectors_dict)
 
     # ── Persistence (EXEC-02) ──────────────────────────────────
     database_url = os.getenv("DATABASE_URL")
     store: Optional[ExecutionStore] = None
+    mapping_store: Optional[MarketMappingStore] = None
     if database_url:
         store = ExecutionStore(database_url)
         await store.connect()
         await store.init_schema()
         logger.info("ExecutionStore connected, schema applied")
+
+        mapping_store = MarketMappingStore(database_url)
+        await mapping_store.connect()
+        await mapping_store.init_schema()
+        await mapping_store.seed_from_records()
+        await mapping_store.refresh_runtime_cache()
+        logger.info("MarketMappingStore connected, schema applied, runtime cache hydrated")
     else:
         logger.warning(
             "DATABASE_URL not set; execution persistence disabled (dev mode)"
@@ -244,24 +508,6 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
         # adapters attached right after — need engine reference for poly factory (D-13)
     )
 
-    # ── Build adapters (uses engine for cached ClobClient via factory) ──
-    # Shared aiohttp session for adapter HTTP calls. Engine keeps its own
-    # internal session for legacy paths; Phase 3 can consolidate.
-    shared_session = aiohttp.ClientSession()
-
-    kalshi_circuit = CircuitBreaker(
-        name="kalshi-exec", failure_threshold=5, recovery_timeout=30.0,
-    )
-    kalshi_rate_limiter = RateLimiter(
-        name="kalshi-exec", max_requests=10, window_seconds=1.0,  # SAFE-04: 10 writes/sec
-    )
-    poly_circuit = CircuitBreaker(
-        name="poly-exec", failure_threshold=5, recovery_timeout=30.0,
-    )
-    poly_rate_limiter = RateLimiter(
-        name="poly-exec", max_requests=5, window_seconds=1.0,  # conservative starting point
-    )
-
     kalshi_adapter = KalshiAdapter(
         config=config,
         session=shared_session,
@@ -269,14 +515,16 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
         rate_limiter=kalshi_rate_limiter,
         circuit=kalshi_circuit,
     )
-    poly_adapter = PolymarketAdapter(
-        config=config,
-        # D-13: share cached ClobClient with heartbeat task via factory closure
-        clob_client_factory=lambda: engine._get_poly_clob_client(),
+    poly_adapter = build_polymarket_adapter(
+        config,
+        engine=engine,
+        collector=polymarket,
         rate_limiter=poly_rate_limiter,
         circuit=poly_circuit,
     )
-    adapters = {"kalshi": kalshi_adapter, "polymarket": poly_adapter}
+    adapters = {"kalshi": kalshi_adapter}
+    if poly_adapter is not None:
+        adapters["polymarket"] = poly_adapter
     engine.adapters = adapters  # late binding — engine constructed before adapters
 
     portfolio = PortfolioMonitor(
@@ -347,9 +595,10 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
 
     # Wire ClobClient to collector for dynamic fee rate lookup (D-09)
     # This happens lazily -- the collector will use fallback rates until ClobClient is ready
-    poly_clob = engine._get_poly_clob_client()
-    if poly_clob is not None:
-        polymarket.set_clob_client(poly_clob)
+    if isinstance(polymarket, PolymarketCollector):
+        poly_clob = engine._get_poly_clob_client()
+        if poly_clob is not None:
+            polymarket.set_clob_client(poly_clob)
 
     if api_only and os.getenv("ARBITER_UI_SMOKE_SEED") == "1":
         await seed_dashboard_fixture(price_store, scanner, engine, monitor)
@@ -374,7 +623,16 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
         host=host,
         port=port,
         safety=safety,
+        mapping_store=mapping_store,
     )
+
+    pm_us_metrics = {
+        "auto_discovery_candidates_pending": 0,
+        "auto_promote_rejections": {},
+    }
+    setattr(api, "_pm_us_metrics", pm_us_metrics)
+    if mapping_store is not None:
+        pm_us_metrics["auto_discovery_candidates_pending"] = await mapping_store.count_candidates()
 
     logger.info("=" * 60)
     logger.info("  ARBITER — Prediction Market Arbitrage System")
@@ -383,7 +641,13 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     logger.info(f"  Min edge: {config.scanner.min_edge_cents}¢")
     logger.info(f"  Max position: ${config.scanner.max_position_usd}")
     logger.info(f"  Kalshi auth: {'✓' if kalshi.auth.is_authenticated else '✗ (public data only)'}")
-    logger.info(f"  Polymarket wallet: {'✓' if getattr(config.polymarket, 'private_key', None) else '✗'}")
+    if config.polymarket is None:
+        poly_auth = "disabled"
+    elif isinstance(config.polymarket, PolymarketUSConfig):
+        poly_auth = "✓" if (config.polymarket.api_key_id and config.polymarket.api_secret) else "✗"
+    else:
+        poly_auth = "✓" if getattr(config.polymarket, "private_key", None) else "✗"
+    logger.info(f"  Polymarket auth: {poly_auth}")
     logger.info(f"  Telegram alerts: {'✓' if config.alerts.telegram_bot_token else '✗'}")
     logger.info("=" * 60)
 
@@ -420,7 +684,7 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
         scanner=scanner,
         engine=engine,
         supervisor=safety,
-        mapping_store=make_settings_mapping_adapter(MARKET_MAP),
+        mapping_store=mapping_store or make_settings_mapping_adapter(MARKET_MAP),
         config_env=os.environ,
     )
     # Expose to the api server so /api/metrics can surface auto_executor stats
@@ -438,18 +702,40 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
         )
 
     # ── Launch all tasks ───────────────────────────────────────
-    tasks = []
+    tasks: list[asyncio.Task] = []
+    shutdown_event = asyncio.Event()
+    shutdown_state = {"in_progress": False}
+    fatal_task_error: dict[str, BaseException | None] = {"exc": None}
 
     if not api_only:
+        tasks.append(asyncio.create_task(kalshi.run(), name="kalshi-collector"))
+        if polymarket is not None:
+            tasks.append(asyncio.create_task(polymarket.run(), name="poly-collector"))
+        if (
+            mapping_store is not None
+            and polymarket is not None
+            and hasattr(kalshi, "list_all_markets")
+            and hasattr(getattr(polymarket, "client", polymarket), "list_markets")
+        ):
+            tasks.append(
+                asyncio.create_task(
+                    run_market_discovery_loop(
+                        kalshi,
+                        polymarket,
+                        mapping_store,
+                        metrics=pm_us_metrics,
+                    ),
+                    name="market-discovery",
+                )
+            )
         tasks.extend([
-            asyncio.create_task(kalshi.run(), name="kalshi-collector"),
-            asyncio.create_task(polymarket.run(), name="poly-collector"),
             asyncio.create_task(scanner.run(), name="arb-scanner"),
             asyncio.create_task(monitor.run(alert_queue), name="balance-monitor"),
             asyncio.create_task(engine.run(arb_queue), name="execution-engine"),
             asyncio.create_task(portfolio.run(), name="portfolio-monitor"),
-            asyncio.create_task(engine.polymarket_heartbeat_loop(), name="poly-heartbeat"),
         ])
+        if isinstance(poly_adapter, PolymarketAdapter):
+            tasks.append(asyncio.create_task(engine.polymarket_heartbeat_loop(), name="poly-heartbeat"))
         # Auto-executor only runs outside api_only mode (it needs scanner+engine).
         await auto_executor.start()
 
@@ -463,9 +749,6 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     # SAFE-05: cancel orders BEFORE cancelling tasks. A second SIGINT/SIGTERM
     # triggers an immediate forced exit so operators always have a hard exit
     # hatch if a hung adapter or deadlock ever blocks the 5s trip_kill window.
-    shutdown_event = asyncio.Event()
-    shutdown_state = {"in_progress": False}
-
     def handle_shutdown(sig):
         if shutdown_state["in_progress"]:
             logger.warning(
@@ -509,6 +792,45 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
                 except (ValueError, OSError):
                     pass
 
+    for task in tasks:
+        arm_critical_task_watch(
+            task,
+            shutdown_event=shutdown_event,
+            shutdown_state=shutdown_state,
+            logger=logger,
+            fatal_error_holder=fatal_task_error,
+        )
+
+    api_start_timeout = max(float(os.getenv("ARBITER_API_STARTUP_TIMEOUT_S", "10.0")), 1.0)
+    try:
+        await api.wait_until_started(timeout=api_start_timeout)
+    except Exception:
+        shutdown_state["in_progress"] = True
+        logger.critical(
+            "API server failed to start on %s:%s",
+            host,
+            port,
+            exc_info=True,
+        )
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await cleanup_runtime(
+            logger=logger,
+            engine=engine,
+            auto_executor=auto_executor,
+            kalshi=kalshi,
+            polymarket=polymarket,
+            scanner=scanner,
+            monitor=monitor,
+            portfolio=portfolio,
+            profitability=profitability,
+            store=store,
+            mapping_store=mapping_store,
+            shared_session=shared_session,
+        )
+        raise
+
     # Wait for shutdown signal.
     await shutdown_event.wait()
 
@@ -516,19 +838,20 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     await run_shutdown_sequence(safety, tasks, timeout=5.0)
 
     # Cleanup
-    engine.stop_heartbeat()
-    await auto_executor.stop()
-    await kalshi.stop()
-    await polymarket.stop()
-    await scanner.stop()
-    await monitor.stop()
-    await engine.stop()
-    portfolio.stop()
-    profitability.stop()
-    if store is not None:
-        await store.disconnect()
-    if not shared_session.closed:
-        await shared_session.close()
+    await cleanup_runtime(
+        logger=logger,
+        engine=engine,
+        auto_executor=auto_executor,
+        kalshi=kalshi,
+        polymarket=polymarket,
+        scanner=scanner,
+        monitor=monitor,
+        portfolio=portfolio,
+        profitability=profitability,
+        store=store,
+        mapping_store=mapping_store,
+        shared_session=shared_session,
+    )
 
     # Final stats
     logger.info("─" * 40)
@@ -536,6 +859,8 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     logger.info(f"Execution stats: {engine.stats}")
     logger.info(f"Profitability: {profitability.get_snapshot().to_dict()}")
     logger.info("ARBITER shutdown complete")
+    if fatal_task_error["exc"] is not None:
+        raise fatal_task_error["exc"]
 
 
 async def seed_dashboard_fixture(
@@ -694,7 +1019,19 @@ def main():
                 logging.getLogger("arbiter.main").critical("Live startup blocked: %s", failure)
             sys.exit(2)
 
-    asyncio.run(run_system(config, api_only=args.api_only, host=args.host, port=args.port))
+    try:
+        with acquire_runtime_lock(api_only=args.api_only, port=args.port):
+            asyncio.run(run_system(config, api_only=args.api_only, host=args.host, port=args.port))
+    except RuntimeLockError as exc:
+        logging.getLogger("arbiter.main").critical("%s", exc)
+        sys.exit(3)
+    except Exception as exc:
+        logging.getLogger("arbiter.main").critical(
+            "ARBITER failed to start: %s",
+            exc,
+            exc_info=True,
+        )
+        sys.exit(1)
 
 
 if __name__ == "__main__":

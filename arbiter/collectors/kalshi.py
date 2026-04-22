@@ -60,7 +60,7 @@ class KalshiAuth:
             message,
             padding.PSS(
                 mgf=padding.MGF1(hashes.SHA256()),
-                salt_length=padding.PSS.MAX_LENGTH,
+                salt_length=padding.PSS.DIGEST_LENGTH,
             ),
             hashes.SHA256(),
         )
@@ -100,14 +100,121 @@ class KalshiCollector:
         self.consecutive_errors = 0
         self.total_fetches = 0
         self.total_errors = 0
-        # Build reverse map: kalshi_event_ticker -> list of canonical_ids
         self._ticker_map: Dict[str, List[str]] = {}
+        self.refresh_tracked_markets()
+
+    def refresh_tracked_markets(self) -> None:
+        """Reload the reverse ticker map from the current runtime MARKET_MAP."""
+        ticker_map: Dict[str, List[str]] = {}
         for canonical_id, mapping in MARKET_MAP.items():
             event_ticker = str(mapping.get("kalshi", "") or "")
-            if event_ticker:
-                if event_ticker not in self._ticker_map:
-                    self._ticker_map[event_ticker] = []
-                self._ticker_map[event_ticker].append(canonical_id)
+            if not event_ticker:
+                continue
+            ticker_map.setdefault(event_ticker, []).append(canonical_id)
+        self._ticker_map = ticker_map
+
+    async def list_all_markets(
+        self,
+        status: Optional[str] = None,
+        page_size: int = 1000,
+        max_pages: int = 20,
+    ) -> list[dict]:
+        """List Kalshi markets with cursor pagination for discovery."""
+        session = await self._get_session()
+        cursor: Optional[str] = None
+        all_markets: list[dict] = []
+
+        for _ in range(max_pages):
+            await self.rate_limiter.acquire()
+            headers = {"Accept": "application/json"}
+            if self.auth.is_authenticated:
+                headers.update(self.auth.get_headers("GET", "/trade-api/v2/markets"))
+            params = {"limit": str(page_size)}
+            if status:
+                params["status"] = status
+            if cursor:
+                params["cursor"] = cursor
+
+            async with session.get(
+                f"{self.config.base_url}/markets",
+                params=params,
+                headers=headers,
+            ) as resp:
+                resp.raise_for_status()
+                data = await resp.json()
+
+            markets = list(data.get("markets") or [])
+            all_markets.extend(markets)
+            cursor = data.get("cursor") or None
+            if not cursor:
+                break
+
+        return all_markets
+
+    async def list_all_events(self, page_size: int = 100, max_pages: int = 20) -> list[dict]:
+        """List Kalshi events for coarse-grained discovery matching.
+
+        Events are dramatically less noisy than the raw global market feed and
+        expose long-dated contracts that can be buried deep in market paging.
+        """
+        session = await self._get_session()
+        cursor: Optional[str] = None
+        all_events: list[dict] = []
+
+        for _ in range(max_pages):
+            await self.rate_limiter.acquire()
+            headers = {"Accept": "application/json"}
+            if self.auth.is_authenticated:
+                headers.update(self.auth.get_headers("GET", "/trade-api/v2/events"))
+            params = {"limit": str(page_size)}
+            if cursor:
+                params["cursor"] = cursor
+
+            async with session.get(
+                f"{self.config.base_url}/events",
+                params=params,
+                headers=headers,
+            ) as resp:
+                resp.raise_for_status()
+                data = await resp.json()
+
+            events = list(data.get("events") or [])
+            all_events.extend(events)
+            cursor = data.get("cursor") or None
+            if not cursor:
+                break
+
+        return all_events
+
+    async def list_markets_for_event(self, event_ticker: str, limit: int = 50) -> list[dict]:
+        """Fetch all submarkets for a specific Kalshi event ticker."""
+        session = await self._get_session()
+        await self.rate_limiter.acquire()
+        headers = {"Accept": "application/json"}
+        if self.auth.is_authenticated:
+            headers.update(self.auth.get_headers("GET", "/trade-api/v2/markets"))
+
+        async with session.get(
+            f"{self.config.base_url}/markets",
+            params={"event_ticker": event_ticker, "limit": str(limit)},
+            headers=headers,
+        ) as resp:
+            resp.raise_for_status()
+            data = await resp.json()
+        return list(data.get("markets") or [])
+
+    async def get_orderbook(self, market_id: str, depth: int = 100) -> dict:
+        """Fetch a raw Kalshi market orderbook for mapping and execution checks."""
+        session = await self._get_session()
+        await self.rate_limiter.acquire()
+        headers = {"Accept": "application/json"}
+        async with session.get(
+            f"{self.config.base_url}/markets/{market_id}/orderbook",
+            params={"depth": str(depth)},
+            headers=headers,
+        ) as resp:
+            resp.raise_for_status()
+            return await resp.json()
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -116,6 +223,7 @@ class KalshiCollector:
 
     async def fetch_markets(self) -> list:
         """Fetch all tracked markets from Kalshi REST API using event_ticker."""
+        self.refresh_tracked_markets()
         session = await self._get_session()
         results = []
 

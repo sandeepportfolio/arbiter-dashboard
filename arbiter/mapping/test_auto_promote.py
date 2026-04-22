@@ -43,6 +43,14 @@ def _make_candidate(
         "score": score,
         "status": "candidate",
         "resolution_date": resolution_date,
+        "kalshi_resolution_date": resolution_date,
+        "polymarket_resolution_date": resolution_date,
+        "kalshi_resolution_source": "Fed",
+        "polymarket_resolution_source": "Federal Reserve",
+        "kalshi_tie_break_rule": None,
+        "polymarket_tie_break_rule": None,
+        "kalshi_outcome_set": ("Yes", "No"),
+        "polymarket_outcome_set": ("Yes", "No"),
     }
 
 
@@ -51,12 +59,16 @@ def _make_settings(
     phase5_max_order_usd: float = 50.0,
     daily_cap: int = 20,
     advisory_scans: int = 30,
+    min_score: float = 0.85,
+    max_days: int = 90,
 ) -> dict:
     return {
         "AUTO_PROMOTE_ENABLED": auto_promote_enabled,
         "PHASE5_MAX_ORDER_USD": phase5_max_order_usd,
         "AUTO_PROMOTE_DAILY_CAP": daily_cap,
         "AUTO_PROMOTE_ADVISORY_SCANS": advisory_scans,
+        "AUTO_PROMOTE_MIN_SCORE": min_score,
+        "AUTO_PROMOTE_MAX_DAYS": max_days,
     }
 
 
@@ -406,4 +418,49 @@ async def test_all_gates_pass_returns_promoted():
     )
 
     assert result.promoted, f"Expected promoted=True, got reason={result.reason}"
+    assert result.reason == "promoted"
+
+
+@pytest.mark.asyncio
+async def test_side_specific_resolution_fields_prevent_false_identical_match():
+    settings = _make_settings()
+    candidate = _make_candidate()
+    candidate["kalshi_resolution_date"] = _days_from_now(30)
+    candidate["polymarket_resolution_date"] = _days_from_now(120)
+    orderbooks = _make_orderbooks(200.0, 200.0)
+    llm = _make_llm_verifier("YES")
+
+    result = await maybe_promote(
+        candidate,
+        settings=settings,
+        orderbooks=orderbooks,
+        llm_verifier=llm,
+        today_promoted_count=0,
+        cooling_state={},
+    )
+
+    assert not result.promoted
+    assert result.reason == "resolution_divergent"
+
+
+@pytest.mark.asyncio
+async def test_long_dated_markets_can_pass_with_configured_max_days():
+    settings = _make_settings(max_days=400)
+    candidate = _make_candidate(resolution_date=_days_from_now(280))
+    candidate["kalshi_resolution_date"] = candidate["resolution_date"]
+    candidate["polymarket_resolution_date"] = candidate["resolution_date"]
+    orderbooks = _make_orderbooks(200.0, 200.0)
+    llm = _make_llm_verifier("YES")
+
+    result = await maybe_promote(
+        candidate,
+        settings=settings,
+        orderbooks=orderbooks,
+        llm_verifier=llm,
+        today_promoted_count=0,
+        cooling_state={},
+        resolution_checker=_resolution_check_identical,
+    )
+
+    assert result.promoted
     assert result.reason == "promoted"

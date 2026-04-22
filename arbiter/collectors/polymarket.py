@@ -57,11 +57,17 @@ class PolymarketCollector:
         self._token_to_market: Dict[str, tuple[str, str]] = {}
         self._clob_client = None  # Set externally when ClobClient is available for fee lookup
 
+        self.refresh_tracked_markets()
+
+    def refresh_tracked_markets(self) -> None:
+        """Reload tracked slugs from MARKET_MAP so runtime updates take effect."""
+        slug_map: Dict[str, list[tuple[str, str]]] = {}
         for canonical_id, mapping in MARKET_MAP.items():
             slug = str(mapping.get("polymarket", "") or "")
             question_match = str(mapping.get("polymarket_question", "") or "")
             if slug:
-                self._slug_map.setdefault(slug, []).append((canonical_id, question_match))
+                slug_map.setdefault(slug, []).append((canonical_id, question_match))
+        self._slug_map = slug_map
 
     def set_clob_client(self, client):
         """Inject ClobClient for dynamic fee rate lookups (per D-09)."""
@@ -131,6 +137,7 @@ class PolymarketCollector:
         return self._session
 
     async def discover_markets(self) -> Dict[str, dict]:
+        self.refresh_tracked_markets()
         session = await self._get_session()
         discovered: Dict[str, dict] = {}
 

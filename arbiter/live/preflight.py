@@ -381,6 +381,7 @@ async def _check_05b_polymarket_us_balance() -> PreflightItem:
     import aiohttp
     try:
         from arbiter.auth.ed25519_signer import Ed25519Signer, SignatureError
+        from arbiter.collectors.polymarket_us import extract_current_balance
     except Exception as exc:
         return PreflightItem(
             key="polymarket_us_balance",
@@ -435,9 +436,10 @@ async def _check_05b_polymarket_us_balance() -> PreflightItem:
             detail=f"network error: {exc.__class__.__name__}",
         )
 
-    # Parse currentBalance — accept both numeric and string forms
+    # Parse currentBalance from either the current flat payload or the nested
+    # balances[] shape returned by the current docs.
     try:
-        current_balance = float(body.get("currentBalance", 0))
+        current_balance = extract_current_balance(body)
     except (TypeError, ValueError):
         return PreflightItem(
             key="polymarket_us_balance",
@@ -752,7 +754,10 @@ def _check_14_identical_mapping_present() -> PreflightItem:
         )
     count = 0
     for canonical_id, mapping in iter_confirmed_market_mappings(require_auto_trade=True):
-        status = getattr(mapping, "resolution_match_status", "") or ""
+        if isinstance(mapping, dict):
+            status = mapping.get("resolution_match_status", "") or ""
+        else:
+            status = getattr(mapping, "resolution_match_status", "") or ""
         if str(status).lower() == "identical":
             count += 1
     passed = count >= 1

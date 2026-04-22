@@ -167,3 +167,39 @@ async def test_prepare_shutdown_broadcasts_before_trip():
     assert "cancel_all" in order, (
         f"cancel_all never recorded; order={order}"
     )
+
+
+async def test_critical_task_watch_triggers_shutdown_on_crash(caplog):
+    """A crashed background task must force process shutdown.
+
+    This prevents headless live-engine situations where the API task dies
+    (for example, bind failure on a duplicate launch) but the trading loops
+    keep running.
+    """
+    caplog.set_level(logging.ERROR, logger="arbiter.main")
+
+    from arbiter.main import arm_critical_task_watch
+
+    shutdown_event = asyncio.Event()
+    shutdown_state = {"in_progress": False}
+    logger = logging.getLogger("arbiter.main")
+
+    async def boom():
+        raise RuntimeError("address already in use")
+
+    task = asyncio.create_task(boom(), name="api-server")
+    arm_critical_task_watch(
+        task,
+        shutdown_event=shutdown_event,
+        shutdown_state=shutdown_state,
+        logger=logger,
+    )
+
+    await asyncio.wait_for(shutdown_event.wait(), timeout=1.0)
+    await asyncio.gather(task, return_exceptions=True)
+
+    assert shutdown_state["in_progress"] is True
+    assert any(
+        "Critical task api-server crashed" in record.message
+        for record in caplog.records
+    ), [record.message for record in caplog.records]

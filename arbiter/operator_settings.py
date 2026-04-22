@@ -16,6 +16,95 @@ def default_operator_settings_path() -> Path:
     return Path(raw).expanduser()
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _coerce_bool(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() not in {"0", "false", "no", "off", ""}
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return default
+
+
+def _coerce_float(value: Any, default: float, minimum: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return max(number, minimum)
+
+
+def _coerce_int(value: Any, default: int, minimum: int) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(number, minimum)
+
+
+def default_market_discovery_settings() -> dict[str, Any]:
+    return {
+        "auto_discovery_enabled": _env_bool("AUTO_DISCOVERY_ENABLED", True),
+        "auto_discovery_interval_seconds": _coerce_float(os.getenv("AUTO_DISCOVERY_INTERVAL_S", "300"), 300.0, 15.0),
+        "auto_discovery_budget_rps": _coerce_float(os.getenv("AUTO_DISCOVERY_BUDGET_RPS", "2.0"), 2.0, 0.1),
+        "auto_discovery_min_score": _coerce_float(os.getenv("AUTO_DISCOVERY_MIN_SCORE", "0.25"), 0.25, 0.0),
+        "auto_discovery_max_candidates": _coerce_int(os.getenv("AUTO_DISCOVERY_MAX_CANDIDATES", "500"), 500, 1),
+        "auto_promote_enabled": _env_bool("AUTO_PROMOTE_ENABLED", False),
+        "auto_promote_min_score": _coerce_float(os.getenv("AUTO_PROMOTE_MIN_SCORE", "0.78"), 0.78, 0.0),
+        "auto_promote_daily_cap": _coerce_int(os.getenv("AUTO_PROMOTE_DAILY_CAP", "250"), 250, 1),
+        "auto_promote_advisory_scans": _coerce_int(os.getenv("AUTO_PROMOTE_ADVISORY_SCANS", "0"), 0, 0),
+        "auto_promote_max_days": _coerce_int(os.getenv("AUTO_PROMOTE_MAX_DAYS", "400"), 400, 1),
+    }
+
+
+def load_market_discovery_settings(store: "OperatorSettingsStore | None" = None) -> dict[str, Any]:
+    settings = default_market_discovery_settings()
+    payload = store.load() if store is not None else {}
+    raw_settings = payload.get("settings") if isinstance(payload, dict) else None
+    mapping = raw_settings.get("mapping") if isinstance(raw_settings, dict) else None
+    if not isinstance(mapping, dict):
+        return settings
+
+    settings["auto_discovery_enabled"] = _coerce_bool(
+        mapping.get("auto_discovery_enabled"), settings["auto_discovery_enabled"]
+    )
+    settings["auto_discovery_interval_seconds"] = _coerce_float(
+        mapping.get("auto_discovery_interval_seconds"), settings["auto_discovery_interval_seconds"], 15.0
+    )
+    settings["auto_discovery_budget_rps"] = _coerce_float(
+        mapping.get("auto_discovery_budget_rps"), settings["auto_discovery_budget_rps"], 0.1
+    )
+    settings["auto_discovery_min_score"] = _coerce_float(
+        mapping.get("auto_discovery_min_score"), settings["auto_discovery_min_score"], 0.0
+    )
+    settings["auto_discovery_max_candidates"] = _coerce_int(
+        mapping.get("auto_discovery_max_candidates"), settings["auto_discovery_max_candidates"], 1
+    )
+    settings["auto_promote_enabled"] = _coerce_bool(
+        mapping.get("auto_promote_enabled"), settings["auto_promote_enabled"]
+    )
+    settings["auto_promote_min_score"] = _coerce_float(
+        mapping.get("auto_promote_min_score"), settings["auto_promote_min_score"], 0.0
+    )
+    settings["auto_promote_daily_cap"] = _coerce_int(
+        mapping.get("auto_promote_daily_cap"), settings["auto_promote_daily_cap"], 1
+    )
+    settings["auto_promote_advisory_scans"] = _coerce_int(
+        mapping.get("auto_promote_advisory_scans"), settings["auto_promote_advisory_scans"], 0
+    )
+    settings["auto_promote_max_days"] = _coerce_int(
+        mapping.get("auto_promote_max_days"), settings["auto_promote_max_days"], 1
+    )
+    return settings
+
+
 class OperatorSettingsStore:
     """Small JSON-backed store for operator-editable runtime settings.
 

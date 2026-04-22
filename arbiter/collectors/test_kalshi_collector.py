@@ -69,3 +69,51 @@ def test_kalshi_skips_ambiguous_submarkets_without_confident_match():
     )
 
     assert market is None
+
+
+def test_list_all_events_pages_through_event_catalog():
+    class FakeResponse:
+        def __init__(self, payload):
+            self.payload = payload
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+        async def json(self):
+            return self.payload
+
+    class FakeSession:
+        def get(self, url, params=None, headers=None):
+            cursor = (params or {}).get("cursor")
+            if cursor == "page-2":
+                return FakeResponse({
+                    "events": [
+                        {"event_ticker": "CONTROLS-2026", "title": "Which party will win the Senate?"},
+                    ],
+                    "cursor": None,
+                })
+            return FakeResponse({
+                "events": [
+                    {"event_ticker": "CONTROLH-2026", "title": "Which party will win the House?"},
+                ],
+                "cursor": "page-2",
+            })
+
+    async def runner():
+        collector = KalshiCollector(KalshiConfig(), PriceStore(ttl=120))
+        collector.rate_limiter.acquire = lambda: asyncio.sleep(0)
+        collector._get_session = lambda: asyncio.sleep(0, result=FakeSession())
+        events = await collector.list_all_events(page_size=100, max_pages=5)
+
+        assert [event["event_ticker"] for event in events] == [
+            "CONTROLH-2026",
+            "CONTROLS-2026",
+        ]
+
+    asyncio.run(runner())

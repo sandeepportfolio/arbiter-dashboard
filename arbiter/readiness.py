@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from .config.settings import ArbiterConfig, iter_confirmed_market_mappings
+from .config.settings import ArbiterConfig, PolymarketUSConfig, iter_confirmed_market_mappings
 
 
 @dataclass
@@ -121,10 +121,38 @@ class OperationalReadiness:
         if not kalshi_ready:
             failures.append("Kalshi API credentials are not configured")
 
-        if not getattr(self.config.polymarket, "private_key", None):
-            failures.append("Polymarket private key is not configured")
+        polymarket_ready, _, polymarket_label = self._polymarket_credentials_state()
+        if not polymarket_ready:
+            if polymarket_label == "Polymarket US":
+                failures.append("Polymarket US credentials are not configured")
+            else:
+                failures.append("Polymarket private key is not configured")
 
         return failures
+
+    def _polymarket_credentials_state(self) -> Tuple[bool, Dict[str, Any], str]:
+        cfg = self.config.polymarket
+        if isinstance(cfg, PolymarketUSConfig):
+            ready = bool(cfg.api_key_id and cfg.api_secret)
+            return (
+                ready,
+                {
+                    "polymarket_variant": "us",
+                    "polymarket_us_api_key_id": bool(cfg.api_key_id),
+                    "polymarket_us_api_secret": bool(cfg.api_secret),
+                },
+                "Polymarket US",
+            )
+
+        ready = bool(getattr(cfg, "private_key", None))
+        return (
+            ready,
+            {
+                "polymarket_variant": "legacy",
+                "polymarket_private_key": ready,
+            },
+            "Polymarket",
+        )
 
     def allow_execution(self, opportunity) -> Tuple[bool, str, Dict[str, Any]]:
         if self.config.scanner.dry_run:
@@ -172,10 +200,10 @@ class OperationalReadiness:
             getattr(getattr(kalshi, "auth", None), "is_authenticated", False)
             or (self.config.kalshi.api_key_id and self.config.kalshi.private_key_path)
         )
-        polymarket_ready = bool(getattr(self.config.polymarket, "private_key", None))
+        polymarket_ready, polymarket_details, polymarket_label = self._polymarket_credentials_state()
         details = {
             "kalshi_authenticated": kalshi_ready,
-            "polymarket_private_key": polymarket_ready,
+            **polymarket_details,
         }
         if kalshi_ready and polymarket_ready:
             return ReadinessCheck(
@@ -189,7 +217,7 @@ class OperationalReadiness:
         if not kalshi_ready:
             missing.append("Kalshi")
         if not polymarket_ready:
-            missing.append("Polymarket")
+            missing.append(polymarket_label)
         return ReadinessCheck(
             key="platform_credentials",
             status="fail",

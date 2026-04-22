@@ -38,6 +38,8 @@ def test_api_and_dashboard_contracts():
     env = dict(os.environ)
     env["ARBITER_UI_SMOKE_SEED"] = "1"
     env["DRY_RUN"] = "true"
+    env["OPS_EMAIL"] = "sparx.sandeep@gmail.com"
+    env["OPS_PASSWORD"] = "letmein123"
     settings_path = os.path.join(tempfile.gettempdir(), f"arbiter-operator-settings-{time.time_ns()}.json")
     env["ARBITER_OPERATOR_SETTINGS_PATH"] = settings_path
     # Isolate the subprocess from the developer's .env — the contract test runs
@@ -94,10 +96,26 @@ def test_api_and_dashboard_contracts():
 
         health = get_json("/api/health")
         assert health["status"] == "ok"
+        assert health["probe"] == "liveness"
+        assert health["service_ready"] is True
         assert "audit" in health
         assert "profitability" in health
         assert "readiness" in health
         assert "reconciliation" in health
+
+        liveness = get_json("/health")
+        assert liveness == {
+            "status": "ok",
+            "probe": "liveness",
+            "mode": "dry-run",
+            "uptime_seconds": liveness["uptime_seconds"],
+        }
+
+        ready = get_json("/ready")
+        assert ready["status"] == "ready"
+        assert ready["probe"] == "service_readiness"
+        assert ready["ready"] is True
+        assert ready["live_trading_endpoint"] == "/api/readiness"
 
         system = get_json("/api/system")
         assert system["mode"] == "dry-run"
@@ -142,7 +160,7 @@ def test_api_and_dashboard_contracts():
         assert portfolio_summary["dry_run"] is True
         assert "realized_pnl" in portfolio_summary
 
-        login = post_json("/api/auth/login", {"email": "sparx.sandeep@gmail.com", "password": "saibaba"})
+        login = post_json("/api/auth/login", {"email": "sparx.sandeep@gmail.com", "password": "letmein123"})
         assert login["status"] == "ok"
         assert login["email"] == "sparx.sandeep@gmail.com"
         assert login["token"]
@@ -150,7 +168,7 @@ def test_api_and_dashboard_contracts():
 
         secure_request = urllib.request.Request(
             f"http://127.0.0.1:{port}/api/auth/login",
-            data=json.dumps({"email": "sparx.sandeep@gmail.com", "password": "saibaba"}).encode("utf-8"),
+            data=json.dumps({"email": "sparx.sandeep@gmail.com", "password": "letmein123"}).encode("utf-8"),
             headers={"Content-Type": "application/json", "X-Forwarded-Proto": "https"},
             method="POST",
         )
@@ -182,6 +200,8 @@ def test_api_and_dashboard_contracts():
         assert settings["mode"]["dry_run"] is True
         assert settings["auto_executor"]["enabled"] is False
         assert settings["scanner"]["min_edge_cents"] >= 0
+        assert settings["mapping"]["auto_discovery_enabled"] is True
+        assert settings["mapping"]["auto_discovery_max_candidates"] >= 1
 
         mappings = get_json("/api/market-mappings")
         assert isinstance(mappings, list)
@@ -217,6 +237,13 @@ def test_api_and_dashboard_contracts():
                 "scanner": {"min_edge_cents": 4.2, "persistence_scans": 5},
                 "alerts": {"kalshi_low": 75, "cooldown": 900},
                 "auto_executor": {"enabled": True, "max_position_usd": 42},
+                "mapping": {
+                    "auto_discovery_enabled": False,
+                    "auto_discovery_interval_seconds": 120,
+                    "auto_discovery_budget_rps": 4.5,
+                    "auto_discovery_min_score": 0.18,
+                    "auto_discovery_max_candidates": 900,
+                },
             },
             headers=auth_headers,
         )
@@ -226,13 +253,19 @@ def test_api_and_dashboard_contracts():
         assert settings_update["alerts"]["cooldown"] == 900.0
         assert settings_update["auto_executor"]["enabled"] is True
         assert settings_update["auto_executor"]["max_position_usd"] == 42.0
+        assert settings_update["mapping"]["auto_discovery_enabled"] is False
+        assert settings_update["mapping"]["auto_discovery_interval_seconds"] == 120.0
+        assert settings_update["mapping"]["auto_discovery_budget_rps"] == 4.5
+        assert settings_update["mapping"]["auto_discovery_min_score"] == 0.18
+        assert settings_update["mapping"]["auto_discovery_max_candidates"] == 900
         persisted_settings = get_json("/api/settings")
         assert persisted_settings["scanner"]["min_edge_cents"] == 4.2
+        assert persisted_settings["mapping"]["auto_discovery_enabled"] is False
         assert persisted_settings["meta"]["persisted"] is True
 
         mapping_update = post_json(
             "/api/market-mappings/DEM_HOUSE_2026",
-            {"action": "confirm"},
+            {"action": "confirm", "resolution_match_status": "identical"},
             headers=auth_headers,
         )
         assert mapping_update["status"] == "confirmed"
@@ -320,6 +353,24 @@ async def _make_rate_limit_api():
     return api
 
 
+def test_direct_health_endpoints_are_unambiguous_without_socket_binding():
+    async def _run():
+        api = await _make_rate_limit_api()
+        health_response = await api.handle_liveness(None)
+        ready_response = await api.handle_service_ready(None)
+
+        health = json.loads(health_response.text)
+        ready = json.loads(ready_response.text)
+
+        assert health["status"] == "ok"
+        assert health["probe"] == "liveness"
+        assert ready["status"] == "ready"
+        assert ready["probe"] == "service_readiness"
+        assert ready["live_trading_endpoint"] == "/api/readiness"
+
+    asyncio.run(_run())
+
+
 def test_rate_limit_ws_event_shape():
     """SAFE-04: Within 3s of WS connect, a `rate_limit_state` message arrives
     with {platform: stats_dict} payload. Each stats_dict must carry the three
@@ -381,6 +432,7 @@ def test_rate_limit_ws_event_shape():
             except (asyncio.CancelledError, BaseException):
                 pass
 
+    free_port()
     asyncio.run(_run())
 
 
@@ -406,6 +458,7 @@ def test_system_endpoint_includes_rate_limits():
             assert "kalshi" in body["rate_limits"]
             assert "polymarket" in body["rate_limits"]
 
+    free_port()
     asyncio.run(_run())
 
 
@@ -458,6 +511,8 @@ def test_market_mappings_returns_resolution_criteria():
     from aiohttp import web
     from aiohttp.test_utils import TestClient, TestServer
 
+    free_port()
+
     async def _run():
         api = await _make_mapping_api()
         app = web.Application()
@@ -479,6 +534,57 @@ def test_market_mappings_returns_resolution_criteria():
     asyncio.run(_run())
 
 
+def test_market_mappings_prefers_live_mapping_store():
+    """The operator surface must expose the live durable mapping set when available."""
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+
+    free_port()
+
+    async def _run():
+        api = await _make_mapping_api()
+
+        class StubMapping:
+            def to_dict(self):
+                return {
+                    "canonical_id": "AUTO_LIVE_001",
+                    "description": "Live discovered mapping",
+                    "status": "candidate",
+                    "allow_auto_trade": False,
+                    "kalshi": "KX-LIVE-001",
+                    "polymarket": "pm-live-001",
+                    "resolution_criteria": None,
+                    "resolution_match_status": "pending_operator_review",
+                }
+
+        class StubStore:
+            async def all(self, status=None, limit=500):
+                assert status is None
+                assert limit >= 1
+                return [StubMapping()]
+
+        api.mapping_store = StubStore()
+
+        app = web.Application()
+        app.router.add_get("/api/market-mappings", api.handle_market_mappings)
+        async with TestClient(TestServer(app)) as client:
+            response = await client.get("/api/market-mappings?limit=25")
+            assert response.status == 200
+            payload = await response.json()
+            assert payload == [{
+                "canonical_id": "AUTO_LIVE_001",
+                "description": "Live discovered mapping",
+                "status": "candidate",
+                "allow_auto_trade": False,
+                "kalshi": "KX-LIVE-001",
+                "polymarket": "pm-live-001",
+                "resolution_criteria": None,
+                "resolution_match_status": "pending_operator_review",
+            }]
+
+    asyncio.run(_run())
+
+
 def test_market_mapping_update_accepts_criteria(monkeypatch):
     """SAFE-06 truth: POST /api/market-mappings/{id} accepts a
     resolution_criteria body and persists it, returning the stored payload.
@@ -487,6 +593,8 @@ def test_market_mapping_update_accepts_criteria(monkeypatch):
     from aiohttp.test_utils import TestClient, TestServer
 
     from arbiter import api as api_mod
+
+    free_port()
 
     # Auth fixture — allow a single test operator.
     test_email = "test-op@arbiter.local"
@@ -534,6 +642,8 @@ def test_market_mapping_update_rejects_invalid_criteria_match(monkeypatch):
 
     from arbiter import api as api_mod
 
+    free_port()
+
     test_email = "test-op@arbiter.local"
     test_password_hash = api_mod._hash_password("letmein")
     monkeypatch.setattr(api_mod, "UI_ALLOWED_USERS", {test_email: test_password_hash})
@@ -567,6 +677,64 @@ def test_market_mapping_update_rejects_invalid_criteria_match(monkeypatch):
     asyncio.run(_run())
 
 
+def test_enable_auto_trade_requires_confirmed_identical_mapping(monkeypatch):
+    """Auto-trade can only be enabled after explicit confirm + SAFE-06 identical."""
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from arbiter import api as api_mod
+    from arbiter.config.settings import MARKET_MAP
+
+    free_port()
+
+    test_email = "test-op@arbiter.local"
+    test_password_hash = api_mod._hash_password("letmein")
+    monkeypatch.setattr(api_mod, "UI_ALLOWED_USERS", {test_email: test_password_hash})
+    original = dict(MARKET_MAP["DEM_HOUSE_2026"])
+
+    async def _run():
+        api = await _make_mapping_api()
+        app = web.Application()
+        app.router.add_post(
+            "/api/market-mappings/{canonical_id}", api.handle_market_mapping_action,
+        )
+        app.router.add_post("/api/auth/login", api.handle_login)
+
+        async with TestClient(TestServer(app)) as client:
+            login_resp = await client.post(
+                "/api/auth/login",
+                json={"email": test_email, "password": "letmein"},
+            )
+            assert login_resp.status == 200
+
+            resp = await client.post(
+                "/api/market-mappings/DEM_HOUSE_2026",
+                json={"action": "enable_auto_trade"},
+            )
+            assert resp.status == 400
+            body = await resp.json()
+            assert "confirmed" in body["error"]
+
+            confirm = await client.post(
+                "/api/market-mappings/DEM_HOUSE_2026",
+                json={"action": "confirm"},
+            )
+            assert confirm.status == 200
+
+            still_blocked = await client.post(
+                "/api/market-mappings/DEM_HOUSE_2026",
+                json={"action": "enable_auto_trade"},
+            )
+            assert still_blocked.status == 400
+            body = await still_blocked.json()
+            assert "resolution_match_status=identical" in body["error"]
+
+    try:
+        asyncio.run(_run())
+    finally:
+        MARKET_MAP["DEM_HOUSE_2026"] = original
+
+
 def test_mapping_state_ws_event_fires_on_update(monkeypatch):
     """SAFE-06 truth: WebSocket mapping_state event fires within 2s after a
     POST update to a mapping's resolution_criteria.
@@ -575,6 +743,8 @@ def test_mapping_state_ws_event_fires_on_update(monkeypatch):
     from aiohttp.test_utils import TestClient, TestServer
 
     from arbiter import api as api_mod
+
+    free_port()
 
     test_email = "test-op@arbiter.local"
     test_password_hash = api_mod._hash_password("letmein")

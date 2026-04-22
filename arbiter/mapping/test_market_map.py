@@ -77,9 +77,25 @@ class MockConn:
         return None
 
     async def fetchrow(self, query: str, *args):
+        if "SELECT COUNT(*) AS total" in query:
+            total = sum(
+                1
+                for mapping in self._mappings.values()
+                if mapping.get("status") in {"candidate", "review"}
+            )
+            return MockRecord({"total": total})
         if "SELECT * FROM market_mappings WHERE canonical_id" in query:
             cid = args[0]
             return MockRecord(self._mappings[cid]) if cid in self._mappings else None
+        if "SELECT * FROM market_mappings" in query and "kalshi_market_id = $1 AND polymarket_slug = $2" in query:
+            kalshi_id, poly_slug = args
+            for mapping in self._mappings.values():
+                if (
+                    mapping.get("kalshi_market_id") == kalshi_id
+                    and mapping.get("polymarket_slug") == poly_slug
+                ):
+                    return MockRecord(mapping)
+            return None
         if "SELECT 1 FROM market_mappings WHERE canonical_id" in query:
             cid = args[0]
             return MockRecord({"exists": True}) if cid in self._mappings else None
@@ -118,6 +134,20 @@ class MockConn:
         return None
 
     async def fetch(self, query: str, *args):
+        if "SELECT * FROM market_mappings WHERE status = $1 ORDER BY description LIMIT $2" in query:
+            status_filter = args[0]
+            limit = args[1] if len(args) > 1 else len(self._mappings)
+            return [
+                MockRecord(m)
+                for m in sorted(self._mappings.values(), key=lambda item: item.get("description", ""))
+                if m.get("status") == status_filter
+            ][:limit]
+        if "SELECT * FROM market_mappings ORDER BY description LIMIT" in query:
+            limit = args[0] if args else len(self._mappings)
+            return [
+                MockRecord(m)
+                for m in sorted(self._mappings.values(), key=lambda item: item.get("description", ""))
+            ][:limit]
         if "SELECT * FROM market_mappings WHERE status = 'confirmed'" in query:
             require_auto = "allow_auto_trade = TRUE" in query
             results = [
@@ -157,7 +187,7 @@ class MockConn:
         return []
 
     def _build_mapping_dict(self, args) -> dict:
-        return {
+        payload = {
             "canonical_id": args[0],
             "description": args[1],
             "status": args[2],
@@ -176,6 +206,11 @@ class MockConn:
             "created_at": args[15] if len(args) > 15 else utc_now(),
             "updated_at": utc_now(),
         }
+        if len(args) > 17:
+            payload["resolution_criteria"] = args[17]
+        if len(args) > 18:
+            payload["resolution_match_status"] = args[18]
+        return payload
 
 
 class MockPool:
@@ -346,6 +381,142 @@ async def test_delete_mapping(mock_pool, monkeypatch):
     assert await store.get("DELETE-ME") is not None
     await store.delete("DELETE-ME")
     assert await store.get("DELETE-ME") is None
+
+    await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_write_candidates_creates_candidate_mapping_without_auto_trade(mock_pool, monkeypatch):
+    store = MarketMappingStore("postgres://mock/mock")
+    await store.connect()
+
+    written = await store.write_candidates([
+        {
+            "canonical_id": "AUTO-CAN-001",
+            "kalshi_ticker": "KALSHI-123",
+            "kalshi_title": "Will rates fall in June?",
+            "poly_slug": "rates-fall-june",
+            "poly_question": "Will rates fall in June?",
+            "score": 0.91,
+        }
+    ])
+
+    assert written == 1
+    mapping = await store.get("AUTO-CAN-001")
+    assert mapping is not None
+    assert mapping.status == MappingStatus.CANDIDATE
+    assert mapping.allow_auto_trade is False
+    assert mapping.kalshi_market_id == "KALSHI-123"
+    assert mapping.polymarket_slug == "rates-fall-june"
+
+    await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_write_candidates_keeps_confirmed_mapping_confirmed(mock_pool, monkeypatch):
+    store = MarketMappingStore("postgres://mock/mock")
+    await store.connect()
+
+    confirmed = MarketMapping(
+        canonical_id="CONF-001",
+        description="Confirmed market",
+        status=MappingStatus.CONFIRMED,
+        allow_auto_trade=True,
+        kalshi_market_id="KALSHI-123",
+        polymarket_slug="rates-fall-june",
+    )
+    await store.upsert(confirmed)
+
+    await store.write_candidates([
+        {
+            "kalshi_ticker": "KALSHI-123",
+            "kalshi_title": "Will rates fall in June?",
+            "poly_slug": "rates-fall-june",
+            "poly_question": "Will rates fall in June?",
+            "score": 0.97,
+        }
+    ])
+
+    mapping = await store.get("CONF-001")
+    assert mapping is not None
+    assert mapping.status == MappingStatus.CONFIRMED
+    assert mapping.allow_auto_trade is True
+    assert mapping.mapping_score == 0.97
+
+    await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_write_candidates_preserves_auto_promoted_mapping_state(mock_pool, monkeypatch):
+    store = MarketMappingStore("postgres://mock/mock")
+    await store.connect()
+
+    written = await store.write_candidates([
+        {
+            "canonical_id": "AUTO-PROMOTE-001",
+            "kalshi_ticker": "CONTROLH-2026-D",
+            "kalshi_title": "Will Democrats win the House in 2026?",
+            "poly_slug": "paccc-usho-midterms-2026-11-03-dem",
+            "poly_question": "Will Democrats win the House in 2026?",
+            "score": 0.93,
+            "status": "confirmed",
+            "allow_auto_trade": True,
+            "resolution_match_status": "identical",
+            "resolution_criteria": {
+                "kalshi": {"source": "AP", "rule": None, "settlement_date": "2027-02-01"},
+                "polymarket": {"source": "AP", "rule": None, "settlement_date": "2027-02-01"},
+                "criteria_match": "identical",
+                "operator_note": "Auto-promoted in test.",
+            },
+            "notes": "Auto-promoted in test.",
+        }
+    ])
+
+    assert written == 1
+    mapping = await store.get("AUTO-PROMOTE-001")
+    assert mapping is not None
+    assert mapping.status == MappingStatus.CONFIRMED
+    assert mapping.allow_auto_trade is True
+    assert mapping.resolution_match_status == "identical"
+    assert "Auto-promoted" in mapping.notes
+
+    await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_sync_candidates_expires_stale_auto_discovered_pairs(mock_pool, monkeypatch):
+    store = MarketMappingStore("postgres://mock/mock")
+    await store.connect()
+
+    await store.write_candidates([
+        {
+            "canonical_id": "AUTO-CAN-OLD",
+            "kalshi_ticker": "KALSHI-OLD",
+            "kalshi_title": "Old candidate",
+            "poly_slug": "poly-old",
+            "poly_question": "Old candidate",
+            "score": 0.71,
+        }
+    ])
+
+    written = await store.sync_candidates([
+        {
+            "canonical_id": "AUTO-CAN-NEW",
+            "kalshi_ticker": "KALSHI-NEW",
+            "kalshi_title": "New candidate",
+            "poly_slug": "poly-new",
+            "poly_question": "New candidate",
+            "score": 0.92,
+        }
+    ])
+
+    assert written == 1
+    old_mapping = await store.get("AUTO-CAN-OLD")
+    new_mapping = await store.get("AUTO-CAN-NEW")
+    assert old_mapping is not None
+    assert old_mapping.status == MappingStatus.EXPIRED
+    assert new_mapping is not None
+    assert new_mapping.status == MappingStatus.CANDIDATE
 
     await store.disconnect()
 

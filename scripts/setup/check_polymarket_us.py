@@ -37,6 +37,7 @@ except ImportError:
     sys.exit(2)
 
 from arbiter.auth.ed25519_signer import Ed25519Signer, SignatureError  # type: ignore
+from arbiter.collectors.polymarket_us import extract_current_balance  # type: ignore
 
 
 def _balances_endpoint(base_url: str) -> tuple[str, str, str]:
@@ -130,7 +131,7 @@ async def _check() -> int:
 
     # ── 5. Parse + validate balance ──────────────────────────────────────
     try:
-        current_balance = float(body.get("currentBalance", 0))
+        current_balance = extract_current_balance(body)
     except (TypeError, ValueError) as exc:
         print(f"FAIL — could not parse currentBalance: {exc}", file=sys.stderr)
         return 1
