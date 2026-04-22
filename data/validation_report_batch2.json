@@ -1,0 +1,1490 @@
+{
+  "validation_agent": 2,
+  "batch_range": "75-150",
+  "total_candidates": 76,
+  "summary": {
+    "VALID": 0,
+    "INVALID": 76,
+    "NEEDS_REVIEW": 0
+  },
+  "confirmed_count": 0,
+  "validated_at": "2026-04-22T10:56:43.558466Z",
+  "results": [
+    {
+      "kalshi_ticker": "KXMLBAL-26-MIN",
+      "poly_slug": "tec-mlb-alchamp-2026-09-27-min",
+      "category": "sports",
+      "candidate_score": 0.88,
+      "kalshi_title": "Will Minnesota win the 2026 Pro Baseball American League Championship?",
+      "poly_question": "American League Champion",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-10-04",
+      "status": "INVALID",
+      "reasons": [
+        "date_mismatch: delta=853d > 14d"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Will Minnesota win the 2026 Pro Baseball American League Championship?",
+      "kalshi_close_time": "2028-10-31T04:00:00Z",
+      "poly_active": true,
+      "poly_question_live": "Will the Minnesota Timberwolves win the 2026 NBA Finals?",
+      "poly_end_date_live": "2026-07-01T00:00:00Z",
+      "poly_condition_id": "0x649ad05a2868343271fe82ea692031d567ca1af652e3529788933157e94aa088",
+      "live_title_similarity": 0.2,
+      "team_abbr_match": true,
+      "kalshi_date_parsed": "2028-10-31",
+      "poly_date_parsed": "2026-07-01",
+      "date_delta_days": 853,
+      "poly_match_method": "fuzzy_title (score=0.200)"
+    },
+    {
+      "kalshi_ticker": "KXMLBAL-26-DET",
+      "poly_slug": "tec-mlb-alchamp-2026-09-27-det",
+      "category": "sports",
+      "candidate_score": 0.88,
+      "kalshi_title": "Will Detroit win the 2026 Pro Baseball American League Championship?",
+      "poly_question": "American League Champion",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-10-04",
+      "status": "INVALID",
+      "reasons": [
+        "date_mismatch: delta=853d > 14d"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Will Detroit win the 2026 Pro Baseball American League Championship?",
+      "kalshi_close_time": "2028-10-31T04:00:00Z",
+      "poly_active": true,
+      "poly_question_live": "Will the Detroit Pistons win the 2026 NBA Finals?",
+      "poly_end_date_live": "2026-07-01T00:00:00Z",
+      "poly_condition_id": "0xe202539dfbeced92dc4112f134a205c80ca6cf4db32bd82f05b291c297219fd8",
+      "live_title_similarity": 0.2,
+      "team_abbr_match": true,
+      "kalshi_date_parsed": "2028-10-31",
+      "poly_date_parsed": "2026-07-01",
+      "date_delta_days": 853,
+      "poly_match_method": "fuzzy_title (score=0.200)"
+    },
+    {
+      "kalshi_ticker": "KXMLBAL-26-SEA",
+      "poly_slug": "tec-mlb-alchamp-2026-09-27-sea",
+      "category": "sports",
+      "candidate_score": 0.88,
+      "kalshi_title": "Will Seattle win the 2026 Pro Baseball American League Championship?",
+      "poly_question": "American League Champion",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-10-04",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Will Seattle win the 2026 Pro Baseball American League Championship?",
+      "kalshi_close_time": "2028-10-31T04:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXMLBAL-26-TOR",
+      "poly_slug": "tec-mlb-alchamp-2026-09-27-tor",
+      "category": "sports",
+      "candidate_score": 0.88,
+      "kalshi_title": "Will Toronto win the 2026 Pro Baseball American League Championship?",
+      "poly_question": "American League Champion",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-10-04",
+      "status": "INVALID",
+      "reasons": [
+        "date_mismatch: delta=853d > 14d"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Will Toronto win the 2026 Pro Baseball American League Championship?",
+      "kalshi_close_time": "2028-10-31T04:00:00Z",
+      "poly_active": true,
+      "poly_question_live": "Will the Toronto Raptors win the 2026 NBA Finals?",
+      "poly_end_date_live": "2026-07-01T00:00:00Z",
+      "poly_condition_id": "0x4405c62496c4fdd275d17ec31567a01534013c518c314ce61bb633b5e7cb6426",
+      "live_title_similarity": 0.2,
+      "team_abbr_match": true,
+      "kalshi_date_parsed": "2028-10-31",
+      "poly_date_parsed": "2026-07-01",
+      "date_delta_days": 853,
+      "poly_match_method": "fuzzy_title (score=0.200)"
+    },
+    {
+      "kalshi_ticker": "KXMLBAL-26-CLE",
+      "poly_slug": "tec-mlb-alchamp-2026-09-27-cle",
+      "category": "sports",
+      "candidate_score": 0.88,
+      "kalshi_title": "Will Cleveland win the 2026 Pro Baseball American League Championship?",
+      "poly_question": "American League Champion",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-10-04",
+      "status": "INVALID",
+      "reasons": [
+        "date_mismatch: delta=853d > 14d"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Will Cleveland win the 2026 Pro Baseball American League Championship?",
+      "kalshi_close_time": "2028-10-31T04:00:00Z",
+      "poly_active": true,
+      "poly_question_live": "Will the Cleveland Cavaliers win the 2026 NBA Finals?",
+      "poly_end_date_live": "2026-07-01T00:00:00Z",
+      "poly_condition_id": "0x6b44bd667fad6cb5b3b68d8bd1055a038c77d9176dbd51f123879797cc3368a7",
+      "live_title_similarity": 0.2,
+      "team_abbr_match": true,
+      "kalshi_date_parsed": "2028-10-31",
+      "poly_date_parsed": "2026-07-01",
+      "date_delta_days": 853,
+      "poly_match_method": "fuzzy_title (score=0.200)"
+    },
+    {
+      "kalshi_ticker": "KXMLBAL-26-HOU",
+      "poly_slug": "tec-mlb-alchamp-2026-09-27-hou",
+      "category": "sports",
+      "candidate_score": 0.88,
+      "kalshi_title": "Will Houston win the 2026 Pro Baseball American League Championship?",
+      "poly_question": "American League Champion",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-10-04",
+      "status": "INVALID",
+      "reasons": [
+        "date_mismatch: delta=853d > 14d"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Will Houston win the 2026 Pro Baseball American League Championship?",
+      "kalshi_close_time": "2028-10-31T04:00:00Z",
+      "poly_active": true,
+      "poly_question_live": "Will the Houston Rockets win the 2026 NBA Finals?",
+      "poly_end_date_live": "2026-07-01T00:00:00Z",
+      "poly_condition_id": "0x9b56568af78dd036b03c641e0673729d72cd7d63578eb0119cd23eb1f94f1b56",
+      "live_title_similarity": 0.2,
+      "team_abbr_match": true,
+      "kalshi_date_parsed": "2028-10-31",
+      "poly_date_parsed": "2026-07-01",
+      "date_delta_days": 853,
+      "poly_match_method": "fuzzy_title (score=0.200)"
+    },
+    {
+      "kalshi_ticker": "KXMLBAL-26-TEX",
+      "poly_slug": "tec-mlb-alchamp-2026-09-27-tex",
+      "category": "sports",
+      "candidate_score": 0.88,
+      "kalshi_title": "Will Texas win the 2026 Pro Baseball American League Championship?",
+      "poly_question": "American League Champion",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-10-04",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Will Texas win the 2026 Pro Baseball American League Championship?",
+      "kalshi_close_time": "2028-10-31T04:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXMLBAL-26-LAA",
+      "poly_slug": "tec-mlb-alchamp-2026-09-27-laa",
+      "category": "sports",
+      "candidate_score": 0.88,
+      "kalshi_title": "Will Los Angeles A win the 2026 Pro Baseball American League Championship?",
+      "poly_question": "American League Champion",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-10-04",
+      "status": "INVALID",
+      "reasons": [
+        "date_mismatch: delta=853d > 14d"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Will Los Angeles A win the 2026 Pro Baseball American League Championship?",
+      "kalshi_close_time": "2028-10-31T04:00:00Z",
+      "poly_active": true,
+      "poly_question_live": "Will the Los Angeles Lakers win the 2026 NBA Finals?",
+      "poly_end_date_live": "2026-07-01T00:00:00Z",
+      "poly_condition_id": "0x796e791e7058571e460278814fc7a3183752285338f1400087b98bef3c447908",
+      "live_title_similarity": 0.2727,
+      "team_abbr_match": true,
+      "kalshi_date_parsed": "2028-10-31",
+      "poly_date_parsed": "2026-07-01",
+      "date_delta_days": 853,
+      "poly_match_method": "fuzzy_title (score=0.273)"
+    },
+    {
+      "kalshi_ticker": "KXMLBAL-26-BOS",
+      "poly_slug": "tec-mlb-alchamp-2026-09-27-bos",
+      "category": "sports",
+      "candidate_score": 0.88,
+      "kalshi_title": "Will Boston win the 2026 Pro Baseball American League Championship?",
+      "poly_question": "American League Champion",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-10-04",
+      "status": "INVALID",
+      "reasons": [
+        "date_mismatch: delta=853d > 14d"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Will Boston win the 2026 Pro Baseball American League Championship?",
+      "kalshi_close_time": "2028-10-31T04:00:00Z",
+      "poly_active": true,
+      "poly_question_live": "Will the Boston Celtics win the 2026 NBA Finals?",
+      "poly_end_date_live": "2026-07-01T00:00:00Z",
+      "poly_condition_id": "0x13e1cc703a120883a709d3bb29707097952845d61ca6793ea2b4328bae2a7451",
+      "live_title_similarity": 0.2,
+      "team_abbr_match": true,
+      "kalshi_date_parsed": "2028-10-31",
+      "poly_date_parsed": "2026-07-01",
+      "date_delta_days": 853,
+      "poly_match_method": "fuzzy_title (score=0.200)"
+    },
+    {
+      "kalshi_ticker": "KXMLBAL-26-NYY",
+      "poly_slug": "tec-mlb-alchamp-2026-09-27-nyy",
+      "category": "sports",
+      "candidate_score": 0.88,
+      "kalshi_title": "Will New York Y win the 2026 Pro Baseball American League Championship?",
+      "poly_question": "American League Champion",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-10-04",
+      "status": "INVALID",
+      "reasons": [
+        "date_mismatch: delta=853d > 14d"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Will New York Y win the 2026 Pro Baseball American League Championship?",
+      "kalshi_close_time": "2028-10-31T04:00:00Z",
+      "poly_active": true,
+      "poly_question_live": "Will the New York Knicks win the 2026 NBA Finals?",
+      "poly_end_date_live": "2026-07-01T00:00:00Z",
+      "poly_condition_id": "0x713641f745d71f6ec61f906237ffca3c8583f251e49384429a63ceb0ccdb2d37",
+      "live_title_similarity": 0.2727,
+      "team_abbr_match": true,
+      "kalshi_date_parsed": "2028-10-31",
+      "poly_date_parsed": "2026-07-01",
+      "date_delta_days": 853,
+      "poly_match_method": "fuzzy_title (score=0.273)"
+    },
+    {
+      "kalshi_ticker": "KXMLBAL-26-CWS",
+      "poly_slug": "tec-mlb-alchamp-2026-09-27-cws",
+      "category": "sports",
+      "candidate_score": 0.88,
+      "kalshi_title": "Will Chicago WS win the 2026 Pro Baseball American League Championship?",
+      "poly_question": "American League Champion",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-10-04",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Will Chicago WS win the 2026 Pro Baseball American League Championship?",
+      "kalshi_close_time": "2028-10-31T04:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXMLBNL-26-ATL",
+      "poly_slug": "tec-mlb-nlchamp-2026-09-27-atl",
+      "category": "sports",
+      "candidate_score": 0.88,
+      "kalshi_title": "Will Atlanta win the 2026 Pro Baseball National League Championship?",
+      "poly_question": "National League Champion",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-10-04",
+      "status": "INVALID",
+      "reasons": [
+        "date_mismatch: delta=853d > 14d"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Will Atlanta win the 2026 Pro Baseball National League Championship?",
+      "kalshi_close_time": "2028-10-31T04:00:00Z",
+      "poly_active": true,
+      "poly_question_live": "Will the Atlanta Hawks win the 2026 NBA Finals?",
+      "poly_end_date_live": "2026-07-01T00:00:00Z",
+      "poly_condition_id": "0xfda648d24cdad32dfe959195bd75ef4c81fbea5130eb6c7a4a0c18607a11ce63",
+      "live_title_similarity": 0.2,
+      "team_abbr_match": true,
+      "kalshi_date_parsed": "2028-10-31",
+      "poly_date_parsed": "2026-07-01",
+      "date_delta_days": 853,
+      "poly_match_method": "fuzzy_title (score=0.200)"
+    },
+    {
+      "kalshi_ticker": "KXMLBNL-26-LAD",
+      "poly_slug": "tec-mlb-nlchamp-2026-09-27-lad",
+      "category": "sports",
+      "candidate_score": 0.88,
+      "kalshi_title": "Will Los Angeles D win the 2026 Pro Baseball National League Championship?",
+      "poly_question": "National League Champion",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-10-04",
+      "status": "INVALID",
+      "reasons": [
+        "date_mismatch: delta=853d > 14d"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Will Los Angeles D win the 2026 Pro Baseball National League Championship?",
+      "kalshi_close_time": "2028-10-31T04:00:00Z",
+      "poly_active": true,
+      "poly_question_live": "Will the Los Angeles Lakers win the 2026 NBA Finals?",
+      "poly_end_date_live": "2026-07-01T00:00:00Z",
+      "poly_condition_id": "0x796e791e7058571e460278814fc7a3183752285338f1400087b98bef3c447908",
+      "live_title_similarity": 0.2727,
+      "team_abbr_match": true,
+      "kalshi_date_parsed": "2028-10-31",
+      "poly_date_parsed": "2026-07-01",
+      "date_delta_days": 853,
+      "poly_match_method": "fuzzy_title (score=0.273)"
+    },
+    {
+      "kalshi_ticker": "KXMLBNL-26-NYM",
+      "poly_slug": "tec-mlb-nlchamp-2026-09-27-nym",
+      "category": "sports",
+      "candidate_score": 0.88,
+      "kalshi_title": "Will New York M win the 2026 Pro Baseball National League Championship?",
+      "poly_question": "National League Champion",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-10-04",
+      "status": "INVALID",
+      "reasons": [
+        "date_mismatch: delta=853d > 14d"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Will New York M win the 2026 Pro Baseball National League Championship?",
+      "kalshi_close_time": "2028-10-31T04:00:00Z",
+      "poly_active": true,
+      "poly_question_live": "Will the New York Knicks win the 2026 NBA Finals?",
+      "poly_end_date_live": "2026-07-01T00:00:00Z",
+      "poly_condition_id": "0x713641f745d71f6ec61f906237ffca3c8583f251e49384429a63ceb0ccdb2d37",
+      "live_title_similarity": 0.2727,
+      "team_abbr_match": true,
+      "kalshi_date_parsed": "2028-10-31",
+      "poly_date_parsed": "2026-07-01",
+      "date_delta_days": 853,
+      "poly_match_method": "fuzzy_title (score=0.273)"
+    },
+    {
+      "kalshi_ticker": "KXMLBNL-26-CHC",
+      "poly_slug": "tec-mlb-nlchamp-2026-09-27-chc",
+      "category": "sports",
+      "candidate_score": 0.88,
+      "kalshi_title": "Will Chicago C win the 2026 Pro Baseball National League Championship?",
+      "poly_question": "National League Champion",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-10-04",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Will Chicago C win the 2026 Pro Baseball National League Championship?",
+      "kalshi_close_time": "2028-10-31T04:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXMLBNL-26-PIT",
+      "poly_slug": "tec-mlb-nlchamp-2026-09-27-pit",
+      "category": "sports",
+      "candidate_score": 0.88,
+      "kalshi_title": "Will Pittsburgh win the 2026 Pro Baseball National League Championship?",
+      "poly_question": "National League Champion",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-10-04",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Will Pittsburgh win the 2026 Pro Baseball National League Championship?",
+      "kalshi_close_time": "2028-10-31T04:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXMLBNL-26-CIN",
+      "poly_slug": "tec-mlb-nlchamp-2026-09-27-cin",
+      "category": "sports",
+      "candidate_score": 0.88,
+      "kalshi_title": "Will Cincinnati win the 2026 Pro Baseball National League Championship?",
+      "poly_question": "National League Champion",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-10-04",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Will Cincinnati win the 2026 Pro Baseball National League Championship?",
+      "kalshi_close_time": "2028-10-31T04:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXMLBNL-26-MIL",
+      "poly_slug": "tec-mlb-nlchamp-2026-09-27-mil",
+      "category": "sports",
+      "candidate_score": 0.88,
+      "kalshi_title": "Will Milwaukee win the 2026 Pro Baseball National League Championship?",
+      "poly_question": "National League Champion",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-10-04",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Will Milwaukee win the 2026 Pro Baseball National League Championship?",
+      "kalshi_close_time": "2028-10-31T04:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXMLBNL-26-PHI",
+      "poly_slug": "tec-mlb-nlchamp-2026-09-27-phi",
+      "category": "sports",
+      "candidate_score": 0.88,
+      "kalshi_title": "Will Philadelphia win the 2026 Pro Baseball National League Championship?",
+      "poly_question": "National League Champion",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-10-04",
+      "status": "INVALID",
+      "reasons": [
+        "date_mismatch: delta=853d > 14d"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Will Philadelphia win the 2026 Pro Baseball National League Championship?",
+      "kalshi_close_time": "2028-10-31T04:00:00Z",
+      "poly_active": true,
+      "poly_question_live": "Will the Philadelphia 76ers win the 2026 NBA Finals?",
+      "poly_end_date_live": "2026-07-01T00:00:00Z",
+      "poly_condition_id": "0x567f1ff714731fafa702d454a105b064a7ec4d10f6fb71ad3221f4918681c709",
+      "live_title_similarity": 0.2,
+      "team_abbr_match": true,
+      "kalshi_date_parsed": "2028-10-31",
+      "poly_date_parsed": "2026-07-01",
+      "date_delta_days": 853,
+      "poly_match_method": "fuzzy_title (score=0.200)"
+    },
+    {
+      "kalshi_ticker": "KXMLBNL-26-STL",
+      "poly_slug": "tec-mlb-nlchamp-2026-09-27-stl",
+      "category": "sports",
+      "candidate_score": 0.88,
+      "kalshi_title": "Will St. Louis win the 2026 Pro Baseball National League Championship?",
+      "poly_question": "National League Champion",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-10-04",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Will St. Louis win the 2026 Pro Baseball National League Championship?",
+      "kalshi_close_time": "2028-10-31T04:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXMLBNL-26-MIA",
+      "poly_slug": "tec-mlb-nlchamp-2026-09-27-mia",
+      "category": "sports",
+      "candidate_score": 0.88,
+      "kalshi_title": "Will Miami win the 2026 Pro Baseball National League Championship?",
+      "poly_question": "National League Champion",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-10-04",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Will Miami win the 2026 Pro Baseball National League Championship?",
+      "kalshi_close_time": "2028-10-31T04:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXMLBNL-26-COL",
+      "poly_slug": "tec-mlb-nlchamp-2026-09-27-col",
+      "category": "sports",
+      "candidate_score": 0.88,
+      "kalshi_title": "Will Colorado win the 2026 Pro Baseball National League Championship?",
+      "poly_question": "National League Champion",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-10-04",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Will Colorado win the 2026 Pro Baseball National League Championship?",
+      "kalshi_close_time": "2028-10-31T04:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXCOLONIZEMARS-50",
+      "poly_slug": "will-humans-colonize-mars-before-2050",
+      "category": "science",
+      "candidate_score": 0.85,
+      "kalshi_title": "Will humans colonize Mars before 2050?",
+      "poly_question": "Will humans colonize Mars before 2050?",
+      "kalshi_resolution_date": "2050-01-01",
+      "poly_resolution_date": null,
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Will humans colonize Mars before 2050?",
+      "kalshi_close_time": "2050-01-01T04:59:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNHLHART-26-KKUC",
+      "poly_slug": "tec-nhl-hart-2026-06-30-nikkuc",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win Hart Memorial Trophy?",
+      "poly_question": "NHL Hart Memorial Trophy Winner",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-07-14",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win Hart Memorial Trophy?",
+      "kalshi_close_time": "2026-06-30T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNHLHART-26-CMAK",
+      "poly_slug": "tec-nhl-hart-2026-06-30-calmak",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win Hart Memorial Trophy?",
+      "poly_question": "NHL Hart Memorial Trophy Winner",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-07-14",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win Hart Memorial Trophy?",
+      "kalshi_close_time": "2026-06-30T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNHLHART-26-CMCD",
+      "poly_slug": "tec-nhl-hart-2026-06-30-conmcd",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win Hart Memorial Trophy?",
+      "poly_question": "NHL Hart Memorial Trophy Winner",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-07-14",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win Hart Memorial Trophy?",
+      "kalshi_close_time": "2026-06-30T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNHLHART-26-QHUG",
+      "poly_slug": "tec-nhl-hart-2026-06-30-quihug",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win Hart Memorial Trophy?",
+      "poly_question": "NHL Hart Memorial Trophy Winner",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-07-14",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win Hart Memorial Trophy?",
+      "kalshi_close_time": "2026-06-30T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNHLHART-26-ANIK",
+      "poly_slug": "tec-nhl-hart-2026-06-30-alenik",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win Hart Memorial Trophy?",
+      "poly_question": "NHL Hart Memorial Trophy Winner",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-07-14",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win Hart Memorial Trophy?",
+      "kalshi_close_time": "2026-06-30T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNHLHART-26-LDRA",
+      "poly_slug": "tec-nhl-hart-2026-06-30-leodra",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win Hart Memorial Trophy?",
+      "poly_question": "NHL Hart Memorial Trophy Winner",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-07-14",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win Hart Memorial Trophy?",
+      "kalshi_close_time": "2026-06-30T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNHLHART-26-MCEL",
+      "poly_slug": "tec-nhl-hart-2026-06-30-maccel",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win Hart Memorial Trophy?",
+      "poly_question": "NHL Hart Memorial Trophy Winner",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-07-14",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win Hart Memorial Trophy?",
+      "kalshi_close_time": "2026-06-30T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNHLHART-26-DWOL",
+      "poly_slug": "tec-nhl-hart-2026-06-30-duswol",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win Hart Memorial Trophy?",
+      "poly_question": "NHL Hart Memorial Trophy Winner",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-07-14",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win Hart Memorial Trophy?",
+      "kalshi_close_time": "2026-06-30T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNHLHART-26-MTKA",
+      "poly_slug": "tec-nhl-hart-2026-06-30-mattka",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win Hart Memorial Trophy?",
+      "poly_question": "NHL Hart Memorial Trophy Winner",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-07-14",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win Hart Memorial Trophy?",
+      "kalshi_close_time": "2026-06-30T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNHLHART-26-KKAP",
+      "poly_slug": "tec-nhl-hart-2026-06-30-kirkap",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win Hart Memorial Trophy?",
+      "poly_question": "NHL Hart Memorial Trophy Winner",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-07-14",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win Hart Memorial Trophy?",
+      "kalshi_close_time": "2026-06-30T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNHLHART-26-DPAS",
+      "poly_slug": "tec-nhl-hart-2026-06-30-davpas",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win Hart Memorial Trophy?",
+      "poly_question": "NHL Hart Memorial Trophy Winner",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-07-14",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win Hart Memorial Trophy?",
+      "kalshi_close_time": "2026-06-30T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNHLHART-26-JEIC",
+      "poly_slug": "tec-nhl-hart-2026-06-30-jaceic",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win Hart Memorial Trophy?",
+      "poly_question": "NHL Hart Memorial Trophy Winner",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-07-14",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win Hart Memorial Trophy?",
+      "kalshi_close_time": "2026-06-30T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNHLHART-26-KCON",
+      "poly_slug": "tec-nhl-hart-2026-06-30-kylcon",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win Hart Memorial Trophy?",
+      "poly_question": "NHL Hart Memorial Trophy Winner",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-07-14",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win Hart Memorial Trophy?",
+      "kalshi_close_time": "2026-06-30T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNHLHART-26-NMAC",
+      "poly_slug": "tec-nhl-hart-2026-06-30-natmac",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win Hart Memorial Trophy?",
+      "poly_question": "NHL Hart Memorial Trophy Winner",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-07-14",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win Hart Memorial Trophy?",
+      "kalshi_close_time": "2026-06-30T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNHLHART-26-JHUG",
+      "poly_slug": "tec-nhl-hart-2026-06-30-jachug",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win Hart Memorial Trophy?",
+      "poly_question": "NHL Hart Memorial Trophy Winner",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-07-14",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win Hart Memorial Trophy?",
+      "kalshi_close_time": "2026-06-30T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNHLHART-26-BTKA",
+      "poly_slug": "tec-nhl-hart-2026-06-30-bratka",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win Hart Memorial Trophy?",
+      "poly_question": "NHL Hart Memorial Trophy Winner",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-07-14",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win Hart Memorial Trophy?",
+      "kalshi_close_time": "2026-06-30T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNHLHART-26-WNYL",
+      "poly_slug": "tec-nhl-hart-2026-06-30-wilnyl",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win Hart Memorial Trophy?",
+      "poly_question": "NHL Hart Memorial Trophy Winner",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-07-14",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win Hart Memorial Trophy?",
+      "kalshi_close_time": "2026-06-30T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNHLHART-26-AVAS",
+      "poly_slug": "tec-nhl-hart-2026-06-30-andvas",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win Hart Memorial Trophy?",
+      "poly_question": "NHL Hart Memorial Trophy Winner",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-07-14",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win Hart Memorial Trophy?",
+      "kalshi_close_time": "2026-06-30T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNHLHART-26-ISHE",
+      "poly_slug": "tec-nhl-hart-2026-06-30-igoshe",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win Hart Memorial Trophy?",
+      "poly_question": "NHL Hart Memorial Trophy Winner",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-07-14",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win Hart Memorial Trophy?",
+      "kalshi_close_time": "2026-06-30T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNHLHART-26-AOVE",
+      "poly_slug": "tec-nhl-hart-2026-06-30-aleove",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win Hart Memorial Trophy?",
+      "poly_question": "NHL Hart Memorial Trophy Winner",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-07-14",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win Hart Memorial Trophy?",
+      "kalshi_close_time": "2026-06-30T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNHLHART-26-APAN",
+      "poly_slug": "tec-nhl-hart-2026-06-30-artpan",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win Hart Memorial Trophy?",
+      "poly_question": "NHL Hart Memorial Trophy Winner",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-07-14",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win Hart Memorial Trophy?",
+      "kalshi_close_time": "2026-06-30T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNHLHART-26-MMAR",
+      "poly_slug": "tec-nhl-hart-2026-06-30-mitmar",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win Hart Memorial Trophy?",
+      "poly_question": "NHL Hart Memorial Trophy Winner",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-07-14",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win Hart Memorial Trophy?",
+      "kalshi_close_time": "2026-06-30T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNHLHART-26-ADEB",
+      "poly_slug": "tec-nhl-hart-2026-06-30-aledeb",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win Hart Memorial Trophy?",
+      "poly_question": "NHL Hart Memorial Trophy Winner",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-07-14",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win Hart Memorial Trophy?",
+      "kalshi_close_time": "2026-06-30T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNHLHART-26-CHEL",
+      "poly_slug": "tec-nhl-hart-2026-06-30-conhel",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win Hart Memorial Trophy?",
+      "poly_question": "NHL Hart Memorial Trophy Winner",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-07-14",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win Hart Memorial Trophy?",
+      "kalshi_close_time": "2026-06-30T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNHLHART-26-AMAT",
+      "poly_slug": "tec-nhl-hart-2026-06-30-ausmat",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win Hart Memorial Trophy?",
+      "poly_question": "NHL Hart Memorial Trophy Winner",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-07-14",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win Hart Memorial Trophy?",
+      "kalshi_close_time": "2026-06-30T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNHLHART-26-NSUZ",
+      "poly_slug": "tec-nhl-hart-2026-06-30-nicsuz",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win Hart Memorial Trophy?",
+      "poly_question": "NHL Hart Memorial Trophy Winner",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-07-14",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win Hart Memorial Trophy?",
+      "kalshi_close_time": "2026-06-30T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNHLHART-26-CBED",
+      "poly_slug": "tec-nhl-hart-2026-06-30-conbed",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win Hart Memorial Trophy?",
+      "poly_question": "NHL Hart Memorial Trophy Winner",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-07-14",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win Hart Memorial Trophy?",
+      "kalshi_close_time": "2026-06-30T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNHLHART-26-AKEM",
+      "poly_slug": "tec-nhl-hart-2026-06-30-adrkem",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win Hart Memorial Trophy?",
+      "poly_question": "NHL Hart Memorial Trophy Winner",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-07-14",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win Hart Memorial Trophy?",
+      "kalshi_close_time": "2026-06-30T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNHLHART-26-AFOX",
+      "poly_slug": "tec-nhl-hart-2026-06-30-adafox",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win Hart Memorial Trophy?",
+      "poly_question": "NHL Hart Memorial Trophy Winner",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-07-14",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win Hart Memorial Trophy?",
+      "kalshi_close_time": "2026-06-30T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNBAMVP-26-NJOK",
+      "poly_slug": "tec-nba-mvp-2026-06-10-nikjok",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win MVP?",
+      "poly_question": "NBA MVP",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-06-24",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win MVP?",
+      "kalshi_close_time": "2027-04-12T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNBAMVP-26-KLEO",
+      "poly_slug": "tec-nba-mvp-2026-06-10-kawleo",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win MVP?",
+      "poly_question": "NBA MVP",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-06-24",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win MVP?",
+      "kalshi_close_time": "2027-04-12T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNBAMVP-26-CFLA",
+      "poly_slug": "tec-nba-mvp-2026-06-10-coofla",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win MVP?",
+      "poly_question": "NBA MVP",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-06-24",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win MVP?",
+      "kalshi_close_time": "2027-04-12T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNBAMVP-26-VWEM",
+      "poly_slug": "tec-nba-mvp-2026-06-10-vicwem",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win MVP?",
+      "poly_question": "NBA MVP",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-06-24",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win MVP?",
+      "kalshi_close_time": "2027-04-12T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNBAMVP-26-TMAX",
+      "poly_slug": "tec-nba-mvp-2026-06-10-tyrmax",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win MVP?",
+      "poly_question": "NBA MVP",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-06-24",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win MVP?",
+      "kalshi_close_time": "2027-04-12T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNBAMVP-26-DBOO",
+      "poly_slug": "tec-nba-mvp-2026-06-10-devboo",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win MVP?",
+      "poly_question": "NBA MVP",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-06-24",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win MVP?",
+      "kalshi_close_time": "2027-04-12T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNBAMVP-26-AEDW",
+      "poly_slug": "tec-nba-mvp-2026-06-10-antedw",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win MVP?",
+      "poly_question": "NBA MVP",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-06-24",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win MVP?",
+      "kalshi_close_time": "2027-04-12T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNBAMVP-26-JBRO",
+      "poly_slug": "tec-nba-mvp-2026-06-10-jaybro",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win MVP?",
+      "poly_question": "NBA MVP",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-06-24",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win MVP?",
+      "kalshi_close_time": "2027-04-12T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNBAMVP-26-ADAV",
+      "poly_slug": "tec-nba-mvp-2026-06-10-antdav",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win MVP?",
+      "poly_question": "NBA MVP",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-06-24",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win MVP?",
+      "kalshi_close_time": "2027-04-12T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNBAMVP-26-KDUR",
+      "poly_slug": "tec-nba-mvp-2026-06-10-kevdur",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win MVP?",
+      "poly_question": "NBA MVP",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-06-24",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win MVP?",
+      "kalshi_close_time": "2027-04-12T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNBAMVP-26-TYOU",
+      "poly_slug": "tec-nba-mvp-2026-06-10-trayou",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win MVP?",
+      "poly_question": "NBA MVP",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-06-24",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win MVP?",
+      "kalshi_close_time": "2027-04-12T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNBAMVP-26-LDON",
+      "poly_slug": "tec-nba-mvp-2026-06-10-lukdon",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win MVP?",
+      "poly_question": "NBA MVP",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-06-24",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win MVP?",
+      "kalshi_close_time": "2027-04-12T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNBAMVP-26-JMOR",
+      "poly_slug": "tec-nba-mvp-2026-06-10-jamor",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win MVP?",
+      "poly_question": "NBA MVP",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-06-24",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win MVP?",
+      "kalshi_close_time": "2027-04-12T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNBAMVP-26-SGIL",
+      "poly_slug": "tec-nba-mvp-2026-06-10-shagil",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win MVP?",
+      "poly_question": "NBA MVP",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-06-24",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win MVP?",
+      "kalshi_close_time": "2027-04-12T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNBAMVP-26-PBAN",
+      "poly_slug": "tec-nba-mvp-2026-06-10-paoban",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win MVP?",
+      "poly_question": "NBA MVP",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-06-24",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win MVP?",
+      "kalshi_close_time": "2027-04-12T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNBAMVP-26-DMIT",
+      "poly_slug": "tec-nba-mvp-2026-06-10-donmit",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win MVP?",
+      "poly_question": "NBA MVP",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-06-24",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win MVP?",
+      "kalshi_close_time": "2027-04-12T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNBAMVP-26-JEMB",
+      "poly_slug": "tec-nba-mvp-2026-06-10-joeemb",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win MVP?",
+      "poly_question": "NBA MVP",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-06-24",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win MVP?",
+      "kalshi_close_time": "2027-04-12T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNBAMVP-26-LJAM",
+      "poly_slug": "tec-nba-mvp-2026-06-10-lebjam",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win MVP?",
+      "poly_question": "NBA MVP",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-06-24",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win MVP?",
+      "kalshi_close_time": "2027-04-12T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNBAMVP-26-GANT",
+      "poly_slug": "tec-nba-mvp-2026-06-10-giaant",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win MVP?",
+      "poly_question": "NBA MVP",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-06-24",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win MVP?",
+      "kalshi_close_time": "2027-04-12T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNBAMVP-26-SCUR",
+      "poly_slug": "tec-nba-mvp-2026-06-10-stecur",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win MVP?",
+      "poly_question": "NBA MVP",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-06-24",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win MVP?",
+      "kalshi_close_time": "2027-04-12T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNBAMVP-26-CCUN",
+      "poly_slug": "tec-nba-mvp-2026-06-10-cadcun",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win MVP?",
+      "poly_question": "NBA MVP",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-06-24",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win MVP?",
+      "kalshi_close_time": "2027-04-12T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXNBAMVP-26-JBRU",
+      "poly_slug": "tec-nba-mvp-2026-06-10-jalbru",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Who will win MVP?",
+      "poly_question": "NBA MVP",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-06-24",
+      "status": "INVALID",
+      "reasons": [
+        "polymarket_not_found"
+      ],
+      "kalshi_status": "active",
+      "kalshi_title_live": "Who will win MVP?",
+      "kalshi_close_time": "2027-04-12T14:00:00Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXPGAR1LEAD-MAST26-TFIN",
+      "poly_slug": "tec-masters-round1leader-2026-04-12-tonfin",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Will Tony Finau lead at the end of Round 1 in the The Masters?",
+      "poly_question": "2026 Masters First Round Winner",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-04-20",
+      "status": "INVALID",
+      "reasons": [
+        "kalshi_not_active (status=finalized)"
+      ],
+      "kalshi_status": "finalized",
+      "kalshi_title_live": "Will Tony Finau lead at the end of Round 1 in the The Masters?",
+      "kalshi_close_time": "2026-04-09T13:40:23Z",
+      "poly_match_method": "exact_slug"
+    },
+    {
+      "kalshi_ticker": "KXPGAR1LEAD-MAST26-TWOO",
+      "poly_slug": "tec-masters-round1leader-2026-04-12-tigwoo",
+      "category": "sports",
+      "candidate_score": 0.85,
+      "kalshi_title": "Will Tiger Woods lead at the end of Round 1 in the The Masters?",
+      "poly_question": "2026 Masters First Round Winner",
+      "kalshi_resolution_date": null,
+      "poly_resolution_date": "2026-04-20",
+      "status": "INVALID",
+      "reasons": [
+        "kalshi_not_active (status=finalized)"
+      ],
+      "kalshi_status": "finalized",
+      "kalshi_title_live": "Will Tiger Woods lead at the end of Round 1 in the The Masters?",
+      "kalshi_close_time": "2026-04-09T13:40:23Z",
+      "poly_match_method": "exact_slug"
+    }
+  ]
+}
