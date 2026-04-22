@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Set up a permanent Cloudflare Tunnel named "arbiter" pointing at the
-# local Arbiter API on 127.0.0.1:8080. The tunnel URL survives reboots
+# local Arbiter API on 127.0.0.1:8090. The tunnel URL survives reboots
 # because it is tied to a named tunnel (UUID) plus a DNS hostname you
 # own in Cloudflare, not a random `trycloudflare.com` quick tunnel.
 #
@@ -19,7 +19,7 @@
 set -euo pipefail
 
 TUNNEL_NAME="arbiter"
-LOCAL_ORIGIN="http://127.0.0.1:8080"
+LOCAL_ORIGIN="http://127.0.0.1:8090"
 HOSTNAME="${1:-}"
 CF_DIR="${HOME}/.cloudflared"
 CONFIG_PATH="${CF_DIR}/config.yml"
