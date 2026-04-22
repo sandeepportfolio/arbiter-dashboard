@@ -55,7 +55,7 @@ services:
     build: .
     container_name: arbiter-core
     image: ghcr.io/sandeepportfolio/arbiter:latest
-    env_file: .env
+    env_file: .env.production
     environment:
       DATABASE_URL: postgresql://${PG_USER:-arbiter}:${PG_PASSWORD:-arbiter_secret}@postgres:5432/${PG_DATABASE:-arbiter_dev}
       REDIS_URL: redis://redis:6379/0
