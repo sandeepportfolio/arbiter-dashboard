@@ -53,12 +53,40 @@
       </form>
     </div>
   </div>
+  <div id="navScrim" class="nav-scrim" aria-hidden="true"></div>
   <main class="shell">
     <section class="desk-shell">
+      <section id="balanceTicker" class="balance-ticker" aria-label="Live account balances" data-state="loading">
+        <div class="balance-ticker-inner">
+          <div class="balance-ticker-lead">
+            <span class="balance-ticker-pulse" aria-hidden="true"></span>
+            <div class="balance-ticker-lead-text">
+              <span class="balance-ticker-eyebrow">Live Capital</span>
+              <span id="balanceTickerTotal" class="balance-ticker-total">—</span>
+            </div>
+          </div>
+          <div id="balanceTickerItems" class="balance-ticker-items" role="list">
+            <p class="balance-ticker-placeholder">Awaiting live balance feed…</p>
+          </div>
+          <div class="balance-ticker-status">
+            <span id="balanceTickerDot" class="balance-ticker-dot" aria-hidden="true"></span>
+            <span id="balanceTickerFreshness" class="balance-ticker-freshness">Waiting</span>
+          </div>
+        </div>
+      </section>
       <header class="utility-bar app-topbar">
         <div class="app-brand-lockup">
+          <button id="navToggle" class="nav-toggle" type="button" aria-label="Open navigation menu" aria-controls="primaryNav" aria-expanded="false">
+            <span class="nav-toggle-bar" aria-hidden="true"></span>
+            <span class="nav-toggle-bar" aria-hidden="true"></span>
+            <span class="nav-toggle-bar" aria-hidden="true"></span>
+          </button>
           <span class="utility-mark brand-wordmark">arb<span>i</span>ter</span>
-          <nav class="primary-nav" aria-label="Primary navigation">
+          <nav id="primaryNav" class="primary-nav" aria-label="Primary navigation">
+            <div class="primary-nav-header">
+              <span class="primary-nav-title">Navigate</span>
+              <button id="navClose" class="nav-close" type="button" aria-label="Close navigation menu">Close</button>
+            </div>
             <a class="primary-nav-link" href="#overviewSection">Dashboard</a>
             <a class="primary-nav-link" href="#performanceSection">Markets</a>
             <a class="primary-nav-link" href="#opportunitiesSection">Scanner</a>
