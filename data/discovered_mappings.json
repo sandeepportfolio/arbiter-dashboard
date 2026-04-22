@@ -1,0 +1,622 @@
+[
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20269BDE77599B3-97ED1BACF7A",
+    "kalshi_title": "yes Both Teams To Score,yes Leverkusen,yes Bayern Munich",
+    "polymarket_slug": "dfb-lev-bay-2026-04-22-btts",
+    "polymarket_question": "Bayer 04 Leverkusen vs. FC Bayern M\u00fcnchen: Both Teams to Score",
+    "similarity_score": 0.8446,
+    "category": "Both Teams to Score",
+    "kalshi_expiry": "2026-05-09T13:30:00Z",
+    "polymarket_end_date": "2026-04-22T18:45:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S202614D721DC7EF-7DED97F4636",
+    "kalshi_title": "yes Both Teams To Score,yes Both Teams To Score,yes Leverkusen,yes Bayern Munich",
+    "polymarket_slug": "dfb-lev-bay-2026-04-22-btts",
+    "polymarket_question": "Bayer 04 Leverkusen vs. FC Bayern M\u00fcnchen: Both Teams to Score",
+    "similarity_score": 0.8386,
+    "category": "Both Teams to Score",
+    "kalshi_expiry": "2026-05-09T13:30:00Z",
+    "polymarket_end_date": "2026-04-22T18:45:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026905D01BFE28-D224B7A25C9",
+    "kalshi_title": "yes Brandon Ingram: 20+,yes Brandon Ingram: 4+,yes Over 213.5 points scored",
+    "polymarket_slug": "nba-cle-tor-2026-04-23-points-brandon-ingram-20pt5",
+    "polymarket_question": "Brandon Ingram: Points O/U 20.5",
+    "similarity_score": 0.8184,
+    "category": "Brandon Ingram: Points O/U 20.5",
+    "kalshi_expiry": "2026-05-08T00:00:00Z",
+    "polymarket_end_date": "2026-04-24T00:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026863E136B9B1-A039172FD87",
+    "kalshi_title": "yes Dillon Brooks: 15+,yes Over 213.5 points scored",
+    "polymarket_slug": "nba-phx-okc-2026-04-22-points-dillon-brooks-16pt5",
+    "polymarket_question": "Dillon Brooks: Points O/U 16.5",
+    "similarity_score": 0.8146,
+    "category": "Dillon Brooks: Points O/U 16.5",
+    "kalshi_expiry": "2026-05-07T01:30:00Z",
+    "polymarket_end_date": "2026-04-23T01:30:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026A8EF3CAE445-0A0D099706F",
+    "kalshi_title": "yes Brandon Ingram: 4+,yes Brandon Ingram: 20+,yes Brandon Ingram: 4+,yes Over 210.5 points scored",
+    "polymarket_slug": "nba-cle-tor-2026-04-23-points-brandon-ingram-20pt5",
+    "polymarket_question": "Brandon Ingram: Points O/U 20.5",
+    "similarity_score": 0.8122,
+    "category": "Brandon Ingram: Points O/U 20.5",
+    "kalshi_expiry": "2026-05-08T00:00:00Z",
+    "polymarket_end_date": "2026-04-24T00:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S202626CCE6C32F2-B6CE7E7841E",
+    "kalshi_title": "yes Brandon Ingram: 2+,yes Brandon Ingram: 4+,yes Over 210.5 points scored",
+    "polymarket_slug": "nba-cle-tor-2026-04-23-points-brandon-ingram-20pt5",
+    "polymarket_question": "Brandon Ingram: Points O/U 20.5",
+    "similarity_score": 0.8062,
+    "category": "Brandon Ingram: Points O/U 20.5",
+    "kalshi_expiry": "2026-05-08T00:00:00Z",
+    "polymarket_end_date": "2026-04-24T00:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20261977C16F5AD-F52B0D060DB",
+    "kalshi_title": "yes Brandon Ingram: 4+,yes Over 210.5 points scored",
+    "polymarket_slug": "nba-cle-tor-2026-04-23-points-brandon-ingram-20pt5",
+    "polymarket_question": "Brandon Ingram: Points O/U 20.5",
+    "similarity_score": 0.8027,
+    "category": "Brandon Ingram: Points O/U 20.5",
+    "kalshi_expiry": "2026-05-08T00:00:00Z",
+    "polymarket_end_date": "2026-04-24T00:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S202618AC450400C-2FCC35331F2",
+    "kalshi_title": "yes Duncan Robinson: 1+,yes Detroit,yes Cade Cunningham: 2+,yes Over 201.5 points scored,yes Over 197.5 points scored",
+    "polymarket_slug": "nba-orl-det-2026-04-22-points-duncan-robinson-2pt5",
+    "polymarket_question": "Duncan Robinson: Points O/U 2.5",
+    "similarity_score": 0.7931,
+    "category": "Duncan Robinson: Points O/U 2.5",
+    "kalshi_expiry": "2026-05-06T23:00:00Z",
+    "polymarket_end_date": "2026-04-22T23:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026749AF50927C-2ED44152F0D",
+    "kalshi_title": "yes Julius Randle: 15+,yes Over 217.5 points scored",
+    "polymarket_slug": "nba-den-min-2026-04-23-points-julius-randle-19pt5",
+    "polymarket_question": "Julius Randle: Points O/U 19.5",
+    "similarity_score": 0.7928,
+    "category": "Julius Randle: Points O/U 19.5",
+    "kalshi_expiry": "2026-05-08T01:30:00Z",
+    "polymarket_end_date": "2026-04-24T01:30:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVECROSSCATEGORY-S2026CB681029B71-6A1B672247B",
+    "kalshi_title": "yes Jalen Williams: 15+,yes Over 204.5 points scored",
+    "polymarket_slug": "nba-phx-okc-2026-04-22-points-jalen-williams-18pt5",
+    "polymarket_question": "Jalen Williams: Points O/U 18.5",
+    "similarity_score": 0.7911,
+    "category": "Jalen Williams: Points O/U 18.5",
+    "kalshi_expiry": "2026-05-07T01:30:00Z",
+    "polymarket_end_date": "2026-04-23T01:30:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20266054DC7D6E8-283104F5212",
+    "kalshi_title": "yes Paolo Banchero: 15+,yes Paolo Banchero: 6+,yes Over 207.5 points scored",
+    "polymarket_slug": "nba-orl-det-2026-04-22-points-paolo-banchero-20pt5",
+    "polymarket_question": "Paolo Banchero: Points O/U 20.5",
+    "similarity_score": 0.7895,
+    "category": "Paolo Banchero: Points O/U 20.5",
+    "kalshi_expiry": "2026-05-06T23:00:00Z",
+    "polymarket_end_date": "2026-04-22T23:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20265B69E54A03B-F2538E5A68C",
+    "kalshi_title": "yes Both Teams To Score,yes Atletico,yes Bayern Munich",
+    "polymarket_slug": "uwcl-bm-fcb-2026-04-25-btts",
+    "polymarket_question": "FC Bayern M\u00fcnchen vs. FC Barcelona: Both Teams to Score",
+    "similarity_score": 0.7858,
+    "category": "Both Teams to Score",
+    "kalshi_expiry": "2026-05-12T19:00:00Z",
+    "polymarket_end_date": "2026-04-25T16:15:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVECROSSCATEGORY-S2026847CFFF0C72-F385B7569B6",
+    "kalshi_title": "yes Paolo Banchero: 15+,yes Paolo Banchero: 4+,yes Over 204.5 points scored,yes Over 203.5 points scored",
+    "polymarket_slug": "nba-orl-det-2026-04-22-points-paolo-banchero-20pt5",
+    "polymarket_question": "Paolo Banchero: Points O/U 20.5",
+    "similarity_score": 0.783,
+    "category": "Paolo Banchero: Points O/U 20.5",
+    "kalshi_expiry": "2026-05-06T23:00:00Z",
+    "polymarket_end_date": "2026-04-22T23:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20265B69E54A03B-F2538E5A68C",
+    "kalshi_title": "yes Both Teams To Score,yes Atletico,yes Bayern Munich",
+    "polymarket_slug": "uwcl-fcb-bm-2026-05-03-btts",
+    "polymarket_question": "FC Barcelona vs. FC Bayern M\u00fcnchen: Both Teams to Score",
+    "similarity_score": 0.7824,
+    "category": "Both Teams to Score",
+    "kalshi_expiry": "2026-05-12T19:00:00Z",
+    "polymarket_end_date": "2026-05-03T14:30:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20263801BA31191-2E4C0B3BEAF",
+    "kalshi_title": "yes Desmond Bane: 15+,yes Dillon Brooks: 15+,yes Over 210.5 points scored",
+    "polymarket_slug": "nba-orl-det-2026-04-22-points-desmond-bane-18pt5",
+    "polymarket_question": "Desmond Bane: Points O/U 18.5",
+    "similarity_score": 0.7814,
+    "category": "Desmond Bane: Points O/U 18.5",
+    "kalshi_expiry": "2026-05-06T23:00:00Z",
+    "polymarket_end_date": "2026-04-22T23:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVECROSSCATEGORY-S2026B4B63FD0DDB-7E8BACB45DF",
+    "kalshi_title": "yes Devin Booker: 20+,yes Over 206.5 points scored",
+    "polymarket_slug": "nba-phx-okc-2026-04-22-points-devin-booker-23pt5",
+    "polymarket_question": "Devin Booker: Points O/U 23.5",
+    "similarity_score": 0.7806,
+    "category": "Devin Booker: Points O/U 23.5",
+    "kalshi_expiry": "2026-05-07T01:30:00Z",
+    "polymarket_end_date": "2026-04-23T01:30:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVECROSSCATEGORY-S2026B046350A6CC-94CC1EB09D7",
+    "kalshi_title": "yes Wendell Carter Jr.: 4+,yes Detroit wins by over 4.5 points,yes Over 201.5 points scored",
+    "polymarket_slug": "nba-orl-det-2026-04-22-points-wendell-carter-jr-2pt5",
+    "polymarket_question": "Wendell Carter Jr.: Points O/U 2.5",
+    "similarity_score": 0.7795,
+    "category": "Wendell Carter Jr.: Points O/U 2.5",
+    "kalshi_expiry": "2026-05-06T23:00:00Z",
+    "polymarket_end_date": "2026-04-22T23:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVECROSSCATEGORY-S20269956AECE293-D473D73DC20",
+    "kalshi_title": "yes Duncan Robinson: 1+,yes Detroit,yes Oklahoma City,yes Cade Cunningham: 2+,yes Shai Gilgeous-Alexander: 2+,yes Over 219.5 points scored",
+    "polymarket_slug": "nba-orl-det-2026-04-22-points-duncan-robinson-2pt5",
+    "polymarket_question": "Duncan Robinson: Points O/U 2.5",
+    "similarity_score": 0.7782,
+    "category": "Duncan Robinson: Points O/U 2.5",
+    "kalshi_expiry": "2026-05-06T23:00:00Z",
+    "polymarket_end_date": "2026-04-22T23:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVECROSSCATEGORY-S2026B9D1DFB1FC9-71F6D63C6F5",
+    "kalshi_title": "yes James Harden: 1+,yes Cleveland,yes James Harden: 15+,yes Over 219.5 points scored",
+    "polymarket_slug": "nba-cle-tor-2026-04-23-points-james-harden-20pt5",
+    "polymarket_question": "James Harden: Points O/U 20.5",
+    "similarity_score": 0.7775,
+    "category": "James Harden: Points O/U 20.5",
+    "kalshi_expiry": "2026-05-08T00:00:00Z",
+    "polymarket_end_date": "2026-04-24T00:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20260DBC79815AC-231C5DFBE8D",
+    "kalshi_title": "yes Cade Cunningham: 25+,yes Over 204.5 points scored",
+    "polymarket_slug": "nba-orl-det-2026-04-22-points-cade-cunningham-28pt5",
+    "polymarket_question": "Cade Cunningham: Points O/U 28.5",
+    "similarity_score": 0.7775,
+    "category": "Cade Cunningham: Points O/U 28.5",
+    "kalshi_expiry": "2026-05-06T23:00:00Z",
+    "polymarket_end_date": "2026-04-22T23:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVECROSSCATEGORY-S20262B14F74ADD6-349F5E1D3D3",
+    "kalshi_title": "yes Both Teams To Score,yes Bayern Munich",
+    "polymarket_slug": "uwcl-bm-fcb-2026-04-25-btts",
+    "polymarket_question": "FC Bayern M\u00fcnchen vs. FC Barcelona: Both Teams to Score",
+    "similarity_score": 0.7772,
+    "category": "Both Teams to Score",
+    "kalshi_expiry": "2026-05-06T19:00:00Z",
+    "polymarket_end_date": "2026-04-25T16:15:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026453E0448369-ECA6FADE4E1",
+    "kalshi_title": "yes Shai Gilgeous-Alexander: 1+,yes Shai Gilgeous-Alexander: 6+,yes Oklahoma City,yes Shai Gilgeous-Alexander: 25+,yes Over 215.5 points scored",
+    "polymarket_slug": "nba-phx-okc-2026-04-22-assists-shai-gilgeous-alexander-6pt5",
+    "polymarket_question": "Shai Gilgeous-Alexander: Assists O/U 6.5",
+    "similarity_score": 0.7754,
+    "category": "Shai Gilgeous-Alexander: Assists O/U 6.5",
+    "kalshi_expiry": "2026-05-07T01:30:00Z",
+    "polymarket_end_date": "2026-04-23T01:30:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026BA0AAFBF0FC-51B818C26EB",
+    "kalshi_title": "yes Desmond Bane: 15+,yes Dillon Brooks: 15+,yes Over 209.5 points scored",
+    "polymarket_slug": "nba-orl-det-2026-04-22-points-desmond-bane-18pt5",
+    "polymarket_question": "Desmond Bane: Points O/U 18.5",
+    "similarity_score": 0.7748,
+    "category": "Desmond Bane: Points O/U 18.5",
+    "kalshi_expiry": "2026-05-06T23:00:00Z",
+    "polymarket_end_date": "2026-04-22T23:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S202644176CB4A9D-4858093489B",
+    "kalshi_title": "yes Duncan Robinson: 1+,no Over 231.5 points scored",
+    "polymarket_slug": "nba-orl-det-2026-04-22-points-duncan-robinson-2pt5",
+    "polymarket_question": "Duncan Robinson: Points O/U 2.5",
+    "similarity_score": 0.7726,
+    "category": "Duncan Robinson: Points O/U 2.5",
+    "kalshi_expiry": "2026-05-06T23:00:00Z",
+    "polymarket_end_date": "2026-04-22T23:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVECROSSCATEGORY-S2026C653F68BF93-B3020B59F14",
+    "kalshi_title": "yes Jalen Williams: 15+,yes Jalen Green: 15+,yes Over 215.5 points scored",
+    "polymarket_slug": "nba-phx-okc-2026-04-22-points-jalen-williams-18pt5",
+    "polymarket_question": "Jalen Williams: Points O/U 18.5",
+    "similarity_score": 0.772,
+    "category": "Jalen Williams: Points O/U 18.5",
+    "kalshi_expiry": "2026-05-07T01:30:00Z",
+    "polymarket_end_date": "2026-04-23T01:30:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20263A6D972FC4F-536AC41C442",
+    "kalshi_title": "yes Paolo Banchero: 20+,yes Over 215.5 points scored",
+    "polymarket_slug": "nba-orl-det-2026-04-22-points-paolo-banchero-20pt5",
+    "polymarket_question": "Paolo Banchero: Points O/U 20.5",
+    "similarity_score": 0.7716,
+    "category": "Paolo Banchero: Points O/U 20.5",
+    "kalshi_expiry": "2026-05-06T23:00:00Z",
+    "polymarket_end_date": "2026-04-22T23:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVECROSSCATEGORY-S2026F05A2E5C66F-F988ADD52F0",
+    "kalshi_title": "yes Dillon Brooks: 2+,no Over 215.5 points scored",
+    "polymarket_slug": "nba-phx-okc-2026-04-22-points-dillon-brooks-16pt5",
+    "polymarket_question": "Dillon Brooks: Points O/U 16.5",
+    "similarity_score": 0.7711,
+    "category": "Dillon Brooks: Points O/U 16.5",
+    "kalshi_expiry": "2026-05-07T01:30:00Z",
+    "polymarket_end_date": "2026-04-23T01:30:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026E7119343632-CAED56F7488",
+    "kalshi_title": "yes Duncan Robinson: 2+,yes Detroit wins by over 7.5 points,no Over 219.5 points scored",
+    "polymarket_slug": "nba-orl-det-2026-04-22-points-duncan-robinson-2pt5",
+    "polymarket_question": "Duncan Robinson: Points O/U 2.5",
+    "similarity_score": 0.7701,
+    "category": "Duncan Robinson: Points O/U 2.5",
+    "kalshi_expiry": "2026-05-06T23:00:00Z",
+    "polymarket_end_date": "2026-04-22T23:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026F9E341EC254-69428E9AECD",
+    "kalshi_title": "yes Desmond Bane: 1+,yes Desmond Bane: 15+,yes Franz Wagner: 10+,yes Paolo Banchero: 15+,yes Over 210.5 points scored",
+    "polymarket_slug": "nba-orl-det-2026-04-22-points-desmond-bane-18pt5",
+    "polymarket_question": "Desmond Bane: Points O/U 18.5",
+    "similarity_score": 0.7689,
+    "category": "Desmond Bane: Points O/U 18.5",
+    "kalshi_expiry": "2026-05-06T23:00:00Z",
+    "polymarket_end_date": "2026-04-22T23:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20269ED48A5BE2D-471BCA6F931",
+    "kalshi_title": "yes Paolo Banchero: 20+,yes Over 219.5 points scored,yes Over 215.5 points scored",
+    "polymarket_slug": "nba-orl-det-2026-04-22-points-paolo-banchero-20pt5",
+    "polymarket_question": "Paolo Banchero: Points O/U 20.5",
+    "similarity_score": 0.7683,
+    "category": "Paolo Banchero: Points O/U 20.5",
+    "kalshi_expiry": "2026-05-06T23:00:00Z",
+    "polymarket_end_date": "2026-04-22T23:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026DC99B6AF4F4-F237708A7EB",
+    "kalshi_title": "yes Cade Cunningham: 3+,yes Cade Cunningham: 30+,yes Over 219.5 points scored",
+    "polymarket_slug": "nba-orl-det-2026-04-22-points-cade-cunningham-28pt5",
+    "polymarket_question": "Cade Cunningham: Points O/U 28.5",
+    "similarity_score": 0.7678,
+    "category": "Cade Cunningham: Points O/U 28.5",
+    "kalshi_expiry": "2026-05-06T23:00:00Z",
+    "polymarket_end_date": "2026-04-22T23:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S202673FB91AD7F5-EAD5586E992",
+    "kalshi_title": "yes Desmond Bane: 15+,yes Dillon Brooks: 15+,yes Over 210.5 points scored,yes Over 212.5 points scored",
+    "polymarket_slug": "nba-orl-det-2026-04-22-points-desmond-bane-18pt5",
+    "polymarket_question": "Desmond Bane: Points O/U 18.5",
+    "similarity_score": 0.7678,
+    "category": "Desmond Bane: Points O/U 18.5",
+    "kalshi_expiry": "2026-05-06T23:00:00Z",
+    "polymarket_end_date": "2026-04-22T23:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20261791DE0E8D2-F38934455D5",
+    "kalshi_title": "yes Cade Cunningham: 3+,yes Cade Cunningham: 30+,yes Over 219.5 points scored,yes Over 215.5 points scored",
+    "polymarket_slug": "nba-orl-det-2026-04-22-points-cade-cunningham-28pt5",
+    "polymarket_question": "Cade Cunningham: Points O/U 28.5",
+    "similarity_score": 0.7669,
+    "category": "Cade Cunningham: Points O/U 28.5",
+    "kalshi_expiry": "2026-05-06T23:00:00Z",
+    "polymarket_end_date": "2026-04-22T23:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026453E0448369-ECA6FADE4E1",
+    "kalshi_title": "yes Shai Gilgeous-Alexander: 1+,yes Shai Gilgeous-Alexander: 6+,yes Oklahoma City,yes Shai Gilgeous-Alexander: 25+,yes Over 215.5 points scored",
+    "polymarket_slug": "nba-phx-okc-2026-04-22-points-shai-gilgeous-alexander-29pt5",
+    "polymarket_question": "Shai Gilgeous-Alexander: Points O/U 29.5",
+    "similarity_score": 0.7666,
+    "category": "Shai Gilgeous-Alexander: Points O/U 29.5",
+    "kalshi_expiry": "2026-05-07T01:30:00Z",
+    "polymarket_end_date": "2026-04-23T01:30:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVECROSSCATEGORY-S2026F01756BCC30-096678D8592",
+    "kalshi_title": "yes Duncan Robinson: 10+,yes Tobias Harris: 10+,yes Franz Wagner: 10+,yes Over 201.5 points scored",
+    "polymarket_slug": "nba-orl-det-2026-04-22-points-duncan-robinson-2pt5",
+    "polymarket_question": "Duncan Robinson: Points O/U 2.5",
+    "similarity_score": 0.7664,
+    "category": "Duncan Robinson: Points O/U 2.5",
+    "kalshi_expiry": "2026-05-06T23:00:00Z",
+    "polymarket_end_date": "2026-04-22T23:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S202618305729348-F344D1BD56F",
+    "kalshi_title": "yes Duncan Robinson: 1+,yes Orlando,yes Phoenix,yes Cade Cunningham: 25+,yes Tobias Harris: 10+,yes Franz Wagner: 10+,no Over 219.5 points scored",
+    "polymarket_slug": "nba-orl-det-2026-04-22-points-duncan-robinson-2pt5",
+    "polymarket_question": "Duncan Robinson: Points O/U 2.5",
+    "similarity_score": 0.7654,
+    "category": "Duncan Robinson: Points O/U 2.5",
+    "kalshi_expiry": "2026-05-06T23:00:00Z",
+    "polymarket_end_date": "2026-04-22T23:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026932ED2DCF9C-93943ACC856",
+    "kalshi_title": "yes Wendell Carter Jr.: 6+,no Detroit wins by over 10.5 points",
+    "polymarket_slug": "nba-orl-det-2026-04-22-points-wendell-carter-jr-2pt5",
+    "polymarket_question": "Wendell Carter Jr.: Points O/U 2.5",
+    "similarity_score": 0.7646,
+    "category": "Wendell Carter Jr.: Points O/U 2.5",
+    "kalshi_expiry": "2026-05-06T23:00:00Z",
+    "polymarket_end_date": "2026-04-22T23:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVECROSSCATEGORY-S202604A242944AD-76BFDCAF3EF",
+    "kalshi_title": "yes Paolo Banchero: 6+,yes Over 201.5 points scored",
+    "polymarket_slug": "nba-orl-det-2026-04-22-points-paolo-banchero-20pt5",
+    "polymarket_question": "Paolo Banchero: Points O/U 20.5",
+    "similarity_score": 0.7641,
+    "category": "Paolo Banchero: Points O/U 20.5",
+    "kalshi_expiry": "2026-05-06T23:00:00Z",
+    "polymarket_end_date": "2026-04-22T23:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVECROSSCATEGORY-S20262B14F74ADD6-349F5E1D3D3",
+    "kalshi_title": "yes Both Teams To Score,yes Bayern Munich",
+    "polymarket_slug": "uwcl-fcb-bm-2026-05-03-btts",
+    "polymarket_question": "FC Barcelona vs. FC Bayern M\u00fcnchen: Both Teams to Score",
+    "similarity_score": 0.7639,
+    "category": "Both Teams to Score",
+    "kalshi_expiry": "2026-05-06T19:00:00Z",
+    "polymarket_end_date": "2026-05-03T14:30:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S202660AAAE6D640-8558D40A629",
+    "kalshi_title": "yes Duncan Robinson: 1+,yes Orlando,yes Phoenix,yes Cade Cunningham: 25+,yes Tobias Harris: 10+,yes Franz Wagner: 10+,yes Dillon Brooks: 10+,no Over 219.5 points scored",
+    "polymarket_slug": "nba-orl-det-2026-04-22-points-duncan-robinson-2pt5",
+    "polymarket_question": "Duncan Robinson: Points O/U 2.5",
+    "similarity_score": 0.763,
+    "category": "Duncan Robinson: Points O/U 2.5",
+    "kalshi_expiry": "2026-05-06T23:00:00Z",
+    "polymarket_end_date": "2026-04-22T23:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVECROSSCATEGORY-S20267D7B2B0AFD0-C53C87C9AA6",
+    "kalshi_title": "yes Devin Booker: 4+,yes Phoenix,yes Over 215.5 points scored",
+    "polymarket_slug": "nba-phx-okc-2026-04-22-points-devin-booker-23pt5",
+    "polymarket_question": "Devin Booker: Points O/U 23.5",
+    "similarity_score": 0.7627,
+    "category": "Devin Booker: Points O/U 23.5",
+    "kalshi_expiry": "2026-05-07T01:30:00Z",
+    "polymarket_end_date": "2026-04-23T01:30:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVECROSSCATEGORY-S202651CB98BA02E-64C9CEAE814",
+    "kalshi_title": "yes Shai Gilgeous-Alexander: 4+,no Over 219.5 points scored,yes Over 215.5 points scored",
+    "polymarket_slug": "nba-phx-okc-2026-04-22-points-shai-gilgeous-alexander-29pt5",
+    "polymarket_question": "Shai Gilgeous-Alexander: Points O/U 29.5",
+    "similarity_score": 0.7622,
+    "category": "Shai Gilgeous-Alexander: Points O/U 29.5",
+    "kalshi_expiry": "2026-05-07T01:30:00Z",
+    "polymarket_end_date": "2026-04-23T01:30:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVECROSSCATEGORY-S20260C79896C7F6-774F06F8973",
+    "kalshi_title": "yes Duncan Robinson: 3+,no Detroit wins by over 10.5 points",
+    "polymarket_slug": "nba-orl-det-2026-04-22-points-duncan-robinson-2pt5",
+    "polymarket_question": "Duncan Robinson: Points O/U 2.5",
+    "similarity_score": 0.7617,
+    "category": "Duncan Robinson: Points O/U 2.5",
+    "kalshi_expiry": "2026-05-06T23:00:00Z",
+    "polymarket_end_date": "2026-04-22T23:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026081745E26FC-3C0654CA55B",
+    "kalshi_title": "yes Bayern Munich,yes Both Teams To Score,yes Atletico,yes Bayern Munich",
+    "polymarket_slug": "uwcl-bm-fcb-2026-04-25-btts",
+    "polymarket_question": "FC Bayern M\u00fcnchen vs. FC Barcelona: Both Teams to Score",
+    "similarity_score": 0.7614,
+    "category": "Both Teams to Score",
+    "kalshi_expiry": "2026-05-09T13:30:00Z",
+    "polymarket_end_date": "2026-04-25T16:15:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026EBB293BFAED-1DFAF70A38F",
+    "kalshi_title": "yes Duncan Robinson: 1+,yes Cade Cunningham: 6+,yes Detroit,yes Ausar Thompson: 2+,yes Cade Cunningham: 2+,no Detroit wins by over 22.5 points,no Over 222.5 points scored",
+    "polymarket_slug": "nba-orl-det-2026-04-22-points-duncan-robinson-2pt5",
+    "polymarket_question": "Duncan Robinson: Points O/U 2.5",
+    "similarity_score": 0.7602,
+    "category": "Duncan Robinson: Points O/U 2.5",
+    "kalshi_expiry": "2026-05-06T23:00:00Z",
+    "polymarket_end_date": "2026-04-22T23:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026BCEA47ADB1D-888DD64E057",
+    "kalshi_title": "yes Atletico,yes Yes",
+    "polymarket_slug": "2026-soccer-liga-mx-winner-atltico-de-san-luis",
+    "polymarket_question": "Will Atl\u00e9tico de San Luis win Liga MX?",
+    "similarity_score": 0.7589,
+    "category": "Atl\u00e9tico de San Luis",
+    "kalshi_expiry": "2026-05-06T17:00:00Z",
+    "polymarket_end_date": "2026-06-07T03:59:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVECROSSCATEGORY-S2026242D8A0F70D-31BA3DE4028",
+    "kalshi_title": "yes Franz Wagner: 15+,yes Paolo Banchero: 15+,yes Franz Wagner: 2+,yes Over 204.5 points scored,yes Over 203.5 points scored",
+    "polymarket_slug": "nba-orl-det-2026-04-22-points-franz-wagner-17pt5",
+    "polymarket_question": "Franz Wagner: Points O/U 17.5",
+    "similarity_score": 0.7563,
+    "category": "Franz Wagner: Points O/U 17.5",
+    "kalshi_expiry": "2026-05-06T23:00:00Z",
+    "polymarket_end_date": "2026-04-22T23:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20269BDE77599B3-97ED1BACF7A",
+    "kalshi_title": "yes Both Teams To Score,yes Leverkusen,yes Bayern Munich",
+    "polymarket_slug": "dfb-lev-bay-2026-04-22-draw",
+    "polymarket_question": "Will Bayer 04 Leverkusen vs. FC Bayern M\u00fcnchen end in a draw?",
+    "similarity_score": 0.7562,
+    "category": "Draw (Bayer 04 Leverkusen vs. FC Bayern M\u00fcnchen)",
+    "kalshi_expiry": "2026-05-09T13:30:00Z",
+    "polymarket_end_date": "2026-04-22T18:45:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026BCEA47ADB1D-888DD64E057",
+    "kalshi_title": "yes Atletico,yes Yes",
+    "polymarket_slug": "mex-asl-san-2026-04-22-asl",
+    "polymarket_question": "Will Atl\u00e9tico San Luis win on 2026-04-22?",
+    "similarity_score": 0.7557,
+    "category": "Atl\u00e9tico San Luis",
+    "kalshi_expiry": "2026-05-06T17:00:00Z",
+    "polymarket_end_date": "2026-04-23T01:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026881D8906EF3-9260921E59D",
+    "kalshi_title": "yes Duncan Robinson: 10+,yes Detroit wins by over 7.5 points,no Over 219.5 points scored",
+    "polymarket_slug": "nba-orl-det-2026-04-22-points-duncan-robinson-2pt5",
+    "polymarket_question": "Duncan Robinson: Points O/U 2.5",
+    "similarity_score": 0.7553,
+    "category": "Duncan Robinson: Points O/U 2.5",
+    "kalshi_expiry": "2026-05-06T23:00:00Z",
+    "polymarket_end_date": "2026-04-22T23:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20264F7C4CD177D-F5AF957B8A3",
+    "kalshi_title": "yes Duncan Robinson: 3+,yes Cade Cunningham: 10+,yes Detroit wins by over 7.5 points",
+    "polymarket_slug": "nba-orl-det-2026-04-22-points-duncan-robinson-2pt5",
+    "polymarket_question": "Duncan Robinson: Points O/U 2.5",
+    "similarity_score": 0.7543,
+    "category": "Duncan Robinson: Points O/U 2.5",
+    "kalshi_expiry": "2026-05-06T23:00:00Z",
+    "polymarket_end_date": "2026-04-22T23:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20269BDE77599B3-97ED1BACF7A",
+    "kalshi_title": "yes Both Teams To Score,yes Leverkusen,yes Bayern Munich",
+    "polymarket_slug": "bun-koe-b04-2026-04-25-btts",
+    "polymarket_question": "1. FC K\u00f6ln vs. Bayer 04 Leverkusen: Both Teams to Score",
+    "similarity_score": 0.7542,
+    "category": "Both Teams to Score",
+    "kalshi_expiry": "2026-05-09T13:30:00Z",
+    "polymarket_end_date": "2026-04-25T13:30:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026BCEA47ADB1D-888DD64E057",
+    "kalshi_title": "yes Atletico,yes Yes",
+    "polymarket_slug": "mex-jua-asl-2026-04-25-asl",
+    "polymarket_question": "Will Atl\u00e9tico San Luis win on 2026-04-25?",
+    "similarity_score": 0.7542,
+    "category": "Atl\u00e9tico San Luis",
+    "kalshi_expiry": "2026-05-06T17:00:00Z",
+    "polymarket_end_date": "2026-04-26T03:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20260E218F54B09-2327E9117B9",
+    "kalshi_title": "yes Both Teams To Score,yes Both Teams To Score,yes Both Teams To Score,yes Barcelona,yes Real Sociedad,no Elche wins by over 1.5 goals",
+    "polymarket_slug": "lal-elc-mad-2026-04-22-btts",
+    "polymarket_question": "Elche CF vs. Club Atl\u00e9tico de Madrid: Both Teams to Score",
+    "similarity_score": 0.7542,
+    "category": "Both Teams to Score",
+    "kalshi_expiry": "2026-05-06T19:30:00Z",
+    "polymarket_end_date": "2026-04-22T17:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20265C7FBBA71EC-B9B36D6C607",
+    "kalshi_title": "yes Shai Gilgeous-Alexander: 1+,yes Shai Gilgeous-Alexander: 6+,yes Oklahoma City,yes Shai Gilgeous-Alexander: 25+,no Oklahoma City wins by over 15.5 points,yes Over 215.5 points scored",
+    "polymarket_slug": "nba-phx-okc-2026-04-22-assists-shai-gilgeous-alexander-6pt5",
+    "polymarket_question": "Shai Gilgeous-Alexander: Assists O/U 6.5",
+    "similarity_score": 0.7535,
+    "category": "Shai Gilgeous-Alexander: Assists O/U 6.5",
+    "kalshi_expiry": "2026-05-07T01:30:00Z",
+    "polymarket_end_date": "2026-04-23T01:30:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026868EE3DD3E1-6DBEBFF286C",
+    "kalshi_title": "yes Duncan Robinson: 2+,yes Cade Cunningham: 25+,yes Tobias Harris: 10+,yes Paolo Banchero: 15+,yes Paolo Banchero: 4+,yes Wendell Carter Jr.: 4+,yes Over 204.5 points scored",
+    "polymarket_slug": "nba-orl-det-2026-04-22-points-duncan-robinson-2pt5",
+    "polymarket_question": "Duncan Robinson: Points O/U 2.5",
+    "similarity_score": 0.7533,
+    "category": "Duncan Robinson: Points O/U 2.5",
+    "kalshi_expiry": "2026-05-06T23:00:00Z",
+    "polymarket_end_date": "2026-04-22T23:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026081745E26FC-3C0654CA55B",
+    "kalshi_title": "yes Bayern Munich,yes Both Teams To Score,yes Atletico,yes Bayern Munich",
+    "polymarket_slug": "uwcl-fcb-bm-2026-05-03-btts",
+    "polymarket_question": "FC Barcelona vs. FC Bayern M\u00fcnchen: Both Teams to Score",
+    "similarity_score": 0.7532,
+    "category": "Both Teams to Score",
+    "kalshi_expiry": "2026-05-09T13:30:00Z",
+    "polymarket_end_date": "2026-05-03T14:30:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S202614D721DC7EF-7DED97F4636",
+    "kalshi_title": "yes Both Teams To Score,yes Both Teams To Score,yes Leverkusen,yes Bayern Munich",
+    "polymarket_slug": "bun-koe-b04-2026-04-25-btts",
+    "polymarket_question": "1. FC K\u00f6ln vs. Bayer 04 Leverkusen: Both Teams to Score",
+    "similarity_score": 0.7528,
+    "category": "Both Teams to Score",
+    "kalshi_expiry": "2026-05-09T13:30:00Z",
+    "polymarket_end_date": "2026-04-25T13:30:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026A39C908BCEE-6B47BA1E2C9",
+    "kalshi_title": "yes Tobias Harris: 2+,yes Over 201.5 points scored,yes Over 200.5 points scored",
+    "polymarket_slug": "nba-orl-det-2026-04-22-points-tobias-harris-14pt5",
+    "polymarket_question": "Tobias Harris: Points O/U 14.5",
+    "similarity_score": 0.7524,
+    "category": "Tobias Harris: Points O/U 14.5",
+    "kalshi_expiry": "2026-05-06T23:00:00Z",
+    "polymarket_end_date": "2026-04-22T23:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026F27310D1E28-53CA86EF0B5",
+    "kalshi_title": "yes Duncan Robinson: 1+,yes Oklahoma City,yes Isaiah Hartenstein: 4+,no Detroit wins by over 22.5 points,yes Over 201.5 points scored",
+    "polymarket_slug": "nba-orl-det-2026-04-22-points-duncan-robinson-2pt5",
+    "polymarket_question": "Duncan Robinson: Points O/U 2.5",
+    "similarity_score": 0.7506,
+    "category": "Duncan Robinson: Points O/U 2.5",
+    "kalshi_expiry": "2026-05-06T23:00:00Z",
+    "polymarket_end_date": "2026-04-22T23:00:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026F3F82C891D2-46818BA7219",
+    "kalshi_title": "yes Shai Gilgeous-Alexander: 6+,yes Oklahoma City,yes Shai Gilgeous-Alexander: 25+,no Oklahoma City wins by over 15.5 points,no Over 215.5 points scored",
+    "polymarket_slug": "nba-phx-okc-2026-04-22-assists-shai-gilgeous-alexander-6pt5",
+    "polymarket_question": "Shai Gilgeous-Alexander: Assists O/U 6.5",
+    "similarity_score": 0.7506,
+    "category": "Shai Gilgeous-Alexander: Assists O/U 6.5",
+    "kalshi_expiry": "2026-05-07T01:30:00Z",
+    "polymarket_end_date": "2026-04-23T01:30:00Z"
+  },
+  {
+    "kalshi_ticker": "KXMVECROSSCATEGORY-S202645FF98C4C52-6CE8F5F9F0F",
+    "kalshi_title": "yes Franz Wagner: 10+,no Over 221.5 points scored",
+    "polymarket_slug": "nba-orl-det-2026-04-22-points-franz-wagner-17pt5",
+    "polymarket_question": "Franz Wagner: Points O/U 17.5",
+    "similarity_score": 0.7505,
+    "category": "Franz Wagner: Points O/U 17.5",
+    "kalshi_expiry": "2026-05-06T23:00:00Z",
+    "polymarket_end_date": "2026-04-22T23:00:00Z"
+  }
+]
