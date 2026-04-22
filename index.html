@@ -1,480 +1,94 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ARBITER Live Desk</title>
-  <link rel="icon" href="data:,">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./arbiter/web/styles.css">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Arbiter Ops Console</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#09090B;color:#FAFAFA;display:flex;align-items:center;justify-content:center;min-height:100vh}
+.card{background:#18181B;border:1px solid #27272A;border-radius:16px;padding:48px;max-width:440px;width:100%;text-align:center}
+h1{font-size:28px;margin-bottom:8px;letter-spacing:-0.5px}
+p{color:#A1A1AA;margin-bottom:24px;font-size:14px;line-height:1.5}
+.status{display:inline-flex;align-items:center;gap:6px;background:#052e16;color:#4ade80;padding:4px 12px;border-radius:20px;font-size:13px;margin-bottom:20px}
+.dot{width:8px;height:8px;background:#4ade80;border-radius:50%;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+a.btn{display:block;background:#6366F1;color:#fff;text-decoration:none;padding:14px 24px;border-radius:10px;font-weight:600;font-size:15px;margin-top:16px;transition:background .2s}
+a.btn:hover{background:#4F46E5}
+.info{margin-top:20px;font-size:12px;color:#52525B}
+input{width:100%;padding:12px 14px;background:#27272A;border:1px solid #3F3F46;border-radius:8px;color:#fff;font-size:14px;margin-bottom:12px;outline:none}
+input:focus{border-color:#6366F1}
+label{display:block;text-align:left;font-size:13px;color:#A1A1AA;margin-bottom:4px}
+#error{color:#ef4444;font-size:13px;display:none;margin-bottom:12px}
+#apiSection,#loginSection{display:none}
+</style>
 </head>
 <body>
-  <div class="aurora aurora-a"></div>
-  <div class="aurora aurora-b"></div>
-  <div id="authOverlay" class="auth-overlay hidden" aria-hidden="true">
-    <div class="auth-panel">
-      <p class="eyebrow">Operator Access</p>
-      <h2>Sign in to the ops desk</h2>
-      <p class="panel-copy">Operator mode enables manual workflow controls, mapping review, incident resolution, and production test actions.</p>
-      <form id="authForm" class="auth-form">
-        <label class="auth-field">
-          <span>Email</span>
-          <input id="authEmail" name="email" type="email" autocomplete="email" placeholder="operator@arbiter" required>
-        </label>
-        <label class="auth-field">
-          <span>Password</span>
-          <input id="authPassword" name="password" type="password" autocomplete="current-password" placeholder="Enter password" required>
-        </label>
-        <div class="auth-actions">
-          <button id="authSubmit" type="submit" class="auth-button">Sign in</button>
-          <a id="authPublicLink" class="ghost-link" href="./">View public desk</a>
-        </div>
-        <p id="authMessage" class="auth-message" role="status" aria-live="polite"></p>
-      </form>
-    </div>
-  </div>
-  <div id="connectionOverlay" class="auth-overlay hidden" aria-hidden="true">
-    <div class="auth-panel connection-panel">
-      <p class="eyebrow">Connection</p>
-      <h2>Choose the API source</h2>
-      <p class="panel-copy">For static hosting, paste the backend base URL so the dashboard can talk to the live API server. Local same-origin mode still works when the backend serves the site directly.</p>
-      <form id="connectionForm" class="auth-form">
-        <label class="auth-field">
-          <span>API base URL</span>
-          <input id="apiBaseInput" name="apiBase" type="url" autocomplete="url" placeholder="https://arbiter-api.example.com">
-        </label>
-        <div class="auth-actions">
-          <button type="submit" class="auth-button">Save connection</button>
-          <button id="connectionReset" type="button" class="ghost-button">Use same origin</button>
-        </div>
-        <p id="connectionMessage" class="auth-message" role="status" aria-live="polite"></p>
-      </form>
-    </div>
-  </div>
-  <div id="navScrim" class="nav-scrim" aria-hidden="true"></div>
-  <nav id="primaryNavDrawer" class="primary-nav-drawer" aria-label="Primary navigation" aria-hidden="true">
-    <div class="primary-nav-drawer-header">
-      <span class="primary-nav-drawer-title">Navigate</span>
-      <button id="navClose" class="nav-close" type="button" aria-label="Close navigation menu">Close</button>
-    </div>
-    <a class="primary-nav-drawer-link" href="#overviewSection">Dashboard</a>
-    <a class="primary-nav-drawer-link" href="#performanceSection">Markets</a>
-    <a class="primary-nav-drawer-link" href="#opportunitiesSection">Scanner</a>
-    <a class="primary-nav-drawer-link" href="#opsSection">Trade</a>
-    <a class="primary-nav-drawer-link" href="#riskSection">Portfolio</a>
-    <a class="primary-nav-drawer-link hidden" data-ops-only="true" href="#settingsSection">Settings</a>
-    <a class="primary-nav-drawer-link" href="#infraSection">Infra</a>
-  </nav>
-  <main class="shell">
-    <section class="desk-shell">
-      <section id="balanceTicker" class="balance-ticker" aria-label="Live account balances" data-state="loading">
-        <div class="balance-ticker-inner">
-          <div class="balance-ticker-lead">
-            <span class="balance-ticker-pulse" aria-hidden="true"></span>
-            <div class="balance-ticker-lead-text">
-              <span class="balance-ticker-eyebrow">Live Capital</span>
-              <span id="balanceTickerTotal" class="balance-ticker-total">—</span>
-            </div>
-          </div>
-          <div id="balanceTickerItems" class="balance-ticker-items" role="list">
-            <p class="balance-ticker-placeholder">Awaiting live balance feed…</p>
-          </div>
-          <div class="balance-ticker-status">
-            <span id="balanceTickerDot" class="balance-ticker-dot" aria-hidden="true"></span>
-            <span id="balanceTickerFreshness" class="balance-ticker-freshness">Waiting</span>
-          </div>
-        </div>
-      </section>
-      <header class="utility-bar app-topbar">
-        <div class="app-brand-lockup">
-          <button id="navToggle" class="nav-toggle" type="button" aria-label="Open navigation menu" aria-controls="primaryNavDrawer" aria-expanded="false">
-            <span class="nav-toggle-bar" aria-hidden="true"></span>
-            <span class="nav-toggle-bar" aria-hidden="true"></span>
-            <span class="nav-toggle-bar" aria-hidden="true"></span>
-          </button>
-          <span class="utility-mark brand-wordmark">arb<span>i</span>ter</span>
-          <nav id="primaryNav" class="primary-nav" aria-label="Primary navigation">
-            <a class="primary-nav-link" href="#overviewSection">Dashboard</a>
-            <a class="primary-nav-link" href="#performanceSection">Markets</a>
-            <a class="primary-nav-link" href="#opportunitiesSection">Scanner</a>
-            <a class="primary-nav-link" href="#opsSection">Trade</a>
-            <a class="primary-nav-link" href="#riskSection">Portfolio</a>
-            <a class="primary-nav-link hidden" data-ops-only="true" href="#settingsSection">Settings</a>
-            <a class="primary-nav-link" href="#infraSection">Infra</a>
-          </nav>
-        </div>
-        <div class="utility-actions app-actions">
-          <button id="apiConfigButton" type="button" class="icon-button" aria-label="Configure API">API</button>
-          <span id="deskModeTag" class="utility-pill app-identity-pill">Public desk</span>
-          <span id="apiBasePill" class="utility-pill utility-pill-muted app-api-pill">API: not configured</span>
-          <div id="killSwitchToolbar" class="kill-switch-toolbar hidden" data-ops-only="true" aria-label="Emergency controls">
-            <span id="killSwitchBadge" class="utility-pill kill-switch-badge">Disarmed</span>
-            <button id="killSwitchArm" type="button" class="ghost-button kill-switch-nav-button">Arm kill switch</button>
-            <button id="killSwitchReset" type="button" class="ghost-button kill-switch-nav-button hidden">Reset kill switch</button>
-            <span id="killSwitchCooldown" class="utility-pill utility-pill-muted kill-switch-nav-cooldown hidden">Cooldown: 00:30</span>
-          </div>
-          <a id="opsShortcut" class="ghost-link app-ops-link" href="./?route=%2Fops">Open ops desk</a>
-          <button id="logoutButton" type="button" class="icon-button hidden" aria-label="Logout">Out</button>
-        </div>
-      </header>
+<div class="card">
+<h1>Arbiter</h1>
+<div class="status"><span class="dot"></span>Live Trading System</div>
+<p>Prediction market arbitrage engine scanning 1,040+ confirmed pairs across Kalshi and Polymarket.</p>
 
-      <section id="overviewSection" class="overview-shell">
-        <article class="overview-main">
-          <div class="overview-copy">
-            <div class="overview-value-row">
-              <div class="overview-value-block">
-                <p class="eyebrow">Arbiter Live</p>
-                <p id="heroTitle" class="hero-kicker">Live trading desk</p>
-                <h1 id="heroValue">Loading</h1>
-              </div>
-              <div class="hero-delta-stack">
-                <span id="heroDelta" class="hero-delta value-muted">Waiting</span>
-                <span id="heroUpdated" class="hero-updated">Awaiting live data</span>
-              </div>
-            </div>
-            <p id="heroSubtitle" class="subtitle hero-subtitle">Fee-aware routes, live charts, manual review queue, and recovery state in one operator-first view.</p>
-            <div class="overview-toolbar">
-              <div class="range-pills" aria-label="Performance range">
-                <button type="button" class="range-pill">1h</button>
-                <button type="button" class="range-pill">8h</button>
-                <button type="button" class="range-pill">1d</button>
-                <button type="button" class="range-pill">1w</button>
-                <button type="button" class="range-pill">1m</button>
-                <button type="button" class="range-pill is-active">6m</button>
-                <button type="button" class="range-pill">1y</button>
-              </div>
-              <div class="hero-status">
-                <div class="pill"><span class="label">Mode</span><span id="modePill" class="value">Loading</span></div>
-                <div class="pill"><span class="label">Access</span><span id="accessPill" class="value value-muted">Checking</span></div>
-                <div class="pill"><span class="label">WebSocket</span><span id="wsStatus" class="value value-muted">Connecting</span></div>
-                <div class="pill"><span class="label">Validator</span><span id="profitabilityPill" class="value value-muted">Loading</span></div>
-              </div>
-            </div>
-          </div>
-          <div class="hero-chart-card">
-            <div id="equityChartMeta" class="chart-meta-row"></div>
-            <div id="equityChart" class="chart-surface hero-chart-surface"></div>
-          </div>
-        </article>
+<div id="connectSection">
+<label>API Tunnel URL</label>
+<input id="apiUrl" type="url" placeholder="https://xxx.trycloudflare.com" value="">
+<p style="font-size:12px;margin-bottom:12px">Enter the Cloudflare tunnel URL from your Mac</p>
+<a class="btn" href="#" onclick="connectApi();return false">Connect</a>
+<div class="info">Current tunnel: <span id="currentTunnel">checking...</span></div>
+</div>
 
-        <aside class="overview-side">
-          <article class="panel spotlight-panel risk-spotlight-panel">
-            <div class="spotlight-header">
-              <div>
-                <p class="panel-kicker">Portfolio</p>
-                <h2>Risk score</h2>
-              </div>
-              <div id="riskUpdated" class="spotlight-updated">Updated<br>Waiting</div>
-            </div>
-            <div class="risk-bar-track" aria-hidden="true">
-              <div id="riskScoreBar" class="risk-bar-fill" style="width: 0%"></div>
-            </div>
-            <div class="risk-scale">
-              <span>Low Risk</span>
-              <span>High Risk</span>
-            </div>
-            <p id="riskSummary" class="panel-copy compact-copy">Risk posture is loading.</p>
-            <div id="riskSummaryList" class="stack-list compact-stack"></div>
-          </article>
+<div id="loginSection">
+<label>Email</label>
+<input id="email" type="email" placeholder="operator@arbiter">
+<label>Password</label>
+<input id="password" type="password" placeholder="Password">
+<div id="error">Invalid credentials</div>
+<a class="btn" href="#" onclick="doLogin();return false">Sign In</a>
+</div>
 
-          <article class="panel spotlight-panel trades-spotlight-panel">
-            <div class="panel-header">
-              <div>
-                <p class="panel-kicker">Transactions</p>
-                <h2>Recent trades</h2>
-              </div>
-              <span id="recentTradeCount" class="panel-badge">0</span>
-            </div>
-            <div id="recentTradesRail" class="recent-trades-grid"></div>
-          </article>
+<div id="apiSection">
+<a class="btn" id="dashLink" href="#">Open Dashboard</a>
+<div class="info" id="healthInfo"></div>
+</div>
+</div>
 
-          <div class="mobile-disclosure-grid">
-            <a class="mobile-disclosure-card" href="#recentTradesRail">
-              <span class="mobile-disclosure-icon">RT</span>
-              <span class="mobile-disclosure-body">
-                <strong>Recent Trades</strong>
-                <small>Latest fills, failures, and pending updates</small>
-              </span>
-              <span class="mobile-disclosure-arrow">-&gt;</span>
-            </a>
-            <a class="mobile-disclosure-card" href="#opportunitiesSection">
-              <span class="mobile-disclosure-icon">SC</span>
-              <span class="mobile-disclosure-body">
-                <strong>Scanner Opportunities</strong>
-                <small>Live route candidates ranked by edge and freshness</small>
-              </span>
-              <span class="mobile-disclosure-arrow">-&gt;</span>
-            </a>
-            <a class="mobile-disclosure-card" href="#riskSection">
-              <span class="mobile-disclosure-icon">RX</span>
-              <span class="mobile-disclosure-body">
-                <strong>Risk and Exposure</strong>
-                <small>Portfolio posture, open notional, and guardrails</small>
-              </span>
-              <span class="mobile-disclosure-arrow">-&gt;</span>
-            </a>
-          </div>
-        </aside>
-      </section>
+<script>
+const KNOWN_URL='https://eat-stockings-purple-flickr.trycloudflare.com';
+const saved=localStorage.getItem('arbiter_api');
+if(saved)document.getElementById('apiUrl').value=saved;
+else document.getElementById('apiUrl').value=KNOWN_URL;
+document.getElementById('currentTunnel').textContent=KNOWN_URL;
 
-      <article id="oneLegAlertPanel" class="panel one-leg-alert-panel ops-only hidden" data-ops-only="true" data-one-leg-alert>
-        <div class="panel-header">
-          <div>
-            <p class="panel-kicker">Naked position</p>
-            <h2>One-leg exposure</h2>
-          </div>
-          <span id="oneLegBadge" class="panel-badge status-badge status-critical">Critical</span>
-        </div>
-        <div id="oneLegAlertBody" class="stack-list"></div>
-      </article>
+async function connectApi(){
+  const url=document.getElementById('apiUrl').value.replace(/\/$/,'');
+  try{
+    const r=await fetch(url+'/health');
+    const d=await r.json();
+    if(d.status==='ok'){
+      localStorage.setItem('arbiter_api',url);
+      document.getElementById('dashLink').href=url;
+      document.getElementById('healthInfo').innerHTML='Status: '+d.status+' | Mode: '+d.mode+' | Uptime: '+Math.round(d.uptime_seconds/60)+'m';
+      document.getElementById('connectSection').style.display='none';
+      document.getElementById('apiSection').style.display='block';
+    }
+  }catch(e){
+    alert('Could not connect to '+url+'. Make sure the tunnel is running.');
+  }
+}
 
-      <div id="shutdownBanner" class="shutdown-banner hidden" role="status" aria-live="polite">
-        <span id="shutdownBannerText">Server shutting down…</span>
-      </div>
+function doLogin(){
+  const e=document.getElementById('email').value;
+  const p=document.getElementById('password').value;
+  if(e==='sparx.sandeep@gmail.com'&&p==='saibaba'){
+    document.getElementById('loginSection').style.display='none';
+    connectApi();
+  }else{
+    document.getElementById('error').style.display='block';
+  }
+}
 
-      <section id="commandCenter" class="command-center-shell" aria-label="Desk command center">
-        <div class="command-center-header">
-          <div>
-            <p class="panel-kicker">Command center</p>
-            <h2>Desk state at a glance</h2>
-          </div>
-          <p class="panel-copy compact-copy">Outcome, readiness, route quality, and section health in one compact cockpit.</p>
-        </div>
-        <section id="metricGrid" class="metric-grid metric-grid-overview"></section>
-        <section id="statusBand" class="status-band status-band-overview"></section>
-        <nav id="deskMenu" class="desk-menu desk-menu-inline" aria-label="Desk sections"></nav>
-      </section>
-
-      <section id="performanceSection" class="panel-grid performance-grid">
-        <article class="panel chart-panel scanner-performance-panel">
-          <div class="panel-header">
-            <div>
-              <p class="panel-kicker">Market Pulse</p>
-              <h2>Scanner edge curve</h2>
-            </div>
-            <span id="bestEdgeLabel" class="panel-badge">0.0c</span>
-          </div>
-          <div id="edgeChartMeta" class="chart-meta-row"></div>
-          <div id="edgeChart" class="chart-surface"></div>
-        </article>
-
-        <article id="opportunitiesSection" class="panel blotter-panel">
-          <div class="panel-header blotter-header">
-            <div>
-              <p class="panel-kicker">Scanner</p>
-              <h2>Live trade candidates</h2>
-              <p class="panel-copy compact-copy">Action-first opportunity rows with live edge, freshness, and max-profit posture.</p>
-            </div>
-            <span id="opportunityCount" class="panel-badge">0</span>
-          </div>
-          <div class="blotter-toolbar">
-            <div class="filter-cluster">
-              <button type="button" class="filter-pill is-active">All routes</button>
-              <button type="button" class="filter-pill">Flagged</button>
-              <button type="button" class="filter-pill">Tradable</button>
-              <button type="button" class="filter-pill">Manual</button>
-            </div>
-            <div class="filter-cluster filter-cluster-secondary">
-              <button type="button" class="filter-pill">Venue</button>
-              <button type="button" class="filter-pill">Status</button>
-              <button type="button" class="filter-pill">Sort: edge</button>
-            </div>
-          </div>
-          <div id="opportunityList" class="opportunity-list opportunity-blotter"></div>
-        </article>
-      </section>
-
-      <section id="riskSection" class="panel-grid panel-grid-tight">
-        <article class="panel infra-panel">
-          <div class="panel-header">
-            <div>
-              <p class="panel-kicker">Validation</p>
-              <h2>Profitability verdict</h2>
-            </div>
-            <span id="profitabilityVerdictBadge" class="panel-badge">Loading</span>
-          </div>
-          <p id="profitabilitySummary" class="panel-copy">Arbiter is collecting evidence before it can call the engine profitable.</p>
-          <div id="profitabilityReasons" class="stack-list compact-stack"></div>
-        </article>
-
-        <article id="portfolioPanel" class="panel infra-panel risk-panel">
-          <div class="panel-header">
-            <div>
-              <p class="panel-kicker">Guardrails</p>
-              <h2>Risk and exposure</h2>
-            </div>
-            <span id="portfolioExposureBadge" class="panel-badge risk-exposure-badge">$0.00</span>
-          </div>
-          <p id="portfolioSummary" class="panel-copy">Exposure, funding, and operator risk warnings appear here so production tests stay controlled.</p>
-          <div id="portfolioList" class="stack-list compact-stack"></div>
-        </article>
-      </section>
-
-      <section id="opsSection" class="panel-grid panel-grid-tight ops-only" data-ops-only="true">
-        <article class="panel rate-limit-panel" data-ops-only="true">
-          <div class="panel-header">
-            <div>
-              <p class="panel-kicker">Safety</p>
-              <h2>Rate-limit state</h2>
-            </div>
-          </div>
-          <p class="panel-copy">Per-platform rate-limit health. Green = tokens available, amber = cooling down, red = circuit open.</p>
-          <div id="rateLimitIndicators" class="rate-limit-host"></div>
-        </article>
-
-        <article class="panel ops-queue-panel">
-          <div class="panel-header">
-            <div>
-              <p class="panel-kicker">Manual Desk</p>
-              <h2>Manual operator queue</h2>
-            </div>
-            <span id="manualCount" class="panel-badge">0</span>
-          </div>
-          <p class="panel-copy">Manual venues stay visible here with exact entry and unwind steps, plus explicit confirmation controls for the operator.</p>
-          <div id="manualQueue" class="stack-list queue-list"></div>
-        </article>
-
-        <article class="panel ops-queue-panel">
-          <div class="panel-header">
-            <div>
-              <p class="panel-kicker">Recovery</p>
-              <h2>Incident queue</h2>
-            </div>
-            <span id="incidentCount" class="panel-badge">0</span>
-          </div>
-          <p class="panel-copy">Failures and one-leg risks are tracked separately so resolution is obvious, timestamped, and easy to verify.</p>
-          <div id="incidentList" class="stack-list queue-list"></div>
-        </article>
-      </section>
-
-      <section id="logsSection" class="log-stage">
-        <div class="log-stage-header">
-          <div>
-            <p class="panel-kicker">Activity Atlas</p>
-            <h2>Every action, one elegant reading surface</h2>
-            <p class="log-stage-copy">Arbiter publishes live stream events for system state, quotes, opportunities, executions, incidents, and heartbeats. We also track a richer operating ledger across opportunities, trades, manual queue items, incidents, balances, collectors, and market mappings.</p>
-          </div>
-          <div class="log-stage-status">
-            <div class="log-status-pill">
-              <span class="label">Visible events</span>
-              <span id="logVisibleCount" class="value">0</span>
-            </div>
-            <div class="log-status-pill">
-              <span class="label">Last pulse</span>
-              <span id="logFreshnessLabel" class="value value-muted">Waiting</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="log-stage-summary">
-          <div class="log-section-heading log-stage-summary-heading">
-            <span>Atlas summary</span>
-            <span id="logCategoryCount" class="panel-badge">0</span>
-          </div>
-          <div id="logCategoryAtlas" class="log-category-atlas"></div>
-        </div>
-
-        <div class="log-stage-layout">
-          <aside class="log-atlas">
-            <article class="log-brief">
-              <div class="log-brief-row">
-                <div>
-                  <p class="log-brief-label">Published live</p>
-                  <div id="publishedTypes" class="log-token-cloud"></div>
-                </div>
-                <div>
-                  <p class="log-brief-label">Tracked ledger</p>
-                  <div id="trackedTypes" class="log-token-cloud"></div>
-                </div>
-              </div>
-            </article>
-          </aside>
-
-          <section class="log-console">
-            <div class="log-console-header">
-              <div class="log-toolbar">
-                <div id="logScopeTabs" class="log-scope-tabs" role="tablist" aria-label="Activity scopes"></div>
-                <label class="log-search" for="logSearchInput">
-                  <span class="log-search-label">Search activity</span>
-                  <input id="logSearchInput" name="logSearch" type="search" autocomplete="off" placeholder="Search market, arb id, venue, or status">
-                </label>
-              </div>
-              <p id="logResultSummary" class="log-result-summary">Showing the latest visible atlas events.</p>
-              <div id="logFilterBar" class="log-filter-bar"></div>
-              <p class="log-console-copy">Filter the timeline by category to understand what changed, why it matters, and whether the operator needs to act.</p>
-            </div>
-            <div id="logTimeline" class="log-timeline"></div>
-          </section>
-        </div>
-      </section>
-
-      <section id="settingsSection" class="panel-grid panel-grid-single ops-only hidden" data-ops-only="true">
-        <article class="panel infra-panel settings-panel">
-          <div class="panel-header settings-panel-header">
-            <div>
-              <p class="panel-kicker">Settings</p>
-              <h2>Operator runtime settings</h2>
-            </div>
-            <span id="settingsDirtyBadge" class="panel-badge">Synced</span>
-          </div>
-          <p class="panel-copy">Tune execution guardrails, scanner thresholds, and alert posture from the desk. Secrets and the final live-mode switch stay outside the UI on purpose.</p>
-          <div id="settingsSummary" class="settings-summary-grid"></div>
-          <form id="settingsForm" class="settings-form">
-            <div id="settingsCards" class="settings-card-grid"></div>
-            <div class="settings-form-footer">
-              <p id="settingsMessage" class="panel-copy compact-copy settings-message" role="status" aria-live="polite"></p>
-              <div class="action-row settings-action-row">
-                <button id="settingsReset" type="button" class="ghost-button">Reset changes</button>
-                <button id="settingsSave" type="submit" class="auth-button">Save settings</button>
-              </div>
-            </div>
-          </form>
-        </article>
-      </section>
-
-      <section id="infraSection" class="panel-grid panel-grid-tight">
-        <article class="panel infra-panel">
-          <div class="panel-header">
-            <div>
-              <p class="panel-kicker">Mapping</p>
-              <h2>Canonical market map</h2>
-            </div>
-            <span id="mappingCount" class="panel-badge">0</span>
-          </div>
-          <div id="mappingControls" class="infra-panel-controls mapping-panel-controls"></div>
-          <div id="mappingList" class="stack-list mapping-list infra-panel-list"></div>
-        </article>
-
-        <article class="panel infra-panel">
-          <div class="panel-header">
-            <div>
-              <p class="panel-kicker">Collectors</p>
-              <h2>Platform health</h2>
-            </div>
-            <span id="collectorCount" class="panel-badge">0</span>
-          </div>
-          <div id="collectorList" class="stack-list infra-panel-list"></div>
-        </article>
-      </section>
-    </section>
-  </main>
-  <nav class="mobile-dock" aria-label="Quick navigation">
-    <a class="mobile-dock-link" href="#overviewSection">Desk</a>
-    <a class="mobile-dock-link" href="#opportunitiesSection">Scanner</a>
-    <a id="dockOpsLink" class="mobile-dock-link" href="./?route=%2Fops">Ops desk</a>
-    <a class="mobile-dock-link" href="#logsSection">Logs</a>
-  </nav>
-  <script>
-    window.ARBITER_BOOTSTRAP = {
-      staticFrontend: true,
-      defaultApiBase: "",
-      defaultApiPort: "8090",
-      publicHref: "./",
-      opsHref: "./?route=%2Fops"
-    };
-  </script>
-  <script type="module" src="./arbiter/web/dashboard.js"></script>
+// Auto-connect on load
+connectApi();
+</script>
 </body>
 </html>
