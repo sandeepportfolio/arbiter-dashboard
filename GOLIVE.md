@@ -72,6 +72,32 @@ Use that value for `UI_SESSION_SECRET`.
 
 ---
 
+## 2E. Optional cross-machine portability bundle
+
+If you want a second machine to restore the same local live secrets quickly,
+create an encrypted bundle on the source machine:
+
+```bash
+export PORTABLE_SECRETS_PASSPHRASE='choose-a-strong-passphrase'
+./scripts/setup/export_portable_secrets.sh
+```
+
+That produces:
+
+```text
+portable-secrets/arbiter-portable-secrets.tgz.enc
+```
+
+After cloning on another machine, restore it with:
+
+```bash
+export PORTABLE_SECRETS_PASSPHRASE='the-same-passphrase'
+./scripts/setup/import_portable_secrets.sh
+```
+
+This restores local secret files like `.env.production` and `keys/kalshi_private.pem`
+without committing them in raw form.
+
 ## 3. Fill `.env.production`
 
 ```bash

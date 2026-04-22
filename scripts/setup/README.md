@@ -18,6 +18,22 @@ That bootstraps a local `.venv` with the supported Python 3.12 runtime (via
 requirements. After that, `make test` and `make verify-quick` will prefer the
 repo `.venv` automatically.
 
+## Portable secrets for a second machine
+
+To move the exact live secret setup to another machine without committing raw secrets,
+use the encrypted portability bundle helpers:
+
+    export PORTABLE_SECRETS_PASSPHRASE='choose-a-strong-passphrase'
+    ./scripts/setup/export_portable_secrets.sh
+
+That produces `portable-secrets/arbiter-portable-secrets.tgz.enc`.
+After cloning on the destination machine:
+
+    export PORTABLE_SECRETS_PASSPHRASE='the-same-passphrase'
+    ./scripts/setup/import_portable_secrets.sh
+
+See `portable-secrets/README.md` for the full workflow.
+
 ## Design rules
 
 - **Never print secrets.** Every script masks private keys + tokens. What they

@@ -104,7 +104,19 @@ npm install
 cp .env.production.template .env.production   # then replace placeholders from your secure copy if needed
 ```
 
-Then restore the real secret files privately and verify:
+Preferred portability path now available in repo:
+
+```bash
+# source machine
+export PORTABLE_SECRETS_PASSPHRASE='choose-a-strong-passphrase'
+./scripts/setup/export_portable_secrets.sh
+
+# destination machine after git clone
+export PORTABLE_SECRETS_PASSPHRASE='the-same-passphrase'
+./scripts/setup/import_portable_secrets.sh
+```
+
+Then verify:
 
 ```bash
 python scripts/setup/validate_env.py

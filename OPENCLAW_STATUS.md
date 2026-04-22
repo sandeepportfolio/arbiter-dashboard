@@ -24,10 +24,12 @@ Repo root: `/Users/rentamac/Documents/arbiter`
 - Repo `.venv` present and healthy (`Python 3.12.12`)
 
 ## Portability truth
-Another machine can pull the full codebase from `main`, but it still needs private out-of-band copies of:
-- `.env.production`
-- `keys/kalshi_private.pem`
-- any other live secret material
+Another machine can pull the full codebase from `main`, and the repo now includes encrypted portability-bundle helpers:
+- `./scripts/setup/export_portable_secrets.sh`
+- `./scripts/setup/import_portable_secrets.sh`
+- `portable-secrets/README.md`
+
+Raw live secret files still do not belong in git.
 
 ## Operator note
 For the detailed handoff and current-state narrative, read `STATUS.md` first.

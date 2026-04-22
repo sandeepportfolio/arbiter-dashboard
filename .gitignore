@@ -28,3 +28,7 @@ evidence/05/
 logs/
 output/*.log
 output/*.err
+
+# Portable secret bundle working files
+portable-secrets/backups/
+portable-secrets/*.tmp
