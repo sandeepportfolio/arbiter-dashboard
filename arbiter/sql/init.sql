@@ -65,3 +65,11 @@ ALTER TABLE market_mappings
     ADD COLUMN IF NOT EXISTS resolution_criteria JSONB,
     ADD COLUMN IF NOT EXISTS resolution_match_status VARCHAR(40)
         DEFAULT 'pending_operator_review';
+
+-- Widen canonical_id to VARCHAR(200); market_* tables always exist here,
+-- execution_* tables only exist after 001_execution_persistence migration.
+ALTER TABLE market_mappings    ALTER COLUMN canonical_id TYPE VARCHAR(200);
+ALTER TABLE mapping_candidates ALTER COLUMN canonical_id TYPE VARCHAR(200);
+DO $$ BEGIN ALTER TABLE execution_arbs      ALTER COLUMN canonical_id TYPE VARCHAR(200); EXCEPTION WHEN undefined_table THEN NULL; END $$;
+DO $$ BEGIN ALTER TABLE execution_orders    ALTER COLUMN canonical_id TYPE VARCHAR(200); EXCEPTION WHEN undefined_table THEN NULL; END $$;
+DO $$ BEGIN ALTER TABLE execution_incidents ALTER COLUMN canonical_id TYPE VARCHAR(200); EXCEPTION WHEN undefined_table THEN NULL; END $$;

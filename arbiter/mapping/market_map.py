@@ -164,7 +164,7 @@ def _coerce_status(value: str | MappingStatus | None) -> MappingStatus:
 
 SQL_INIT = """
 CREATE TABLE IF NOT EXISTS market_mappings (
-    canonical_id         VARCHAR(60) PRIMARY KEY,
+    canonical_id         VARCHAR(200) PRIMARY KEY,
     description          TEXT NOT NULL,
     status               VARCHAR(20) NOT NULL DEFAULT 'candidate',
     allow_auto_trade     BOOLEAN DEFAULT FALSE,
@@ -190,7 +190,7 @@ CREATE INDEX IF NOT EXISTS idx_mappings_expires ON market_mappings(expires_at) W
 
 CREATE TABLE IF NOT EXISTS mapping_candidates (
     id                  SERIAL PRIMARY KEY,
-    canonical_id        VARCHAR(60) NOT NULL,
+    canonical_id        VARCHAR(200) NOT NULL,
     platform            VARCHAR(20) NOT NULL,
     platform_market_id  VARCHAR(200) NOT NULL,
     description         TEXT,
@@ -212,6 +212,10 @@ ALTER TABLE market_mappings
     ADD COLUMN IF NOT EXISTS resolution_criteria JSONB,
     ADD COLUMN IF NOT EXISTS resolution_match_status VARCHAR(40)
         DEFAULT 'pending_operator_review';
+
+-- Widen canonical_id to VARCHAR(200) so long slugs don't truncate (idempotent).
+ALTER TABLE market_mappings    ALTER COLUMN canonical_id TYPE VARCHAR(200);
+ALTER TABLE mapping_candidates ALTER COLUMN canonical_id TYPE VARCHAR(200);
 """
 
 
