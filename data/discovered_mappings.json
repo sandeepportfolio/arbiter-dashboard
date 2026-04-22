@@ -7,7 +7,13 @@
     "similarity_score": 0.8446,
     "category": "Both Teams to Score",
     "kalshi_expiry": "2026-05-09T13:30:00Z",
-    "polymarket_end_date": "2026-04-22T18:45:00Z"
+    "polymarket_end_date": "2026-04-22T18:45:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 3 legs: KXBUNDESLIGABTTS-26APR25WOBBMG (side=yes); KXBUNDESLIGAGAME-26APR25KOELEV-LEV (side=yes); KXBUNDESLIGAGAME-26APR25M05BMU-BMU (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S202614D721DC7EF-7DED97F4636",
@@ -17,7 +23,13 @@
     "similarity_score": 0.8386,
     "category": "Both Teams to Score",
     "kalshi_expiry": "2026-05-09T13:30:00Z",
-    "polymarket_end_date": "2026-04-22T18:45:00Z"
+    "polymarket_end_date": "2026-04-22T18:45:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 4 legs: KXBUNDESLIGABTTS-26APR25FCHSTP (side=yes); KXBUNDESLIGABTTS-26APR25WOBBMG (side=yes); KXBUNDESLIGAGAME-26APR25KOELEV-LEV (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026905D01BFE28-D224B7A25C9",
@@ -27,7 +39,13 @@
     "similarity_score": 0.8184,
     "category": "Brandon Ingram: Points O/U 20.5",
     "kalshi_expiry": "2026-05-08T00:00:00Z",
-    "polymarket_end_date": "2026-04-24T00:00:00Z"
+    "polymarket_end_date": "2026-04-24T00:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 3 legs: KXNBAPTS-26APR23CLETOR-TORBINGRAM3-20 (side=yes); KXNBAREB-26APR23CLETOR-TORBINGRAM3-4 (side=yes); KXNBATOTAL-26APR23CLETOR-213 (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026863E136B9B1-A039172FD87",
@@ -37,7 +55,13 @@
     "similarity_score": 0.8146,
     "category": "Dillon Brooks: Points O/U 16.5",
     "kalshi_expiry": "2026-05-07T01:30:00Z",
-    "polymarket_end_date": "2026-04-23T01:30:00Z"
+    "polymarket_end_date": "2026-04-23T01:30:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 2 legs: KXNBAPTS-26APR22PHXOKC-PHXDBROOKS3-15 (side=yes); KXNBATOTAL-26APR22ORLDET-213 (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026A8EF3CAE445-0A0D099706F",
@@ -47,7 +71,13 @@
     "similarity_score": 0.8122,
     "category": "Brandon Ingram: Points O/U 20.5",
     "kalshi_expiry": "2026-05-08T00:00:00Z",
-    "polymarket_end_date": "2026-04-24T00:00:00Z"
+    "polymarket_end_date": "2026-04-24T00:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 4 legs: KXNBAAST-26APR23CLETOR-TORBINGRAM3-4 (side=yes); KXNBAPTS-26APR23CLETOR-TORBINGRAM3-20 (side=yes); KXNBAREB-26APR23CLETOR-TORBINGRAM3-4 (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S202626CCE6C32F2-B6CE7E7841E",
@@ -57,7 +87,13 @@
     "similarity_score": 0.8062,
     "category": "Brandon Ingram: Points O/U 20.5",
     "kalshi_expiry": "2026-05-08T00:00:00Z",
-    "polymarket_end_date": "2026-04-24T00:00:00Z"
+    "polymarket_end_date": "2026-04-24T00:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 3 legs: KXNBAAST-26APR23CLETOR-TORBINGRAM3-2 (side=yes); KXNBAREB-26APR23CLETOR-TORBINGRAM3-4 (side=yes); KXNBATOTAL-26APR23CLETOR-210 (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20261977C16F5AD-F52B0D060DB",
@@ -67,7 +103,13 @@
     "similarity_score": 0.8027,
     "category": "Brandon Ingram: Points O/U 20.5",
     "kalshi_expiry": "2026-05-08T00:00:00Z",
-    "polymarket_end_date": "2026-04-24T00:00:00Z"
+    "polymarket_end_date": "2026-04-24T00:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 2 legs: KXNBAREB-26APR23CLETOR-TORBINGRAM3-4 (side=yes); KXNBATOTAL-26APR23CLETOR-210 (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S202618AC450400C-2FCC35331F2",
@@ -77,7 +119,13 @@
     "similarity_score": 0.7931,
     "category": "Duncan Robinson: Points O/U 2.5",
     "kalshi_expiry": "2026-05-06T23:00:00Z",
-    "polymarket_end_date": "2026-04-22T23:00:00Z"
+    "polymarket_end_date": "2026-04-22T23:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 5 legs: KXNBA3PT-26APR22ORLDET-DETDROBINSON55-1 (side=yes); KXNBAGAME-26APR22ORLDET-DET (side=yes); KXNBAREB-26APR22ORLDET-DETCCUNNINGHAM2-2 (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026749AF50927C-2ED44152F0D",
@@ -87,7 +135,13 @@
     "similarity_score": 0.7928,
     "category": "Julius Randle: Points O/U 19.5",
     "kalshi_expiry": "2026-05-08T01:30:00Z",
-    "polymarket_end_date": "2026-04-24T01:30:00Z"
+    "polymarket_end_date": "2026-04-24T01:30:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 2 legs: KXNBAPTS-26APR23DENMIN-MINJRANDLE30-15 (side=yes); KXNBATOTAL-26APR23DENMIN-217 (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVECROSSCATEGORY-S2026CB681029B71-6A1B672247B",
@@ -97,7 +151,13 @@
     "similarity_score": 0.7911,
     "category": "Jalen Williams: Points O/U 18.5",
     "kalshi_expiry": "2026-05-07T01:30:00Z",
-    "polymarket_end_date": "2026-04-23T01:30:00Z"
+    "polymarket_end_date": "2026-04-23T01:30:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a cross-category MVE with 2 legs: KXNBAPTS-26APR22PHXOKC-OKCJWILLIAMS8-15 (side=yes); KXNBATOTAL-26APR22ORLDET-204 (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20266054DC7D6E8-283104F5212",
@@ -107,7 +167,13 @@
     "similarity_score": 0.7895,
     "category": "Paolo Banchero: Points O/U 20.5",
     "kalshi_expiry": "2026-05-06T23:00:00Z",
-    "polymarket_end_date": "2026-04-22T23:00:00Z"
+    "polymarket_end_date": "2026-04-22T23:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 3 legs: KXNBAPTS-26APR22ORLDET-ORLPBANCHERO5-15 (side=yes); KXNBAREB-26APR22ORLDET-ORLPBANCHERO5-6 (side=yes); KXNBATOTAL-26APR22ORLDET-207 (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20265B69E54A03B-F2538E5A68C",
@@ -117,7 +183,14 @@
     "similarity_score": 0.7858,
     "category": "Both Teams to Score",
     "kalshi_expiry": "2026-05-12T19:00:00Z",
-    "polymarket_end_date": "2026-04-25T16:15:00Z"
+    "polymarket_end_date": "2026-04-25T16:15:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market.",
+      "Kalshi is a MVE parlay with 3 legs: KXUCLBTTS-26APR28PSGBMU (side=yes); KXUCLGAME-26APR29ATMARS-ATM (side=yes); KXUCLGAME-26MAY06BMUPSG-BMU (side=yes)",
+      "Date mismatch: Kalshi closes 2026-05-06, Polymarket ends 2026-04-25 (11 days apart)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVECROSSCATEGORY-S2026847CFFF0C72-F385B7569B6",
@@ -127,7 +200,13 @@
     "similarity_score": 0.783,
     "category": "Paolo Banchero: Points O/U 20.5",
     "kalshi_expiry": "2026-05-06T23:00:00Z",
-    "polymarket_end_date": "2026-04-22T23:00:00Z"
+    "polymarket_end_date": "2026-04-22T23:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a cross-category MVE with 4 legs: KXNBAPTS-26APR22ORLDET-ORLPBANCHERO5-15 (side=yes); KXNBAREB-26APR22ORLDET-ORLPBANCHERO5-4 (side=yes); KXNBATOTAL-26APR22ORLDET-204 (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20265B69E54A03B-F2538E5A68C",
@@ -137,7 +216,13 @@
     "similarity_score": 0.7824,
     "category": "Both Teams to Score",
     "kalshi_expiry": "2026-05-12T19:00:00Z",
-    "polymarket_end_date": "2026-05-03T14:30:00Z"
+    "polymarket_end_date": "2026-05-03T14:30:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 3 legs: KXUCLBTTS-26APR28PSGBMU (side=yes); KXUCLGAME-26APR29ATMARS-ATM (side=yes); KXUCLGAME-26MAY06BMUPSG-BMU (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20263801BA31191-2E4C0B3BEAF",
@@ -147,7 +232,13 @@
     "similarity_score": 0.7814,
     "category": "Desmond Bane: Points O/U 18.5",
     "kalshi_expiry": "2026-05-06T23:00:00Z",
-    "polymarket_end_date": "2026-04-22T23:00:00Z"
+    "polymarket_end_date": "2026-04-22T23:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 3 legs: KXNBAPTS-26APR22ORLDET-ORLDBANE3-15 (side=yes); KXNBAPTS-26APR22PHXOKC-PHXDBROOKS3-15 (side=yes); KXNBATOTAL-26APR22ORLDET-210 (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVECROSSCATEGORY-S2026B4B63FD0DDB-7E8BACB45DF",
@@ -157,7 +248,13 @@
     "similarity_score": 0.7806,
     "category": "Devin Booker: Points O/U 23.5",
     "kalshi_expiry": "2026-05-07T01:30:00Z",
-    "polymarket_end_date": "2026-04-23T01:30:00Z"
+    "polymarket_end_date": "2026-04-23T01:30:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a cross-category MVE with 2 legs: KXNBAPTS-26APR22PHXOKC-PHXDBOOKER1-20 (side=yes); KXNBATOTAL-26APR22PHXOKC-206 (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVECROSSCATEGORY-S2026B046350A6CC-94CC1EB09D7",
@@ -167,7 +264,13 @@
     "similarity_score": 0.7795,
     "category": "Wendell Carter Jr.: Points O/U 2.5",
     "kalshi_expiry": "2026-05-06T23:00:00Z",
-    "polymarket_end_date": "2026-04-22T23:00:00Z"
+    "polymarket_end_date": "2026-04-22T23:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a cross-category MVE with 3 legs: KXNBAREB-26APR22ORLDET-ORLWCARTER34-4 (side=yes); KXNBASPREAD-26APR22ORLDET-DET4 (side=yes); KXNBATOTAL-26APR22ORLDET-201 (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVECROSSCATEGORY-S20269956AECE293-D473D73DC20",
@@ -177,7 +280,13 @@
     "similarity_score": 0.7782,
     "category": "Duncan Robinson: Points O/U 2.5",
     "kalshi_expiry": "2026-05-06T23:00:00Z",
-    "polymarket_end_date": "2026-04-22T23:00:00Z"
+    "polymarket_end_date": "2026-04-22T23:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a cross-category MVE with 6 legs: KXNBA3PT-26APR22ORLDET-DETDROBINSON55-1 (side=yes); KXNBAGAME-26APR22ORLDET-DET (side=yes); KXNBAGAME-26APR22PHXOKC-OKC (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVECROSSCATEGORY-S2026B9D1DFB1FC9-71F6D63C6F5",
@@ -187,7 +296,13 @@
     "similarity_score": 0.7775,
     "category": "James Harden: Points O/U 20.5",
     "kalshi_expiry": "2026-05-08T00:00:00Z",
-    "polymarket_end_date": "2026-04-24T00:00:00Z"
+    "polymarket_end_date": "2026-04-24T00:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a cross-category MVE with 4 legs: KXNBA3PT-26APR23CLETOR-CLEJHARDEN1-1 (side=yes); KXNBAGAME-26APR23CLETOR-CLE (side=yes); KXNBAPTS-26APR23CLETOR-CLEJHARDEN1-15 (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20260DBC79815AC-231C5DFBE8D",
@@ -197,7 +312,13 @@
     "similarity_score": 0.7775,
     "category": "Cade Cunningham: Points O/U 28.5",
     "kalshi_expiry": "2026-05-06T23:00:00Z",
-    "polymarket_end_date": "2026-04-22T23:00:00Z"
+    "polymarket_end_date": "2026-04-22T23:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 2 legs: KXNBAPTS-26APR22ORLDET-DETCCUNNINGHAM2-25 (side=yes); KXNBATOTAL-26APR22ORLDET-204 (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVECROSSCATEGORY-S20262B14F74ADD6-349F5E1D3D3",
@@ -207,7 +328,14 @@
     "similarity_score": 0.7772,
     "category": "Both Teams to Score",
     "kalshi_expiry": "2026-05-06T19:00:00Z",
-    "polymarket_end_date": "2026-04-25T16:15:00Z"
+    "polymarket_end_date": "2026-04-25T16:15:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market.",
+      "Kalshi is a cross-category MVE with 2 legs: KXEPLBTTS-26APR22BOULEE (side=yes); KXUCLGAME-26MAY06BMUPSG-BMU (side=yes)",
+      "Date mismatch: Kalshi closes 2026-05-06, Polymarket ends 2026-04-25 (11 days apart)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026453E0448369-ECA6FADE4E1",
@@ -217,7 +345,13 @@
     "similarity_score": 0.7754,
     "category": "Shai Gilgeous-Alexander: Assists O/U 6.5",
     "kalshi_expiry": "2026-05-07T01:30:00Z",
-    "polymarket_end_date": "2026-04-23T01:30:00Z"
+    "polymarket_end_date": "2026-04-23T01:30:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 5 legs: KXNBA3PT-26APR22PHXOKC-OKCSGILGEOUSALEXANDER2-1 (side=yes); KXNBAAST-26APR22PHXOKC-OKCSGILGEOUSALEXANDER2-6 (side=yes); KXNBAGAME-26APR22PHXOKC-OKC (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026BA0AAFBF0FC-51B818C26EB",
@@ -227,7 +361,13 @@
     "similarity_score": 0.7748,
     "category": "Desmond Bane: Points O/U 18.5",
     "kalshi_expiry": "2026-05-06T23:00:00Z",
-    "polymarket_end_date": "2026-04-22T23:00:00Z"
+    "polymarket_end_date": "2026-04-22T23:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 3 legs: KXNBAPTS-26APR22ORLDET-ORLDBANE3-15 (side=yes); KXNBAPTS-26APR22PHXOKC-PHXDBROOKS3-15 (side=yes); KXNBATOTAL-26APR22PHXOKC-209 (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S202644176CB4A9D-4858093489B",
@@ -237,7 +377,13 @@
     "similarity_score": 0.7726,
     "category": "Duncan Robinson: Points O/U 2.5",
     "kalshi_expiry": "2026-05-06T23:00:00Z",
-    "polymarket_end_date": "2026-04-22T23:00:00Z"
+    "polymarket_end_date": "2026-04-22T23:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 2 legs: KXNBA3PT-26APR22ORLDET-DETDROBINSON55-1 (side=yes); KXNBATOTAL-26APR22ORLDET-231 (side=no)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVECROSSCATEGORY-S2026C653F68BF93-B3020B59F14",
@@ -247,7 +393,13 @@
     "similarity_score": 0.772,
     "category": "Jalen Williams: Points O/U 18.5",
     "kalshi_expiry": "2026-05-07T01:30:00Z",
-    "polymarket_end_date": "2026-04-23T01:30:00Z"
+    "polymarket_end_date": "2026-04-23T01:30:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a cross-category MVE with 3 legs: KXNBAPTS-26APR22PHXOKC-OKCJWILLIAMS8-15 (side=yes); KXNBAPTS-26APR22PHXOKC-PHXJGREEN4-15 (side=yes); KXNBATOTAL-26APR22PHXOKC-215 (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20263A6D972FC4F-536AC41C442",
@@ -257,7 +409,13 @@
     "similarity_score": 0.7716,
     "category": "Paolo Banchero: Points O/U 20.5",
     "kalshi_expiry": "2026-05-06T23:00:00Z",
-    "polymarket_end_date": "2026-04-22T23:00:00Z"
+    "polymarket_end_date": "2026-04-22T23:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 2 legs: KXNBAPTS-26APR22ORLDET-ORLPBANCHERO5-20 (side=yes); KXNBATOTAL-26APR22PHXOKC-215 (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVECROSSCATEGORY-S2026F05A2E5C66F-F988ADD52F0",
@@ -267,7 +425,13 @@
     "similarity_score": 0.7711,
     "category": "Dillon Brooks: Points O/U 16.5",
     "kalshi_expiry": "2026-05-07T01:30:00Z",
-    "polymarket_end_date": "2026-04-23T01:30:00Z"
+    "polymarket_end_date": "2026-04-23T01:30:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a cross-category MVE with 2 legs: KXNBAREB-26APR22PHXOKC-PHXDBROOKS3-2 (side=yes); KXNBATOTAL-26APR22PHXOKC-215 (side=no)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026E7119343632-CAED56F7488",
@@ -277,7 +441,13 @@
     "similarity_score": 0.7701,
     "category": "Duncan Robinson: Points O/U 2.5",
     "kalshi_expiry": "2026-05-06T23:00:00Z",
-    "polymarket_end_date": "2026-04-22T23:00:00Z"
+    "polymarket_end_date": "2026-04-22T23:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 3 legs: KXNBA3PT-26APR22ORLDET-DETDROBINSON55-2 (side=yes); KXNBASPREAD-26APR22ORLDET-DET7 (side=yes); KXNBATOTAL-26APR22ORLDET-219 (side=no)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026F9E341EC254-69428E9AECD",
@@ -287,7 +457,13 @@
     "similarity_score": 0.7689,
     "category": "Desmond Bane: Points O/U 18.5",
     "kalshi_expiry": "2026-05-06T23:00:00Z",
-    "polymarket_end_date": "2026-04-22T23:00:00Z"
+    "polymarket_end_date": "2026-04-22T23:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 5 legs: KXNBA3PT-26APR22ORLDET-ORLDBANE3-1 (side=yes); KXNBAPTS-26APR22ORLDET-ORLDBANE3-15 (side=yes); KXNBAPTS-26APR22ORLDET-ORLFWAGNER22-10 (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20269ED48A5BE2D-471BCA6F931",
@@ -297,7 +473,13 @@
     "similarity_score": 0.7683,
     "category": "Paolo Banchero: Points O/U 20.5",
     "kalshi_expiry": "2026-05-06T23:00:00Z",
-    "polymarket_end_date": "2026-04-22T23:00:00Z"
+    "polymarket_end_date": "2026-04-22T23:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 3 legs: KXNBAPTS-26APR22ORLDET-ORLPBANCHERO5-20 (side=yes); KXNBATOTAL-26APR22ORLDET-219 (side=yes); KXNBATOTAL-26APR22PHXOKC-215 (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026DC99B6AF4F4-F237708A7EB",
@@ -307,7 +489,13 @@
     "similarity_score": 0.7678,
     "category": "Cade Cunningham: Points O/U 28.5",
     "kalshi_expiry": "2026-05-06T23:00:00Z",
-    "polymarket_end_date": "2026-04-22T23:00:00Z"
+    "polymarket_end_date": "2026-04-22T23:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 3 legs: KXNBA3PT-26APR22ORLDET-DETCCUNNINGHAM2-3 (side=yes); KXNBAPTS-26APR22ORLDET-DETCCUNNINGHAM2-30 (side=yes); KXNBATOTAL-26APR22ORLDET-219 (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S202673FB91AD7F5-EAD5586E992",
@@ -317,7 +505,13 @@
     "similarity_score": 0.7678,
     "category": "Desmond Bane: Points O/U 18.5",
     "kalshi_expiry": "2026-05-06T23:00:00Z",
-    "polymarket_end_date": "2026-04-22T23:00:00Z"
+    "polymarket_end_date": "2026-04-22T23:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 4 legs: KXNBAPTS-26APR22ORLDET-ORLDBANE3-15 (side=yes); KXNBAPTS-26APR22PHXOKC-PHXDBROOKS3-15 (side=yes); KXNBATOTAL-26APR22ORLDET-210 (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20261791DE0E8D2-F38934455D5",
@@ -327,7 +521,13 @@
     "similarity_score": 0.7669,
     "category": "Cade Cunningham: Points O/U 28.5",
     "kalshi_expiry": "2026-05-06T23:00:00Z",
-    "polymarket_end_date": "2026-04-22T23:00:00Z"
+    "polymarket_end_date": "2026-04-22T23:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 4 legs: KXNBA3PT-26APR22ORLDET-DETCCUNNINGHAM2-3 (side=yes); KXNBAPTS-26APR22ORLDET-DETCCUNNINGHAM2-30 (side=yes); KXNBATOTAL-26APR22ORLDET-219 (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026453E0448369-ECA6FADE4E1",
@@ -337,7 +537,13 @@
     "similarity_score": 0.7666,
     "category": "Shai Gilgeous-Alexander: Points O/U 29.5",
     "kalshi_expiry": "2026-05-07T01:30:00Z",
-    "polymarket_end_date": "2026-04-23T01:30:00Z"
+    "polymarket_end_date": "2026-04-23T01:30:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 5 legs: KXNBA3PT-26APR22PHXOKC-OKCSGILGEOUSALEXANDER2-1 (side=yes); KXNBAAST-26APR22PHXOKC-OKCSGILGEOUSALEXANDER2-6 (side=yes); KXNBAGAME-26APR22PHXOKC-OKC (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVECROSSCATEGORY-S2026F01756BCC30-096678D8592",
@@ -347,7 +553,13 @@
     "similarity_score": 0.7664,
     "category": "Duncan Robinson: Points O/U 2.5",
     "kalshi_expiry": "2026-05-06T23:00:00Z",
-    "polymarket_end_date": "2026-04-22T23:00:00Z"
+    "polymarket_end_date": "2026-04-22T23:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a cross-category MVE with 4 legs: KXNBAPTS-26APR22ORLDET-DETDROBINSON55-10 (side=yes); KXNBAPTS-26APR22ORLDET-DETTHARRIS12-10 (side=yes); KXNBAPTS-26APR22ORLDET-ORLFWAGNER22-10 (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S202618305729348-F344D1BD56F",
@@ -357,7 +569,13 @@
     "similarity_score": 0.7654,
     "category": "Duncan Robinson: Points O/U 2.5",
     "kalshi_expiry": "2026-05-06T23:00:00Z",
-    "polymarket_end_date": "2026-04-22T23:00:00Z"
+    "polymarket_end_date": "2026-04-22T23:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 7 legs: KXNBA3PT-26APR22ORLDET-DETDROBINSON55-1 (side=yes); KXNBAGAME-26APR22ORLDET-ORL (side=yes); KXNBAGAME-26APR22PHXOKC-PHX (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026932ED2DCF9C-93943ACC856",
@@ -367,7 +585,13 @@
     "similarity_score": 0.7646,
     "category": "Wendell Carter Jr.: Points O/U 2.5",
     "kalshi_expiry": "2026-05-06T23:00:00Z",
-    "polymarket_end_date": "2026-04-22T23:00:00Z"
+    "polymarket_end_date": "2026-04-22T23:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 2 legs: KXNBAREB-26APR22ORLDET-ORLWCARTER34-6 (side=yes); KXNBASPREAD-26APR22ORLDET-DET10 (side=no)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVECROSSCATEGORY-S202604A242944AD-76BFDCAF3EF",
@@ -377,7 +601,13 @@
     "similarity_score": 0.7641,
     "category": "Paolo Banchero: Points O/U 20.5",
     "kalshi_expiry": "2026-05-06T23:00:00Z",
-    "polymarket_end_date": "2026-04-22T23:00:00Z"
+    "polymarket_end_date": "2026-04-22T23:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a cross-category MVE with 2 legs: KXNBAREB-26APR22ORLDET-ORLPBANCHERO5-6 (side=yes); KXNBATOTAL-26APR22ORLDET-201 (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVECROSSCATEGORY-S20262B14F74ADD6-349F5E1D3D3",
@@ -387,7 +617,13 @@
     "similarity_score": 0.7639,
     "category": "Both Teams to Score",
     "kalshi_expiry": "2026-05-06T19:00:00Z",
-    "polymarket_end_date": "2026-05-03T14:30:00Z"
+    "polymarket_end_date": "2026-05-03T14:30:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a cross-category MVE with 2 legs: KXEPLBTTS-26APR22BOULEE (side=yes); KXUCLGAME-26MAY06BMUPSG-BMU (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S202660AAAE6D640-8558D40A629",
@@ -397,7 +633,13 @@
     "similarity_score": 0.763,
     "category": "Duncan Robinson: Points O/U 2.5",
     "kalshi_expiry": "2026-05-06T23:00:00Z",
-    "polymarket_end_date": "2026-04-22T23:00:00Z"
+    "polymarket_end_date": "2026-04-22T23:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 8 legs: KXNBA3PT-26APR22ORLDET-DETDROBINSON55-1 (side=yes); KXNBAGAME-26APR22ORLDET-ORL (side=yes); KXNBAGAME-26APR22PHXOKC-PHX (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVECROSSCATEGORY-S20267D7B2B0AFD0-C53C87C9AA6",
@@ -407,7 +649,13 @@
     "similarity_score": 0.7627,
     "category": "Devin Booker: Points O/U 23.5",
     "kalshi_expiry": "2026-05-07T01:30:00Z",
-    "polymarket_end_date": "2026-04-23T01:30:00Z"
+    "polymarket_end_date": "2026-04-23T01:30:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a cross-category MVE with 3 legs: KXNBAAST-26APR22PHXOKC-PHXDBOOKER1-4 (side=yes); KXNBAGAME-26APR22PHXOKC-PHX (side=yes); KXNBATOTAL-26APR22PHXOKC-215 (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVECROSSCATEGORY-S202651CB98BA02E-64C9CEAE814",
@@ -417,7 +665,13 @@
     "similarity_score": 0.7622,
     "category": "Shai Gilgeous-Alexander: Points O/U 29.5",
     "kalshi_expiry": "2026-05-07T01:30:00Z",
-    "polymarket_end_date": "2026-04-23T01:30:00Z"
+    "polymarket_end_date": "2026-04-23T01:30:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a cross-category MVE with 3 legs: KXNBAREB-26APR22PHXOKC-OKCSGILGEOUSALEXANDER2-4 (side=yes); KXNBATOTAL-26APR22ORLDET-219 (side=no); KXNBATOTAL-26APR22PHXOKC-215 (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVECROSSCATEGORY-S20260C79896C7F6-774F06F8973",
@@ -427,7 +681,13 @@
     "similarity_score": 0.7617,
     "category": "Duncan Robinson: Points O/U 2.5",
     "kalshi_expiry": "2026-05-06T23:00:00Z",
-    "polymarket_end_date": "2026-04-22T23:00:00Z"
+    "polymarket_end_date": "2026-04-22T23:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a cross-category MVE with 2 legs: KXNBA3PT-26APR22ORLDET-DETDROBINSON55-3 (side=yes); KXNBASPREAD-26APR22ORLDET-DET10 (side=no)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026081745E26FC-3C0654CA55B",
@@ -437,7 +697,14 @@
     "similarity_score": 0.7614,
     "category": "Both Teams to Score",
     "kalshi_expiry": "2026-05-09T13:30:00Z",
-    "polymarket_end_date": "2026-04-25T16:15:00Z"
+    "polymarket_end_date": "2026-04-25T16:15:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market.",
+      "Kalshi is a MVE parlay with 4 legs: KXBUNDESLIGAGAME-26APR25M05BMU-BMU (side=yes); KXUCLBTTS-26APR28PSGBMU (side=yes); KXUCLGAME-26APR29ATMARS-ATM (side=yes)",
+      "Date mismatch: Kalshi closes 2026-05-06, Polymarket ends 2026-04-25 (11 days apart)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026EBB293BFAED-1DFAF70A38F",
@@ -447,7 +714,13 @@
     "similarity_score": 0.7602,
     "category": "Duncan Robinson: Points O/U 2.5",
     "kalshi_expiry": "2026-05-06T23:00:00Z",
-    "polymarket_end_date": "2026-04-22T23:00:00Z"
+    "polymarket_end_date": "2026-04-22T23:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 7 legs: KXNBA3PT-26APR22ORLDET-DETDROBINSON55-1 (side=yes); KXNBAAST-26APR22ORLDET-DETCCUNNINGHAM2-6 (side=yes); KXNBAGAME-26APR22ORLDET-DET (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026BCEA47ADB1D-888DD64E057",
@@ -457,7 +730,14 @@
     "similarity_score": 0.7589,
     "category": "Atl\u00e9tico de San Luis",
     "kalshi_expiry": "2026-05-06T17:00:00Z",
-    "polymarket_end_date": "2026-06-07T03:59:00Z"
+    "polymarket_end_date": "2026-06-07T03:59:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market.",
+      "Kalshi is a MVE parlay with 2 legs: KXLALIGAGAME-26APR22ELCATM-ATM (side=yes); KXMLBRFI-26APR221210STLMIA (side=yes)",
+      "Date mismatch: Kalshi closes 2026-04-22, Polymarket ends 2026-06-07 (46 days apart)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVECROSSCATEGORY-S2026242D8A0F70D-31BA3DE4028",
@@ -467,7 +747,13 @@
     "similarity_score": 0.7563,
     "category": "Franz Wagner: Points O/U 17.5",
     "kalshi_expiry": "2026-05-06T23:00:00Z",
-    "polymarket_end_date": "2026-04-22T23:00:00Z"
+    "polymarket_end_date": "2026-04-22T23:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a cross-category MVE with 5 legs: KXNBAPTS-26APR22ORLDET-ORLFWAGNER22-15 (side=yes); KXNBAPTS-26APR22ORLDET-ORLPBANCHERO5-15 (side=yes); KXNBAREB-26APR22ORLDET-ORLFWAGNER22-2 (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20269BDE77599B3-97ED1BACF7A",
@@ -477,7 +763,13 @@
     "similarity_score": 0.7562,
     "category": "Draw (Bayer 04 Leverkusen vs. FC Bayern M\u00fcnchen)",
     "kalshi_expiry": "2026-05-09T13:30:00Z",
-    "polymarket_end_date": "2026-04-22T18:45:00Z"
+    "polymarket_end_date": "2026-04-22T18:45:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 3 legs: KXBUNDESLIGABTTS-26APR25WOBBMG (side=yes); KXBUNDESLIGAGAME-26APR25KOELEV-LEV (side=yes); KXBUNDESLIGAGAME-26APR25M05BMU-BMU (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026BCEA47ADB1D-888DD64E057",
@@ -487,7 +779,13 @@
     "similarity_score": 0.7557,
     "category": "Atl\u00e9tico San Luis",
     "kalshi_expiry": "2026-05-06T17:00:00Z",
-    "polymarket_end_date": "2026-04-23T01:00:00Z"
+    "polymarket_end_date": "2026-04-23T01:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 2 legs: KXLALIGAGAME-26APR22ELCATM-ATM (side=yes); KXMLBRFI-26APR221210STLMIA (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026881D8906EF3-9260921E59D",
@@ -497,7 +795,13 @@
     "similarity_score": 0.7553,
     "category": "Duncan Robinson: Points O/U 2.5",
     "kalshi_expiry": "2026-05-06T23:00:00Z",
-    "polymarket_end_date": "2026-04-22T23:00:00Z"
+    "polymarket_end_date": "2026-04-22T23:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 3 legs: KXNBAPTS-26APR22ORLDET-DETDROBINSON55-10 (side=yes); KXNBASPREAD-26APR22ORLDET-DET7 (side=yes); KXNBATOTAL-26APR22ORLDET-219 (side=no)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20264F7C4CD177D-F5AF957B8A3",
@@ -507,7 +811,13 @@
     "similarity_score": 0.7543,
     "category": "Duncan Robinson: Points O/U 2.5",
     "kalshi_expiry": "2026-05-06T23:00:00Z",
-    "polymarket_end_date": "2026-04-22T23:00:00Z"
+    "polymarket_end_date": "2026-04-22T23:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 3 legs: KXNBA3PT-26APR22ORLDET-DETDROBINSON55-3 (side=yes); KXNBAAST-26APR22ORLDET-DETCCUNNINGHAM2-10 (side=yes); KXNBASPREAD-26APR22ORLDET-DET7 (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20269BDE77599B3-97ED1BACF7A",
@@ -517,7 +827,13 @@
     "similarity_score": 0.7542,
     "category": "Both Teams to Score",
     "kalshi_expiry": "2026-05-09T13:30:00Z",
-    "polymarket_end_date": "2026-04-25T13:30:00Z"
+    "polymarket_end_date": "2026-04-25T13:30:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 3 legs: KXBUNDESLIGABTTS-26APR25WOBBMG (side=yes); KXBUNDESLIGAGAME-26APR25KOELEV-LEV (side=yes); KXBUNDESLIGAGAME-26APR25M05BMU-BMU (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026BCEA47ADB1D-888DD64E057",
@@ -527,7 +843,13 @@
     "similarity_score": 0.7542,
     "category": "Atl\u00e9tico San Luis",
     "kalshi_expiry": "2026-05-06T17:00:00Z",
-    "polymarket_end_date": "2026-04-26T03:00:00Z"
+    "polymarket_end_date": "2026-04-26T03:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 2 legs: KXLALIGAGAME-26APR22ELCATM-ATM (side=yes); KXMLBRFI-26APR221210STLMIA (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20260E218F54B09-2327E9117B9",
@@ -537,7 +859,13 @@
     "similarity_score": 0.7542,
     "category": "Both Teams to Score",
     "kalshi_expiry": "2026-05-06T19:30:00Z",
-    "polymarket_end_date": "2026-04-22T17:00:00Z"
+    "polymarket_end_date": "2026-04-22T17:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 6 legs: KXLALIGABTTS-26APR22BARRCC (side=yes); KXLALIGABTTS-26APR22ELCATM (side=yes); KXLALIGABTTS-26APR22RSOGET (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S20265C7FBBA71EC-B9B36D6C607",
@@ -547,7 +875,13 @@
     "similarity_score": 0.7535,
     "category": "Shai Gilgeous-Alexander: Assists O/U 6.5",
     "kalshi_expiry": "2026-05-07T01:30:00Z",
-    "polymarket_end_date": "2026-04-23T01:30:00Z"
+    "polymarket_end_date": "2026-04-23T01:30:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 6 legs: KXNBA3PT-26APR22PHXOKC-OKCSGILGEOUSALEXANDER2-1 (side=yes); KXNBAAST-26APR22PHXOKC-OKCSGILGEOUSALEXANDER2-6 (side=yes); KXNBAGAME-26APR22PHXOKC-OKC (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026868EE3DD3E1-6DBEBFF286C",
@@ -557,7 +891,13 @@
     "similarity_score": 0.7533,
     "category": "Duncan Robinson: Points O/U 2.5",
     "kalshi_expiry": "2026-05-06T23:00:00Z",
-    "polymarket_end_date": "2026-04-22T23:00:00Z"
+    "polymarket_end_date": "2026-04-22T23:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 7 legs: KXNBA3PT-26APR22ORLDET-DETDROBINSON55-2 (side=yes); KXNBAPTS-26APR22ORLDET-DETCCUNNINGHAM2-25 (side=yes); KXNBAPTS-26APR22ORLDET-DETTHARRIS12-10 (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026081745E26FC-3C0654CA55B",
@@ -567,7 +907,13 @@
     "similarity_score": 0.7532,
     "category": "Both Teams to Score",
     "kalshi_expiry": "2026-05-09T13:30:00Z",
-    "polymarket_end_date": "2026-05-03T14:30:00Z"
+    "polymarket_end_date": "2026-05-03T14:30:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 4 legs: KXBUNDESLIGAGAME-26APR25M05BMU-BMU (side=yes); KXUCLBTTS-26APR28PSGBMU (side=yes); KXUCLGAME-26APR29ATMARS-ATM (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S202614D721DC7EF-7DED97F4636",
@@ -577,7 +923,13 @@
     "similarity_score": 0.7528,
     "category": "Both Teams to Score",
     "kalshi_expiry": "2026-05-09T13:30:00Z",
-    "polymarket_end_date": "2026-04-25T13:30:00Z"
+    "polymarket_end_date": "2026-04-25T13:30:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 4 legs: KXBUNDESLIGABTTS-26APR25FCHSTP (side=yes); KXBUNDESLIGABTTS-26APR25WOBBMG (side=yes); KXBUNDESLIGAGAME-26APR25KOELEV-LEV (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026A39C908BCEE-6B47BA1E2C9",
@@ -587,7 +939,13 @@
     "similarity_score": 0.7524,
     "category": "Tobias Harris: Points O/U 14.5",
     "kalshi_expiry": "2026-05-06T23:00:00Z",
-    "polymarket_end_date": "2026-04-22T23:00:00Z"
+    "polymarket_end_date": "2026-04-22T23:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 3 legs: KXNBAREB-26APR22ORLDET-DETTHARRIS12-2 (side=yes); KXNBATOTAL-26APR22ORLDET-201 (side=yes); KXNBATOTAL-26APR22PHXOKC-200 (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026F27310D1E28-53CA86EF0B5",
@@ -597,7 +955,13 @@
     "similarity_score": 0.7506,
     "category": "Duncan Robinson: Points O/U 2.5",
     "kalshi_expiry": "2026-05-06T23:00:00Z",
-    "polymarket_end_date": "2026-04-22T23:00:00Z"
+    "polymarket_end_date": "2026-04-22T23:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 5 legs: KXNBA3PT-26APR22ORLDET-DETDROBINSON55-1 (side=yes); KXNBAGAME-26APR22PHXOKC-OKC (side=yes); KXNBAREB-26APR22PHXOKC-OKCIHARTENSTEIN55-4 (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVESPORTSMULTIGAMEEXTENDED-S2026F3F82C891D2-46818BA7219",
@@ -607,7 +971,13 @@
     "similarity_score": 0.7506,
     "category": "Shai Gilgeous-Alexander: Assists O/U 6.5",
     "kalshi_expiry": "2026-05-07T01:30:00Z",
-    "polymarket_end_date": "2026-04-23T01:30:00Z"
+    "polymarket_end_date": "2026-04-23T01:30:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a MVE parlay with 5 legs: KXNBAAST-26APR22PHXOKC-OKCSGILGEOUSALEXANDER2-6 (side=yes); KXNBAGAME-26APR22PHXOKC-OKC (side=yes); KXNBAPTS-26APR22PHXOKC-OKCSGILGEOUSALEXANDER2-25 (side=yes)"
+    ],
+    "validation_date": "2026-04-22"
   },
   {
     "kalshi_ticker": "KXMVECROSSCATEGORY-S202645FF98C4C52-6CE8F5F9F0F",
@@ -617,6 +987,12 @@
     "similarity_score": 0.7505,
     "category": "Franz Wagner: Points O/U 17.5",
     "kalshi_expiry": "2026-05-06T23:00:00Z",
-    "polymarket_end_date": "2026-04-22T23:00:00Z"
+    "polymarket_end_date": "2026-04-22T23:00:00Z",
+    "validation_status": "INVALID",
+    "validation_reason": [
+      "STRUCTURAL MISMATCH: Kalshi is a multi-leg parlay market but Polymarket is a single binary market. Cannot arbitrage a combined parlay against one independent market.",
+      "Kalshi is a cross-category MVE with 2 legs: KXNBAPTS-26APR22ORLDET-ORLFWAGNER22-10 (side=yes); KXNBATOTAL-26APR22PHXOKC-221 (side=no)"
+    ],
+    "validation_date": "2026-04-22"
   }
 ]
