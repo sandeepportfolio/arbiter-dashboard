@@ -1173,4 +1173,34 @@ CRYPTO_FINANCE_SEEDS: Tuple[MarketMappingRecord, ...] = (
         resolution_match_status='pending_operator_review',
     ),
 
+    # NEW: Fed cut count economics pairs (politics_economics_v2) - added 2026-04-22
+    # Maps Polymarket "N Fed rate cuts in 2026" to Kalshi KXFED-26DEC rate level
+    MarketMappingRecord(
+        canonical_id="CONFIRMED_KXFED_26DEC_T4_50_WILL_NO_FED_RATE_CUTS_HAPPEN_IN_2026",
+        description="Fed upper bound above 4.5% Dec 2026 (0 cuts implied)",
+        kalshi="KXFED-26DEC-T4.50",
+        polymarket="will-no-fed-rate-cuts-happen-in-2026",
+        status="confirmed",
+        allow_auto_trade=True,
+        tags=("economics",),
+    ),
+    MarketMappingRecord(
+        canonical_id="CONFIRMED_KXFED_26DEC_T4_00_WILL_2_FED_RATE_CUTS_HAPPEN_IN_2026",
+        description="Fed upper bound above 4.0% Dec 2026 (2 cuts implied)",
+        kalshi="KXFED-26DEC-T4.00",
+        polymarket="will-2-fed-rate-cuts-happen-in-2026",
+        status="confirmed",
+        allow_auto_trade=True,
+        tags=("economics",),
+    ),
+    MarketMappingRecord(
+        canonical_id="CONFIRMED_KXFED_26DEC_T3_00_WILL_6_FED_RATE_CUTS_HAPPEN_IN_2026",
+        description="Fed upper bound above 3.0% Dec 2026 (6 cuts implied)",
+        kalshi="KXFED-26DEC-T3.00",
+        polymarket="will-6-fed-rate-cuts-happen-in-2026",
+        status="confirmed",
+        allow_auto_trade=True,
+        tags=("economics",),
+    ),
+
 )
