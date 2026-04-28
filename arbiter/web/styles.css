@@ -1600,6 +1600,8 @@ h2 {
   padding: 10px 12px 9px 14px;
   border-radius: 16px;
   scroll-snap-align: start;
+  overflow: hidden;
+  min-width: 0;
 }
 
 .mapping-card::before {
@@ -1629,6 +1631,7 @@ h2 {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  max-width: 100%;
 }
 
 .mapping-card-statuses {
@@ -1636,6 +1639,8 @@ h2 {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 6px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .mapping-trade-pill {
@@ -2294,6 +2299,24 @@ h2 {
     height: 240px;
     min-height: 240px;
     max-height: 240px;
+  }
+
+  .hero-chart-surface {
+    height: 240px;
+    min-height: 240px;
+    max-height: 240px;
+  }
+
+  .hero-chart-card .hero-chart-surface {
+    height: 240px;
+    min-height: 240px;
+    max-height: 240px;
+  }
+
+  .hero-chart-card {
+    gap: 12px;
+    padding: 14px;
+    border-radius: 22px;
   }
 
   .log-stage-status {
@@ -3426,6 +3449,9 @@ h2,
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  min-width: 0;
   overflow: hidden;
 }
 
@@ -3982,10 +4008,12 @@ h2,
   font-size: 0.76rem;
   line-height: 1.35;
   display: -webkit-box;
-  -webkit-line-clamp: 1;
+  -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
   min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .log-entry-tags {
@@ -4219,7 +4247,18 @@ h2,
   }
 
   .performance-grid {
-    --performance-panel-height: clamp(460px, 50vh, 560px);
+    --performance-panel-height: none;
+  }
+
+  /* Let blotter/scanner panels grow naturally on mobile */
+  .blotter-panel {
+    min-height: 0;
+    max-height: none;
+    height: auto;
+  }
+
+  .opportunity-blotter {
+    max-height: min(50vh, 400px);
   }
 
   #opsSection {
@@ -4235,8 +4274,58 @@ h2,
     max-height: min(42vh, 360px);
   }
 
+  /* ── Kill switch: compact single row ── */
+  .kill-switch-toolbar {
+    display: flex;
+    gap: 8px;
+    flex-wrap: nowrap;
+  }
+
+  .kill-switch-badge {
+    flex: 0 0 auto;
+    min-width: 80px;
+  }
+
+  .kill-switch-nav-button {
+    flex: 1 1 auto;
+  }
+
+  .overview-main {
+    gap: 14px;
+  }
+
+  .overview-copy {
+    gap: 10px;
+  }
+
   .overview-side {
     grid-template-columns: 1fr;
+  }
+
+  /* ── Hero balance strip: compact 2-col on mobile ── */
+  .hero-balance-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .hero-balance-card {
+    padding: 10px 12px;
+    border-radius: 14px;
+    gap: 6px;
+  }
+
+  .hero-balance-value {
+    font-size: clamp(1.2rem, 5.5vw, 1.6rem);
+  }
+
+  .hero-balance-label,
+  .hero-balance-state {
+    font-size: 0.62rem;
+  }
+
+  .hero-balance-copy {
+    font-size: 0.72rem;
+    line-height: 1.3;
   }
 
   .overview-toolbar {
@@ -4313,11 +4402,29 @@ h2,
   }
 
   .performance-grid {
-    --performance-panel-height: clamp(420px, 48vh, 520px);
+    --performance-panel-height: none;
+  }
+
+  /* Let blotter grow on small phones */
+  .blotter-panel {
+    min-height: 0;
+    max-height: none;
+    height: auto;
   }
 
   #infraSection {
-    --infra-panel-height: clamp(280px, 38vh, 360px);
+    --infra-panel-height: none;
+  }
+
+  /* Infra panels (mapping, collectors): no fixed height, grow naturally */
+  .infra-panel {
+    min-height: 0;
+    max-height: none;
+    height: auto;
+  }
+
+  .infra-panel-list {
+    max-height: min(50vh, 400px);
   }
 
   .utility-mark.brand-wordmark {
@@ -4325,10 +4432,35 @@ h2,
   }
 
   .app-actions {
-    display: grid;
-    grid-template-columns: 48px minmax(0, 1fr) 64px;
-    gap: 8px;
-    align-items: stretch;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .app-actions > * {
+    min-height: 36px;
+    font-size: 0.72rem;
+  }
+
+  /* Hide non-essential toolbar items on small phones */
+  .app-api-pill {
+    display: none;
+  }
+
+  /* Kill switch: compact on phones */
+  .kill-switch-toolbar {
+    width: 100%;
+    display: flex;
+    gap: 6px;
+  }
+
+  .kill-switch-badge,
+  .kill-switch-nav-button {
+    min-height: 36px;
+    padding: 0 8px;
+    font-size: 0.7rem;
+    border-radius: 10px;
   }
 
   .app-api-pill,
@@ -4430,73 +4562,124 @@ h2,
     letter-spacing: 0.04em;
   }
 
+  /* ── Hero value row: stack vertically, left-aligned ── */
   .overview-value-row {
     display: grid;
-    gap: 14px;
+    gap: 6px;
   }
 
-  .hero-balance-strip {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .hero-delta-stack {
+    align-items: flex-start;
+    flex-direction: row;
     gap: 10px;
   }
 
+  .hero-delta {
+    font-size: 1.3rem;
+  }
+
+  .hero-updated {
+    font-size: 0.78rem;
+    align-self: center;
+  }
+
+  #heroValue {
+    font-size: clamp(2.6rem, 14vw, 3.7rem);
+    line-height: 1;
+  }
+
+  .hero-kicker {
+    font-size: 1.1rem;
+  }
+
+  /* ── Subtitle: tighter on mobile ── */
+  .hero-subtitle {
+    font-size: 0.82rem;
+    line-height: 1.4;
+  }
+
+  .eyebrow {
+    font-size: 0.62rem;
+  }
+
+  /* ── Hero status pills: 2-column wrap, proper sizing ── */
   .hero-status {
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
     overflow: hidden;
   }
 
   .hero-status .pill {
-    flex: 0 1 calc((100% - 8px) / 2);
-    max-width: calc((100% - 8px) / 2);
     min-width: 0;
-    min-height: 84px;
-    padding: 14px;
+    min-height: 68px;
+    padding: 10px 12px;
   }
 
-  .hero-status .value {
-    font-size: 0.95rem;
+  .hero-status .pill .label {
+    font-size: 0.58rem;
   }
 
-  .hero-delta-stack {
-    align-items: flex-start;
+  .hero-status .pill .value {
+    font-size: 0.82rem;
+    word-break: break-word;
+    overflow-wrap: anywhere;
   }
 
-  #heroValue {
-    font-size: clamp(2.6rem, 14vw, 3.7rem);
-  }
-
+  /* ── Chart card: tighter, shorter on mobile ── */
   .hero-chart-card,
   .panel,
   .log-stage,
   .log-brief,
   .log-console,
   .spotlight-panel {
-    padding: 16px;
-    border-radius: 22px;
+    padding: 14px;
+    border-radius: 20px;
   }
 
-  .hero-chart-surface,
+  .hero-chart-card {
+    gap: 10px;
+  }
+
+  .hero-chart-surface {
+    min-height: 180px;
+    height: 180px;
+    max-height: 180px;
+    border-radius: 16px;
+  }
+
+  .hero-chart-card .hero-chart-surface {
+    min-height: 180px;
+    height: 180px;
+    max-height: 180px;
+  }
+
   .chart-surface {
-    min-height: 220px;
-    height: 220px;
-    max-height: 220px;
+    min-height: 200px;
+    height: 200px;
+    max-height: 200px;
+    border-radius: 16px;
   }
 
   .chart-meta-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
   }
 
   .chart-meta-pill {
-    min-height: 54px;
-    padding: 10px 12px;
-    border-radius: 18px;
-    gap: 8px;
+    min-height: 48px;
+    padding: 8px 10px;
+    border-radius: 14px;
+    gap: 4px;
   }
 
   .chart-meta-pill strong {
-    font-size: 1rem;
+    font-size: 0.88rem;
+  }
+
+  .chart-meta-pill .label,
+  .chart-meta-pill small {
+    font-size: 0.56rem;
   }
 
   .metric-grid-overview,
@@ -4549,7 +4732,9 @@ h2,
 
   .metric-card .metric-meta,
   .status-strip-copy {
-    -webkit-line-clamp: 1;
+    -webkit-line-clamp: 3;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 
   .status-strip-command,
@@ -4680,9 +4865,11 @@ h2,
   .log-entry-headline,
   .log-entry-narrative {
     display: -webkit-box;
-    -webkit-line-clamp: 2;
+    -webkit-line-clamp: 3;
     -webkit-box-orient: vertical;
     overflow: hidden;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 
   .trade-spotlight-route,
@@ -4780,20 +4967,66 @@ h2,
   }
 
   .mapping-card {
-    padding: 13px 13px 11px 15px;
+    padding: 10px 10px 8px 12px;
+    border-radius: 12px;
+    gap: 5px;
+  }
+
+  .mapping-card .stack-item-title {
+    font-size: 0.85rem;
+    line-height: 1.2;
+  }
+
+  .mapping-card-id {
+    font-size: 0.62rem;
   }
 
   .mapping-card-note {
     -webkit-line-clamp: 2;
+    font-size: 0.72rem;
+  }
+
+  .mapping-card-statuses {
+    gap: 4px;
+  }
+
+  .mapping-trade-pill,
+  .mapping-platforms span {
+    font-size: 0.58rem;
+    padding: 2px 6px;
+  }
+
+  .mapping-action-row {
+    gap: 4px;
   }
 
   .mapping-action-row .action-button {
     flex: 1 1 auto;
+    min-height: 32px;
+    font-size: 0.7rem;
+    padding: 0 8px;
   }
 
   .criteria-match-select {
     min-width: 100%;
     width: 100%;
+  }
+
+  /* Scanner empty state — ensure text isn't cut off */
+  .opportunity-blotter {
+    max-height: none;
+    overflow-y: visible;
+  }
+
+  /* Panel copy text — don't let it overflow */
+  .panel-copy {
+    font-size: 0.82rem;
+    line-height: 1.4;
+    word-break: break-word;
+  }
+
+  .blotter-header .panel-copy {
+    max-width: none;
   }
 }
 
@@ -5515,51 +5748,9 @@ body.is-nav-open .primary-nav-drawer {
 }
 
 @media (max-width: 860px) {
+  /* ── Hide balance ticker entirely on mobile — hero cards show the data ── */
   .balance-ticker {
-    margin: -18px -18px 14px;
-    padding: 12px 18px;
-    position: sticky;
-    top: 0;
-    /* Solid surface on mobile — backdrop-filter is expensive and
-       can produce visible banding on iOS Safari when the ticker is
-       sticky over scrolling content. */
-    background: #050607;
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-  }
-
-  .balance-ticker-inner {
-    grid-template-columns: 1fr;
-    grid-template-areas:
-      "lead"
-      "items"
-      "status";
-    gap: 10px;
-    min-height: 0;
-  }
-
-  .balance-ticker-lead {
-    grid-area: lead;
-    justify-content: flex-start;
-    gap: 10px;
-  }
-
-  .balance-ticker-items {
-    grid-area: items;
-    padding-bottom: 2px;
-    -webkit-overflow-scrolling: touch;
-  }
-
-  .balance-ticker-status {
-    grid-area: status;
-    justify-content: flex-start;
-    font-size: 0.68rem;
-    padding-top: 2px;
-    border-top: 1px solid rgba(255, 255, 255, 0.05);
-  }
-
-  .balance-cell {
-    min-width: 168px;
+    display: none !important;
   }
 
   /* hamburger + body-level drawer visible on mobile; desktop
@@ -5632,28 +5823,25 @@ body.is-nav-open .primary-nav-drawer {
 }
 
 @media (max-width: 640px) {
-  .balance-ticker {
-    margin: -14px -14px 12px;
-    padding: 9px 14px;
-    border-bottom-left-radius: 0;
-    border-bottom-right-radius: 0;
+  /* balance-ticker already hidden at 860px */
+
+  /* hero balance cards: even more compact on small phones */
+  .hero-balance-card {
+    padding: 8px 10px;
+    border-radius: 12px;
+    gap: 4px;
   }
 
-  .balance-ticker-lead {
-    gap: 10px;
+  .hero-balance-value {
+    font-size: clamp(1.1rem, 5vw, 1.4rem);
   }
 
-  .balance-ticker-total {
-    font-size: 1.35rem;
-  }
-
-  .balance-cell {
-    min-width: 158px;
-    padding: 7px 12px;
-  }
-
-  .balance-cell-value {
-    font-size: 1.02rem;
+  .hero-balance-copy {
+    font-size: 0.68rem;
+    -webkit-line-clamp: 2;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
   }
 
   /* collapse the horizontal-scroll primary-nav replacement on phones */

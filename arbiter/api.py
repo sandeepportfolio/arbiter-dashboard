@@ -222,7 +222,8 @@ class ArbiterAPI:
         app.router.add_get("/", self.handle_site_index)
         app.router.add_get("/health", self.handle_liveness)
         app.router.add_get("/ready", self.handle_service_ready)
-        app.router.add_get("/ops", self.handle_dashboard)
+        app.router.add_get("/ops", self.handle_ops_dashboard)
+        app.router.add_get("/ops-legacy", self.handle_dashboard)
         app.router.add_get("/favicon.ico", self.handle_favicon)
         if self._dashboard_dir.exists():
             app.router.add_static("/static", str(self._dashboard_dir), show_index=False)
@@ -247,6 +248,9 @@ class ArbiterAPI:
         app.router.add_get("/api/profitability", self.handle_profitability)
         app.router.add_get("/api/readiness", self.handle_readiness)
         app.router.add_get("/api/reconciliation", self.handle_reconciliation)
+        app.router.add_get("/api/pnl", self.handle_pnl_summary)
+        app.router.add_get("/api/deposits", self.handle_deposits)
+        app.router.add_post("/api/deposits", self.handle_add_deposit)
         app.router.add_get("/api/portfolio", self.handle_portfolio)
         app.router.add_get("/api/portfolio/positions", self.handle_portfolio_positions)
         app.router.add_get("/api/portfolio/violations", self.handle_portfolio_violations)
@@ -256,6 +260,8 @@ class ArbiterAPI:
         app.router.add_post("/api/auth/logout", self.handle_logout)
         app.router.add_get("/api/auth/me", self.handle_auth_me)
         app.router.add_post("/api/kill-switch", self.handle_kill_switch)
+        app.router.add_post("/api/scanner/control", self.handle_scanner_control)
+        app.router.add_post("/api/batch-discover", self.handle_batch_discover)
         app.router.add_get("/api/safety/status", self.handle_safety_status)
         app.router.add_get("/api/safety/events", self.handle_safety_events)
         app.router.add_get("/api/metrics", self.handle_metrics)
@@ -361,13 +367,25 @@ class ArbiterAPI:
         return response
 
     async def handle_site_index(self, request):
-        return await self.handle_dashboard(request)
+        return await self.handle_ops_dashboard(request)
+
+    async def handle_ops_dashboard(self, request):
+        ops_path = self._dashboard_dir / "ops.html"
+        if not ops_path.exists():
+            return await self.handle_dashboard(request)
+        resp = web.FileResponse(ops_path)
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        resp.headers["Pragma"] = "no-cache"
+        return resp
 
     async def handle_dashboard(self, request):
         dashboard_path = self._dashboard_dir / "dashboard.html"
         if not dashboard_path.exists():
             return web.Response(text="Dashboard not found", status=404)
-        return web.FileResponse(dashboard_path)
+        resp = web.FileResponse(dashboard_path)
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        resp.headers["Pragma"] = "no-cache"
+        return resp
 
     async def handle_favicon(self, request):
         return web.Response(status=204)
@@ -470,6 +488,172 @@ class ArbiterAPI:
 
     async def handle_reconciliation(self, request):
         return web.json_response(self._reconciliation_snapshot())
+
+    async def handle_pnl_summary(self, request):
+        """Full P&L summary separating trading P&L from deposits.
+
+        Includes deployed capital (money in open positions) so the UI can
+        distinguish between actual losses and capital currently at work.
+        """
+        balances = {
+            platform: snapshot.balance
+            for platform, snapshot in self.monitor.current_balances.items()
+        }
+        recon_stats = self.reconciler.stats if self.reconciler else {}
+        recorded_pnl = recon_stats.get("recorded_pnl", {})
+        total_deposits = recon_stats.get("total_deposits", {})
+        starting_balances = recon_stats.get("starting_balances", {})
+
+        # Calculate trading P&L = current_balance - starting_balance - deposits
+        trading_pnl = {}
+        for platform in balances:
+            start = starting_balances.get(platform, 0.0)
+            deposits = total_deposits.get(platform, 0.0)
+            current = balances[platform]
+            trading_pnl[platform] = round(current - start - deposits, 2)
+
+        total_current = sum(balances.values())
+        total_start = sum(starting_balances.get(p, 0) for p in balances)
+        total_dep = sum(total_deposits.get(p, 0) for p in balances)
+        net_trading_pnl = round(total_current - total_start - total_dep, 2)
+
+        # Calculate deployed capital (money in open/submitted positions)
+        # and expected settlement value
+        executions = getattr(self.engine, "_executions", [])
+        deployed_capital = 0.0
+        expected_settlement = 0.0
+        open_positions = 0
+        for e in executions:
+            if e.status in ("filled", "submitted", "simulated"):
+                yes_cost = e.leg_yes.fill_qty * e.leg_yes.fill_price if e.leg_yes.fill_qty > 0 else 0
+                no_cost = e.leg_no.fill_qty * e.leg_no.fill_price if e.leg_no.fill_qty > 0 else 0
+                spent = yes_cost + no_cost
+                if spent > 0:
+                    deployed_capital += spent
+                    # If both legs filled, settlement = min(fill_qty) * $1.00
+                    both_filled = e.leg_yes.fill_qty > 0 and e.leg_no.fill_qty > 0
+                    if both_filled:
+                        matched_qty = min(e.leg_yes.fill_qty, e.leg_no.fill_qty)
+                        expected_settlement += matched_qty * 1.00
+                    else:
+                        # One leg only — uncertain outcome
+                        expected_settlement += spent  # conservative: assume breakeven
+                    open_positions += 1
+
+        expected_profit_at_settlement = round(expected_settlement - deployed_capital, 2)
+
+        return web.json_response({
+            "current_balances": {k: round(v, 2) for k, v in balances.items()},
+            "starting_balances": {k: round(v, 2) for k, v in starting_balances.items()},
+            "total_deposits": total_deposits,
+            "total_deposits_all_platforms": round(total_dep, 2),
+            "recorded_trading_pnl": recorded_pnl,
+            "balance_change_by_platform": trading_pnl,
+            "total_balance": round(total_current, 2),
+            "net_balance_change": net_trading_pnl,
+            "deposit_count": recon_stats.get("deposit_count", 0),
+            # New: deployed capital context
+            "deployed_capital": round(deployed_capital, 2),
+            "expected_settlement": round(expected_settlement, 2),
+            "expected_profit_at_settlement": expected_profit_at_settlement,
+            "open_positions": open_positions,
+        })
+
+    async def handle_deposits(self, request):
+        """Return deposit/withdrawal event history."""
+        if not self.reconciler:
+            return web.json_response({"deposits": [], "totals": {}})
+        return web.json_response({
+            "deposits": self.reconciler.deposit_history,
+            "totals": self.reconciler.total_deposits_by_platform,
+            "total_all": round(sum(self.reconciler.total_deposits_by_platform.values()), 2),
+        })
+
+    async def handle_add_deposit(self, request):
+        """POST /api/deposits — record a deposit, withdrawal, or set initial capital.
+
+        Body options:
+          {"platform": "kalshi"|"polymarket", "amount": 100.00}
+            — Record a new deposit/withdrawal that just happened.
+          {"platform": "kalshi"|"polymarket", "amount": 300.00, "type": "initial_capital"}
+            — Set the total initial capital deposited. This resets the starting
+              balance to the specified amount and clears deposit tracking for
+              that platform. Use for retroactive "I deposited $X total before
+              tracking started".
+        """
+        await require_auth(request)
+        payload = await self._read_json_body(request)
+        platform = str(payload.get("platform", "")).strip().lower()
+        amount = payload.get("amount")
+        deposit_type = str(payload.get("type", "")).strip().lower()
+
+        if not platform or platform not in ("kalshi", "polymarket"):
+            return web.json_response(
+                {"error": "platform must be 'kalshi' or 'polymarket'"}, status=400
+            )
+        if amount is None:
+            return web.json_response({"error": "amount is required"}, status=400)
+        try:
+            amount = float(amount)
+        except (TypeError, ValueError):
+            return web.json_response({"error": "amount must be a number"}, status=400)
+        if amount == 0:
+            return web.json_response({"error": "amount must be non-zero"}, status=400)
+
+        if not self.reconciler:
+            return web.json_response(
+                {"error": "Reconciler not configured"}, status=503
+            )
+
+        if deposit_type == "initial_capital":
+            # Set the starting balance to the total capital deposited.
+            # This is for retroactive deposits that happened before tracking.
+            # Deposits during tracking = 0 (the starting balance IS the capital).
+            self.reconciler._starting_balances[platform] = amount
+            self.reconciler._total_deposits[platform] = 0.0
+            # Persist
+            if self.reconciler._pg_pool is not None:
+                import asyncio
+                await self.reconciler._persist_balance(platform)
+            logger.info(
+                "Initial capital set: %s = $%.2f (starting balance reset)",
+                platform, amount,
+            )
+            # Get current balance for the response
+            balance_snapshot = self.monitor.current_balances.get(platform)
+            current_balance = balance_snapshot.balance if balance_snapshot else 0.0
+            trading_pnl = round(current_balance - amount, 2)
+            return web.json_response({
+                "status": "ok",
+                "platform": platform,
+                "initial_capital": round(amount, 2),
+                "current_balance": round(current_balance, 2),
+                "trading_pnl": trading_pnl,
+            })
+
+        # Regular deposit/withdrawal during tracking
+        balance_snapshot = self.monitor.current_balances.get(platform)
+        current_balance = balance_snapshot.balance if balance_snapshot else 0.0
+        balance_before = current_balance - amount
+
+        self.reconciler.record_deposit(platform, amount, balance_before, current_balance)
+
+        logger.info(
+            "Manual deposit recorded: %s %s$%.2f",
+            platform,
+            "+" if amount > 0 else "",
+            amount,
+        )
+
+        return web.json_response({
+            "status": "ok",
+            "platform": platform,
+            "amount": round(amount, 2),
+            "type": "deposit" if amount > 0 else "withdrawal",
+            "new_total_deposits": round(
+                self.reconciler.total_deposits_by_platform.get(platform, 0.0), 2
+            ),
+        })
 
     async def handle_market_mapping_audit(self, request):
         """Return the audit log for a single mapping (Phase 6 Plan 06-05).
@@ -765,6 +949,113 @@ class ArbiterAPI:
         return web.json_response({"authenticated": True, "email": user})
 
     # ── Safety / kill-switch endpoints (SAFE-01) ──────────────────────────
+
+    async def handle_scanner_control(self, request):
+        """POST /api/scanner/control — pause or resume the scanner.
+
+        Body: {"action": "pause" | "resume"}
+        """
+        await require_auth(request)
+        payload = await self._read_json_body(request)
+        action = str(payload.get("action", "")).strip().lower()
+
+        if action == "pause":
+            self.scanner.pause()
+            return web.json_response({"status": "paused", "scanning": False})
+        elif action == "resume":
+            self.scanner.resume()
+            return web.json_response({"status": "resumed", "scanning": True})
+        else:
+            return web.json_response(
+                {"error": f"Unsupported scanner action: {action or 'unknown'}"},
+                status=400,
+            )
+
+    async def handle_batch_discover(self, request):
+        """POST /api/batch-discover — trigger one-shot discovery + auto-promote.
+
+        Runs the full auto_discovery pipeline synchronously (in background),
+        then returns a summary of new candidates and promotions.
+
+        Body (all optional):
+            min_score:       float  (default from env/operator settings)
+            max_candidates:  int    (default from env/operator settings)
+            auto_promote:    bool   (default True — run auto-promote gates)
+        """
+        actor = await require_auth(request)
+        payload = await self._read_json_body(request)
+
+        if self.mapping_store is None:
+            return web.json_response(
+                {"error": "Mapping store not available (no DATABASE_URL)"}, status=503,
+            )
+
+        # Get the Kalshi and Polymarket collectors
+        kalshi_collector = self.collectors.get("kalshi")
+        poly_collector = self.collectors.get("polymarket")
+        if kalshi_collector is None or poly_collector is None:
+            return web.json_response(
+                {"error": "Both Kalshi and Polymarket collectors required"}, status=503,
+            )
+
+        # Load operator settings as baseline, override with request body
+        settings_store = OperatorSettingsStore()
+        runtime = load_market_discovery_settings(settings_store)
+
+        min_score = float(payload.get("min_score", runtime["auto_discovery_min_score"]))
+        max_candidates = int(payload.get("max_candidates", runtime["auto_discovery_max_candidates"]))
+        do_promote = payload.get("auto_promote", True)
+
+        promotion_settings = runtime if do_promote else None
+
+        # Get the client from the collector (polymarket collector wraps a client)
+        poly_client = getattr(poly_collector, "client", poly_collector)
+
+        from .mapping.auto_discovery import discover as discover_market_mappings
+
+        try:
+            written = await discover_market_mappings(
+                kalshi_collector,
+                poly_client,
+                self.mapping_store,
+                budget_rps=float(runtime["auto_discovery_budget_rps"]),
+                min_score=min_score,
+                max_candidates=max_candidates,
+                promotion_settings=promotion_settings,
+            )
+
+            # Refresh the runtime cache so new mappings take effect immediately
+            from .mapping.market_map import MarketMappingStore
+            await self.mapping_store.refresh_runtime_cache()
+
+            # Get updated counts
+            pending = await self.mapping_store.count_candidates()
+            confirmed_count = 0
+            try:
+                all_mappings = await self.mapping_store.all(status="confirmed", limit=10000)
+                confirmed_count = len(all_mappings)
+            except Exception:
+                pass
+
+            return web.json_response({
+                "status": "completed",
+                "candidates_written": written,
+                "candidates_pending": pending,
+                "confirmed_total": confirmed_count,
+                "settings_used": {
+                    "min_score": min_score,
+                    "max_candidates": max_candidates,
+                    "auto_promote": do_promote,
+                    "auto_promote_min_score": runtime.get("auto_promote_min_score"),
+                    "auto_promote_daily_cap": runtime.get("auto_promote_daily_cap"),
+                },
+                "triggered_by": actor,
+            })
+        except Exception as exc:
+            logger.error("Batch discover failed: %s", exc)
+            return web.json_response(
+                {"error": f"Discovery failed: {str(exc)}"}, status=500,
+            )
 
     async def handle_kill_switch(self, request):
         """POST /api/kill-switch — arm or reset the kill switch.

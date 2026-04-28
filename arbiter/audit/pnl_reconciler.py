@@ -63,6 +63,26 @@ class ReconciliationReport:
         }
 
 
+@dataclass
+class DepositEvent:
+    """Detected deposit or withdrawal on a platform."""
+    platform: str
+    amount: float          # positive = deposit, negative = withdrawal
+    balance_before: float  # expected balance before the event
+    balance_after: float   # actual balance after the event
+    timestamp: float
+
+    def to_dict(self) -> dict:
+        return {
+            "platform": self.platform,
+            "amount": round(self.amount, 2),
+            "type": "deposit" if self.amount > 0 else "withdrawal",
+            "balance_before": round(self.balance_before, 2),
+            "balance_after": round(self.balance_after, 2),
+            "timestamp": self.timestamp,
+        }
+
+
 class PnLReconciler:
     """
     Reconciles recorded P&L against platform balances.
@@ -72,30 +92,141 @@ class PnLReconciler:
       discrepancy = expected - actual_platform_balance
 
     Flags discrepancies > $0.50 for investigation.
+    Auto-detects deposits/withdrawals (balance jumps not explained by P&L)
+    and adjusts baselines so they don't corrupt P&L tracking.
+
+    When a PostgreSQL pool is provided, starting balances and deposit events
+    are persisted across container restarts.
     """
+
+    # Minimum balance change to classify as deposit/withdrawal vs noise
+    DEPOSIT_DETECTION_THRESHOLD = 1.00  # $1.00
 
     def __init__(self, discrepancy_threshold: float = 0.50,
                  check_interval: float = 300.0,
-                 log_to_disk: bool = True):
+                 log_to_disk: bool = True,
+                 pg_pool=None):
         self.threshold = discrepancy_threshold
         self.check_interval = check_interval
         self.log_to_disk = log_to_disk
+        self._pg_pool = pg_pool  # asyncpg pool for persistence (optional)
         self._starting_balances: Dict[str, float] = {}
         self._recorded_pnl: Dict[str, float] = {}  # platform -> cumulative PnL
+        self._total_deposits: Dict[str, float] = {}  # platform -> total deposits
+        self._deposit_events: List[DepositEvent] = []  # full history
         self._reports: List[ReconciliationReport] = []
         self._running = False
         self._reconciliation_count = 0
         self._flag_count = 0
+        self._restored_from_db = False  # True after load_persisted_state() restores data
 
         if log_to_disk:
             RECONCILIATION_LOG_DIR.mkdir(parents=True, exist_ok=True)
 
-    def set_starting_balance(self, platform: str, balance: float):
+    # ── PostgreSQL persistence ────────────────────────────────────────────
+
+    async def load_persisted_state(self) -> bool:
+        """Load starting balances and deposit history from PostgreSQL.
+
+        Returns True if any state was restored, False otherwise.
+        """
+        if self._pg_pool is None:
+            return False
+        try:
+            async with self._pg_pool.acquire() as conn:
+                # Load starting balances and total deposits
+                rows = await conn.fetch(
+                    "SELECT platform, starting_balance, total_deposits FROM platform_balances"
+                )
+                for row in rows:
+                    self._starting_balances[row["platform"]] = float(row["starting_balance"])
+                    self._total_deposits[row["platform"]] = float(row["total_deposits"])
+                    if row["platform"] not in self._recorded_pnl:
+                        self._recorded_pnl[row["platform"]] = 0.0
+
+                # Load deposit event history
+                dep_rows = await conn.fetch(
+                    "SELECT platform, amount, balance_before, balance_after, "
+                    "EXTRACT(EPOCH FROM created_at) AS ts "
+                    "FROM deposit_events ORDER BY created_at ASC"
+                )
+                for row in dep_rows:
+                    self._deposit_events.append(DepositEvent(
+                        platform=row["platform"],
+                        amount=float(row["amount"]),
+                        balance_before=float(row["balance_before"]),
+                        balance_after=float(row["balance_after"]),
+                        timestamp=float(row["ts"]),
+                    ))
+
+            restored = len(rows) > 0
+            if restored:
+                self._restored_from_db = True
+                logger.info(
+                    "Restored persisted state: %d platform(s), %d deposit event(s)",
+                    len(rows), len(dep_rows),
+                )
+                for plat, bal in self._starting_balances.items():
+                    dep = self._total_deposits.get(plat, 0.0)
+                    logger.info(
+                        "  %s: starting=$%.2f, deposits=$%.2f",
+                        plat, bal, dep,
+                    )
+            return restored
+        except Exception as exc:
+            logger.warning("Failed to load persisted reconciler state: %s", exc)
+            return False
+
+    async def _persist_balance(self, platform: str) -> None:
+        """Save starting balance and total deposits for a platform to PostgreSQL."""
+        if self._pg_pool is None:
+            return
+        try:
+            async with self._pg_pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO platform_balances (platform, starting_balance, total_deposits, updated_at)
+                    VALUES ($1, $2, $3, NOW())
+                    ON CONFLICT (platform) DO UPDATE SET
+                        starting_balance = $2,
+                        total_deposits = $3,
+                        updated_at = NOW()
+                    """,
+                    platform,
+                    self._starting_balances.get(platform, 0.0),
+                    self._total_deposits.get(platform, 0.0),
+                )
+        except Exception as exc:
+            logger.warning("Failed to persist balance for %s: %s", platform, exc)
+
+    async def _persist_deposit_event(self, event: DepositEvent) -> None:
+        """Save a deposit event to PostgreSQL."""
+        if self._pg_pool is None:
+            return
+        try:
+            async with self._pg_pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO deposit_events (platform, amount, balance_before, balance_after)
+                    VALUES ($1, $2, $3, $4)
+                    """,
+                    event.platform,
+                    event.amount,
+                    event.balance_before,
+                    event.balance_after,
+                )
+        except Exception as exc:
+            logger.warning("Failed to persist deposit event for %s: %s", event.platform, exc)
+
+    def set_starting_balance(self, platform: str, balance: float, persist: bool = True):
         """Set the starting balance for a platform (call at system start)."""
         self._starting_balances[platform] = balance
         if platform not in self._recorded_pnl:
             self._recorded_pnl[platform] = 0.0
         logger.info(f"Starting balance set: {platform} = ${balance:.2f}")
+        if persist and self._pg_pool is not None:
+            # Fire-and-forget persistence — don't block the caller
+            asyncio.ensure_future(self._persist_balance(platform))
 
     def record_execution_pnl(self, platform: str, pnl: float):
         """Record P&L from a trade execution on a platform."""
@@ -138,12 +269,61 @@ class PnLReconciler:
             self._recorded_pnl[yes_platform] = self._recorded_pnl.get(yes_platform, 0.0) + split_pnl
             self._recorded_pnl[no_platform] = self._recorded_pnl.get(no_platform, 0.0) + split_pnl
 
+    def record_deposit(self, platform: str, amount: float,
+                       balance_before: float, balance_after: float):
+        """Record a detected deposit/withdrawal and adjust the starting balance."""
+        event = DepositEvent(
+            platform=platform,
+            amount=amount,
+            balance_before=balance_before,
+            balance_after=balance_after,
+            timestamp=time.time(),
+        )
+        self._deposit_events.append(event)
+        self._total_deposits[platform] = self._total_deposits.get(platform, 0.0) + amount
+        # Shift the starting balance forward so the deposit doesn't show as P&L
+        self._starting_balances[platform] = self._starting_balances.get(platform, 0.0) + amount
+        event_type = "DEPOSIT" if amount > 0 else "WITHDRAWAL"
+        logger.info(
+            "%s detected on %s: $%.2f (balance $%.2f → $%.2f, new baseline: $%.2f)",
+            event_type, platform, abs(amount), balance_before, balance_after,
+            self._starting_balances[platform],
+        )
+        # Persist deposit event and updated balance to PostgreSQL
+        if self._pg_pool is not None:
+            asyncio.ensure_future(self._persist_deposit_event(event))
+            asyncio.ensure_future(self._persist_balance(platform))
+
+    def _detect_deposits(self, current_balances: Dict[str, float]):
+        """Check for unexplained balance changes and classify as deposits/withdrawals."""
+        for platform, actual_balance in current_balances.items():
+            starting = self._starting_balances.get(platform)
+            if starting is None:
+                continue
+            recorded = self._recorded_pnl.get(platform, 0.0)
+            expected = starting + recorded
+            discrepancy = actual_balance - expected  # positive = more $ than expected
+
+            if abs(discrepancy) >= self.DEPOSIT_DETECTION_THRESHOLD:
+                self.record_deposit(platform, discrepancy, expected, actual_balance)
+
     def reconcile(self, current_balances: Dict[str, float]) -> ReconciliationReport:
         """
         Run reconciliation against current platform balances.
 
+        First detects deposits/withdrawals (balance changes not explained by
+        recorded P&L), adjusts baselines, then reconciles remaining discrepancies.
+
         current_balances: {"kalshi": 450.00, "polymarket": 200.00, ...}
         """
+        # When state was restored from PostgreSQL, the gap between
+        # starting_balance and current_balance IS the real trading P&L,
+        # NOT a deposit/withdrawal. Skip auto-detection until a real
+        # trade executes or an operator records a deposit — at that point
+        # the flag is cleared and normal detection resumes.
+        if not self._restored_from_db:
+            self._detect_deposits(current_balances)
+
         self._reconciliation_count += 1
         now = time.time()
         entries = []
@@ -211,11 +391,26 @@ class PnLReconciler:
             json.dump(report.to_dict(), f, indent=2)
 
     @property
+    def deposit_history(self) -> List[dict]:
+        """Return full deposit/withdrawal event history."""
+        return [e.to_dict() for e in self._deposit_events]
+
+    @property
+    def total_deposits_by_platform(self) -> Dict[str, float]:
+        """Return total deposits per platform."""
+        return {k: round(v, 2) for k, v in self._total_deposits.items()}
+
+    @property
     def stats(self) -> dict:
+        total_deposits = sum(self._total_deposits.values())
         return {
             "reconciliation_count": self._reconciliation_count,
             "flag_count": self._flag_count,
             "starting_balances": dict(self._starting_balances),
             "recorded_pnl": {k: round(v, 4) for k, v in self._recorded_pnl.items()},
+            "total_deposits": {k: round(v, 2) for k, v in self._total_deposits.items()},
+            "total_deposits_all": round(total_deposits, 2),
+            "deposit_count": len(self._deposit_events),
+            "deposit_events": [e.to_dict() for e in self._deposit_events[-10:]],  # last 10
             "latest_report": self._reports[-1].to_dict() if self._reports else None,
         }

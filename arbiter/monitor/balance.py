@@ -17,6 +17,80 @@ from ..scanner.arbitrage import ArbitrageOpportunity
 logger = logging.getLogger("arbiter.monitor")
 
 
+# ── Alert validation gates ────────────────────────────────────────────
+# An alert is only safe to send if ALL of these hold. These match the
+# scanner's "tradable" status guarantees but are duplicated here so a
+# regression in scanner gating cannot cause us to push misleading
+# "ARBITRAGE FOUND" alerts.
+ALERT_MIN_NET_EDGE_CENTS = 3.0  # buffer above break-even (covers slippage)
+ALERT_MAX_QUOTE_AGE_SECONDS = 30.0
+ALERT_MIN_CONFIDENCE = 0.5
+
+
+def _alert_is_safe_to_send(opp: ArbitrageOpportunity) -> bool:
+    """Return True only if every safety condition for alerting is met.
+
+    Each failed check logs at WARNING so operators can audit why an alert
+    was suppressed. Order is from cheapest/most-fundamental check first.
+    """
+    if opp.mapping_status != "confirmed":
+        logger.warning(
+            "Alert suppressed [%s] mapping_status=%s (must be 'confirmed')",
+            opp.canonical_id, opp.mapping_status,
+        )
+        return False
+    if opp.status not in {"tradable", "manual"}:
+        logger.warning(
+            "Alert suppressed [%s] status=%s (must be 'tradable' or 'manual')",
+            opp.canonical_id, opp.status,
+        )
+        return False
+    if opp.yes_price <= 0 or opp.no_price <= 0:
+        logger.warning(
+            "Alert suppressed [%s] non-positive price yes=%.3f no=%.3f",
+            opp.canonical_id, opp.yes_price, opp.no_price,
+        )
+        return False
+    if opp.yes_price + opp.no_price >= 1.0:
+        logger.warning(
+            "Alert suppressed [%s] yes+no=%.3f, no genuine cross-platform arb",
+            opp.canonical_id, opp.yes_price + opp.no_price,
+        )
+        return False
+    if opp.net_edge_cents < ALERT_MIN_NET_EDGE_CENTS:
+        logger.warning(
+            "Alert suppressed [%s] net_edge=%.2f¢ below %.1f¢ profitability buffer",
+            opp.canonical_id, opp.net_edge_cents, ALERT_MIN_NET_EDGE_CENTS,
+        )
+        return False
+    if opp.quote_age_seconds > ALERT_MAX_QUOTE_AGE_SECONDS:
+        logger.warning(
+            "Alert suppressed [%s] quote_age=%.1fs > %.0fs (stale)",
+            opp.canonical_id, opp.quote_age_seconds, ALERT_MAX_QUOTE_AGE_SECONDS,
+        )
+        return False
+    if opp.confidence < ALERT_MIN_CONFIDENCE:
+        logger.warning(
+            "Alert suppressed [%s] confidence=%.2f below %.2f threshold",
+            opp.canonical_id, opp.confidence, ALERT_MIN_CONFIDENCE,
+        )
+        return False
+    if opp.suggested_qty <= 0:
+        logger.warning(
+            "Alert suppressed [%s] suggested_qty=%d (no executable size)",
+            opp.canonical_id, opp.suggested_qty,
+        )
+        return False
+    return True
+
+
+def _truncate(text: str, limit: int) -> str:
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
 @dataclass
 class BalanceSnapshot:
     platform: str
@@ -216,7 +290,16 @@ class BalanceMonitor:
         logger.warning(f"Low balance alert sent: {platform} ${balance:.2f} < ${threshold:.2f}")
 
     async def alert_opportunity(self, opp: ArbitrageOpportunity):
-        """Send Telegram alert for a profitable arbitrage opportunity."""
+        """Send Telegram alert for a profitable arbitrage opportunity.
+
+        Defense-in-depth: this re-validates the safety conditions the scanner
+        already checks, so a regression in scanner gating cannot cause us to
+        push misleading "ARBITRAGE FOUND" alerts to operators. Each suppression
+        path logs at WARNING so operators can see why an alert was skipped.
+        """
+        if not _alert_is_safe_to_send(opp):
+            return
+
         now = time.time()
         key = f"arb_{opp.canonical_id}_{opp.yes_platform}_{opp.no_platform}"
         last = self._last_alert_time.get(key, 0)
@@ -224,17 +307,38 @@ class BalanceMonitor:
             return
 
         self._last_alert_time[key] = now
+        total_cost = opp.yes_price + opp.no_price
+        yes_q_line = f"\n  ❓ <i>{_truncate(opp.yes_question, 140)}</i>" if opp.yes_question else ""
+        no_q_line = f"\n  ❓ <i>{_truncate(opp.no_question, 140)}</i>" if opp.no_question else ""
+
         msg = (
-            f"💰 <b>ARBITRAGE FOUND</b>\n\n"
-            f"<b>{opp.description}</b>\n"
-            f"├ BUY YES @ {opp.yes_platform.upper()}: ${opp.yes_price:.2f}\n"
-            f"├ BUY NO  @ {opp.no_platform.upper()}: ${opp.no_price:.2f}\n"
-            f"├ Gross edge: {opp.gross_edge*100:.1f}¢\n"
-            f"├ Fees: {opp.total_fees*100:.1f}¢\n"
-            f"├ <b>Net profit: {opp.net_edge_cents:.1f}¢/contract</b>\n"
-            f"├ Suggested qty: {opp.suggested_qty}\n"
-            f"└ <b>Max profit: ${opp.max_profit_usd:.2f}</b>\n\n"
-            f"Confidence: {opp.confidence*100:.0f}%"
+            f"💰 <b>ARBITRAGE FOUND</b>\n"
+            f"\n"
+            f"🎯 <b>Outcome:</b> {opp.description}\n"
+            f"🆔 <code>{opp.canonical_id}</code>\n"
+            f"\n"
+            f"📈 <b>BUY YES on {opp.yes_platform.upper()}</b> @ ${opp.yes_price:.3f}\n"
+            f"  📍 Market: <code>{opp.yes_market_id}</code>"
+            f"{yes_q_line}\n"
+            f"\n"
+            f"📉 <b>BUY NO on {opp.no_platform.upper()}</b> @ ${opp.no_price:.3f}\n"
+            f"  📍 Market: <code>{opp.no_market_id}</code>"
+            f"{no_q_line}\n"
+            f"\n"
+            f"💵 <b>Profit math (per contract):</b>\n"
+            f"├ Cost: ${total_cost:.3f} (YES + NO)\n"
+            f"├ Gross edge: {opp.gross_edge*100:.2f}¢\n"
+            f"├ Fees: {opp.total_fees*100:.2f}¢\n"
+            f"└ <b>Net profit: {opp.net_edge_cents:.2f}¢ after fees ✅</b>\n"
+            f"\n"
+            f"📊 Suggested qty: <b>{opp.suggested_qty}</b>\n"
+            f"💎 Max profit: <b>${opp.max_profit_usd:.2f}</b>\n"
+            f"\n"
+            f"🔒 Mapping: {opp.mapping_status} (score {opp.mapping_score:.2f})\n"
+            f"⏱ Quote age: {opp.quote_age_seconds:.1f}s\n"
+            f"🎯 Confidence: {opp.confidence*100:.0f}%\n"
+            f"\n"
+            f"⚠️ <i>Verify both legs target the SAME outcome on the apps before trading.</i>"
         )
         await self.notifier.send(msg)
 
@@ -293,11 +397,15 @@ class BalanceMonitor:
                 await asyncio.sleep(10)
 
     async def _arb_alert_loop(self, queue: asyncio.Queue):
-        """Process arbitrage opportunities and send alerts for good ones."""
+        """Process arbitrage opportunities and send alerts for good ones.
+
+        All gating is delegated to ``_alert_is_safe_to_send`` (defense-in-depth:
+        the same checks run again inside ``alert_opportunity``).
+        """
         while self._running:
             try:
                 opp = await asyncio.wait_for(queue.get(), timeout=5.0)
-                if opp.net_edge_cents >= 3.0 and opp.confidence >= 0.5:
+                if _alert_is_safe_to_send(opp):
                     await self.alert_opportunity(opp)
             except asyncio.TimeoutError:
                 continue

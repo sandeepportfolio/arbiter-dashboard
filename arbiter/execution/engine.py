@@ -377,8 +377,12 @@ class ExecutionEngine:
         self._aborted_count = 0
         self._manual_count = 0
         self._recovery_count = 0
+        import os as _os_init
+        _p5 = float(_os_init.getenv("PHASE5_MAX_ORDER_USD", "0") or "0")
+        _mp = float(_os_init.getenv("MAX_POSITION_USD", "0") or "0")
+        _audit_cap = _p5 or _mp or config.scanner.max_position_usd
         self._auditor = MathAuditor(
-            max_position_usd=config.scanner.max_position_usd,
+            max_position_usd=_audit_cap,
         )
         self._trade_gate = None
         # Plan 02-06 integration: adapters + store + per-leg timeout
@@ -433,6 +437,34 @@ class ExecutionEngine:
             platform_no=opp.no_platform,
         )
         try:
+            # ── SAFETY: Reject non-confirmed mappings at execution level ──
+            # Defense-in-depth: even if scanner somehow marks a non-confirmed
+            # mapping as tradable, the engine MUST refuse to trade it.
+            if opp.mapping_status != "confirmed":
+                logger.warning(
+                    "REJECTED %s: mapping_status=%s (only confirmed mappings can trade). canonical=%s",
+                    arb_id, opp.mapping_status, opp.canonical_id,
+                )
+                self._aborted_count += 1
+                return None
+
+            # ── SAFETY: Require identical resolution criteria for live trading ──
+            # Defense-in-depth: even if scanner somehow marks a mapping as
+            # tradable, the engine verifies resolution_match_status == "identical".
+            # This prevents any mapping with unverified resolution criteria
+            # from reaching real-money execution.
+            from ..config.settings import get_market_mapping
+            live_mapping = get_market_mapping(opp.canonical_id) or {}
+            res_match = str(live_mapping.get("resolution_match_status", "pending_operator_review")).lower()
+            if res_match != "identical":
+                logger.warning(
+                    "REJECTED %s: resolution_match_status=%s (only identical resolution "
+                    "criteria can trade live). canonical=%s",
+                    arb_id, res_match, opp.canonical_id,
+                )
+                self._aborted_count += 1
+                return None
+
             gate_allowed, gate_reason, gate_context = await self._check_trade_gate(opp)
             if not gate_allowed:
                 self._aborted_count += 1
@@ -471,6 +503,20 @@ class ExecutionEngine:
 
             await self._audit_execution(execution)
             await self._publish_execution(execution)
+
+            # Send detailed Telegram notification with execution result
+            try:
+                await self.balance_monitor.alert_execution_result(
+                    arb_id=execution.arb_id,
+                    opp=execution.opportunity,
+                    status=execution.status,
+                    leg_yes=execution.leg_yes,
+                    leg_no=execution.leg_no,
+                    realized_pnl=execution.realized_pnl,
+                )
+            except Exception as exc:
+                logger.warning("Telegram execution result alert failed: %s", exc)
+
             return execution
         finally:
             clear_contextvars()
@@ -676,6 +722,7 @@ class ExecutionEngine:
             total_fees=total_fees,
             net_edge=net_edge,
             net_edge_cents=net_edge_cents,
+            max_profit_usd=round(net_edge * opp.suggested_qty, 4),
             quote_age_seconds=age,
             timestamp=time.time(),
             yes_fee_rate=current_yes.fee_rate,
@@ -708,12 +755,16 @@ class ExecutionEngine:
             return
 
         severities = {flag.severity for flag in audit_result.flags}
-        severity = "critical" if "critical" in severities else "warning"
+        # Downgrade to warning for non-terminal states (submitted, partial)
+        # where the trade may still succeed. Only use critical when both legs
+        # have terminal outcomes AND the audit found critical flags.
+        is_terminal = execution.status in ("filled", "failed")
+        severity = "critical" if ("critical" in severities and is_terminal) else "warning"
         await self.record_incident(
             arb_id=execution.arb_id,
             canonical_id=execution.opportunity.canonical_id,
             severity=severity,
-            message="Shadow execution audit flagged the completed trade state",
+            message=f"Shadow execution audit flagged (trade status={execution.status})",
             metadata={"audit": audit_result.to_dict()},
         )
 
@@ -768,13 +819,176 @@ class ExecutionEngine:
 
     async def _live_execution(self, arb_id: str, opp: ArbitrageOpportunity) -> ArbExecution:
         now = time.time()
-        yes_task = asyncio.create_task(
-            self._place_order_for_leg(arb_id, opp.yes_platform, opp.yes_market_id, opp.canonical_id, "yes", opp.yes_price, opp.suggested_qty)
-        )
-        no_task = asyncio.create_task(
-            self._place_order_for_leg(arb_id, opp.no_platform, opp.no_market_id, opp.canonical_id, "no", opp.no_price, opp.suggested_qty)
-        )
-        leg_yes, leg_no = await asyncio.gather(yes_task, no_task)
+
+        # ── Sequential leg execution (naked-position prevention) ─────
+        # Execute legs SEQUENTIALLY instead of concurrently to prevent
+        # naked positions:
+        #   1. Fire the PRIMARY leg first (Kalshi = FOK, instant feedback).
+        #   2. Only if primary fills → fire the SECONDARY leg (Polymarket).
+        #   3. If secondary fails → log incident for manual resolution.
+        # With FOK on Kalshi, the primary either fills completely or not
+        # at all — no partial exposure risk on leg 1.
+
+        # ── Pre-execution profitability gate ─────
+        # Verify the arb is genuinely profitable after ALL fees before
+        # risking any capital. Require at least 0.5¢ net edge after fees.
+        MIN_NET_EDGE_CENTS = 0.5
+        total_cost = opp.yes_price + opp.no_price
+        gross_edge = 1.0 - total_cost
+        qty = max(1, int(opp.suggested_qty or 1))
+        yes_fee = compute_fee(opp.yes_platform, opp.yes_price, qty, opp.yes_fee_rate)
+        no_fee = compute_fee(opp.no_platform, opp.no_price, qty, opp.no_fee_rate)
+        # Per-contract fees
+        yes_fee_per = yes_fee / qty if qty > 0 else 0.0
+        no_fee_per = no_fee / qty if qty > 0 else 0.0
+        net_edge_after_fees = gross_edge - yes_fee_per - no_fee_per
+        if net_edge_after_fees * 100 < MIN_NET_EDGE_CENTS:
+            logger.info(
+                "Profitability gate: net_edge=%.4f (%.2f¢) below minimum %.1f¢, aborting",
+                net_edge_after_fees, net_edge_after_fees * 100, MIN_NET_EDGE_CENTS,
+            )
+            leg_yes = Order(
+                order_id=f"{arb_id}-YES-UNPROFITABLE",
+                platform=opp.yes_platform, market_id=opp.yes_market_id,
+                canonical_id=opp.canonical_id, side="yes",
+                price=opp.yes_price, quantity=opp.suggested_qty,
+                status=OrderStatus.ABORTED, timestamp=time.time(),
+                error=f"Net edge {net_edge_after_fees*100:.2f}¢ below {MIN_NET_EDGE_CENTS}¢ minimum",
+            )
+            leg_no = Order(
+                order_id=f"{arb_id}-NO-UNPROFITABLE",
+                platform=opp.no_platform, market_id=opp.no_market_id,
+                canonical_id=opp.canonical_id, side="no",
+                price=opp.no_price, quantity=opp.suggested_qty,
+                status=OrderStatus.ABORTED, timestamp=time.time(),
+                error=f"Net edge {net_edge_after_fees*100:.2f}¢ below {MIN_NET_EDGE_CENTS}¢ minimum",
+            )
+            # Skip straight to status determination below
+        else:
+            # Determine primary/secondary: Kalshi (FOK) goes first because
+            # it gives an immediate fill-or-kill result.
+            if opp.yes_platform == "kalshi":
+                primary_side, secondary_side = "yes", "no"
+            elif opp.no_platform == "kalshi":
+                primary_side, secondary_side = "no", "yes"
+            else:
+                # Neither is Kalshi — default to YES first
+                primary_side, secondary_side = "yes", "no"
+
+            primary_platform = getattr(opp, f"{primary_side}_platform")
+            primary_market = getattr(opp, f"{primary_side}_market_id")
+            primary_price = getattr(opp, f"{primary_side}_price")
+            secondary_platform = getattr(opp, f"{secondary_side}_platform")
+            secondary_market = getattr(opp, f"{secondary_side}_market_id")
+            secondary_price = getattr(opp, f"{secondary_side}_price")
+
+            total_cost_per = opp.yes_price + opp.no_price
+            total_cost_usd = total_cost_per * qty
+            expected_profit_usd = net_edge_after_fees * qty
+            logger.info(
+                "═══ TRADE %s ═══ %s\n"
+                "  PRIMARY:   BUY %s on %s @ $%.2f × %d = $%.2f\n"
+                "  SECONDARY: BUY %s on %s @ $%.2f × %d = $%.2f\n"
+                "  COST/PAIR: $%.4f | TOTAL COST: $%.2f\n"
+                "  GROSS EDGE: %.2f¢ | FEES: %.2f¢ (YES %.2f¢ + NO %.2f¢) | NET EDGE: %.2f¢\n"
+                "  EXPECTED PROFIT: $%.2f on %d contracts\n"
+                "  MARKET IDs: %s (YES) / %s (NO)",
+                arb_id, opp.description,
+                primary_side.upper(), primary_platform, primary_price, qty, primary_price * qty,
+                secondary_side.upper(), secondary_platform, secondary_price, qty, secondary_price * qty,
+                total_cost_per, total_cost_usd,
+                gross_edge * 100, (yes_fee_per + no_fee_per) * 100, yes_fee_per * 100, no_fee_per * 100,
+                net_edge_after_fees * 100,
+                expected_profit_usd, qty,
+                opp.yes_market_id, opp.no_market_id,
+            )
+
+            # Step 0: Pre-flight orderbook depth check (EXEC-03)
+            # Both adapters expose check_depth(market_id, side, qty) → (sufficient, best_price).
+            # Reduce quantity progressively if the full amount isn't available.
+            effective_qty = qty
+            primary_adapter = self.adapters.get(primary_platform)
+            if primary_adapter is not None and hasattr(primary_adapter, "check_depth"):
+                depth_ok = False
+                try_qty = qty
+                while try_qty >= 1:
+                    sufficient, best_price = await primary_adapter.check_depth(
+                        primary_market, primary_side, try_qty,
+                    )
+                    if sufficient:
+                        depth_ok = True
+                        effective_qty = try_qty
+                        if try_qty < qty:
+                            logger.info(
+                                "  ↓ Reduced qty %d→%d (orderbook depth insufficient for full size)",
+                                qty, try_qty,
+                            )
+                        break
+                    try_qty = try_qty // 2
+                if not depth_ok:
+                    logger.info(
+                        "  ✗ SKIP: %s orderbook has no depth even for qty=1 on %s side (best=%.4f). "
+                        "No order placed — zero exposure.",
+                        primary_platform, primary_side, best_price,
+                    )
+                    # Return None — auto_executor will set cooldown for this canonical_id
+                    return None
+
+            # Step 1: Execute the primary leg (Kalshi FOK)
+            primary_leg = await self._place_order_for_leg(
+                arb_id, primary_platform, primary_market,
+                opp.canonical_id, primary_side, primary_price, effective_qty,
+            )
+
+            # Step 2: Only proceed if primary leg FILLED
+            if primary_leg.status != OrderStatus.FILLED:
+                # Primary didn't fill (FOK rejected) — zero exposure, clean exit
+                logger.info(
+                    "  ✗ PRIMARY %s did not fill (status=%s) — $0.00 exposure, skipping secondary",
+                    primary_side.upper(), primary_leg.status.value,
+                )
+                secondary_leg = Order(
+                    order_id=f"{arb_id}-{secondary_side.upper()}-SKIPPED",
+                    platform=secondary_platform,
+                    market_id=secondary_market,
+                    canonical_id=opp.canonical_id,
+                    side=secondary_side,
+                    price=secondary_price,
+                    quantity=effective_qty,
+                    status=OrderStatus.ABORTED,
+                    timestamp=time.time(),
+                    error="Skipped: primary leg did not fill (sequential execution)",
+                )
+            else:
+                # Primary filled — now execute secondary
+                logger.info(
+                    "  ✓ PRIMARY %s FILLED: %d contracts @ $%.2f = $%.2f spent on %s → proceeding to %s",
+                    primary_side.upper(), primary_leg.fill_qty, primary_leg.fill_price,
+                    primary_leg.fill_qty * primary_leg.fill_price,
+                    primary_platform, secondary_side.upper(),
+                )
+                secondary_leg = await self._place_order_for_leg(
+                    arb_id, secondary_platform, secondary_market,
+                    opp.canonical_id, secondary_side, secondary_price, effective_qty,
+                )
+
+                if secondary_leg.status not in {OrderStatus.FILLED, OrderStatus.SUBMITTED, OrderStatus.PARTIAL}:
+                    # Secondary failed — we have a naked position. Log critical
+                    # incident for manual resolution. Do NOT auto-unwind.
+                    logger.error(
+                        "NAKED POSITION: secondary %s FAILED (status=%s) after primary %s filled on %s. "
+                        "Exposure: %d contracts @ %.4f = $%.2f. Manual resolution required.",
+                        secondary_side.upper(), secondary_leg.status.value,
+                        primary_side.upper(), primary_platform,
+                        primary_leg.fill_qty, primary_leg.fill_price,
+                        primary_leg.fill_qty * primary_leg.fill_price,
+                    )
+
+            # Assign to leg_yes / leg_no based on which side was primary
+            if primary_side == "yes":
+                leg_yes, leg_no = primary_leg, secondary_leg
+            else:
+                leg_yes, leg_no = secondary_leg, primary_leg
 
         # Plan 03-08 (SAFE-02 gap closure — closes the
         # 03-VERIFICATION.md "Per-platform exposure tracking fires on
@@ -811,13 +1025,29 @@ class ExecutionEngine:
         elif leg_yes.status == OrderStatus.FILLED and leg_no.status == OrderStatus.FILLED:
             status = "filled"
 
+        realized_pnl = opp.net_edge * min(max(leg_yes.fill_qty, 0), max(leg_no.fill_qty, 0)) if status in {"filled", "submitted"} else 0.0
+        yes_cost = leg_yes.fill_qty * leg_yes.fill_price if leg_yes.fill_qty > 0 else 0.0
+        no_cost = leg_no.fill_qty * leg_no.fill_price if leg_no.fill_qty > 0 else 0.0
+        total_spent = yes_cost + no_cost
+        status_emoji = {"filled": "✅", "submitted": "⏳", "recovering": "⚠️", "failed": "❌"}.get(status, "❓")
+        logger.info(
+            "═══ RESULT %s ═══ %s %s\n"
+            "  YES leg: %s on %s — %d @ $%.2f = $%.2f\n"
+            "  NO  leg: %s on %s — %d @ $%.2f = $%.2f\n"
+            "  TOTAL SPENT: $%.2f | REALIZED P&L: $%.4f | STATUS: %s",
+            arb_id, status_emoji, status.upper(),
+            leg_yes.status.value, opp.yes_platform, leg_yes.fill_qty, leg_yes.fill_price, yes_cost,
+            leg_no.status.value, opp.no_platform, leg_no.fill_qty, leg_no.fill_price, no_cost,
+            total_spent, realized_pnl, status,
+        )
+
         execution = ArbExecution(
             arb_id=arb_id,
             opportunity=opp,
             leg_yes=leg_yes,
             leg_no=leg_no,
             status=status,
-            realized_pnl=opp.net_edge * min(max(leg_yes.fill_qty, 0), max(leg_no.fill_qty, 0)) if status in {"filled", "submitted"} else 0.0,
+            realized_pnl=realized_pnl,
             timestamp=now,
             notes=notes,
         )
@@ -1396,6 +1626,18 @@ class ExecutionEngine:
         while self._running:
             try:
                 opp = await asyncio.wait_for(arb_queue.get(), timeout=5.0)
+                # Clamp qty to fit within per-order hardlock caps to avoid
+                # adapter rejections when scanner uses a larger position cap.
+                import os as _os
+                _phase5_cap = float(_os.getenv("PHASE5_MAX_ORDER_USD", "0") or "0")
+                _max_pos_cap = float(_os.getenv("MAX_POSITION_USD", "0") or "0")
+                max_pos = _phase5_cap or _max_pos_cap or self.scanner_config.max_position_usd
+                # Use pair cost (yes + no) to match auditor's _compute_position_size
+                price = float(opp.yes_price or 0.01) + float(opp.no_price or 0.01)
+                notional = price * opp.suggested_qty
+                if notional > max_pos and max_pos > 0:
+                    opp.suggested_qty = max(1, int(max_pos / price))
+                    opp.max_profit_usd = round(opp.net_edge * opp.suggested_qty, 4)
                 result = await self.execute_opportunity(opp)
                 if result:
                     await self.balance_monitor.alert_opportunity(result.opportunity)

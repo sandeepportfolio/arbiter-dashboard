@@ -9,8 +9,9 @@ import base64
 import hashlib
 import json
 import logging
+import re
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 import aiohttp
@@ -103,14 +104,44 @@ class KalshiCollector:
         self._ticker_map: Dict[str, List[str]] = {}
         self.refresh_tracked_markets()
 
+    @staticmethod
+    def _is_expired_mapping(mapping: dict, grace_days: int = 1) -> bool:
+        """Check if a mapping's Polymarket slug contains an expired date."""
+        slug = str(mapping.get("polymarket", "") or "")
+        if not slug:
+            return False
+        _date_re = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
+        match = _date_re.search(slug)
+        if not match:
+            return False
+        try:
+            slug_date = date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+            return slug_date < date.today() - timedelta(days=grace_days)
+        except ValueError:
+            return False
+
     def refresh_tracked_markets(self) -> None:
-        """Reload the reverse ticker map from the current runtime MARKET_MAP."""
+        """Reload the reverse ticker map from the current runtime MARKET_MAP.
+
+        Skips mappings whose Polymarket slug has an expired date to avoid
+        wasting Kalshi API quota on markets that can no longer be arbitraged.
+        """
         ticker_map: Dict[str, List[str]] = {}
+        skipped = 0
         for canonical_id, mapping in MARKET_MAP.items():
             event_ticker = str(mapping.get("kalshi", "") or "")
             if not event_ticker:
                 continue
+            if self._is_expired_mapping(mapping):
+                skipped += 1
+                continue
             ticker_map.setdefault(event_ticker, []).append(canonical_id)
+        if skipped:
+            logger.info(
+                "Kalshi: tracking %d tickers, skipped %d expired mappings",
+                len(ticker_map),
+                skipped,
+            )
         self._ticker_map = ticker_map
 
     async def list_all_markets(
@@ -218,61 +249,149 @@ class KalshiCollector:
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
+            timeout = aiohttp.ClientTimeout(total=30, connect=10, sock_read=20)
+            self._session = aiohttp.ClientSession(timeout=timeout)
         return self._session
 
+    _BATCH_SIZE = 100  # tickers per bulk request; Kalshi allows up to ~1000 but 100 is safe
+
     async def fetch_markets(self) -> list:
-        """Fetch all tracked markets from Kalshi REST API using event_ticker."""
+        """Fetch all tracked markets from Kalshi using bulk ticker batching.
+
+        Instead of 1 request per ticker (1000+ calls/cycle), we send batches of
+        _BATCH_SIZE tickers via the ?tickers= param, reducing API calls ~100x.
+        """
         self.refresh_tracked_markets()
+
+        # Build flat map: kalshi_market_ticker -> [canonical_id, ...]
+        ticker_to_canonicals: Dict[str, List[str]] = {}
+        for canonical_id, mapping in MARKET_MAP.items():
+            kalshi_ticker = str(mapping.get("kalshi", "") or "").strip()
+            if kalshi_ticker:
+                ticker_to_canonicals.setdefault(kalshi_ticker, []).append(canonical_id)
+
+        if not ticker_to_canonicals:
+            return []
+
+        all_tickers = list(ticker_to_canonicals.keys())
+        ticker_to_market: Dict[str, dict] = {}
         session = await self._get_session()
-        results = []
 
-        for event_ticker, canonical_ids in self._ticker_map.items():
+        num_batches = (len(all_tickers) + self._BATCH_SIZE - 1) // self._BATCH_SIZE
+        logger.info("Kalshi bulk fetch: %d tickers in %d batches", len(all_tickers), num_batches)
+
+        for batch_idx in range(0, len(all_tickers), self._BATCH_SIZE):
+            batch = all_tickers[batch_idx : batch_idx + self._BATCH_SIZE]
+            await self.rate_limiter.acquire()
+
+            headers = {"Accept": "application/json"}
+            if self.auth.is_authenticated:
+                headers.update(self.auth.get_headers("GET", "/trade-api/v2/markets"))
+
             try:
-                await self.rate_limiter.acquire()
-                url = f"{self.config.base_url}/markets"
-                params = {"event_ticker": event_ticker, "limit": 50}
-                headers = {"Accept": "application/json"}
-
-                # Use auth if available
-                if self.auth.is_authenticated:
-                    path = "/trade-api/v2/markets"
-                    headers.update(self.auth.get_headers("GET", path))
-
-                async with session.get(url, params=params, headers=headers) as resp:
+                async with session.get(
+                    f"{self.config.base_url}/markets",
+                    params={"tickers": ",".join(batch), "limit": str(self._BATCH_SIZE)},
+                    headers=headers,
+                ) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        markets = data.get("markets", [])
-                        for canonical_id in canonical_ids:
-                            market = self._select_market_for_canonical(canonical_id, event_ticker, markets)
-                            if not market:
-                                continue
-                            price = self._build_price_point(canonical_id, event_ticker, market)
-                            if price is None:
-                                continue
-                            results.append(price)
-                            await self.store.put(price)
-                            logger.debug(
-                                "Kalshi %s: YES=%.2f NO=%.2f (%s)",
-                                canonical_id,
-                                price.yes_price,
-                                price.no_price,
-                                price.raw_market_id,
-                            )
+                        for market in data.get("markets", []):
+                            t = str(market.get("ticker", "") or "")
+                            if t:
+                                ticker_to_market[t] = market
                     elif resp.status == 429:
                         delay = self.rate_limiter.apply_retry_after(
                             resp.headers.get("Retry-After"),
-                            fallback_delay=max(self.config.poll_interval * 4, 5.0),
-                            reason="kalshi_429",
+                            fallback_delay=max(self.config.poll_interval * 4, 10.0),
+                            reason="kalshi_429_bulk",
                         )
-                        logger.warning("Kalshi rate limited for %s, backing off %.1fs", event_ticker, delay)
+                        logger.warning(
+                            "Kalshi rate limited on batch %d/%d, backing off %.1fs",
+                            batch_idx // self._BATCH_SIZE + 1,
+                            num_batches,
+                            delay,
+                        )
                     else:
                         text = await resp.text()
-                        logger.warning(f"Kalshi API {resp.status} for {event_ticker}: {text[:200]}")
-
+                        logger.warning(
+                            "Kalshi bulk batch %d/%d HTTP %s: %s",
+                            batch_idx // self._BATCH_SIZE + 1,
+                            num_batches,
+                            resp.status,
+                            text[:200],
+                        )
             except Exception as e:
-                logger.error(f"Kalshi fetch error for {event_ticker}: {e}")
+                logger.error(
+                    "Kalshi bulk batch %d/%d error: %s",
+                    batch_idx // self._BATCH_SIZE + 1,
+                    num_batches,
+                    e,
+                )
 
+        # Fallback: fetch unresolved tickers individually via /markets/{ticker}
+        # The bulk ?tickers= query doesn't resolve some market tickers (e.g.
+        # political markets like CONTROLH-2026-D) even though the single-market
+        # endpoint /markets/{ticker} returns them fine.
+        unresolved = [t for t in all_tickers if t not in ticker_to_market]
+        if unresolved:
+            logger.info(
+                "Kalshi: %d/%d tickers unresolved after bulk fetch, trying individual fallback",
+                len(unresolved),
+                len(all_tickers),
+            )
+            for ticker in unresolved:
+                await self.rate_limiter.acquire()
+                try:
+                    path = f"/trade-api/v2/markets/{ticker}"
+                    headers = {"Accept": "application/json"}
+                    if self.auth.is_authenticated:
+                        headers.update(self.auth.get_headers("GET", path))
+                    async with session.get(
+                        f"{self.config.base_url}/markets/{ticker}",
+                        headers=headers,
+                    ) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            market = data.get("market", data)
+                            t = str(market.get("ticker", "") or "")
+                            if t:
+                                ticker_to_market[t] = market
+                                logger.info("Kalshi individual fetch OK: %s", t)
+                        else:
+                            logger.debug(
+                                "Kalshi individual fetch %s: HTTP %s",
+                                ticker,
+                                resp.status,
+                            )
+                except Exception as e:
+                    logger.debug("Kalshi individual fetch %s error: %s", ticker, e)
+
+        # Map fetched markets back to canonical IDs and publish to price store
+        results = []
+        for kalshi_ticker, canonical_ids in ticker_to_canonicals.items():
+            market = ticker_to_market.get(kalshi_ticker)
+            if not market:
+                continue
+            for canonical_id in canonical_ids:
+                price = self._build_price_point(canonical_id, kalshi_ticker, market)
+                if price is None:
+                    continue
+                results.append(price)
+                await self.store.put(price)
+                logger.debug(
+                    "Kalshi %s: YES=%.2f NO=%.2f (%s)",
+                    canonical_id,
+                    price.yes_price,
+                    price.no_price,
+                    price.raw_market_id,
+                )
+
+        logger.info(
+            "Kalshi bulk fetch complete: %d/%d markets resolved",
+            len(results),
+            len(all_tickers),
+        )
         return results
 
     @staticmethod
@@ -371,6 +490,13 @@ class KalshiCollector:
                 "yes_sub_title": market.get("yes_sub_title", ""),
                 "no_sub_title": market.get("no_sub_title", ""),
                 "response_price_units": market.get("response_price_units", ""),
+                "market_type": market.get("market_type", ""),
+                "result": market.get("result", ""),
+                "can_close_early": market.get("can_close_early", False),
+                "cap_strike": market.get("cap_strike"),
+                "floor_strike": market.get("floor_strike"),
+                "category": market.get("category", ""),
+                "sub_title": market.get("sub_title", ""),
             },
         )
 
@@ -404,7 +530,7 @@ class KalshiCollector:
         """Main polling loop with circuit breaker and adaptive backoff."""
         self._running = True
         logger.info(f"Kalshi collector started (poll interval: {self.config.poll_interval}s)")
-        logger.info(f"Tracking {len(self._ticker_map)} event tickers: {list(self._ticker_map.keys())}")
+        logger.info(f"Tracking {len(self._ticker_map)} market tickers (bulk fetch, batch size={self._BATCH_SIZE})")
         logger.info(f"Auth: {'enabled' if self.auth.is_authenticated else 'disabled (public data only)'}")
         logger.info(f"Circuit breaker: threshold={self.circuit.failure_threshold}, recovery={self.circuit.recovery_timeout}s")
 

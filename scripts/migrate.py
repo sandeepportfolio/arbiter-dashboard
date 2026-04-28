@@ -166,6 +166,15 @@ MIGRATIONS = [
     CREATE INDEX IF NOT EXISTS idx_candidates_status ON mapping_candidates(status);
     CREATE INDEX IF NOT EXISTS idx_candidates_canonical ON mapping_candidates(canonical_id);
     """,
+    # ── 007: Widen canonical_id from VARCHAR(60) to VARCHAR(100) ─────────────
+    """
+    ALTER TABLE market_mappings ALTER COLUMN canonical_id TYPE VARCHAR(100);
+    ALTER TABLE mapping_candidates ALTER COLUMN canonical_id TYPE VARCHAR(100);
+    ALTER TABLE positions ALTER COLUMN canonical_id TYPE VARCHAR(100);
+    ALTER TABLE execution_arbs ALTER COLUMN canonical_id TYPE VARCHAR(100);
+    ALTER TABLE execution_orders ALTER COLUMN canonical_id TYPE VARCHAR(100);
+    ALTER TABLE execution_incidents ALTER COLUMN canonical_id TYPE VARCHAR(100);
+    """,
 ]
 
 

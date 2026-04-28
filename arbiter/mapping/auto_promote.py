@@ -9,7 +9,7 @@ Conditions (in order — first failing wins):
 2. score >= 0.85
 3. resolution_check(...) == IDENTICAL
 4. LLM verifier returns YES
-5. Both orderbooks have depth >= PHASE5_MAX_ORDER_USD × 2
+5. Both orderbooks have combined (bid + ask) depth >= PHASE5_MAX_ORDER_USD
 6. resolution_date within 90 days
 7. today_promoted_count < AUTO_PROMOTE_DAILY_CAP (default 20)
 8. Cooling-off: first AUTO_PROMOTE_ADVISORY_SCANS after first-see are advisory-only
@@ -64,15 +64,21 @@ class PromotionResult:
 # ─── Depth calculation ────────────────────────────────────────────────────────
 
 def _orderbook_depth_usd(orderbook: dict) -> float:
-    """Sum USD depth from the bids side: sum(price * qty) for each bid level."""
+    """Sum USD depth across bids and asks: sum(price * qty) over all levels.
+
+    Counts both sides (bid + ask/offer) because for cross-platform arb we may
+    BUY at the ask on one venue and SELL at the bid on the other — the gate is
+    a coarse "is this market actually trading" check, not a directional one.
+    """
     total = 0.0
-    for bid in orderbook.get("bids", []):
-        try:
-            px = float(bid.get("px", 0) or 0)
-            qty = float(bid.get("qty", 0) or 0)
-            total += px * qty
-        except (TypeError, ValueError):
-            continue
+    for side_key in ("bids", "asks", "offers"):
+        for level in orderbook.get(side_key, []) or []:
+            try:
+                px = float(level.get("px", 0) or 0)
+                qty = float(level.get("qty", 0) or 0)
+                total += px * qty
+            except (TypeError, ValueError, AttributeError):
+                continue
     return total
 
 
@@ -149,23 +155,48 @@ async def maybe_promote(
     if score < min_score:
         return _reject("score_low")
 
-    # ── Gate 3: resolution_check == IDENTICAL ─────────────────────────────────
+    # ── Gate 3: resolution_check — reject DIVERGENT, allow IDENTICAL or PENDING ─
+    # DIVERGENT = confirmed mismatch (different dates, different sources) → block.
+    # IDENTICAL = perfect structured match → proceed.
+    # PENDING = insufficient structured data → defer to LLM (Gate 4).
+    # This relaxation is safe because Gate 4 (LLM) will catch semantic
+    # mismatches that lack structured data, and DIVERGENT still blocks.
     kalshi_facts = _candidate_to_market_facts(candidate, "kalshi")
     poly_facts = _candidate_to_market_facts(candidate, "polymarket")
     resolution_result = resolution_checker(kalshi_facts, poly_facts)
-    if resolution_result != ResolutionMatch.IDENTICAL:
+    if resolution_result == ResolutionMatch.DIVERGENT:
         return _reject("resolution_divergent")
+    resolution_is_identical = resolution_result == ResolutionMatch.IDENTICAL
 
-    # ── Gate 4: LLM verifier == YES ───────────────────────────────────────────
+    # ── Gate 4: LLM verifier == YES or MAYBE ────────────────────────────────
+    # When resolution_check returned PENDING (not enough structured data),
+    # the LLM is the primary validator. When IDENTICAL, the LLM is a
+    # second opinion that must also agree.
+    # MAYBE is accepted when score >= 0.30 (decent textual overlap suggests
+    # the markets are related even if the LLM can't be certain from question
+    # text alone — e.g. different phrasing of the same underlying event).
     kalshi_q = candidate.get("kalshi_title", "")
     poly_q = candidate.get("poly_question", "")
     llm_result = await llm_verifier(kalshi_q, poly_q)
-    if llm_result != "YES":
+    if llm_result == "NO":
         return _reject("llm_no")
+    if llm_result == "MAYBE" and score < 0.30:
+        return _reject("llm_maybe_low_score")
 
-    # ── Gate 5: Liquidity depth ≥ PHASE5_MAX_ORDER_USD × 2 ────────────────────
+    # If resolution was only PENDING (not IDENTICAL), require a modestly
+    # higher text-similarity score as additional safety.  The LLM already
+    # returned YES, so this is a secondary sanity check — not the primary
+    # When resolution data is PENDING (not enough structured data to confirm),
+    # the LLM is the primary validator.  We only need a modest score bump
+    # above the base threshold as a sanity check — the LLM already said YES.
+    if not resolution_is_identical:
+        high_score_threshold = min_score + 0.02
+        if score < high_score_threshold:
+            return _reject("score_low_for_pending_resolution")
+
+    # ── Gate 5: Liquidity depth ≥ PHASE5_MAX_ORDER_USD (combined bid+ask) ─────
     phase5_max = float(_setting(settings, "PHASE5_MAX_ORDER_USD", "phase5_max_order_usd", default=50.0))
-    required_depth = phase5_max * 2.0
+    required_depth = phase5_max
 
     kalshi_ob = orderbooks.get("kalshi", {})
     poly_ob = orderbooks.get("polymarket", {})

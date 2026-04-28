@@ -94,6 +94,8 @@ class AutoExecutor:
         self._task: Optional[asyncio.Task] = None
         self._running = False
         self._seen_dedup_keys: dict[str, float] = {}
+        self._failed_cooldown: dict[str, float] = {}  # canonical_id -> cooldown_until
+        self._failed_count: dict[str, int] = {}  # canonical_id -> consecutive failure count
         self.stats = AutoExecutorStats()
 
     async def start(self) -> None:
@@ -175,6 +177,16 @@ class AutoExecutor:
             )
             return
 
+        # Cooldown after failed fill-or-kill (avoid spamming thin orderbooks)
+        cooldown_until = self._failed_cooldown.get(opp.canonical_id, 0.0)
+        if now < cooldown_until:
+            log.info(
+                "auto_executor.skip.failed_cooldown",
+                canonical_id=opp.canonical_id,
+                remaining=round(cooldown_until - now, 1),
+            )
+            return
+
         dedup_key = self._dedup_key(opp, now)
         if dedup_key in self._seen_dedup_keys:
             self.stats.skipped_duplicate += 1
@@ -188,14 +200,51 @@ class AutoExecutor:
 
         notional = self._estimate_notional(opp)
         if notional > self._config.max_position_usd:
-            self.stats.skipped_over_cap += 1
-            log.info(
-                "auto_executor.skip.over_cap",
-                canonical_id=opp.canonical_id,
-                notional=round(notional, 2),
-                cap=self._config.max_position_usd,
+            # Scale qty down to fit within the per-trade cap instead of skipping
+            # Use pair cost (yes + no) to match auditor's _compute_position_size
+            price = float(opp.yes_price or 0.01) + float(opp.no_price or 0.01)
+            clamped_qty = max(1, int(self._config.max_position_usd / price))
+            # ── Recompute per-unit fees for the clamped quantity ───────
+            # Fee functions have order-level ceil rounding, so per-unit
+            # cost changes with quantity.  We must recompute net_edge
+            # with the actual qty we will trade.
+            from ..scanner.arbitrage import compute_fee
+            yes_fee_new = compute_fee(
+                opp.yes_platform, opp.yes_price, clamped_qty,
+                fee_rate=opp.yes_fee_rate,
             )
-            return
+            no_fee_new = compute_fee(
+                opp.no_platform, opp.no_price, clamped_qty,
+                fee_rate=opp.no_fee_rate,
+            )
+            new_total_fees = (yes_fee_new + no_fee_new) / max(clamped_qty, 1)
+            new_net_edge = opp.gross_edge - new_total_fees
+            log.info(
+                "auto_executor.clamp_qty",
+                canonical_id=opp.canonical_id,
+                original_qty=opp.suggested_qty,
+                clamped_qty=clamped_qty,
+                notional=round(price * clamped_qty, 2),
+                cap=self._config.max_position_usd,
+                old_net_edge=round(opp.net_edge, 4),
+                new_net_edge=round(new_net_edge, 4),
+            )
+            opp.suggested_qty = clamped_qty
+            opp.net_edge = new_net_edge
+            opp.net_edge_cents = new_net_edge * 100.0
+            opp.total_fees = new_total_fees
+            opp.yes_fee = yes_fee_new / max(clamped_qty, 1)
+            opp.no_fee = no_fee_new / max(clamped_qty, 1)
+            opp.max_profit_usd = round(new_net_edge * clamped_qty, 4)
+            # If recomputed edge is now negative, skip this opportunity
+            if new_net_edge <= 0:
+                self.stats.skipped_over_cap += 1
+                log.info(
+                    "auto_executor.skip.negative_after_clamp",
+                    canonical_id=opp.canonical_id,
+                    new_net_edge=round(new_net_edge, 4),
+                )
+                return
 
         if (
             self._config.bootstrap_trades is not None
@@ -227,9 +276,25 @@ class AutoExecutor:
             )
             return
 
+        if result is None or getattr(result, "status", "") == "failed":
+            # Exponential backoff: 5m, 10m, 20m, 40m, capped at 60m
+            count = self._failed_count.get(opp.canonical_id, 0) + 1
+            self._failed_count[opp.canonical_id] = count
+            backoff_s = min(300.0 * (2 ** (count - 1)), 3600.0)
+            self._failed_cooldown[opp.canonical_id] = time.time() + backoff_s
+            log.info(
+                "auto_executor.cooldown.set",
+                canonical_id=opp.canonical_id,
+                attempt=count,
+                backoff_minutes=round(backoff_s / 60, 1),
+            )
         if result is not None:
             self.stats.executed += 1
             self.stats.last_executed_ts = time.time()
+            # Reset failure counter on successful execution
+            if getattr(result, "status", "") in ("filled", "submitted"):
+                self._failed_count.pop(opp.canonical_id, None)
+                self._failed_cooldown.pop(opp.canonical_id, None)
             log.info(
                 "auto_executor.execute.complete",
                 canonical_id=opp.canonical_id,
@@ -240,14 +305,13 @@ class AutoExecutor:
     # ─── helpers ──────────────────────────────────────────────────────────
 
     def _estimate_notional(self, opp: ArbitrageOpportunity) -> float:
-        """Per-leg notional = max(yes_price, no_price) * suggested_qty.
+        """Pair-cost notional = (yes_price + no_price) * suggested_qty.
 
-        The worst-case leg cost is the more expensive side; we cap on the
-        larger-notional leg to ensure MAX_POSITION_USD is never exceeded on
-        either platform.
+        Uses total pair cost to match the auditor's _compute_position_size
+        calculation, ensuring consistent qty sizing across the system.
         """
         qty = max(1, int(opp.suggested_qty or 1))
-        price = max(float(opp.yes_price or 0.0), float(opp.no_price or 0.0))
+        price = float(opp.yes_price or 0.0) + float(opp.no_price or 0.0)
         return price * qty
 
     def _dedup_key(self, opp: ArbitrageOpportunity, now: float) -> str:

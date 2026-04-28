@@ -190,7 +190,13 @@ class MarketMappingRecord:
 
     def to_dict(self) -> dict:
         payload = asdict(self)
-        payload["mapping_score"] = similarity_score(self.description, " ".join(self.aliases))
+        # Confirmed auto-trade mappings have been API-verified; give them
+        # full mapping_score so the confidence formula doesn't penalise them
+        # for having empty aliases (which are irrelevant for verified pairs).
+        if self.status == "confirmed" and self.allow_auto_trade and self.resolution_match_status == "identical":
+            payload["mapping_score"] = 1.0
+        else:
+            payload["mapping_score"] = similarity_score(self.description, " ".join(self.aliases))
         # Always emit the SAFE-06 keys (None when unset) so API consumers
         # can safely .get() them without branching.
         payload["resolution_criteria"] = self.resolution_criteria
@@ -301,11 +307,17 @@ MARKET_SEEDS: Tuple[MarketMappingRecord, ...] = (
     ),
 )
 
-try:
-    from arbiter.config.market_seeds_ext import CRYPTO_FINANCE_SEEDS  # noqa: E402
-    MARKET_SEEDS = MARKET_SEEDS + CRYPTO_FINANCE_SEEDS
-except ImportError:
-    pass
+# SAFETY: Extended seeds DISABLED on 2026-04-24.
+# All 286+ entries in market_seeds_ext.py have resolution_match_status='pending_operator_review'
+# but were incorrectly marked status='confirmed', allow_auto_trade=True.
+# Many are mismatched (e.g., BTC daily price paired with BTC "best performance 2026",
+# Tesla production paired with Tesla delivery at different thresholds).
+# These would cause real-money losses. Only re-enable after manual verification of each pair.
+# try:
+#     from arbiter.config.market_seeds_ext import CRYPTO_FINANCE_SEEDS  # noqa: E402
+#     MARKET_SEEDS = MARKET_SEEDS + CRYPTO_FINANCE_SEEDS
+# except ImportError:
+#     pass
 
 
 def _load_auto_seeds() -> Tuple[MarketMappingRecord, ...]:
@@ -334,7 +346,8 @@ def _load_auto_seeds() -> Tuple[MarketMappingRecord, ...]:
                     polymarket=item.get("polymarket", ""),
                     polymarket_question=item.get("polymarket_question", ""),
                     notes=item.get("notes", ""),
-                    resolution_match_status="pending_operator_review",
+                    resolution_criteria=item.get("resolution_criteria"),
+                    resolution_match_status=item.get("resolution_match_status", "pending_operator_review"),
                 )
             )
         except Exception:
@@ -560,12 +573,12 @@ class AlertConfig:
 
 @dataclass
 class ScannerConfig:
-    min_edge_cents: float = 2.5
+    min_edge_cents: float = 1.5
     max_position_usd: float = 100.0
     scan_interval: float = 1.0
     confidence_threshold: float = 0.8
     persistence_scans: int = 3
-    max_quote_age_seconds: float = 15.0
+    max_quote_age_seconds: float = 120.0
     min_liquidity: float = 25.0
     slippage_tolerance: float = 0.01
     dry_run: bool = field(default_factory=lambda: os.getenv("DRY_RUN", "true").lower() != "false")

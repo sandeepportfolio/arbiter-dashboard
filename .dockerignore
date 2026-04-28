@@ -11,3 +11,5 @@ output/
 node_modules/
 logs/
 *.log
+.claude/
+data/

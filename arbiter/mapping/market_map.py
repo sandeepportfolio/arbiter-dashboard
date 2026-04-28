@@ -107,7 +107,15 @@ class MarketMapping:
 
     @classmethod
     def from_record(cls, record: MarketMappingRecord) -> "MarketMapping":
-        score = similarity_score(record.description, " ".join(record.aliases)) if record.aliases else 0.0
+        # Confirmed auto-trade mappings with identical resolution are API-verified;
+        # give them full mapping_score rather than penalising empty aliases.
+        if (record.status == "confirmed" and record.allow_auto_trade
+                and getattr(record, "resolution_match_status", "") == "identical"):
+            score = 1.0
+        elif record.aliases:
+            score = similarity_score(record.description, " ".join(record.aliases))
+        else:
+            score = 0.0
         criteria_json = json.dumps(record.resolution_criteria) if record.resolution_criteria is not None else ""
         return cls(
             canonical_id=record.canonical_id,
@@ -294,7 +302,8 @@ class MarketMappingStore:
                     "SELECT 1 FROM market_mappings WHERE canonical_id = $1",
                     record.canonical_id,
                 )
-                if existing and not overwrite:
+                # Always re-upsert confirmed seeds so mapping_score stays current
+                if existing and not overwrite and record.status != "confirmed":
                     continue
 
                 mapping = MarketMapping.from_record(record)
@@ -771,12 +780,37 @@ class MarketMappingStore:
             await self._pool.release(conn)
 
     async def refresh_runtime_cache(self) -> int:
-        """Mirror all durable mappings into the legacy in-process MARKET_MAP."""
-        rows = await self.all(limit=5000)
+        """Mirror all durable mappings into the legacy in-process MARKET_MAP.
+
+        Prioritizes confirmed/auto-trade mappings by fetching them first,
+        then fills with candidates up to the limit. This ensures confirmed
+        pairs are never dropped by the LIMIT clause even when the DB has
+        many thousands of auto-discovered candidate rows.
+        """
+        # Always include ALL confirmed mappings (tiny set, critical path)
+        confirmed = await self.all(status="confirmed", limit=500)
+        # Then fill with non-expired candidates/others
+        others = await self.all(limit=5000)
+        # Merge: confirmed first, then others (dedup by canonical_id)
+        seen = set()
+        merged = []
+        for m in confirmed:
+            if m and m.canonical_id not in seen:
+                seen.add(m.canonical_id)
+                merged.append(m)
+        for m in others:
+            if m and m.canonical_id not in seen:
+                seen.add(m.canonical_id)
+                merged.append(m)
         replace_runtime_market_map(
-            (mapping.canonical_id, mapping.to_dict()) for mapping in rows
+            (mapping.canonical_id, mapping.to_dict()) for mapping in merged
         )
-        return len(rows)
+        logger.info(
+            "refresh_runtime_cache: %d mappings loaded (%d confirmed)",
+            len(merged),
+            len(confirmed),
+        )
+        return len(merged)
 
     # ─── Helpers ─────────────────────────────────────────────────────────────
 
@@ -802,6 +836,32 @@ class MarketMappingStore:
         )
         kalshi_mapping = await self.get_by_platform("kalshi", kalshi_ticker)
         poly_mapping = await self.get_by_platform("polymarket", poly_slug)
+
+        # ── Duplicate guard: never create auto candidates that overlap
+        #    with CONFIRMED mappings on a different canonical_id.
+        #    e.g. CONTROLS-2026-D already confirmed as DEM_SENATE_2026 →
+        #    skip any auto candidate that re-uses that ticker or slug.
+        if pair_mapping is None:
+            if (
+                kalshi_mapping is not None
+                and kalshi_mapping.status == MappingStatus.CONFIRMED
+                and (poly_mapping is None or poly_mapping.canonical_id != kalshi_mapping.canonical_id)
+            ):
+                logger.debug(
+                    "Skipping auto candidate: Kalshi %s already confirmed as %s",
+                    kalshi_ticker, kalshi_mapping.canonical_id,
+                )
+                return None
+            if (
+                poly_mapping is not None
+                and poly_mapping.status == MappingStatus.CONFIRMED
+                and (kalshi_mapping is None or kalshi_mapping.canonical_id != poly_mapping.canonical_id)
+            ):
+                logger.debug(
+                    "Skipping auto candidate: Polymarket %s already confirmed as %s",
+                    poly_slug, poly_mapping.canonical_id,
+                )
+                return None
 
         existing = pair_mapping
         if existing is None and kalshi_mapping and poly_mapping:
@@ -830,14 +890,23 @@ class MarketMappingStore:
                 description=self._candidate_description(candidate),
                 status=MappingStatus.CANDIDATE,
                 allow_auto_trade=False,
+                kalshi_market_id=kalshi_ticker,
+                polymarket_slug=poly_slug,
             )
 
         score = float(candidate.get("score", 0.0) or 0.0)
         candidate_status = _coerce_status(candidate.get("status", MappingStatus.CANDIDATE.value))
         candidate_allow_auto = bool(candidate.get("allow_auto_trade", False))
         existing.description = self._candidate_description(candidate, fallback=existing.description)
+        # Ensure platform IDs are always set from the candidate (defensive; should already be set in constructor)
         existing.kalshi_market_id = kalshi_ticker
         existing.polymarket_slug = poly_slug
+        if not existing.kalshi_market_id or not existing.polymarket_slug:
+            logger.warning(
+                "Candidate mapping %s has empty platform IDs after assignment: "
+                "kalshi_market_id=%r, polymarket_slug=%r",
+                existing.canonical_id, existing.kalshi_market_id, existing.polymarket_slug,
+            )
         existing.polymarket_question = str(
             candidate.get("poly_question", "") or existing.polymarket_question or ""
         )

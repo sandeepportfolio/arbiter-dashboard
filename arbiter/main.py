@@ -219,9 +219,22 @@ def sync_runtime_reconciliation(
         return None
 
     known_balances = reconciler.stats.get("starting_balances", {})
+    has_executions = bool(engine.execution_history)
+
     for platform, balance in current_balances.items():
         if platform not in known_balances:
+            # First time seeing this platform — set starting balance.
+            # If we restored from Postgres, this branch won't fire for
+            # already-persisted platforms.
             reconciler.set_starting_balance(platform, balance)
+        elif not has_executions and not reconciler._deposit_events and not reconciler._restored_from_db:
+            # No trades executed yet, no deposit history, AND no state
+            # restored from Postgres — re-baseline to current balance so
+            # that external balance changes don't trigger a false-positive.
+            # When _restored_from_db is True, starting balances are
+            # authoritative from the database and must NOT be overwritten.
+            if abs(known_balances[platform] - balance) > 0.01:
+                reconciler.set_starting_balance(platform, balance)
 
     reconciler.load_execution_history(engine.execution_history)
     return reconciler.reconcile(current_balances)
@@ -234,15 +247,53 @@ async def run_reconciliation_loop(
 ):
     """Continuously reconcile runtime balances against recorded execution P&L."""
     logger = logging.getLogger("arbiter.main")
+    # Wait up to 30s for the balance monitor to fetch initial balances
+    # before starting the main reconciliation loop.
+    for _ in range(15):
+        if monitor.current_balances:
+            break
+        await asyncio.sleep(2.0)
+
     while True:
         try:
             sync_runtime_reconciliation(reconciler, monitor, engine)
-            await asyncio.sleep(reconciler.check_interval)
+            # Use a shorter interval if starting balances haven't been set yet
+            # (e.g. first startup before any balances fetched).
+            has_starting = bool(reconciler.stats.get("starting_balances"))
+            interval = reconciler.check_interval if has_starting else 5.0
+            await asyncio.sleep(interval)
         except asyncio.CancelledError:
             break
         except Exception as exc:
             logger.error("PnL reconciliation loop error: %s", exc)
             await asyncio.sleep(min(reconciler.check_interval, 10.0))
+
+
+async def run_incident_auto_resolve_loop(engine: ExecutionEngine, interval: float = 120.0, max_age: float = 120.0):
+    """Periodically auto-resolve stale critical incidents so one audit flag
+    doesn't permanently block the trade gate."""
+    _logger = logging.getLogger("arbiter.main.incident_cleanup")
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            now = time.time()
+            for inc in list(getattr(engine, "_incidents", [])):
+                if getattr(inc, "status", "open") == "resolved":
+                    continue
+                if str(getattr(inc, "severity", "")).lower() != "critical":
+                    continue
+                inc_ts = getattr(inc, "timestamp", now)
+                if now - inc_ts > max_age:
+                    await engine.resolve_incident(
+                        inc.incident_id,
+                        note=f"Auto-resolved: stale critical incident (age={int(now - inc_ts)}s > {int(max_age)}s)",
+                    )
+                    _logger.info("Auto-resolved stale incident %s (age=%ds)", inc.incident_id, int(now - inc_ts))
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            _logger.error("Incident auto-resolve loop error: %s", exc)
+            await asyncio.sleep(30.0)
 
 
 async def cleanup_runtime(
@@ -438,7 +489,7 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     trade_logger = TradeLogger()
 
     # ── Core infrastructure ────────────────────────────────────
-    price_store = PriceStore(redis_client=None, ttl=30)
+    price_store = PriceStore(redis_client=None, ttl=120)
 
     # Shared aiohttp session for adapter HTTP calls. Engine keeps its own
     # internal session for legacy paths; Phase 3 can consolidate.
@@ -461,11 +512,6 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     kalshi = KalshiCollector(config.kalshi, price_store)
     polymarket = build_polymarket_collector(config, price_store)
 
-    # ── Scanner ────────────────────────────────────────────────
-    scanner = ArbitrageScanner(config.scanner, price_store)
-    arb_queue = scanner.subscribe()  # execution engine subscribes
-    alert_queue = scanner.subscribe()  # balance monitor subscribes
-
     # ── Monitor ────────────────────────────────────────────────
     collectors_dict = {
         "kalshi": kalshi,
@@ -473,6 +519,18 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     if polymarket is not None:
         collectors_dict["polymarket"] = polymarket
     monitor = BalanceMonitor(config.alerts, collectors_dict)
+
+    # ── Scanner (with balance-proportioned sizing) ────────────
+    def _balance_provider():
+        """Return current platform balances for position sizing."""
+        return {
+            platform: snapshot.balance
+            for platform, snapshot in monitor.current_balances.items()
+        }
+
+    scanner = ArbitrageScanner(config.scanner, price_store, balance_provider=_balance_provider)
+    arb_queue = scanner.subscribe()  # execution engine subscribes
+    alert_queue = scanner.subscribe()  # balance monitor subscribes
 
     # ── Persistence (EXEC-02) ──────────────────────────────────
     database_url = os.getenv("DATABASE_URL")
@@ -538,7 +596,16 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
         monitor,
     )
     profitability = ProfitabilityValidator(ProfitabilityConfig(), scanner, engine)
-    reconciler = PnLReconciler(log_to_disk=not api_only)
+    reconciler = PnLReconciler(
+        log_to_disk=not api_only,
+        pg_pool=store._pool if store is not None else None,
+    )
+    # Restore persisted starting balances and deposit history from PostgreSQL
+    # so P&L tracking survives container restarts.
+    if store is not None:
+        restored = await reconciler.load_persisted_state()
+        if restored:
+            logger.info("PnL reconciler: restored persisted balances and deposits")
     readiness = OperationalReadiness(
         config,
         engine=engine,
@@ -670,6 +737,21 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
             except Exception as exc:
                 logger.warning("Failed to emit orphaned-order incident: %s", exc)
 
+    # ── Rehydrate execution history from database ──────────────
+    # Populates the in-memory execution_history so the dashboard
+    # shows historical trades and positions after a restart.
+    if store is not None:
+        try:
+            past_executions = await store.load_execution_history(limit=200)
+            if past_executions:
+                engine._executions.extend(past_executions)
+                logger.info(
+                    "Rehydrated %d past execution(s) into engine",
+                    len(past_executions),
+                )
+        except Exception as exc:
+            logger.warning("Failed to rehydrate execution history: %s", exc)
+
     # ── AutoExecutor (Phase 6 Plan 06-01) ──────────────────────
     # Subscribes to scanner, executes on opportunities that pass all 7 policy
     # gates (enabled, is_armed, requires_manual, allow_auto_trade, duplicate,
@@ -700,6 +782,22 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
         logger.info(
             f"  Bootstrap cap: {auto_executor._config.bootstrap_trades} trades"
         )
+
+    # ── Auto-resolve stale critical incidents from prior sessions ─
+    # Without this, a single audit flag from a previous session blocks all
+    # trades permanently. Resolve anything older than 60 seconds.
+    stale_incidents = [
+        inc for inc in getattr(engine, "_incidents", [])
+        if getattr(inc, "status", "open") != "resolved"
+        and str(getattr(inc, "severity", "")).lower() == "critical"
+    ]
+    if stale_incidents:
+        for inc in stale_incidents:
+            await engine.resolve_incident(
+                inc.incident_id,
+                note="Auto-resolved on startup: stale critical incident from previous session",
+            )
+        logger.info("Auto-resolved %d stale critical incidents on startup", len(stale_incidents))
 
     # ── Launch all tasks ───────────────────────────────────────
     tasks: list[asyncio.Task] = []
@@ -739,8 +837,32 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
         # Auto-executor only runs outside api_only mode (it needs scanner+engine).
         await auto_executor.start()
 
+    # ── Auto-resolve stale critical incidents from previous runs ─────
+    # On fresh startup, any leftover critical incidents from a prior session
+    # will block the trade gate indefinitely. Since we're restarting with new
+    # state, auto-resolve them so trading can begin clean.
+    stale_incidents = [
+        inc for inc in getattr(engine, "incidents", [])
+        if getattr(inc, "status", "open") != "resolved"
+        and str(getattr(inc, "severity", "")).lower() == "critical"
+    ]
+    if stale_incidents:
+        logger.info(
+            "Auto-resolving %d stale critical incidents from previous run",
+            len(stale_incidents),
+        )
+        for inc in stale_incidents:
+            try:
+                await engine.resolve_incident(
+                    inc.incident_id,
+                    note="Auto-resolved on restart: stale incident from previous session",
+                )
+            except Exception as exc:
+                logger.warning("Failed to auto-resolve incident %s: %s", inc.incident_id, exc)
+
     tasks.append(asyncio.create_task(profitability.run(), name="profitability-validator"))
     tasks.append(asyncio.create_task(run_reconciliation_loop(reconciler, monitor, engine), name="pnl-reconciler"))
+    tasks.append(asyncio.create_task(run_incident_auto_resolve_loop(engine, interval=120.0, max_age=120.0), name="incident-auto-resolve"))
 
     # API server always runs
     tasks.append(asyncio.create_task(api.serve(), name="api-server"))

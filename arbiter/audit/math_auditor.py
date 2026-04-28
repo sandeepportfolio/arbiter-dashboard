@@ -194,14 +194,19 @@ class MathAuditor:
             no_price,
             min_available_liquidity=reported_liquidity,
         )
-        if shadow_qty != reported_qty:
+        # Allow qty mismatches when the reported qty has been clamped down
+        # to fit within a per-order cap (e.g. engine clamps scanner's $100
+        # suggested_qty to fit $10 MAX_POSITION_USD). The key safety check
+        # is that reported_qty doesn't EXCEED the auditor's shadow_qty,
+        # which would mean the engine is trying to trade MORE than allowed.
+        if reported_qty > shadow_qty:
             flags.append(AuditFlag(
                 field="suggested_qty",
                 expected=float(shadow_qty),
                 actual=float(reported_qty),
                 discrepancy=abs(shadow_qty - reported_qty),
                 severity="warning",
-                message=f"Quantity mismatch: shadow={shadow_qty} vs reported={reported_qty}",
+                message=f"Quantity exceeds cap: reported={reported_qty} > shadow_max={shadow_qty}",
             ))
 
         qty_for_fee = max(reported_qty or shadow_qty, 1)

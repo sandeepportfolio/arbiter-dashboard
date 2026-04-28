@@ -14,7 +14,7 @@ import json
 import logging
 from dataclasses import asdict, is_dataclass
 from decimal import Decimal
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 import asyncpg
 
@@ -255,6 +255,143 @@ class ExecutionStore:
         # Persist both legs (delegates to upsert_order)
         await self.upsert_order(arb_execution.leg_yes, arb_id=arb_execution.arb_id)
         await self.upsert_order(arb_execution.leg_no, arb_id=arb_execution.arb_id)
+
+    # ─── Rehydration (load past trades on restart) ────────────────────────────
+
+    async def load_execution_history(self, limit: int = 200) -> List[ArbExecution]:
+        """Rehydrate ArbExecution objects from the database for dashboard display.
+
+        Loads the most recent `limit` arb executions with their YES/NO leg orders.
+        Used on startup to populate the engine's execution_history so the
+        Trades and Positions tabs show historical data.
+        """
+        if self._pool is None:
+            await self.connect()
+        from ..scanner.arbitrage import ArbitrageOpportunity
+
+        async with self._pool.acquire() as conn:
+            arb_rows = await conn.fetch(
+                """
+                SELECT arb_id, canonical_id, status, net_edge, realized_pnl,
+                       opportunity_json, is_simulation, created_at
+                FROM execution_arbs
+                ORDER BY created_at DESC
+                LIMIT $1
+                """,
+                limit,
+            )
+            # Build a map of arb_id -> [order rows]
+            arb_ids = [r["arb_id"] for r in arb_rows]
+            if not arb_ids:
+                return []
+
+            order_rows = await conn.fetch(
+                """
+                SELECT order_id, arb_id, platform, market_id, canonical_id,
+                       side, price, quantity, status, fill_price, fill_qty,
+                       submitted_at, error
+                FROM execution_orders
+                WHERE arb_id = ANY($1)
+                ORDER BY submitted_at ASC
+                """,
+                arb_ids,
+            )
+
+        # Group orders by arb_id
+        orders_by_arb: Dict[str, List] = {}
+        for row in order_rows:
+            orders_by_arb.setdefault(row["arb_id"], []).append(row)
+
+        executions: List[ArbExecution] = []
+        for arb_row in reversed(arb_rows):  # oldest first
+            arb_id = arb_row["arb_id"]
+            opp_json = arb_row["opportunity_json"]
+
+            # Reconstruct ArbitrageOpportunity from stored JSON
+            opp_data = json.loads(opp_json) if isinstance(opp_json, str) else (opp_json or {})
+            try:
+                opp = ArbitrageOpportunity(
+                    canonical_id=opp_data.get("canonical_id", arb_row["canonical_id"] or ""),
+                    description=opp_data.get("description", ""),
+                    yes_platform=opp_data.get("yes_platform", ""),
+                    yes_price=float(opp_data.get("yes_price", 0)),
+                    yes_fee=float(opp_data.get("yes_fee", 0)),
+                    yes_market_id=opp_data.get("yes_market_id", ""),
+                    no_platform=opp_data.get("no_platform", ""),
+                    no_price=float(opp_data.get("no_price", 0)),
+                    no_fee=float(opp_data.get("no_fee", 0)),
+                    no_market_id=opp_data.get("no_market_id", ""),
+                    gross_edge=float(opp_data.get("gross_edge", 0)),
+                    total_fees=float(opp_data.get("total_fees", 0)),
+                    net_edge=float(opp_data.get("net_edge", 0)),
+                    net_edge_cents=float(opp_data.get("net_edge_cents", 0)),
+                    suggested_qty=int(opp_data.get("suggested_qty", 0)),
+                    max_profit_usd=float(opp_data.get("max_profit_usd", 0)),
+                    timestamp=float(opp_data.get("timestamp", 0)),
+                    status=opp_data.get("status", "candidate"),
+                    mapping_status=opp_data.get("mapping_status", "candidate"),
+                )
+            except Exception as exc:
+                logger.warning("Failed to reconstruct opportunity for %s: %s", arb_id, exc)
+                continue
+
+            # Find YES and NO leg orders
+            leg_orders = orders_by_arb.get(arb_id, [])
+            leg_yes = leg_no = None
+            for orow in leg_orders:
+                order = self._row_to_order(orow)
+                if order is None:
+                    continue
+                side = (orow["side"] or "").upper()
+                if side == "YES" or "YES" in (orow["order_id"] or "").upper():
+                    leg_yes = order
+                elif side == "NO" or "NO" in (orow["order_id"] or "").upper():
+                    leg_no = order
+
+            # Fallback: create placeholder orders if not found
+            if leg_yes is None:
+                leg_yes = Order(
+                    order_id=f"{arb_id}-YES",
+                    platform=opp.yes_platform,
+                    market_id=opp.yes_market_id,
+                    canonical_id=opp.canonical_id,
+                    side="YES",
+                    price=opp.yes_price,
+                    quantity=opp.suggested_qty,
+                    status=OrderStatus.FILLED if arb_row["status"] in ("filled", "simulated") else OrderStatus.PENDING,
+                    fill_price=opp.yes_price,
+                    fill_qty=opp.suggested_qty if arb_row["status"] in ("filled", "simulated") else 0,
+                )
+            if leg_no is None:
+                leg_no = Order(
+                    order_id=f"{arb_id}-NO",
+                    platform=opp.no_platform,
+                    market_id=opp.no_market_id,
+                    canonical_id=opp.canonical_id,
+                    side="NO",
+                    price=opp.no_price,
+                    quantity=opp.suggested_qty,
+                    status=OrderStatus.FILLED if arb_row["status"] in ("filled", "simulated") else OrderStatus.PENDING,
+                    fill_price=opp.no_price,
+                    fill_qty=opp.suggested_qty if arb_row["status"] in ("filled", "simulated") else 0,
+                )
+
+            created_at = arb_row["created_at"]
+            ts = created_at.timestamp() if created_at else 0.0
+
+            execution = ArbExecution(
+                arb_id=arb_id,
+                opportunity=opp,
+                leg_yes=leg_yes,
+                leg_no=leg_no,
+                status=arb_row["status"] or "unknown",
+                realized_pnl=float(arb_row["realized_pnl"] or 0),
+                timestamp=ts,
+            )
+            executions.append(execution)
+
+        logger.info("Rehydrated %d execution(s) from database", len(executions))
+        return executions
 
     # ─── Helpers ─────────────────────────────────────────────────────────────
 

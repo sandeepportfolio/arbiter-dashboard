@@ -90,6 +90,9 @@ services:
       # (overrides any localhost value accidentally left in .env.production).
       DATABASE_URL: postgresql://${PG_USER:-arbiter}:${PG_PASSWORD:-arbiter_secret}@arbiter-postgres-prod:5432/arbiter_live
       REDIS_URL: redis://arbiter-redis-prod:6379/0
+      # Use host-side Claude CLI verifier service (Max subscription, no API key needed)
+      LLM_VERIFIER_BACKEND: http
+      LLM_VERIFIER_HTTP_URL: http://host.docker.internal:8079/verify
     ports:
       - "${ARBITER_PORT:-8080}:8080"
     depends_on:
@@ -100,6 +103,8 @@ services:
     volumes:
       # RSA private key mounted read-only
       - ./keys:/app/keys:ro
+      # Claude Code CLI verifier service runs on the host (port 8079)
+      # No need to mount auth config — the service handles Claude CLI auth natively
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/api/health').read()\" || exit 1"]
       interval: 30s

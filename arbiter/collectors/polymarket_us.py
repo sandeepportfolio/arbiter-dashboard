@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
+from datetime import date, timedelta
 from dataclasses import dataclass, field
 from typing import AsyncIterator, Optional
 
@@ -30,6 +32,26 @@ from arbiter.utils.retry import CircuitBreaker, RateLimiter
 logger = logging.getLogger("arbiter.collector.polymarket_us")
 
 _DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=10)
+
+# Matches YYYY-MM-DD anywhere in a slug (e.g. "asc-mlb-mil-mia-2026-04-17-neg-3pt5")
+_SLUG_DATE_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
+
+
+def _slug_is_expired(slug: str, grace_days: int = 1) -> bool:
+    """Return True if the slug contains a date that is in the past (with grace period).
+
+    Sports-event slugs embed their game date (e.g. 2026-04-17). Once the date has
+    passed, the market is settled/expired and fetching its book is pointless.
+    Slugs without a date (e.g. midterm politics) are never considered expired.
+    """
+    match = _SLUG_DATE_RE.search(slug)
+    if not match:
+        return False
+    try:
+        slug_date = date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+        return slug_date < date.today() - timedelta(days=grace_days)
+    except ValueError:
+        return False
 
 
 def _normalize_path(path: str) -> str:
@@ -344,12 +366,28 @@ class PolymarketUSCollector:
         self._inactive_slugs: set[str] = set()
 
     def refresh_tracked_markets(self) -> None:
-        """Reload tracked slugs so newly discovered mappings are picked up."""
-        self._slug_map = {
-            canonical_id: str(mapping.get("polymarket", "") or "").strip()
-            for canonical_id, mapping in MARKET_MAP.items()
-            if str(mapping.get("polymarket", "") or "").strip()
-        }
+        """Reload tracked slugs so newly discovered mappings are picked up.
+
+        Automatically skips slugs with embedded dates that are in the past
+        (expired sports events, etc.) to avoid hammering the API with 404s.
+        """
+        slug_map: dict[str, str] = {}
+        skipped = 0
+        for canonical_id, mapping in MARKET_MAP.items():
+            slug = str(mapping.get("polymarket", "") or "").strip()
+            if not slug:
+                continue
+            if _slug_is_expired(slug):
+                skipped += 1
+                continue
+            slug_map[canonical_id] = slug
+        if skipped:
+            logger.info(
+                "Polymarket US: tracking %d markets, skipped %d expired slugs",
+                len(slug_map),
+                skipped,
+            )
+        self._slug_map = slug_map
 
     def _build_price_point(
         self,

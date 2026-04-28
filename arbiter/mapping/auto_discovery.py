@@ -14,6 +14,7 @@ import re
 import time
 from collections import defaultdict
 from datetime import date, datetime
+from difflib import SequenceMatcher
 from typing import Any
 
 from arbiter.config.settings import normalize_market_text, similarity_score
@@ -24,6 +25,32 @@ _COMMON_TOKENS = {
     "a", "an", "and", "are", "be", "for", "if", "in", "is", "of", "on", "or",
     "the", "to", "vs", "will", "win", "winner", "yes", "no",
 }
+
+# ── Bracket-vs-binary mismatch guard ─────────────────────────────────
+# Kalshi offers bracket/seat-count markets (e.g., KXDSENATESEATS-27-47
+# = "Democrats win exactly 47 seats") which look textually similar to
+# binary control markets (CONTROLS-2026-D = "Democrats win the Senate").
+# These are fundamentally different contracts: a seat-count bracket
+# resolves on a specific number, while a control market resolves on
+# majority. Pairing them creates phantom arbitrage (e.g., $0.03 YES on
+# 47 seats vs $0.47 NO on overall control) that would guarantee losses.
+_KALSHI_BRACKET_TICKERS = re.compile(
+    r"^KX[DR](?:SENATE|HOUSE)SEATS",
+    re.IGNORECASE,
+)
+_POLY_BINARY_CONTROL_SLUGS = re.compile(
+    r"(?:midterms|control|usse|usho)",
+    re.IGNORECASE,
+)
+
+
+def _is_bracket_vs_binary_mismatch(kalshi_ticker: str, poly_slug: str) -> bool:
+    """Return True if a Kalshi bracket/seat-count market is paired with a
+    Polymarket binary control market (or vice versa). These are structurally
+    incompatible and must never be paired."""
+    if _KALSHI_BRACKET_TICKERS.search(kalshi_ticker) and _POLY_BINARY_CONTROL_SLUGS.search(poly_slug):
+        return True
+    return False
 _DATE_RE = re.compile(r"(20\d{2})[-_/](\d{2})[-_/](\d{2})")
 _AUTO_CATEGORY_LABELS = {
     "politics",
@@ -296,35 +323,85 @@ def _candidate_resolution_criteria(candidate: dict[str, Any], *, operator_note: 
 
 def _synthetic_kalshi_orderbook(market: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(market, dict):
-        return {"bids": []}
+        return {"bids": [], "asks": []}
     px = market.get("yes_bid") or market.get("bid") or market.get("last_price") or 0
     qty = market.get("yes_bid_size_fp") or market.get("yes_ask_size_fp") or market.get("volume") or 0
     try:
         px_f = float(px or 0)
         qty_f = float(qty or 0)
     except (TypeError, ValueError):
-        return {"bids": []}
+        return {"bids": [], "asks": []}
     if px_f > 1.0:
         px_f /= 100.0
     if px_f <= 0 or qty_f <= 0:
-        return {"bids": []}
-    return {"bids": [{"px": px_f, "qty": qty_f}]}
+        return {"bids": [], "asks": []}
+    return {"bids": [{"px": px_f, "qty": qty_f}], "asks": []}
 
 
 def _normalize_kalshi_orderbook(payload: Any) -> dict[str, Any]:
+    """Normalize Kalshi orderbook to {bids, asks} of {px, qty} levels.
+
+    Kalshi exposes both sides of the YES contract under `orderbook.yes` (bids)
+    and `orderbook.no` (which represents bids for NO, ≡ asks for YES). We treat
+    both as activity for the liquidity gate.
+    """
     orderbook = payload.get("orderbook", payload) if isinstance(payload, dict) else {}
-    levels = orderbook.get("yes", []) if isinstance(orderbook, dict) else []
-    bids = []
-    for level in levels or []:
-        try:
-            px = float(level[0])
-            qty = float(level[1])
-        except (IndexError, TypeError, ValueError):
-            continue
-        if px > 1.0:
-            px /= 100.0
-        bids.append({"px": px, "qty": qty})
-    return {"bids": bids}
+
+    def _convert(levels: Any) -> list[dict[str, float]]:
+        result: list[dict[str, float]] = []
+        for level in levels or []:
+            try:
+                px = float(level[0])
+                qty = float(level[1])
+            except (IndexError, TypeError, ValueError):
+                continue
+            if px > 1.0:
+                px /= 100.0
+            if px <= 0 or qty <= 0:
+                continue
+            result.append({"px": px, "qty": qty})
+        return result
+
+    yes_levels = orderbook.get("yes", []) if isinstance(orderbook, dict) else []
+    no_levels = orderbook.get("no", []) if isinstance(orderbook, dict) else []
+    return {"bids": _convert(yes_levels), "asks": _convert(no_levels)}
+
+
+def _normalize_polymarket_orderbook(payload: Any) -> dict[str, Any]:
+    """Normalize Polymarket book API response to {bids, asks} of {px, qty} levels.
+
+    The /markets/{slug}/book endpoint returns
+    {"marketData": {"bids": [{"px": {"value": "0.50"}, "qty": "100"}], "offers": [...]}}.
+    Prices are nested under `px.value` and quantities are strings.
+    """
+    if not isinstance(payload, dict):
+        return {"bids": [], "asks": []}
+    market_data = payload.get("marketData") if "marketData" in payload else payload
+    if not isinstance(market_data, dict):
+        return {"bids": [], "asks": []}
+
+    def _convert(levels: Any) -> list[dict[str, float]]:
+        result: list[dict[str, float]] = []
+        for level in levels or []:
+            if not isinstance(level, dict):
+                continue
+            px_raw = level.get("px")
+            if isinstance(px_raw, dict):
+                px_raw = px_raw.get("value")
+            try:
+                px = float(px_raw or 0)
+                qty = float(level.get("qty", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            if px <= 0 or qty <= 0:
+                continue
+            result.append({"px": px, "qty": qty})
+        return result
+
+    return {
+        "bids": _convert(market_data.get("bids")),
+        "asks": _convert(market_data.get("offers") or market_data.get("asks")),
+    }
 
 
 async def _load_candidate_orderbooks(
@@ -335,7 +412,7 @@ async def _load_candidate_orderbooks(
     kalshi_market = candidate.get("__kalshi_market") or {}
     polymarket_market = candidate.get("__polymarket_market") or {}
     kalshi_orderbook = _synthetic_kalshi_orderbook(kalshi_market)
-    poly_orderbook: dict[str, Any] = {"bids": []}
+    poly_orderbook: dict[str, Any] = {"bids": [], "asks": []}
 
     kalshi_getter = getattr(kalshi_client, "get_orderbook", None)
     if callable(kalshi_getter):
@@ -349,14 +426,14 @@ async def _load_candidate_orderbooks(
     poly_getter = getattr(polymarket_us_client, "get_orderbook", None)
     if callable(poly_getter):
         try:
-            poly_orderbook = await poly_getter(candidate.get("poly_slug", ""), depth=100)
+            poly_orderbook = _normalize_polymarket_orderbook(
+                await poly_getter(candidate.get("poly_slug", ""), depth=100)
+            )
         except Exception:
-            poly_orderbook = {"bids": []}
+            poly_orderbook = {"bids": [], "asks": []}
 
-    if not poly_orderbook.get("bids") and isinstance(polymarket_market, dict):
-        market_data = polymarket_market.get("marketData") or polymarket_market
-        if isinstance(market_data, dict):
-            poly_orderbook = {"bids": list(market_data.get("bids") or [])}
+    if not poly_orderbook.get("bids") and not poly_orderbook.get("asks") and isinstance(polymarket_market, dict):
+        poly_orderbook = _normalize_polymarket_orderbook(polymarket_market)
 
     return {
         "kalshi": kalshi_orderbook,
@@ -397,9 +474,10 @@ async def _apply_auto_promote(
             return candidate, type("PromotionResult", (), {"promoted": False, "reason": "score_low"})()
 
         resolution_date = _coerce_date(candidate.get("resolution_date"))
-        if resolution_date is None:
-            return candidate, type("PromotionResult", (), {"promoted": False, "reason": "date_missing"})()
-        if (resolution_date - today).days > max_days:
+        # Allow candidates without explicit resolution dates — many valid
+        # markets (politics, long-dated) lack structured date fields.  The
+        # LLM verifier + score threshold are the real quality gates.
+        if resolution_date is not None and (resolution_date - today).days > max_days:
             return candidate, type("PromotionResult", (), {"promoted": False, "reason": "resolution_too_far"})()
 
         if int(candidate.get("advisory_scans", 0) or 0) < advisory_scans:
@@ -418,8 +496,10 @@ async def _apply_auto_promote(
             return candidate, result
 
     promoted_this_pass = 0
+    reason_counts: dict[str, int] = {}
     for candidate, result in await asyncio.gather(*(_evaluate(candidate) for candidate in candidates)):
         candidate["auto_promote_reason"] = result.reason
+        reason_counts[result.reason] = reason_counts.get(result.reason, 0) + 1
         if not result.promoted or promoted_this_pass >= max_promotions:
             continue
 
@@ -433,8 +513,11 @@ async def _apply_auto_promote(
         )
         candidate["notes"] = "Auto-promoted by discovery engine."
 
-    if promoted_this_pass:
-        logger.info("auto_discovery: auto-promoted %d mapping(s) this pass", promoted_this_pass)
+    logger.info(
+        "auto_discovery: auto-promote summary — %d promoted, %d total, settings: min_score=%.2f max_days=%d advisory=%d, reasons: %s",
+        promoted_this_pass, len(candidates), min_score, max_days, advisory_scans,
+        ", ".join(f"{r}={c}" for r, c in sorted(reason_counts.items(), key=lambda x: -x[1])),
+    )
     return candidates
 
 
@@ -538,6 +621,13 @@ async def _discover_from_kalshi_events(
 
             for _, entry_index, _, _, _ in top_matches:
                 pm_entry = poly_entries[entry_index]
+
+                # ── Bracket-vs-binary guard (event path) ─────────────
+                p_slug = str(pm_entry["market"].get("slug", "") or "")
+                k_ticker = str(km.get("ticker", "") or "")
+                if _is_bracket_vs_binary_mismatch(k_ticker, p_slug):
+                    continue
+
                 score = _candidate_score(
                     kalshi_text=k_text,
                     poly_text=pm_entry["text"],
@@ -584,9 +674,29 @@ def _candidate_score(
     if not shared_tokens:
         return 0.0
 
-    token_overlap = len(shared_tokens) / max(len(kalshi_tokens | poly_tokens), 1)
-    lexical_score = similarity_score(kalshi_text, poly_text)
-    score = (0.65 * lexical_score) + (0.35 * token_overlap)
+    # Fast: token Jaccard overlap (set-based, order-independent)
+    union_size = len(kalshi_tokens | poly_tokens)
+    token_jaccard = len(shared_tokens) / max(union_size, 1)
+
+    # Fast: meaningful token overlap (rare/domain-specific tokens matter more)
+    meaningful_shared = shared_tokens - _COMMON_TOKENS
+    meaningful_union = (kalshi_tokens | poly_tokens) - _COMMON_TOKENS
+    meaningful_overlap = len(meaningful_shared) / max(len(meaningful_union), 1) if meaningful_union else 0.0
+
+    # Quick score from fast metrics; only run expensive SequenceMatcher if
+    # the fast score is promising enough to be a viable candidate.
+    # Threshold 0.04 keeps scoring fast while allowing pairs with modest
+    # token overlap (e.g. 2+ shared meaningful tokens) through to the
+    # more accurate sequence comparison.
+    quick_score = (0.50 * token_jaccard) + (0.50 * meaningful_overlap)
+    if quick_score < 0.04:
+        return 0.0  # Skip expensive SequenceMatcher for clearly-unrelated pairs
+
+    # Slow: sequence similarity (order-sensitive, catches phrasing differences)
+    seq_ratio = SequenceMatcher(None, kalshi_text.lower(), poly_text.lower()).ratio()
+
+    # Combine all three signals
+    score = (0.40 * seq_ratio) + (0.30 * token_jaccard) + (0.30 * meaningful_overlap)
 
     if kalshi_date is not None and poly_date is not None:
         day_delta = abs((kalshi_date - poly_date).days)
@@ -716,6 +826,13 @@ async def discover(
 
             for entry_index in candidate_indexes:
                 pm_entry = poly_entries[entry_index]
+
+                # ── Bracket-vs-binary guard ───────────────────────────
+                p_slug = str(pm_entry["market"].get("slug", "") or "")
+                k_ticker = str(km.get("ticker", "") or "")
+                if _is_bracket_vs_binary_mismatch(k_ticker, p_slug):
+                    continue
+
                 score = _candidate_score(
                     kalshi_text=k_text,
                     poly_text=pm_entry["text"],
