@@ -238,6 +238,13 @@ class ArbitrageScanner:
         stale_keys = {key for key in self._stable_keys if key not in seen_keys}
         for stale_key in stale_keys:
             self._stable_keys.pop(stale_key, None)
+        # Drop publish-time entries for opportunities we no longer see, so the
+        # cache can't grow without bound across long-running scanner sessions.
+        publish_stale = {
+            key for key in self._recent_publish_time if key not in seen_keys
+        }
+        for stale_key in publish_stale:
+            self._recent_publish_time.pop(stale_key, None)
 
         opportunities.sort(key=lambda item: (item.status == "tradable", item.net_edge_cents, item.confidence), reverse=True)
         self._opportunities = opportunities
@@ -386,39 +393,71 @@ class ArbitrageScanner:
         is_confirmed = opportunity.mapping_status == "confirmed"
         is_auto_tradable = mapping.get("allow_auto_trade", False)
 
-        # Non-confirmed mappings ALWAYS go to review — no exceptions
+        # Every gate logs the reason it fired so the dashboard / log search
+        # can answer "why didn't this opportunity trade?" without re-running it.
         if not is_confirmed:
+            logger.debug(
+                "scanner.skip canonical=%s reason=mapping_unconfirmed status=%s",
+                opportunity.canonical_id, opportunity.mapping_status,
+            )
             return "review"
-        # Confirmed but not auto-tradable → still needs operator approval
         if not is_auto_tradable:
+            logger.debug(
+                "scanner.skip canonical=%s reason=mapping_not_auto_tradable",
+                opportunity.canonical_id,
+            )
             return "review"
-        # Resolution criteria must be "identical" for live trading.
-        # This blocks any mapping (hand-curated or auto-promoted) where
-        # the resolution criteria haven't been verified as matching.
         res_status = str(mapping.get("resolution_match_status", "pending_operator_review")).lower()
         if res_status != "identical":
+            logger.debug(
+                "scanner.skip canonical=%s reason=resolution_match_status status=%s",
+                opportunity.canonical_id, res_status,
+            )
             return "review"
-        # Stale quotes
         if opportunity.quote_age_seconds > self.config.max_quote_age_seconds:
+            logger.info(
+                "scanner.skip canonical=%s reason=stale_quote age=%.1fs max=%.1fs",
+                opportunity.canonical_id,
+                opportunity.quote_age_seconds,
+                self.config.max_quote_age_seconds,
+            )
             return "stale"
-        # Insufficient liquidity
         if opportunity.min_available_liquidity < self.config.min_liquidity:
+            logger.info(
+                "scanner.skip canonical=%s reason=illiquid liq=%.2f min=%.2f",
+                opportunity.canonical_id,
+                opportunity.min_available_liquidity,
+                self.config.min_liquidity,
+            )
             return "illiquid"
-        # Must persist across multiple scans
         if opportunity.persistence_count < self.config.persistence_scans:
+            logger.debug(
+                "scanner.skip canonical=%s reason=insufficient_persistence count=%d need=%d",
+                opportunity.canonical_id,
+                opportunity.persistence_count,
+                self.config.persistence_scans,
+            )
             return "candidate"
-        # Manual flag
         if opportunity.requires_manual:
             return "manual"
-        # Confidence threshold
         if opportunity.confidence < self.config.confidence_threshold:
+            logger.debug(
+                "scanner.skip canonical=%s reason=low_confidence confidence=%.2f threshold=%.2f",
+                opportunity.canonical_id,
+                opportunity.confidence,
+                self.config.confidence_threshold,
+            )
             return "candidate"
         # ── Net edge floor re-check (defense-in-depth) ────────────────
-        # Even after all gates pass, verify the net edge is still above
-        # the minimum threshold. This catches stale-price drift between
-        # the time the opportunity was built and now, and prevents
-        # trading on rounding-error edges.
+        # Catches stale-price drift between the time the opportunity was
+        # built and now, and prevents trading on rounding-error edges.
         if opportunity.net_edge_cents < self.config.min_edge_cents:
+            logger.debug(
+                "scanner.skip canonical=%s reason=net_edge_below_floor net=%.2f¢ min=%.2f¢",
+                opportunity.canonical_id,
+                opportunity.net_edge_cents,
+                self.config.min_edge_cents,
+            )
             return "candidate"
         return "tradable"
 
@@ -452,7 +491,14 @@ class ArbitrageScanner:
                 yes_cap = max(yes_bal * (1 - RESERVE_FRACTION), 0) / max(yes_price, 0.01)
                 no_cap = max(no_bal * (1 - RESERVE_FRACTION), 0) / max(no_price, 0.01)
                 balance_limited = int(min(yes_cap, no_cap))
-            except Exception:
+            except Exception as exc:
+                # Balance lookup is best-effort: fall back to the static cap so
+                # a flaky balance source doesn't pause the scanner. We log the
+                # reason once per scan so operators can spot persistent issues.
+                logger.warning(
+                    "scanner.balance_provider.error platform_yes=%s platform_no=%s err=%s",
+                    yes_price_point.platform, no_price_point.platform, exc,
+                )
                 balance_limited = int(max_cap / cost_per_pair)
         else:
             balance_limited = int(max_cap / cost_per_pair)

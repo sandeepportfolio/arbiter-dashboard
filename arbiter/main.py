@@ -1193,6 +1193,16 @@ def main():
     config = load_config()
     if args.live:
         config.scanner.dry_run = False
+        # Static config checks first — these catch missing/half-configured env
+        # vars that would otherwise blow up hours into operation.
+        from .config.settings import validate_live_config
+        config_errors = validate_live_config(config)
+        if config_errors:
+            for err in config_errors:
+                logging.getLogger("arbiter.main").critical(
+                    "Live startup blocked (config): %s", err,
+                )
+            sys.exit(2)
         readiness = OperationalReadiness(config)
         failures = readiness.startup_failures()
         if failures:

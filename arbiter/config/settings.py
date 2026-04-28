@@ -323,15 +323,21 @@ MARKET_SEEDS: Tuple[MarketMappingRecord, ...] = (
 def _load_auto_seeds() -> Tuple[MarketMappingRecord, ...]:
     """Load auto-discovered candidate mappings from the JSON fixture file."""
     import json
+    import logging as _logging
 
+    _seed_log = _logging.getLogger("arbiter.config.seeds")
     fixture = Path(__file__).resolve().parent.parent / "mapping" / "fixtures" / "market_seeds_auto.json"
     if not fixture.exists():
         return ()
     try:
         raw = json.loads(fixture.read_text())
-    except Exception:
+    except (OSError, json.JSONDecodeError) as exc:
+        _seed_log.warning(
+            "auto_seeds.fixture_unreadable path=%s err=%s", fixture, exc,
+        )
         return ()
     records = []
+    skipped = 0
     for item in raw:
         try:
             records.append(
@@ -350,8 +356,18 @@ def _load_auto_seeds() -> Tuple[MarketMappingRecord, ...]:
                     resolution_match_status=item.get("resolution_match_status", "pending_operator_review"),
                 )
             )
-        except Exception:
+        except (KeyError, TypeError, ValueError) as exc:
+            skipped += 1
+            _seed_log.debug(
+                "auto_seeds.record_invalid index=%d err=%s",
+                len(records) + skipped - 1, exc,
+            )
             continue
+    if skipped:
+        _seed_log.warning(
+            "auto_seeds.partial_load loaded=%d skipped=%d path=%s",
+            len(records), skipped, fixture,
+        )
     return tuple(records)
 
 
@@ -649,6 +665,66 @@ def polymarket_us_order_fee(price: float, qty: float, intent: str = "taker") -> 
     return round(raw * 100) / 100.0
 
 
+class ConfigValidationError(RuntimeError):
+    """Raised when ArbiterConfig is missing values required for live trading."""
+
+
+def validate_live_config(cfg: ArbiterConfig) -> list[str]:
+    """Return a list of config errors that would block live trading.
+
+    These checks complement OperationalReadiness.startup_failures(): they cover
+    the static (env-var) side, where a missing value causes a cryptic
+    mid-operation failure hours later. The readiness check then layers on
+    runtime evidence (collector health, balances, profitability).
+
+    Returning a list (rather than raising) lets callers decide whether to
+    surface as warnings (dry-run) or hard-stop (live).
+    """
+    errors: list[str] = []
+
+    # Kalshi credentials must both be present together — using one without the
+    # other is the most common silent-failure path (an empty private key path
+    # gets resolved to a relative dir and then fails on first sign attempt).
+    if cfg.kalshi.api_key_id and not cfg.kalshi.private_key_path:
+        errors.append("KALSHI_API_KEY_ID set but KALSHI_PRIVATE_KEY_PATH is missing")
+    if cfg.kalshi.private_key_path and not cfg.kalshi.api_key_id:
+        errors.append("KALSHI_PRIVATE_KEY_PATH set but KALSHI_API_KEY_ID is missing")
+
+    if isinstance(cfg.polymarket, PolymarketUSConfig):
+        if cfg.polymarket.api_key_id and not cfg.polymarket.api_secret:
+            errors.append("POLYMARKET_US_API_KEY_ID set but POLYMARKET_US_API_SECRET is missing")
+        if cfg.polymarket.api_secret and not cfg.polymarket.api_key_id:
+            errors.append("POLYMARKET_US_API_SECRET set but POLYMARKET_US_API_KEY_ID is missing")
+    elif isinstance(cfg.polymarket, PolymarketConfig):
+        # Legacy variant: signature_type 2 needs a funder address.
+        if cfg.polymarket.private_key and cfg.polymarket.signature_type == 2 and not cfg.polymarket.funder:
+            errors.append(
+                "POLY_SIGNATURE_TYPE=2 requires POLY_FUNDER (proxy wallet address)"
+            )
+
+    # Telegram alerts gate live trading per readiness check; if either piece is
+    # set the other should be too, otherwise alerts silently no-op.
+    if cfg.alerts.telegram_bot_token and not cfg.alerts.telegram_chat_id:
+        errors.append("TELEGRAM_BOT_TOKEN set but TELEGRAM_CHAT_ID is missing")
+    if cfg.alerts.telegram_chat_id and not cfg.alerts.telegram_bot_token:
+        errors.append("TELEGRAM_CHAT_ID set but TELEGRAM_BOT_TOKEN is missing")
+
+    # Sanity checks on numeric thresholds — a misconfigured min_edge_cents=0
+    # would push every gross-positive opportunity through the floor.
+    if cfg.scanner.min_edge_cents <= 0:
+        errors.append(f"scanner.min_edge_cents must be > 0 (got {cfg.scanner.min_edge_cents})")
+    if cfg.scanner.max_quote_age_seconds <= 0:
+        errors.append(
+            f"scanner.max_quote_age_seconds must be > 0 (got {cfg.scanner.max_quote_age_seconds})"
+        )
+    if cfg.scanner.max_position_usd <= 0:
+        errors.append(
+            f"scanner.max_position_usd must be > 0 (got {cfg.scanner.max_position_usd})"
+        )
+
+    return errors
+
+
 def load_config() -> ArbiterConfig:
     # Select Polymarket variant before constructing ArbiterConfig so the right
     # config class is used. Defaults to "us" to align with the CFTC-regulated
@@ -668,4 +744,15 @@ def load_config() -> ArbiterConfig:
     if cfg.kalshi.private_key_path and not os.path.isabs(cfg.kalshi.private_key_path):
         config_root = _DOTENV_PATH.parent if _DOTENV_PATH else Path(__file__).resolve().parent.parent
         cfg.kalshi.private_key_path = str((config_root / cfg.kalshi.private_key_path).resolve())
+
+    # Validate the loaded config and log any issues. We log rather than raise
+    # so dry-run / dev environments can still boot; callers (main.py for live
+    # mode) should call validate_live_config(cfg) and abort on errors.
+    errors = validate_live_config(cfg)
+    if errors:
+        import logging as _logging
+        _cfg_log = _logging.getLogger("arbiter.config")
+        for err in errors:
+            _cfg_log.warning("config.validation %s", err)
+
     return cfg

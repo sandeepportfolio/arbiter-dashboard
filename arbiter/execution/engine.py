@@ -30,6 +30,24 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("arbiter.execution")
 
+# Cap in-memory execution history to prevent unbounded growth across 24/7 runs.
+# Persistent history lives in ExecutionStore (PostgreSQL); this is the dashboard
+# / equity-curve buffer.
+MAX_EXECUTION_HISTORY = 1000
+
+# `_recent_signatures` is a per-process dedup map (opp.key():status -> last_seen_ts)
+# preventing duplicate execution attempts within 30s. Old entries must be evicted
+# so the dict doesn't grow without bound across long runs.
+SIGNATURE_DEDUP_WINDOW_S = 30.0
+SIGNATURE_PRUNE_INTERVAL_S = 300.0
+
+
+def _trim_executions(executions: List["ArbExecution"]) -> None:
+    """Trim in-place to MAX_EXECUTION_HISTORY. Cheap O(1) when under cap."""
+    overflow = len(executions) - MAX_EXECUTION_HISTORY
+    if overflow > 0:
+        del executions[:overflow]
+
 
 class OrderStatus(Enum):
     PENDING = "pending"
@@ -366,6 +384,9 @@ class ExecutionEngine:
         self.price_store = price_store
         self.risk = RiskManager(config.scanner, safety_config=getattr(config, "safety", None))
         self._running = False
+        # Capped at MAX_EXECUTION_HISTORY to prevent unbounded memory growth in
+        # 24/7 operation. Operators querying history beyond this should pull from
+        # the persistent ExecutionStore (PostgreSQL) which retains everything.
         self._executions: List[ArbExecution] = []
         self._execution_count = 0
         self._collectors = collectors or {}
@@ -377,6 +398,7 @@ class ExecutionEngine:
         self._incidents: Deque[ExecutionIncident] = deque(maxlen=200)
         self._manual_positions: Deque[ManualPosition] = deque(maxlen=200)
         self._recent_signatures: Dict[str, float] = {}
+        self._signatures_last_pruned: float = time.time()
         self._aborted_count = 0
         self._manual_count = 0
         self._recovery_count = 0
@@ -427,10 +449,19 @@ class ExecutionEngine:
             return None
 
         signature = f"{opp.key()}:{opp.status}"
+        now_ts = time.time()
         last_seen = self._recent_signatures.get(signature, 0.0)
-        if time.time() - last_seen < 30.0:
+        if now_ts - last_seen < SIGNATURE_DEDUP_WINDOW_S:
             return None
-        self._recent_signatures[signature] = time.time()
+        self._recent_signatures[signature] = now_ts
+        # Prune the dedup map periodically so it can't grow without bound.
+        # Cheap: only walks the dict every SIGNATURE_PRUNE_INTERVAL_S seconds.
+        if now_ts - self._signatures_last_pruned > SIGNATURE_PRUNE_INTERVAL_S:
+            cutoff = now_ts - SIGNATURE_DEDUP_WINDOW_S * 4
+            self._recent_signatures = {
+                key: ts for key, ts in self._recent_signatures.items() if ts > cutoff
+            }
+            self._signatures_last_pruned = now_ts
 
         # Bump counter + bind contextvars early (OPS-01 / Pitfall 6) — every
         # downstream log line will carry arb_id + canonical_id until the finally
@@ -592,6 +623,7 @@ class ExecutionEngine:
             notes=["Manual workflow queued"],
         )
         self._executions.append(execution)
+        _trim_executions(self._executions)
         return execution
 
     async def update_manual_position(self, position_id: str, action: str, note: str = "") -> Optional[ManualPosition]:
@@ -815,6 +847,7 @@ class ExecutionEngine:
             timestamp=now,
         )
         self._executions.append(execution)
+        _trim_executions(self._executions)
         self.risk.record_trade(
             opp.canonical_id,
             opp.suggested_qty * (opp.yes_price + opp.no_price),
@@ -1124,6 +1157,7 @@ class ExecutionEngine:
             notes=notes,
         )
         self._executions.append(execution)
+        _trim_executions(self._executions)
 
         # Plan 03-08 (SAFE-02): per-platform exposure recording.
         #   * "submitted"/"filled" → both legs have real exposure; record

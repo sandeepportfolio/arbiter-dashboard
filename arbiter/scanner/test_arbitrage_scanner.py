@@ -27,6 +27,7 @@ def test_scanner_requires_persistence_before_publish():
             "status": "confirmed",
             "allow_auto_trade": True,
             "mapping_score": 0.9,
+            "resolution_match_status": "identical",
         }
 
         now = time.time()
@@ -106,6 +107,7 @@ def test_scanner_uses_fee_aware_polymarket_math():
             "status": "confirmed",
             "allow_auto_trade": True,
             "mapping_score": 0.95,
+            "resolution_match_status": "identical",
         }
 
         now = time.time()
