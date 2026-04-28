@@ -351,3 +351,123 @@ async def test_discover_auto_promotes_when_enabled_and_candidate_passes_gates():
     assert store.written[0]["status"] == "confirmed"
     assert store.written[0]["allow_auto_trade"] is True
     assert store.written[0]["resolution_match_status"] == "identical"
+
+
+# ─── Orderbook normalizers ───────────────────────────────────────────────────
+
+
+def test_normalize_polymarket_orderbook_handles_marketdata_envelope():
+    """Real /markets/{slug}/book responses nest bids/offers under marketData with
+    `px` as {"value": "..."}. The normalizer must extract them as flat px/qty floats."""
+    from arbiter.mapping.auto_discovery import _normalize_polymarket_orderbook
+
+    payload = {
+        "marketData": {
+            "bids": [
+                {"px": {"value": "0.50"}, "qty": "100"},
+                {"px": {"value": "0.49"}, "qty": "200"},
+            ],
+            "offers": [
+                {"px": {"value": "0.52"}, "qty": "150"},
+            ],
+        }
+    }
+    book = _normalize_polymarket_orderbook(payload)
+    assert book["bids"] == [{"px": 0.50, "qty": 100.0}, {"px": 0.49, "qty": 200.0}]
+    assert book["asks"] == [{"px": 0.52, "qty": 150.0}]
+
+
+def test_normalize_polymarket_orderbook_skips_garbage_levels():
+    from arbiter.mapping.auto_discovery import _normalize_polymarket_orderbook
+
+    payload = {
+        "marketData": {
+            "bids": [
+                {"px": {"value": "0.50"}, "qty": "100"},
+                {"px": None, "qty": "100"},        # missing px → drop
+                {"px": {"value": "0"}, "qty": "10"},  # zero px → drop
+                "not-a-dict",                          # garbage → drop
+            ],
+            "offers": [],
+        }
+    }
+    book = _normalize_polymarket_orderbook(payload)
+    assert book["bids"] == [{"px": 0.50, "qty": 100.0}]
+    assert book["asks"] == []
+
+
+def test_normalize_kalshi_orderbook_includes_no_side_as_asks():
+    """The `no` side of a Kalshi orderbook represents asks for YES — it should
+    be counted as activity in the liquidity gate."""
+    from arbiter.mapping.auto_discovery import _normalize_kalshi_orderbook
+
+    payload = {"orderbook": {"yes": [[55, 100]], "no": [[44, 200]]}}
+    book = _normalize_kalshi_orderbook(payload)
+    assert book["bids"] == [{"px": 0.55, "qty": 100.0}]
+    assert book["asks"] == [{"px": 0.44, "qty": 200.0}]
+
+
+@pytest.mark.asyncio
+async def test_polymarket_book_response_passes_liquidity_gate():
+    """End-to-end: a candidate whose Polymarket book endpoint returns the real
+    nested-marketData format must clear the liquidity gate (regression test —
+    previously every Polymarket market silently scored 0 USD depth)."""
+    kalshi = _make_kalshi_client([
+        {
+            "ticker": "CONTROLH-2026-D",
+            "title": "Will Democrats win the House in 2026?",
+            "category": "Elections",
+            "close_time": "2027-02-01T15:00:00Z",
+            "settlement_source": "AP",
+            "status": "open",
+            "yes_bid": 55,
+            "yes_bid_size_fp": 500,
+        },
+    ])
+
+    real_poly_book = {
+        "marketData": {
+            "bids": [{"px": {"value": "0.50"}, "qty": "100"}],
+            "offers": [{"px": {"value": "0.52"}, "qty": "100"}],
+        }
+    }
+
+    poly = MagicMock()
+    async def _gen():
+        yield {
+            "slug": "paccc-usho-midterms-2026-11-03-dem",
+            "question": "Will Democrats win the House in 2026?",
+            "description": "Will Democrats win the House in 2026?",
+            "category": "politics",
+            "endDate": "2027-02-01T23:59:00Z",
+            "resolutionSource": "AP",
+            "outcomes": ["Yes", "No"],
+        }
+    poly.list_markets = MagicMock(return_value=_gen())
+    poly.get_orderbook = AsyncMock(return_value=real_poly_book)
+
+    store = _make_store()
+
+    with patch("arbiter.mapping.llm_verifier.verify", new=AsyncMock(return_value="YES")):
+        await discover(
+            kalshi,
+            poly,
+            store,
+            budget_rps=100.0,
+            min_score=0.2,
+            promotion_settings={
+                "auto_promote_enabled": True,
+                "auto_promote_min_score": 0.75,
+                "auto_promote_daily_cap": 25,
+                "auto_promote_advisory_scans": 0,
+                "auto_promote_max_days": 400,
+                "phase5_max_order_usd": 10,
+            },
+        )
+
+    assert store.written, "no candidates were written"
+    written = store.written[0]
+    # Must NOT be rejected for liquidity_low — the format-aware parser sees real depth.
+    assert written.get("auto_promote_reason") != "liquidity_low"
+    assert written["status"] == "confirmed"
+    assert written["allow_auto_trade"] is True

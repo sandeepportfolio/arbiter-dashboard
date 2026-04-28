@@ -1,0 +1,3812 @@
+{
+  "batch": "375-500",
+  "validated_at": "2026-04-22T10:50:12.178302+00:00",
+  "total": 126,
+  "confirmed": 0,
+  "invalid": 126,
+  "confirmed_indices": [],
+  "invalid_details": [
+    {
+      "index": 375,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26M_57aedfd6",
+      "kalshi": "KXPGAR2LEAD-MAST26-MMCN",
+      "polymarket": "tec-masters-round2leader-2026-04-12-mavmcn",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-mavmcn not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 376,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26M_666b88af",
+      "kalshi": "KXPGAR2LEAD-MAST26-MBRE",
+      "polymarket": "tec-masters-round2leader-2026-04-12-micbre",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-micbre not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 377,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26M_721043e1",
+      "kalshi": "KXPGAR2LEAD-MAST26-MWEI",
+      "polymarket": "tec-masters-round2leader-2026-04-12-mikwei",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-mikwei not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 378,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26M_89235dd1",
+      "kalshi": "KXPGAR2LEAD-MAST26-MLEE",
+      "polymarket": "tec-masters-round2leader-2026-04-12-minlee",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-minlee not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 379,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26M_8a60cb44",
+      "kalshi": "KXPGAR2LEAD-MAST26-MPEN",
+      "polymarket": "tec-masters-round2leader-2026-04-12-marpen",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-marpen not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 380,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26M_93844dfc",
+      "kalshi": "KXPGAR2LEAD-MAST26-MHOM",
+      "polymarket": "tec-masters-round2leader-2026-04-12-maxhom",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-maxhom not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 381,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26M_aaa45546",
+      "kalshi": "KXPGAR2LEAD-MAST26-MHOW",
+      "polymarket": "tec-masters-round2leader-2026-04-12-mashow",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-mashow not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 382,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26M_b9306773",
+      "kalshi": "KXPGAR2LEAD-MAST26-MGRE",
+      "polymarket": "tec-masters-round2leader-2026-04-12-maxgre",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-maxgre not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 383,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26M_d5efebc4",
+      "kalshi": "KXPGAR2LEAD-MAST26-MKIM",
+      "polymarket": "tec-masters-round2leader-2026-04-12-mickim",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-mickim not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 384,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26M_f69b4eee",
+      "kalshi": "KXPGAR2LEAD-MAST26-MMCC",
+      "polymarket": "tec-masters-round2leader-2026-04-12-matmcc",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-matmcc not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 385,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26N_18e8939c",
+      "kalshi": "KXPGAR2LEAD-MAST26-NECH",
+      "polymarket": "tec-masters-round2leader-2026-04-12-nicech",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-nicech not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 386,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26N_7966c11e",
+      "kalshi": "KXPGAR2LEAD-MAST26-NHOJ",
+      "polymarket": "tec-masters-round2leader-2026-04-12-nichoj",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-nichoj not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 387,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26N_a53182fe",
+      "kalshi": "KXPGAR2LEAD-MAST26-NKAT",
+      "polymarket": "tec-masters-round2leader-2026-04-12-naokat",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-naokat not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 388,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26N_d7ed473b",
+      "kalshi": "KXPGAR2LEAD-MAST26-NTAY",
+      "polymarket": "tec-masters-round2leader-2026-04-12-nictay",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-nictay not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 389,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26P_4f366727",
+      "kalshi": "KXPGAR2LEAD-MAST26-PCAN",
+      "polymarket": "tec-masters-round2leader-2026-04-12-patcan",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-patcan not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 390,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26P_51b7ec4b",
+      "kalshi": "KXPGAR2LEAD-MAST26-PREE",
+      "polymarket": "tec-masters-round2leader-2026-04-12-patree",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-patree not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 391,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26R_2d8a49bd",
+      "kalshi": "KXPGAR2LEAD-MAST26-RNEE",
+      "polymarket": "tec-masters-round2leader-2026-04-12-rasnee",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-rasnee not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 392,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26R_5f88e53d",
+      "kalshi": "KXPGAR2LEAD-MAST26-RFOX",
+      "polymarket": "tec-masters-round2leader-2026-04-12-ryafox",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-ryafox not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 393,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26R_609aa67a",
+      "kalshi": "KXPGAR2LEAD-MAST26-RHOJ",
+      "polymarket": "tec-masters-round2leader-2026-04-12-rashoj",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-rashoj not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 394,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26R_8299795b",
+      "kalshi": "KXPGAR2LEAD-MAST26-RHEN",
+      "polymarket": "tec-masters-round2leader-2026-04-12-rushen",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-rushen not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 395,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26R_a84ba903",
+      "kalshi": "KXPGAR2LEAD-MAST26-RGER",
+      "polymarket": "tec-masters-round2leader-2026-04-12-ryager",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-ryager not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 396,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26R_c39d8db4",
+      "kalshi": "KXPGAR2LEAD-MAST26-RMCI",
+      "polymarket": "tec-masters-round2leader-2026-04-12-rormci",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-rormci not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 397,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26R_e1a1c953",
+      "kalshi": "KXPGAR2LEAD-MAST26-RMAC",
+      "polymarket": "tec-masters-round2leader-2026-04-12-robmac",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-robmac not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 398,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26S_33a6c217",
+      "kalshi": "KXPGAR2LEAD-MAST26-SVAL",
+      "polymarket": "tec-masters-round2leader-2026-04-12-samval",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-samval not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 399,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26S_4aab0ac5",
+      "kalshi": "KXPGAR2LEAD-MAST26-SBUR",
+      "polymarket": "tec-masters-round2leader-2026-04-12-sambur",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-sambur not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 400,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26S_7e241633",
+      "kalshi": "KXPGAR2LEAD-MAST26-SSCH",
+      "polymarket": "tec-masters-round2leader-2026-04-12-scosch",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-scosch not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 401,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26S_9bb32755",
+      "kalshi": "KXPGAR2LEAD-MAST26-SIM",
+      "polymarket": "tec-masters-round2leader-2026-04-12-sunim",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-sunim not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 402,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26S_9fafc297",
+      "kalshi": "KXPGAR2LEAD-MAST26-SSTE",
+      "polymarket": "tec-masters-round2leader-2026-04-12-samste",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-samste not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 403,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26S_b02b40ae",
+      "kalshi": "KXPGAR2LEAD-MAST26-SLOW",
+      "polymarket": "tec-masters-round2leader-2026-04-12-shalow",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-shalow not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 404,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26S_bb083feb",
+      "kalshi": "KXPGAR2LEAD-MAST26-SGAR",
+      "polymarket": "tec-masters-round2leader-2026-04-12-sergar",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-sergar not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 405,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26S_f166a163",
+      "kalshi": "KXPGAR2LEAD-MAST26-SSTR",
+      "polymarket": "tec-masters-round2leader-2026-04-12-sepstr",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-sepstr not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 406,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26T_1989a32d",
+      "kalshi": "KXPGAR2LEAD-MAST26-THAT",
+      "polymarket": "tec-masters-round2leader-2026-04-12-tyrhat",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-tyrhat not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 407,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26T_a6ec8c77",
+      "kalshi": "KXPGAR2LEAD-MAST26-TFLE",
+      "polymarket": "tec-masters-round2leader-2026-04-12-tomfle",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-tomfle not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 408,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26T_df31495d",
+      "kalshi": "KXPGAR2LEAD-MAST26-TMCK",
+      "polymarket": "tec-masters-round2leader-2026-04-12-tommck",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-tommck not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 409,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26V_106142e6",
+      "kalshi": "KXPGAR2LEAD-MAST26-VSIN",
+      "polymarket": "tec-masters-round2leader-2026-04-12-vijsin",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-vijsin not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 410,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26V_c2886b96",
+      "kalshi": "KXPGAR2LEAD-MAST26-VHOV",
+      "polymarket": "tec-masters-round2leader-2026-04-12-vikhov",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-vikhov not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 411,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26W_16aa243a",
+      "kalshi": "KXPGAR2LEAD-MAST26-WKIM",
+      "polymarket": "tec-masters-round2leader-2026-04-12-sikim",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": false,
+      "kalshi_status": "",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Kalshi market KXPGAR2LEAD-MAST26-WKIM not found (HTTP 429): {\"error\":{\"code\":\"too_many_requests\",\"message\":\"too many requests\"}}",
+        "Polymarket slug tec-masters-round2leader-2026-04-12-sikim not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 412,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26W_61411170",
+      "kalshi": "KXPGAR2LEAD-MAST26-WCLA",
+      "polymarket": "tec-masters-round2leader-2026-04-12-wyncla",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-wyncla not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 413,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26X_d6986ecb",
+      "kalshi": "KXPGAR2LEAD-MAST26-XSCH",
+      "polymarket": "tec-masters-round2leader-2026-04-12-xansch",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": false,
+      "kalshi_status": "",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Kalshi market KXPGAR2LEAD-MAST26-XSCH not found (HTTP 429): {\"error\":{\"code\":\"too_many_requests\",\"message\":\"too many requests\"}}",
+        "Polymarket slug tec-masters-round2leader-2026-04-12-xansch not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 414,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26Z_f34f2e0b",
+      "kalshi": "KXPGAR2LEAD-MAST26-ZJOH",
+      "polymarket": "tec-masters-round2leader-2026-04-12-zacjoh",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-zacjoh not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 415,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26AB_e86e497c",
+      "kalshi": "KXPGAR2LEAD-RBH26-ABHA",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-aksbha",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-aksbha not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 416,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26AN_4c9b96ce",
+      "kalshi": "KXPGAR2LEAD-RBH26-ANOV",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-andnov",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-andnov not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 417,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26AN_cd7578f9",
+      "kalshi": "KXPGAR2LEAD-RBH26-ANOR",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-alenor",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-alenor not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 418,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26AP_5e0fcb91",
+      "kalshi": "KXPGAR2LEAD-RBH26-APOT",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-aldpot",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-aldpot not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 419,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26AP_64f57f36",
+      "kalshi": "KXPGAR2LEAD-RBH26-APUT",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-andput",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-andput not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 420,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26AS_01fb1037",
+      "kalshi": "KXPGAR2LEAD-RBH26-ASMO",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-aussmo",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-aussmo not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 421,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26AS_fef81a99",
+      "kalshi": "KXPGAR2LEAD-RBH26-ASCH",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-adasch",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-adasch not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 422,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26BC_11045030",
+      "kalshi": "KXPGAR2LEAD-RBH26-BCAU",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-budcau",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-budcau not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 423,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26BC_8c0cdce8",
+      "kalshi": "KXPGAR2LEAD-RBH26-BCAM",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-bricam",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-bricam not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 424,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26BG_275412c5",
+      "kalshi": "KXPGAR2LEAD-RBH26-BGRI",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-bengri",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-bengri not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 425,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26BH_d638d239",
+      "kalshi": "KXPGAR2LEAD-RBH26-BHAR",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-brihar",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-brihar not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 426,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26BH_e5a7d057",
+      "kalshi": "KXPGAR2LEAD-RBH26-BHOR",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-bilhor",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-bilhor not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 427,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26CA_818d3aee",
+      "kalshi": "KXPGAR2LEAD-RBH26-CAME",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-camyou",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-camyou not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 428,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26CB_05bec14b",
+      "kalshi": "KXPGAR2LEAD-RBH26-CBLA",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-chabla",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-chabla not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 429,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26CC_125c4a3e",
+      "kalshi": "KXPGAR2LEAD-RBH26-CCON",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-corcon",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-corcon not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 430,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26CG_0cca536f",
+      "kalshi": "KXPGAR2LEAD-RBH26-CGOT",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-chrgot",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-chrgot not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 431,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26CM_d26651df",
+      "kalshi": "KXPGAR2LEAD-RBH26-CMOR",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-colmor",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-colmor not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 432,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26DB_cd18c83c",
+      "kalshi": "KXPGAR2LEAD-RBH26-DBER",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-danber",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-danber not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 433,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26DL_2c75315b",
+      "kalshi": "KXPGAR2LEAD-RBH26-DLIP",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-davlip",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-davlip not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 434,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26DM_f90ae7f1",
+      "kalshi": "KXPGAR2LEAD-RBH26-DMCC",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-denmcc",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-denmcc not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 435,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26GH_fa4204c9",
+      "kalshi": "KXPGAR2LEAD-RBH26-GHIG",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-garhig",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-garhig not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 436,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26GW_888f0d2c",
+      "kalshi": "KXPGAR2LEAD-RBH26-GWOO",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-garwoo",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-garwoo not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 437,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26HE_a37d9038",
+      "kalshi": "KXPGAR2LEAD-RBH26-HENG",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-hareng",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-hareng not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 438,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26HH_1e4f09ef",
+      "kalshi": "KXPGAR2LEAD-RBH26-HHAL",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-harhal",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-harhal not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 439,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26JB_2e974df6",
+      "kalshi": "KXPGAR2LEAD-RBH26-JBRI",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-jacbri",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-jacbri not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 440,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26JD_ba7de58d",
+      "kalshi": "KXPGAR2LEAD-RBH26-JDAY",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-jasday",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-jasday not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 441,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26JH_ada984e0",
+      "kalshi": "KXPGAR2LEAD-RBH26-JHIG",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-joehig",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-joehig not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 442,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26JK_58674b81",
+      "kalshi": "KXPGAR2LEAD-RBH26-JKNA",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-jakkna",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-jakkna not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 443,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26JK_76630060",
+      "kalshi": "KXPGAR2LEAD-RBH26-JKEE",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-johkee",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-johkee not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 444,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26JS_405850d2",
+      "kalshi": "KXPGAR2LEAD-RBH26-JSPI",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-jorspi",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-jorspi not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 445,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26JS_b069439d",
+      "kalshi": "KXPGAR2LEAD-RBH26-JSMI",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-jorsmi",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-jorsmi not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 446,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26JT_113bd47a",
+      "kalshi": "KXPGAR2LEAD-RBH26-JTHO",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-justho",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-justho not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 447,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26JV_a8173e20",
+      "kalshi": "KXPGAR2LEAD-RBH26-JVEG",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-jhoveg",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-jhoveg not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 448,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26KB_fa744c73",
+      "kalshi": "KXPGAR2LEAD-RBH26-KBRA",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-keebra",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-keebra not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 449,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26KK_4222bf57",
+      "kalshi": "KXPGAR2LEAD-RBH26-KKIT",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-kurkit",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": false,
+      "kalshi_status": "",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Kalshi market KXPGAR2LEAD-RBH26-KKIT not found (HTTP 429): {\"error\":{\"code\":\"too_many_requests\",\"message\":\"too many requests\"}}",
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-kurkit not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 450,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26KV_7b7bab65",
+      "kalshi": "KXPGAR2LEAD-RBH26-KVIL",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-karvil",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-karvil not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 451,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26LA_005312ad",
+      "kalshi": "KXPGAR2LEAD-RBH26-LABE",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-ludabe",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-ludabe not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 452,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26LG_dbe7bcf4",
+      "kalshi": "KXPGAR2LEAD-RBH26-LGLO",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-lucglo",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-lucglo not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 453,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26MB_2ded5aff",
+      "kalshi": "KXPGAR2LEAD-RBH26-MBRE",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-micbre",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-micbre not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 454,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26MF_8a8d751e",
+      "kalshi": "KXPGAR2LEAD-RBH26-MFIT",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-matfit",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": false,
+      "kalshi_status": "",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Kalshi market KXPGAR2LEAD-RBH26-MFIT not found (HTTP 429): {\"error\":{\"code\":\"too_many_requests\",\"message\":\"too many requests\"}}",
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-matfit not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 455,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26MH_f0817cb1",
+      "kalshi": "KXPGAR2LEAD-RBH26-MHOM",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-maxhom",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-maxhom not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 456,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26MK_014078ae",
+      "kalshi": "KXPGAR2LEAD-RBH26-MKIM",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-mickim",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-mickim not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 457,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26ML_867998bf",
+      "kalshi": "KXPGAR2LEAD-RBH26-MLEE",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-minlee",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-minlee not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 458,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26MM_5812a4c4",
+      "kalshi": "KXPGAR2LEAD-RBH26-MMCN",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-mavmcn",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-mavmcn not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 459,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26MM_e2e4b069",
+      "kalshi": "KXPGAR2LEAD-RBH26-MMCC",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-matmcc",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-matmcc not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 460,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26MP_1f7f34e2",
+      "kalshi": "KXPGAR2LEAD-RBH26-MPEN",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-marpen",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-marpen not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 461,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26MT_09082362",
+      "kalshi": "KXPGAR2LEAD-RBH26-MTHO",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-mictho",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-mictho not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 462,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26MW_8afe7bb7",
+      "kalshi": "KXPGAR2LEAD-RBH26-MWAL",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-matwal",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": false,
+      "kalshi_status": "",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Kalshi market KXPGAR2LEAD-RBH26-MWAL not found (HTTP 429): {\"error\":{\"code\":\"too_many_requests\",\"message\":\"too many requests\"}}",
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-matwal not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 463,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26NE_d3e08bda",
+      "kalshi": "KXPGAR2LEAD-RBH26-NECH",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-nicech",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-nicech not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 464,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26NH_69e7b93a",
+      "kalshi": "KXPGAR2LEAD-RBH26-NHOJ",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-nichoj",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-nichoj not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 465,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26NT_2e65a555",
+      "kalshi": "KXPGAR2LEAD-RBH26-NTAY",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-nictay",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-nictay not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 466,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26PC_a7313f7a",
+      "kalshi": "KXPGAR2LEAD-RBH26-PCAN",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-patcan",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-patcan not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 467,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26PC_fba9cee0",
+      "kalshi": "KXPGAR2LEAD-RBH26-PCOO",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-piecoo",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-piecoo not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 468,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26PR_4e826cf9",
+      "kalshi": "KXPGAR2LEAD-RBH26-PROD",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-patrod",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-patrod not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 469,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26RC_a0ffaa26",
+      "kalshi": "KXPGAR2LEAD-RBH26-RCAS",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-riccas",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-riccas not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 470,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26RF_0940b8a5",
+      "kalshi": "KXPGAR2LEAD-RBH26-RFOX",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-ryafox",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": false,
+      "kalshi_status": "",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Kalshi market KXPGAR2LEAD-RBH26-RFOX not found (HTTP 429): {\"error\":{\"code\":\"too_many_requests\",\"message\":\"too many requests\"}}",
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-ryafox not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 471,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26RF_28d7d27c",
+      "kalshi": "KXPGAR2LEAD-RBH26-RFOW",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-ricfow",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-ricfow not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 472,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26RG_a4c46711",
+      "kalshi": "KXPGAR2LEAD-RBH26-RGER",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-ryager",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-ryager not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 473,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26RH_37eca0a6",
+      "kalshi": "KXPGAR2LEAD-RBH26-RHEN",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-rushen",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-rushen not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 474,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26RH_6cf5a127",
+      "kalshi": "KXPGAR2LEAD-RBH26-RHIS",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-ryohis",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-ryohis not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 475,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26RM_6afaaa9f",
+      "kalshi": "KXPGAR2LEAD-RBH26-RMAC",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-robmac",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-robmac not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 476,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26SB_833ab0c0",
+      "kalshi": "KXPGAR2LEAD-RBH26-SBUR",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-sambur",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-sambur not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 477,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26SF_00d45ecf",
+      "kalshi": "KXPGAR2LEAD-RBH26-SFIS",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-stefis",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-stefis not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 478,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26SI_3664fc20",
+      "kalshi": "KXPGAR2LEAD-RBH26-SIM",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-sunim",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-sunim not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 479,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26SL_ac23ced1",
+      "kalshi": "KXPGAR2LEAD-RBH26-SLOW",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-shalow",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": false,
+      "kalshi_status": "",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Kalshi market KXPGAR2LEAD-RBH26-SLOW not found (HTTP 429): {\"error\":{\"code\":\"too_many_requests\",\"message\":\"too many requests\"}}",
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-shalow not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 480,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26SS_1ac94bad",
+      "kalshi": "KXPGAR2LEAD-RBH26-SSTE",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-samste",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-samste not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 481,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26SS_8344c23b",
+      "kalshi": "KXPGAR2LEAD-RBH26-SSCH",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-scosch",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-scosch not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 482,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26SS_eb3e8ba9",
+      "kalshi": "KXPGAR2LEAD-RBH26-SSTR",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-sepstr",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-sepstr not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 483,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26ST_759564eb",
+      "kalshi": "KXPGAR2LEAD-RBH26-STHE",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-sahthe",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-sahthe not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 484,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26SV_160985fd",
+      "kalshi": "KXPGAR2LEAD-RBH26-SVAL",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-samval",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-samval not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 485,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26SY_ef1be0cf",
+      "kalshi": "KXPGAR2LEAD-RBH26-SYEL",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-sudyel",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-sudyel not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 486,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26TF_28b9d72f",
+      "kalshi": "KXPGAR2LEAD-RBH26-TFLE",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-tomfle",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": false,
+      "kalshi_status": "",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Kalshi market KXPGAR2LEAD-RBH26-TFLE not found (HTTP 429): {\"error\":{\"code\":\"too_many_requests\",\"message\":\"too many requests\"}}",
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-tomfle not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 487,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26TF_f0ad3847",
+      "kalshi": "KXPGAR2LEAD-RBH26-TFIN",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-tonfin",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-tonfin not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 488,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26TH_fbb68f9e",
+      "kalshi": "KXPGAR2LEAD-RBH26-THOG",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-tomhog",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-tomhog not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 489,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26TP_53404bb2",
+      "kalshi": "KXPGAR2LEAD-RBH26-TPEN",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-taypen",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-taypen not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 490,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26VH_0dc8be14",
+      "kalshi": "KXPGAR2LEAD-RBH26-VHOV",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-vikhov",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-vikhov not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 491,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26WC_0ec2fcf8",
+      "kalshi": "KXPGAR2LEAD-RBH26-WCLA",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-wyncla",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-wyncla not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 492,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26WK_f7134970",
+      "kalshi": "KXPGAR2LEAD-RBH26-WKIM",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-sikim",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": false,
+      "kalshi_status": "",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Kalshi market KXPGAR2LEAD-RBH26-WKIM not found (HTTP 429): {\"error\":{\"code\":\"too_many_requests\",\"message\":\"too many requests\"}}",
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-sikim not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 493,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26WM_9ef16bf7",
+      "kalshi": "KXPGAR2LEAD-RBH26-WMOU",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-wilmou",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-wilmou not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 494,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26XS_1f81961b",
+      "kalshi": "KXPGAR2LEAD-RBH26-XSCH",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-xansch",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-xansch not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 495,
+      "canonical_id": "AUTO_KXPGAR3LEADMAST26A_43bb7adb",
+      "kalshi": "KXPGAR3LEAD-MAST26-ACAB",
+      "polymarket": "tec-masters-round3leader-2026-04-12-angcab",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round3leader-2026-04-12-angcab not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 496,
+      "canonical_id": "AUTO_KXPGAR3LEADMAST26A_5ab4b1d2",
+      "kalshi": "KXPGAR3LEAD-MAST26-ABHA",
+      "polymarket": "tec-masters-round3leader-2026-04-12-aksbha",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round3leader-2026-04-12-aksbha not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 497,
+      "canonical_id": "AUTO_KXPGAR3LEADMAST26A_5f6aa7a5",
+      "kalshi": "KXPGAR3LEAD-MAST26-ARAI",
+      "polymarket": "tec-masters-round3leader-2026-04-12-aarrai",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round3leader-2026-04-12-aarrai not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 498,
+      "canonical_id": "AUTO_KXPGAR3LEADMAST26A_84b34e0c",
+      "kalshi": "KXPGAR3LEAD-MAST26-ASCO",
+      "polymarket": "tec-masters-round3leader-2026-04-12-adasco",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round3leader-2026-04-12-adasco not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 499,
+      "canonical_id": "AUTO_KXPGAR3LEADMAST26A_acea4dd3",
+      "kalshi": "KXPGAR3LEAD-MAST26-ANOR",
+      "polymarket": "tec-masters-round3leader-2026-04-12-alenor",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": false,
+      "kalshi_status": "",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Kalshi market KXPGAR3LEAD-MAST26-ANOR not found (HTTP 429): {\"error\":{\"code\":\"too_many_requests\",\"message\":\"too many requests\"}}",
+        "Polymarket slug tec-masters-round3leader-2026-04-12-alenor not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 500,
+      "canonical_id": "AUTO_KXPGAR3LEADMAST26A_ca882d97",
+      "kalshi": "KXPGAR3LEAD-MAST26-ANOV",
+      "polymarket": "tec-masters-round3leader-2026-04-12-andnov",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round3leader-2026-04-12-andnov not found (HTTP 404): not found"
+      ]
+    }
+  ],
+  "all_results": [
+    {
+      "index": 375,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26M_57aedfd6",
+      "kalshi": "KXPGAR2LEAD-MAST26-MMCN",
+      "polymarket": "tec-masters-round2leader-2026-04-12-mavmcn",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-mavmcn not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 376,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26M_666b88af",
+      "kalshi": "KXPGAR2LEAD-MAST26-MBRE",
+      "polymarket": "tec-masters-round2leader-2026-04-12-micbre",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-micbre not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 377,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26M_721043e1",
+      "kalshi": "KXPGAR2LEAD-MAST26-MWEI",
+      "polymarket": "tec-masters-round2leader-2026-04-12-mikwei",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-mikwei not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 378,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26M_89235dd1",
+      "kalshi": "KXPGAR2LEAD-MAST26-MLEE",
+      "polymarket": "tec-masters-round2leader-2026-04-12-minlee",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-minlee not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 379,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26M_8a60cb44",
+      "kalshi": "KXPGAR2LEAD-MAST26-MPEN",
+      "polymarket": "tec-masters-round2leader-2026-04-12-marpen",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-marpen not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 380,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26M_93844dfc",
+      "kalshi": "KXPGAR2LEAD-MAST26-MHOM",
+      "polymarket": "tec-masters-round2leader-2026-04-12-maxhom",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-maxhom not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 381,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26M_aaa45546",
+      "kalshi": "KXPGAR2LEAD-MAST26-MHOW",
+      "polymarket": "tec-masters-round2leader-2026-04-12-mashow",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-mashow not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 382,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26M_b9306773",
+      "kalshi": "KXPGAR2LEAD-MAST26-MGRE",
+      "polymarket": "tec-masters-round2leader-2026-04-12-maxgre",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-maxgre not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 383,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26M_d5efebc4",
+      "kalshi": "KXPGAR2LEAD-MAST26-MKIM",
+      "polymarket": "tec-masters-round2leader-2026-04-12-mickim",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-mickim not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 384,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26M_f69b4eee",
+      "kalshi": "KXPGAR2LEAD-MAST26-MMCC",
+      "polymarket": "tec-masters-round2leader-2026-04-12-matmcc",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-matmcc not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 385,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26N_18e8939c",
+      "kalshi": "KXPGAR2LEAD-MAST26-NECH",
+      "polymarket": "tec-masters-round2leader-2026-04-12-nicech",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-nicech not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 386,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26N_7966c11e",
+      "kalshi": "KXPGAR2LEAD-MAST26-NHOJ",
+      "polymarket": "tec-masters-round2leader-2026-04-12-nichoj",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-nichoj not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 387,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26N_a53182fe",
+      "kalshi": "KXPGAR2LEAD-MAST26-NKAT",
+      "polymarket": "tec-masters-round2leader-2026-04-12-naokat",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-naokat not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 388,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26N_d7ed473b",
+      "kalshi": "KXPGAR2LEAD-MAST26-NTAY",
+      "polymarket": "tec-masters-round2leader-2026-04-12-nictay",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-nictay not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 389,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26P_4f366727",
+      "kalshi": "KXPGAR2LEAD-MAST26-PCAN",
+      "polymarket": "tec-masters-round2leader-2026-04-12-patcan",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-patcan not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 390,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26P_51b7ec4b",
+      "kalshi": "KXPGAR2LEAD-MAST26-PREE",
+      "polymarket": "tec-masters-round2leader-2026-04-12-patree",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-patree not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 391,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26R_2d8a49bd",
+      "kalshi": "KXPGAR2LEAD-MAST26-RNEE",
+      "polymarket": "tec-masters-round2leader-2026-04-12-rasnee",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-rasnee not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 392,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26R_5f88e53d",
+      "kalshi": "KXPGAR2LEAD-MAST26-RFOX",
+      "polymarket": "tec-masters-round2leader-2026-04-12-ryafox",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-ryafox not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 393,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26R_609aa67a",
+      "kalshi": "KXPGAR2LEAD-MAST26-RHOJ",
+      "polymarket": "tec-masters-round2leader-2026-04-12-rashoj",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-rashoj not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 394,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26R_8299795b",
+      "kalshi": "KXPGAR2LEAD-MAST26-RHEN",
+      "polymarket": "tec-masters-round2leader-2026-04-12-rushen",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-rushen not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 395,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26R_a84ba903",
+      "kalshi": "KXPGAR2LEAD-MAST26-RGER",
+      "polymarket": "tec-masters-round2leader-2026-04-12-ryager",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-ryager not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 396,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26R_c39d8db4",
+      "kalshi": "KXPGAR2LEAD-MAST26-RMCI",
+      "polymarket": "tec-masters-round2leader-2026-04-12-rormci",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-rormci not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 397,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26R_e1a1c953",
+      "kalshi": "KXPGAR2LEAD-MAST26-RMAC",
+      "polymarket": "tec-masters-round2leader-2026-04-12-robmac",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-robmac not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 398,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26S_33a6c217",
+      "kalshi": "KXPGAR2LEAD-MAST26-SVAL",
+      "polymarket": "tec-masters-round2leader-2026-04-12-samval",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-samval not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 399,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26S_4aab0ac5",
+      "kalshi": "KXPGAR2LEAD-MAST26-SBUR",
+      "polymarket": "tec-masters-round2leader-2026-04-12-sambur",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-sambur not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 400,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26S_7e241633",
+      "kalshi": "KXPGAR2LEAD-MAST26-SSCH",
+      "polymarket": "tec-masters-round2leader-2026-04-12-scosch",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-scosch not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 401,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26S_9bb32755",
+      "kalshi": "KXPGAR2LEAD-MAST26-SIM",
+      "polymarket": "tec-masters-round2leader-2026-04-12-sunim",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-sunim not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 402,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26S_9fafc297",
+      "kalshi": "KXPGAR2LEAD-MAST26-SSTE",
+      "polymarket": "tec-masters-round2leader-2026-04-12-samste",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-samste not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 403,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26S_b02b40ae",
+      "kalshi": "KXPGAR2LEAD-MAST26-SLOW",
+      "polymarket": "tec-masters-round2leader-2026-04-12-shalow",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-shalow not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 404,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26S_bb083feb",
+      "kalshi": "KXPGAR2LEAD-MAST26-SGAR",
+      "polymarket": "tec-masters-round2leader-2026-04-12-sergar",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-sergar not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 405,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26S_f166a163",
+      "kalshi": "KXPGAR2LEAD-MAST26-SSTR",
+      "polymarket": "tec-masters-round2leader-2026-04-12-sepstr",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-sepstr not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 406,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26T_1989a32d",
+      "kalshi": "KXPGAR2LEAD-MAST26-THAT",
+      "polymarket": "tec-masters-round2leader-2026-04-12-tyrhat",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-tyrhat not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 407,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26T_a6ec8c77",
+      "kalshi": "KXPGAR2LEAD-MAST26-TFLE",
+      "polymarket": "tec-masters-round2leader-2026-04-12-tomfle",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-tomfle not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 408,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26T_df31495d",
+      "kalshi": "KXPGAR2LEAD-MAST26-TMCK",
+      "polymarket": "tec-masters-round2leader-2026-04-12-tommck",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-tommck not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 409,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26V_106142e6",
+      "kalshi": "KXPGAR2LEAD-MAST26-VSIN",
+      "polymarket": "tec-masters-round2leader-2026-04-12-vijsin",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-vijsin not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 410,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26V_c2886b96",
+      "kalshi": "KXPGAR2LEAD-MAST26-VHOV",
+      "polymarket": "tec-masters-round2leader-2026-04-12-vikhov",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-vikhov not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 411,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26W_16aa243a",
+      "kalshi": "KXPGAR2LEAD-MAST26-WKIM",
+      "polymarket": "tec-masters-round2leader-2026-04-12-sikim",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": false,
+      "kalshi_status": "",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Kalshi market KXPGAR2LEAD-MAST26-WKIM not found (HTTP 429): {\"error\":{\"code\":\"too_many_requests\",\"message\":\"too many requests\"}}",
+        "Polymarket slug tec-masters-round2leader-2026-04-12-sikim not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 412,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26W_61411170",
+      "kalshi": "KXPGAR2LEAD-MAST26-WCLA",
+      "polymarket": "tec-masters-round2leader-2026-04-12-wyncla",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-wyncla not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 413,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26X_d6986ecb",
+      "kalshi": "KXPGAR2LEAD-MAST26-XSCH",
+      "polymarket": "tec-masters-round2leader-2026-04-12-xansch",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": false,
+      "kalshi_status": "",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Kalshi market KXPGAR2LEAD-MAST26-XSCH not found (HTTP 429): {\"error\":{\"code\":\"too_many_requests\",\"message\":\"too many requests\"}}",
+        "Polymarket slug tec-masters-round2leader-2026-04-12-xansch not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 414,
+      "canonical_id": "AUTO_KXPGAR2LEADMAST26Z_f34f2e0b",
+      "kalshi": "KXPGAR2LEAD-MAST26-ZJOH",
+      "polymarket": "tec-masters-round2leader-2026-04-12-zacjoh",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round2leader-2026-04-12-zacjoh not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 415,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26AB_e86e497c",
+      "kalshi": "KXPGAR2LEAD-RBH26-ABHA",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-aksbha",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-aksbha not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 416,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26AN_4c9b96ce",
+      "kalshi": "KXPGAR2LEAD-RBH26-ANOV",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-andnov",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-andnov not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 417,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26AN_cd7578f9",
+      "kalshi": "KXPGAR2LEAD-RBH26-ANOR",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-alenor",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-alenor not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 418,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26AP_5e0fcb91",
+      "kalshi": "KXPGAR2LEAD-RBH26-APOT",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-aldpot",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-aldpot not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 419,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26AP_64f57f36",
+      "kalshi": "KXPGAR2LEAD-RBH26-APUT",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-andput",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-andput not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 420,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26AS_01fb1037",
+      "kalshi": "KXPGAR2LEAD-RBH26-ASMO",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-aussmo",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-aussmo not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 421,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26AS_fef81a99",
+      "kalshi": "KXPGAR2LEAD-RBH26-ASCH",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-adasch",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-adasch not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 422,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26BC_11045030",
+      "kalshi": "KXPGAR2LEAD-RBH26-BCAU",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-budcau",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-budcau not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 423,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26BC_8c0cdce8",
+      "kalshi": "KXPGAR2LEAD-RBH26-BCAM",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-bricam",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-bricam not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 424,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26BG_275412c5",
+      "kalshi": "KXPGAR2LEAD-RBH26-BGRI",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-bengri",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-bengri not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 425,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26BH_d638d239",
+      "kalshi": "KXPGAR2LEAD-RBH26-BHAR",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-brihar",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-brihar not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 426,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26BH_e5a7d057",
+      "kalshi": "KXPGAR2LEAD-RBH26-BHOR",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-bilhor",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-bilhor not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 427,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26CA_818d3aee",
+      "kalshi": "KXPGAR2LEAD-RBH26-CAME",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-camyou",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-camyou not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 428,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26CB_05bec14b",
+      "kalshi": "KXPGAR2LEAD-RBH26-CBLA",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-chabla",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-chabla not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 429,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26CC_125c4a3e",
+      "kalshi": "KXPGAR2LEAD-RBH26-CCON",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-corcon",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-corcon not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 430,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26CG_0cca536f",
+      "kalshi": "KXPGAR2LEAD-RBH26-CGOT",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-chrgot",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-chrgot not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 431,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26CM_d26651df",
+      "kalshi": "KXPGAR2LEAD-RBH26-CMOR",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-colmor",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-colmor not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 432,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26DB_cd18c83c",
+      "kalshi": "KXPGAR2LEAD-RBH26-DBER",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-danber",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-danber not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 433,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26DL_2c75315b",
+      "kalshi": "KXPGAR2LEAD-RBH26-DLIP",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-davlip",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-davlip not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 434,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26DM_f90ae7f1",
+      "kalshi": "KXPGAR2LEAD-RBH26-DMCC",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-denmcc",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-denmcc not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 435,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26GH_fa4204c9",
+      "kalshi": "KXPGAR2LEAD-RBH26-GHIG",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-garhig",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-garhig not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 436,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26GW_888f0d2c",
+      "kalshi": "KXPGAR2LEAD-RBH26-GWOO",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-garwoo",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-garwoo not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 437,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26HE_a37d9038",
+      "kalshi": "KXPGAR2LEAD-RBH26-HENG",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-hareng",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-hareng not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 438,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26HH_1e4f09ef",
+      "kalshi": "KXPGAR2LEAD-RBH26-HHAL",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-harhal",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-harhal not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 439,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26JB_2e974df6",
+      "kalshi": "KXPGAR2LEAD-RBH26-JBRI",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-jacbri",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-jacbri not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 440,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26JD_ba7de58d",
+      "kalshi": "KXPGAR2LEAD-RBH26-JDAY",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-jasday",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-jasday not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 441,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26JH_ada984e0",
+      "kalshi": "KXPGAR2LEAD-RBH26-JHIG",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-joehig",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-joehig not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 442,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26JK_58674b81",
+      "kalshi": "KXPGAR2LEAD-RBH26-JKNA",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-jakkna",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-jakkna not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 443,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26JK_76630060",
+      "kalshi": "KXPGAR2LEAD-RBH26-JKEE",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-johkee",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-johkee not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 444,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26JS_405850d2",
+      "kalshi": "KXPGAR2LEAD-RBH26-JSPI",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-jorspi",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-jorspi not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 445,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26JS_b069439d",
+      "kalshi": "KXPGAR2LEAD-RBH26-JSMI",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-jorsmi",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-jorsmi not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 446,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26JT_113bd47a",
+      "kalshi": "KXPGAR2LEAD-RBH26-JTHO",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-justho",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-justho not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 447,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26JV_a8173e20",
+      "kalshi": "KXPGAR2LEAD-RBH26-JVEG",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-jhoveg",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-jhoveg not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 448,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26KB_fa744c73",
+      "kalshi": "KXPGAR2LEAD-RBH26-KBRA",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-keebra",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-keebra not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 449,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26KK_4222bf57",
+      "kalshi": "KXPGAR2LEAD-RBH26-KKIT",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-kurkit",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": false,
+      "kalshi_status": "",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Kalshi market KXPGAR2LEAD-RBH26-KKIT not found (HTTP 429): {\"error\":{\"code\":\"too_many_requests\",\"message\":\"too many requests\"}}",
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-kurkit not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 450,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26KV_7b7bab65",
+      "kalshi": "KXPGAR2LEAD-RBH26-KVIL",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-karvil",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-karvil not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 451,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26LA_005312ad",
+      "kalshi": "KXPGAR2LEAD-RBH26-LABE",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-ludabe",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-ludabe not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 452,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26LG_dbe7bcf4",
+      "kalshi": "KXPGAR2LEAD-RBH26-LGLO",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-lucglo",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-lucglo not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 453,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26MB_2ded5aff",
+      "kalshi": "KXPGAR2LEAD-RBH26-MBRE",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-micbre",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-micbre not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 454,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26MF_8a8d751e",
+      "kalshi": "KXPGAR2LEAD-RBH26-MFIT",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-matfit",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": false,
+      "kalshi_status": "",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Kalshi market KXPGAR2LEAD-RBH26-MFIT not found (HTTP 429): {\"error\":{\"code\":\"too_many_requests\",\"message\":\"too many requests\"}}",
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-matfit not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 455,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26MH_f0817cb1",
+      "kalshi": "KXPGAR2LEAD-RBH26-MHOM",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-maxhom",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-maxhom not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 456,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26MK_014078ae",
+      "kalshi": "KXPGAR2LEAD-RBH26-MKIM",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-mickim",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-mickim not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 457,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26ML_867998bf",
+      "kalshi": "KXPGAR2LEAD-RBH26-MLEE",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-minlee",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-minlee not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 458,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26MM_5812a4c4",
+      "kalshi": "KXPGAR2LEAD-RBH26-MMCN",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-mavmcn",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-mavmcn not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 459,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26MM_e2e4b069",
+      "kalshi": "KXPGAR2LEAD-RBH26-MMCC",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-matmcc",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-matmcc not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 460,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26MP_1f7f34e2",
+      "kalshi": "KXPGAR2LEAD-RBH26-MPEN",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-marpen",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-marpen not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 461,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26MT_09082362",
+      "kalshi": "KXPGAR2LEAD-RBH26-MTHO",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-mictho",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-mictho not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 462,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26MW_8afe7bb7",
+      "kalshi": "KXPGAR2LEAD-RBH26-MWAL",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-matwal",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": false,
+      "kalshi_status": "",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Kalshi market KXPGAR2LEAD-RBH26-MWAL not found (HTTP 429): {\"error\":{\"code\":\"too_many_requests\",\"message\":\"too many requests\"}}",
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-matwal not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 463,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26NE_d3e08bda",
+      "kalshi": "KXPGAR2LEAD-RBH26-NECH",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-nicech",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-nicech not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 464,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26NH_69e7b93a",
+      "kalshi": "KXPGAR2LEAD-RBH26-NHOJ",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-nichoj",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-nichoj not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 465,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26NT_2e65a555",
+      "kalshi": "KXPGAR2LEAD-RBH26-NTAY",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-nictay",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-nictay not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 466,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26PC_a7313f7a",
+      "kalshi": "KXPGAR2LEAD-RBH26-PCAN",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-patcan",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-patcan not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 467,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26PC_fba9cee0",
+      "kalshi": "KXPGAR2LEAD-RBH26-PCOO",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-piecoo",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-piecoo not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 468,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26PR_4e826cf9",
+      "kalshi": "KXPGAR2LEAD-RBH26-PROD",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-patrod",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-patrod not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 469,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26RC_a0ffaa26",
+      "kalshi": "KXPGAR2LEAD-RBH26-RCAS",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-riccas",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-riccas not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 470,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26RF_0940b8a5",
+      "kalshi": "KXPGAR2LEAD-RBH26-RFOX",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-ryafox",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": false,
+      "kalshi_status": "",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Kalshi market KXPGAR2LEAD-RBH26-RFOX not found (HTTP 429): {\"error\":{\"code\":\"too_many_requests\",\"message\":\"too many requests\"}}",
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-ryafox not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 471,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26RF_28d7d27c",
+      "kalshi": "KXPGAR2LEAD-RBH26-RFOW",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-ricfow",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-ricfow not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 472,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26RG_a4c46711",
+      "kalshi": "KXPGAR2LEAD-RBH26-RGER",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-ryager",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-ryager not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 473,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26RH_37eca0a6",
+      "kalshi": "KXPGAR2LEAD-RBH26-RHEN",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-rushen",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-rushen not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 474,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26RH_6cf5a127",
+      "kalshi": "KXPGAR2LEAD-RBH26-RHIS",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-ryohis",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-ryohis not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 475,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26RM_6afaaa9f",
+      "kalshi": "KXPGAR2LEAD-RBH26-RMAC",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-robmac",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-robmac not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 476,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26SB_833ab0c0",
+      "kalshi": "KXPGAR2LEAD-RBH26-SBUR",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-sambur",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-sambur not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 477,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26SF_00d45ecf",
+      "kalshi": "KXPGAR2LEAD-RBH26-SFIS",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-stefis",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-stefis not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 478,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26SI_3664fc20",
+      "kalshi": "KXPGAR2LEAD-RBH26-SIM",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-sunim",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-sunim not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 479,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26SL_ac23ced1",
+      "kalshi": "KXPGAR2LEAD-RBH26-SLOW",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-shalow",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": false,
+      "kalshi_status": "",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Kalshi market KXPGAR2LEAD-RBH26-SLOW not found (HTTP 429): {\"error\":{\"code\":\"too_many_requests\",\"message\":\"too many requests\"}}",
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-shalow not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 480,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26SS_1ac94bad",
+      "kalshi": "KXPGAR2LEAD-RBH26-SSTE",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-samste",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-samste not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 481,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26SS_8344c23b",
+      "kalshi": "KXPGAR2LEAD-RBH26-SSCH",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-scosch",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-scosch not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 482,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26SS_eb3e8ba9",
+      "kalshi": "KXPGAR2LEAD-RBH26-SSTR",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-sepstr",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-sepstr not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 483,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26ST_759564eb",
+      "kalshi": "KXPGAR2LEAD-RBH26-STHE",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-sahthe",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-sahthe not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 484,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26SV_160985fd",
+      "kalshi": "KXPGAR2LEAD-RBH26-SVAL",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-samval",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-samval not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 485,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26SY_ef1be0cf",
+      "kalshi": "KXPGAR2LEAD-RBH26-SYEL",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-sudyel",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-sudyel not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 486,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26TF_28b9d72f",
+      "kalshi": "KXPGAR2LEAD-RBH26-TFLE",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-tomfle",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": false,
+      "kalshi_status": "",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Kalshi market KXPGAR2LEAD-RBH26-TFLE not found (HTTP 429): {\"error\":{\"code\":\"too_many_requests\",\"message\":\"too many requests\"}}",
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-tomfle not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 487,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26TF_f0ad3847",
+      "kalshi": "KXPGAR2LEAD-RBH26-TFIN",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-tonfin",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-tonfin not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 488,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26TH_fbb68f9e",
+      "kalshi": "KXPGAR2LEAD-RBH26-THOG",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-tomhog",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-tomhog not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 489,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26TP_53404bb2",
+      "kalshi": "KXPGAR2LEAD-RBH26-TPEN",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-taypen",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-taypen not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 490,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26VH_0dc8be14",
+      "kalshi": "KXPGAR2LEAD-RBH26-VHOV",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-vikhov",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-vikhov not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 491,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26WC_0ec2fcf8",
+      "kalshi": "KXPGAR2LEAD-RBH26-WCLA",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-wyncla",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-wyncla not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 492,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26WK_f7134970",
+      "kalshi": "KXPGAR2LEAD-RBH26-WKIM",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-sikim",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": false,
+      "kalshi_status": "",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Kalshi market KXPGAR2LEAD-RBH26-WKIM not found (HTTP 429): {\"error\":{\"code\":\"too_many_requests\",\"message\":\"too many requests\"}}",
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-sikim not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 493,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26WM_9ef16bf7",
+      "kalshi": "KXPGAR2LEAD-RBH26-WMOU",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-wilmou",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-wilmou not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 494,
+      "canonical_id": "AUTO_KXPGAR2LEADRBH26XS_1f81961b",
+      "kalshi": "KXPGAR2LEAD-RBH26-XSCH",
+      "polymarket": "tec-pga-rbcheri-2026-04-19-round2leader-xansch",
+      "resolution_date": "2026-04-27",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-pga-rbcheri-2026-04-19-round2leader-xansch not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 495,
+      "canonical_id": "AUTO_KXPGAR3LEADMAST26A_43bb7adb",
+      "kalshi": "KXPGAR3LEAD-MAST26-ACAB",
+      "polymarket": "tec-masters-round3leader-2026-04-12-angcab",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round3leader-2026-04-12-angcab not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 496,
+      "canonical_id": "AUTO_KXPGAR3LEADMAST26A_5ab4b1d2",
+      "kalshi": "KXPGAR3LEAD-MAST26-ABHA",
+      "polymarket": "tec-masters-round3leader-2026-04-12-aksbha",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round3leader-2026-04-12-aksbha not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 497,
+      "canonical_id": "AUTO_KXPGAR3LEADMAST26A_5f6aa7a5",
+      "kalshi": "KXPGAR3LEAD-MAST26-ARAI",
+      "polymarket": "tec-masters-round3leader-2026-04-12-aarrai",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round3leader-2026-04-12-aarrai not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 498,
+      "canonical_id": "AUTO_KXPGAR3LEADMAST26A_84b34e0c",
+      "kalshi": "KXPGAR3LEAD-MAST26-ASCO",
+      "polymarket": "tec-masters-round3leader-2026-04-12-adasco",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round3leader-2026-04-12-adasco not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 499,
+      "canonical_id": "AUTO_KXPGAR3LEADMAST26A_acea4dd3",
+      "kalshi": "KXPGAR3LEAD-MAST26-ANOR",
+      "polymarket": "tec-masters-round3leader-2026-04-12-alenor",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": false,
+      "kalshi_status": "",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Kalshi market KXPGAR3LEAD-MAST26-ANOR not found (HTTP 429): {\"error\":{\"code\":\"too_many_requests\",\"message\":\"too many requests\"}}",
+        "Polymarket slug tec-masters-round3leader-2026-04-12-alenor not found (HTTP 404): not found"
+      ]
+    },
+    {
+      "index": 500,
+      "canonical_id": "AUTO_KXPGAR3LEADMAST26A_ca882d97",
+      "kalshi": "KXPGAR3LEAD-MAST26-ANOV",
+      "polymarket": "tec-masters-round3leader-2026-04-12-andnov",
+      "resolution_date": "2026-04-20",
+      "kalshi_exists": true,
+      "kalshi_status": "finalized",
+      "poly_exists": false,
+      "poly_active": "",
+      "is_valid": false,
+      "issues": [
+        "Polymarket slug tec-masters-round3leader-2026-04-12-andnov not found (HTTP 404): not found"
+      ]
+    }
+  ]
+}

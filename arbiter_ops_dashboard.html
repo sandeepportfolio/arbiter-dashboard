@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ARBITER OPS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#07080C;--bg-card:#0D0F15;--bg-elevated:#13151D;--bg-hover:#1A1D28;
+  --border:#1E2230;--border-bright:#2A2E3E;
+  --text:#E8EAF0;--text-dim:#8B90A0;--text-muted:#555B70;
+  --green:#22C55E;--green-dim:#166534;--green-glow:rgba(34,197,94,0.15);
+  --red:#EF4444;--red-dim:#7F1D1D;--red-glow:rgba(239,68,68,0.15);
+  --amber:#F59E0B;--amber-dim:#78350F;
+  --blue:#3B82F6;--blue-dim:#1E3A5F;
+  --cyan:#06B6D4;
+  --accent:#818CF8;--accent-dim:#312E81;
+  --mono:'DM Mono',monospace;--sans:'Outfit',sans-serif;
+}
+html{font-size:14px;-webkit-font-smoothing:antialiased}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:100vh;overflow-x:hidden}
+a{color:var(--accent);text-decoration:none}
+
+/* Scrollbar */
+::-webkit-scrollbar{width:6px}
+::-webkit-scrollbar-track{background:var(--bg)}
+::-webkit-scrollbar-thumb{background:var(--border-bright);border-radius:3px}
+
+/* Layout */
+.shell{max-width:1440px;margin:0 auto;padding:16px 20px}
+.topbar{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--border);margin-bottom:20px}
+.topbar h1{font-size:1.1rem;font-weight:700;letter-spacing:0.08em;color:var(--text-dim);font-family:var(--mono)}
+.topbar h1 span{color:var(--accent)}
+.live-dot{width:8px;height:8px;border-radius:50%;background:var(--green);display:inline-block;margin-right:8px;animation:pulse 2s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1;box-shadow:0 0 0 0 var(--green-glow)}50%{opacity:0.7;box-shadow:0 0 0 6px transparent}}
+.status-bar{display:flex;gap:16px;align-items:center;font-family:var(--mono);font-size:0.78rem;color:var(--text-dim)}
+.status-bar .sep{color:var(--border-bright)}
+
+/* Grid */
+.grid-top{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;margin-bottom:16px}
+.grid-main{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px}
+.grid-full{margin-bottom:16px}
+
+/* Cards */
+.card{background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:16px 18px;position:relative;overflow:hidden}
+.card::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,var(--border-bright),transparent)}
+.card-title{font-size:0.72rem;font-weight:500;text-transform:uppercase;letter-spacing:0.1em;color:var(--text-muted);margin-bottom:10px;font-family:var(--mono)}
+.card-value{font-size:1.8rem;font-weight:700;font-family:var(--mono);line-height:1}
+.card-sub{font-size:0.75rem;color:var(--text-dim);margin-top:6px;font-family:var(--mono)}
+
+/* Balance colors */
+.val-green{color:var(--green)}
+.val-red{color:var(--red)}
+.val-amber{color:var(--amber)}
+.val-blue{color:var(--blue)}
+.val-accent{color:var(--accent)}
+.val-cyan{color:var(--cyan)}
+
+/* Tag */
+.tag{display:inline-block;padding:2px 8px;border-radius:4px;font-size:0.7rem;font-family:var(--mono);font-weight:500;letter-spacing:0.04em}
+.tag-green{background:var(--green-dim);color:var(--green)}
+.tag-red{background:var(--red-dim);color:var(--red)}
+.tag-amber{background:var(--amber-dim);color:var(--amber)}
+.tag-blue{background:var(--blue-dim);color:var(--blue)}
+.tag-muted{background:var(--bg-hover);color:var(--text-dim)}
+
+/* Tables */
+.tbl{width:100%;border-collapse:collapse}
+.tbl th{text-align:left;font-size:0.68rem;font-weight:500;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-muted);padding:8px 10px;border-bottom:1px solid var(--border);font-family:var(--mono)}
+.tbl td{padding:8px 10px;border-bottom:1px solid var(--border);font-size:0.82rem;vertical-align:top}
+.tbl tr:last-child td{border-bottom:none}
+.tbl tr:hover td{background:var(--bg-hover)}
+.tbl .mono{font-family:var(--mono);font-size:0.78rem}
+.tbl .right{text-align:right}
+.tbl .nowrap{white-space:nowrap}
+
+/* Opportunity rows */
+.opp-desc{font-weight:500;color:var(--text);max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.opp-ids{font-size:0.68rem;color:var(--text-muted);font-family:var(--mono);margin-top:2px}
+.opp-edge{font-weight:600}
+
+/* Section headers */
+.section-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.section-head h2{font-size:0.82rem;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-dim)}
+.section-head .count{font-family:var(--mono);font-size:0.72rem;color:var(--text-muted)}
+
+/* Empty state */
+.empty{text-align:center;padding:32px;color:var(--text-muted);font-size:0.85rem}
+
+/* Connection status */
+.conn-status{font-size:0.7rem;font-family:var(--mono);padding:3px 8px;border-radius:4px}
+.conn-ok{background:var(--green-dim);color:var(--green)}
+.conn-err{background:var(--red-dim);color:var(--red)}
+
+/* Responsive */
+@media(max-width:900px){
+  .grid-top{grid-template-columns:1fr 1fr}
+  .grid-main{grid-template-columns:1fr}
+}
+@media(max-width:500px){
+  .grid-top{grid-template-columns:1fr}
+  .shell{padding:10px 12px}
+}
+
+/* Refresh animation */
+.refreshing{opacity:0.6;transition:opacity 0.2s}
+
+/* P&L breakdown */
+.pnl-row{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)}
+.pnl-row:last-child{border-bottom:none}
+.pnl-label{font-size:0.78rem;color:var(--text-dim)}
+.pnl-val{font-family:var(--mono);font-size:0.85rem;font-weight:500}
+
+/* Deposit log */
+.deposit-item{display:flex;gap:10px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);font-size:0.78rem}
+.deposit-item:last-child{border-bottom:none}
+.deposit-amount{font-family:var(--mono);font-weight:600}
+</style>
+</head>
+<body>
+<div class="shell">
+  <!-- Top Bar -->
+  <div class="topbar">
+    <h1><span>ARBITER</span> OPS</h1>
+    <div class="status-bar">
+      <span id="conn-badge" class="conn-status conn-err">CONNECTING</span>
+      <span class="sep">|</span>
+      <span id="uptime">--</span>
+      <span class="sep">|</span>
+      <span id="last-refresh">--</span>
+    </div>
+  </div>
+
+  <!-- Balance & P&L Cards -->
+  <div class="grid-top">
+    <div class="card">
+      <div class="card-title">Kalshi Balance</div>
+      <div class="card-value val-cyan" id="bal-kalshi">--</div>
+      <div class="card-sub" id="bal-kalshi-sub"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Polymarket Balance</div>
+      <div class="card-value val-accent" id="bal-poly">--</div>
+      <div class="card-sub" id="bal-poly-sub"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Total Balance</div>
+      <div class="card-value" id="bal-total">--</div>
+      <div class="card-sub" id="bal-total-sub"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Trading P&L</div>
+      <div class="card-value" id="trading-pnl">--</div>
+      <div class="card-sub" id="trading-pnl-sub"></div>
+    </div>
+  </div>
+
+  <!-- System Status Cards -->
+  <div class="grid-top">
+    <div class="card">
+      <div class="card-title">Scanner</div>
+      <div class="card-value val-green" id="scanner-status">--</div>
+      <div class="card-sub" id="scanner-sub"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Trades Executed</div>
+      <div class="card-value" id="trades-count">0</div>
+      <div class="card-sub" id="trades-sub"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Best Edge Now</div>
+      <div class="card-value val-green" id="best-edge">--</div>
+      <div class="card-sub" id="best-edge-sub"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Deposits Tracked</div>
+      <div class="card-value val-blue" id="deposits-total">$0</div>
+      <div class="card-sub" id="deposits-sub"></div>
+    </div>
+  </div>
+
+  <!-- Opportunities Table -->
+  <div class="grid-full">
+    <div class="card">
+      <div class="section-head">
+        <h2><span class="live-dot"></span>Live Opportunities</h2>
+        <span class="count" id="opp-count">0 found</span>
+      </div>
+      <div style="overflow-x:auto">
+        <table class="tbl" id="opp-table">
+          <thead>
+            <tr>
+              <th>Market</th>
+              <th>YES Side</th>
+              <th>NO Side</th>
+              <th class="right">Cost/Pair</th>
+              <th class="right">Net Edge</th>
+              <th class="right">Qty</th>
+              <th class="right">Exp. Profit</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="opp-body">
+            <tr><td colspan="8" class="empty">Waiting for scan data...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Trade History + P&L Breakdown -->
+  <div class="grid-main">
+    <div class="card">
+      <div class="section-head">
+        <h2>Trade History</h2>
+        <span class="count" id="trade-hist-count">0 trades</span>
+      </div>
+      <div style="overflow-x:auto">
+        <table class="tbl" id="trade-table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Market</th>
+              <th>YES Leg</th>
+              <th>NO Leg</th>
+              <th class="right">Spent</th>
+              <th class="right">P&L</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="trade-body">
+            <tr><td colspan="7" class="empty">No trades yet</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-head">
+        <h2>P&L Breakdown</h2>
+      </div>
+      <div id="pnl-breakdown">
+        <div class="empty">Loading...</div>
+      </div>
+      <div style="margin-top:16px">
+        <div class="section-head">
+          <h2>Deposit History</h2>
+        </div>
+        <div id="deposit-list">
+          <div class="empty">No deposits detected</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- System Logs -->
+  <div class="grid-full">
+    <div class="card">
+      <div class="section-head">
+        <h2>System Info</h2>
+      </div>
+      <div id="system-info" style="font-family:var(--mono);font-size:0.75rem;color:var(--text-dim);line-height:1.6">
+        Loading...
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API_BASE = window.location.origin;
+let refreshInterval = null;
+let lastData = {};
+
+function $(id) { return document.getElementById(id); }
+function fmt(n, d=2) { return n != null ? '$' + Number(n).toFixed(d) : '--'; }
+function fmtC(n) { return n != null ? Number(n).toFixed(1) + '\u00a2' : '--'; }
+function fmtPct(n) { return n != null ? Number(n*100).toFixed(0) + '%' : '--'; }
+function ago(ts) {
+  if (!ts) return '--';
+  const s = Math.floor((Date.now()/1000) - ts);
+  if (s < 60) return s + 's ago';
+  if (s < 3600) return Math.floor(s/60) + 'm ago';
+  return Math.floor(s/3600) + 'h ago';
+}
+
+function statusTag(status) {
+  const map = {
+    tradable: 'tag-green', filled: 'tag-green',
+    candidate: 'tag-muted', review: 'tag-muted', stale: 'tag-muted',
+    submitted: 'tag-blue', recovering: 'tag-amber',
+    failed: 'tag-red', illiquid: 'tag-amber',
+  };
+  return `<span class="tag ${map[status]||'tag-muted'}">${(status||'unknown').toUpperCase()}</span>`;
+}
+
+async function fetchJSON(path) {
+  try {
+    const r = await fetch(API_BASE + path, { signal: AbortSignal.timeout(8000) });
+    if (!r.ok) throw new Error(r.status);
+    return await r.json();
+  } catch(e) {
+    console.warn('Fetch error:', path, e);
+    return null;
+  }
+}
+
+async function refresh() {
+  const [health, opps, trades, pnl, deposits, balances] = await Promise.all([
+    fetchJSON('/api/health'),
+    fetchJSON('/api/opportunities'),
+    fetchJSON('/api/executions'),
+    fetchJSON('/api/pnl'),
+    fetchJSON('/api/deposits'),
+    fetchJSON('/api/balances'),
+  ]);
+
+  const ok = health != null;
+  $('conn-badge').className = 'conn-status ' + (ok ? 'conn-ok' : 'conn-err');
+  $('conn-badge').textContent = ok ? 'LIVE' : 'OFFLINE';
+  $('last-refresh').textContent = new Date().toLocaleTimeString();
+
+  // Health / uptime
+  if (health) {
+    const up = health.uptime_seconds;
+    const h = Math.floor(up/3600), m = Math.floor((up%3600)/60);
+    $('uptime').textContent = `UP ${h}h ${m}m`;
+
+    const sc = health.scanner || {};
+    $('scanner-status').textContent = sc.scan_count || 0;
+    $('scanner-sub').textContent = `scans | ${(sc.scan_time_ms||0).toFixed(0)}ms avg`;
+
+    const ex = health.execution || {};
+    $('trades-count').textContent = ex.total_executions || 0;
+    $('trades-sub').textContent = `filled: ${ex.filled||0} | failed: ${ex.failed||0}`;
+
+    const bestEdge = (sc.history && sc.history.length) ? sc.history[sc.history.length-1] : null;
+    if (bestEdge && bestEdge.best_edge_cents > 0) {
+      $('best-edge').textContent = fmtC(bestEdge.best_edge_cents);
+      $('best-edge-sub').textContent = `${bestEdge.active||0} active | ${bestEdge.tradable||0} tradable`;
+    } else {
+      $('best-edge').textContent = '0\u00a2';
+      $('best-edge-sub').textContent = 'No opportunities above threshold';
+    }
+  }
+
+  // Balances
+  if (balances) {
+    const k = balances.kalshi, p = balances.polymarket;
+    $('bal-kalshi').textContent = k ? fmt(k.balance) : '--';
+    $('bal-poly').textContent = p ? fmt(p.balance) : '--';
+    const total = (k?.balance||0) + (p?.balance||0);
+    $('bal-total').textContent = fmt(total);
+  }
+
+  // P&L
+  if (pnl) {
+    const recorded = pnl.recorded_trading_pnl || {};
+    const totalPnl = Object.values(recorded).reduce((a,b)=>a+b, 0);
+    $('trading-pnl').textContent = fmt(totalPnl, 4);
+    $('trading-pnl').className = 'card-value ' + (totalPnl >= 0 ? 'val-green' : 'val-red');
+    $('trading-pnl-sub').textContent = `Deposits: ${fmt(pnl.total_deposits_all_platforms||0)}`;
+
+    // Breakdown
+    let html = '';
+    for (const [plat, bal] of Object.entries(pnl.current_balances||{})) {
+      const start = (pnl.starting_balances||{})[plat] || 0;
+      const dep = (pnl.total_deposits||{})[plat] || 0;
+      const rec = (pnl.recorded_trading_pnl||{})[plat] || 0;
+      html += `
+        <div class="pnl-row"><span class="pnl-label">${plat.toUpperCase()} Balance</span><span class="pnl-val">${fmt(bal)}</span></div>
+        <div class="pnl-row"><span class="pnl-label">&nbsp;&nbsp;Starting</span><span class="pnl-val" style="color:var(--text-dim)">${fmt(start)}</span></div>
+        <div class="pnl-row"><span class="pnl-label">&nbsp;&nbsp;Deposits</span><span class="pnl-val val-blue">${dep>0?'+':''}${fmt(dep)}</span></div>
+        <div class="pnl-row"><span class="pnl-label">&nbsp;&nbsp;Trading P&L</span><span class="pnl-val ${rec>=0?'val-green':'val-red'}">${rec>=0?'+':''}${fmt(rec,4)}</span></div>
+      `;
+    }
+    html += `<div class="pnl-row" style="margin-top:8px;border-top:1px solid var(--border-bright);padding-top:8px"><span class="pnl-label" style="font-weight:600;color:var(--text)">Total Balance</span><span class="pnl-val" style="font-size:1rem">${fmt(pnl.total_balance)}</span></div>`;
+    $('pnl-breakdown').innerHTML = html || '<div class="empty">No data</div>';
+
+    $('bal-total-sub').textContent = `Start: ${fmt(Object.values(pnl.starting_balances||{}).reduce((a,b)=>a+b,0))} | Deposits: ${fmt(pnl.total_deposits_all_platforms||0)}`;
+  }
+
+  // Deposits
+  if (deposits) {
+    $('deposits-total').textContent = fmt(deposits.total_all || 0);
+    $('deposits-sub').textContent = `${(deposits.deposits||[]).length} event(s)`;
+    if (deposits.deposits && deposits.deposits.length) {
+      let html = '';
+      for (const d of deposits.deposits.slice(-8).reverse()) {
+        const cls = d.amount > 0 ? 'val-green' : 'val-red';
+        const sign = d.amount > 0 ? '+' : '';
+        const dt = new Date(d.timestamp * 1000).toLocaleString();
+        html += `<div class="deposit-item">
+          <span class="tag ${d.amount>0?'tag-green':'tag-red'}">${d.type.toUpperCase()}</span>
+          <span class="deposit-amount ${cls}">${sign}${fmt(Math.abs(d.amount))}</span>
+          <span style="color:var(--text-dim)">${d.platform}</span>
+          <span style="color:var(--text-muted);margin-left:auto;font-family:var(--mono)">${dt}</span>
+        </div>`;
+      }
+      $('deposit-list').innerHTML = html;
+    }
+  }
+
+  // Opportunities
+  if (opps && opps.length) {
+    $('opp-count').textContent = `${opps.length} found`;
+    let html = '';
+    const sorted = opps.sort((a,b) => b.net_edge_cents - a.net_edge_cents).slice(0, 30);
+    for (const o of sorted) {
+      const costPair = (o.yes_price + o.no_price).toFixed(4);
+      const expProfit = (o.net_edge * o.suggested_qty).toFixed(2);
+      html += `<tr>
+        <td><div class="opp-desc">${esc(o.description)}</div><div class="opp-ids">${esc(o.canonical_id)}</div></td>
+        <td class="mono nowrap">${o.yes_platform.toUpperCase()} @ ${fmt(o.yes_price,2)}</td>
+        <td class="mono nowrap">${o.no_platform.toUpperCase()} @ ${fmt(o.no_price,2)}</td>
+        <td class="mono right">$${costPair}</td>
+        <td class="mono right opp-edge ${o.net_edge_cents>=3?'val-green':o.net_edge_cents>=1.5?'val-amber':'val-red'}">${fmtC(o.net_edge_cents)}</td>
+        <td class="mono right">${o.suggested_qty}</td>
+        <td class="mono right val-green">$${expProfit}</td>
+        <td>${statusTag(o.status)}</td>
+      </tr>`;
+    }
+    $('opp-body').innerHTML = html;
+  } else if (opps) {
+    $('opp-count').textContent = '0 found';
+    $('opp-body').innerHTML = '<tr><td colspan="8" class="empty">No arbitrage opportunities above threshold right now. Scanner is active.</td></tr>';
+  }
+
+  // Trades
+  if (trades && trades.length) {
+    $('trade-hist-count').textContent = `${trades.length} trades`;
+    let html = '';
+    for (const t of trades.slice(-20).reverse()) {
+      const o = t.opportunity || {};
+      const yLeg = t.leg_yes || {};
+      const nLeg = t.leg_no || {};
+      const spent = ((yLeg.fill_qty||0)*(yLeg.fill_price||0)) + ((nLeg.fill_qty||0)*(nLeg.fill_price||0));
+      const pnlVal = t.realized_pnl || 0;
+      html += `<tr>
+        <td class="mono nowrap">${esc(t.arb_id||'--')}</td>
+        <td><div class="opp-desc">${esc(o.description||o.canonical_id||'--')}</div></td>
+        <td class="mono nowrap">${(yLeg.status||'--').toUpperCase()} ${(o.yes_platform||'').toUpperCase()} ${yLeg.fill_qty||0}@${fmt(yLeg.fill_price||0)}</td>
+        <td class="mono nowrap">${(nLeg.status||'--').toUpperCase()} ${(o.no_platform||'').toUpperCase()} ${nLeg.fill_qty||0}@${fmt(nLeg.fill_price||0)}</td>
+        <td class="mono right">${fmt(spent)}</td>
+        <td class="mono right ${pnlVal>=0?'val-green':'val-red'}">${pnlVal>=0?'+':''}${fmt(pnlVal,4)}</td>
+        <td>${statusTag(t.status)}</td>
+      </tr>`;
+    }
+    $('trade-body').innerHTML = html;
+  }
+
+  // System info
+  if (health) {
+    const r = health.readiness || {};
+    const a = health.audit || {};
+    const p = health.profitability || {};
+    const recon = health.reconciliation || {};
+    $('system-info').innerHTML = `
+      Mode: <b>${health.live_trading_ready ? '🔴 LIVE TRADING' : '⚪ STANDBY'}</b> &nbsp;|&nbsp;
+      Audit score: <b>${(a.audit_score||0).toFixed(4)}</b> &nbsp;|&nbsp;
+      Profitability: <b>${p.verdict||'unknown'}</b> (${fmt(p.cumulative_pnl||0,4)}) &nbsp;|&nbsp;
+      Reconciliation: <b>${recon.reconciliation_count||0}</b> checks, <b>${recon.flag_count||0}</b> flags &nbsp;|&nbsp;
+      Scanner: <b>${(health.scanner||{}).scan_count||0}</b> scans, <b>${(health.scanner||{}).published||0}</b> published
+    `;
+  }
+}
+
+function esc(s) { const d=document.createElement('div'); d.textContent=s||''; return d.innerHTML; }
+
+// Initial load + auto-refresh
+refresh();
+refreshInterval = setInterval(refresh, 5000);
+</script>
+</body>
+</html>

@@ -12408,5 +12408,778 @@
     ],
     "notes": "V3 targeted: KXNHL \u2194 tec-nhl-scw-2026-06-30",
     "resolution_date": "2026-07-14"
+  },
+  {
+    "canonical_id": "GAME_BUN_20260503_BMG_de1ef745",
+    "description": "Bundesliga: BMG wins on 2026-05-03",
+    "kalshi": "KXBUNDESLIGAGAME-26MAY03BMGBVB-BMG",
+    "polymarket": "atc-bun-bmg-bvb-2026-05-03-bmg",
+    "polymarket_question": "Bundesliga: BMG wins",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "bun",
+      "game-winner",
+      "cross-validated"
+    ],
+    "notes": "Structurally matched and verified via Kalshi API on 2026-04-27. Same polarity: both YES = BMG.",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi rulebook",
+        "rule": "Market resolves Yes if BMG wins the game on 2026-05-03",
+        "settlement_date": "2026-05-03"
+      },
+      "polymarket": {
+        "source": "Polymarket US retail market",
+        "rule": "Market resolves Yes if BMG wins the game on 2026-05-03",
+        "settlement_date": "2026-05-03"
+      },
+      "criteria_match": "identical",
+      "polarity": "same",
+      "operator_note": "Auto-validated by comprehensive matcher + Kalshi API verification on 2026-04-27"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_SEA_20260502_ATA_5923d22a",
+    "description": "Serie A: ATA wins on 2026-05-02",
+    "kalshi": "KXSERIEAGAME-26MAY02ATAGEN-ATA",
+    "polymarket": "atc-sea-ata-gen-2026-05-02-ata",
+    "polymarket_question": "Serie A: ATA wins",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "sea",
+      "game-winner",
+      "cross-validated"
+    ],
+    "notes": "Structurally matched and verified via Kalshi API on 2026-04-27. Same polarity: both YES = ATA.",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi rulebook",
+        "rule": "Market resolves Yes if ATA wins the game on 2026-05-02",
+        "settlement_date": "2026-05-02"
+      },
+      "polymarket": {
+        "source": "Polymarket US retail market",
+        "rule": "Market resolves Yes if ATA wins the game on 2026-05-02",
+        "settlement_date": "2026-05-02"
+      },
+      "criteria_match": "identical",
+      "polarity": "same",
+      "operator_note": "Auto-validated by comprehensive matcher + Kalshi API verification on 2026-04-27"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260503_STL_8e2be601",
+    "description": "MLS: STL wins on 2026-05-03",
+    "kalshi": "KXMLSGAME-26MAY03ATXSTL-STL",
+    "polymarket": "atc-mls-aus-stl-2026-05-03-stl",
+    "polymarket_question": "MLS: STL wins",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "cross-validated"
+    ],
+    "notes": "Structurally matched and verified via Kalshi API on 2026-04-27. Same polarity: both YES = STL.",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi rulebook",
+        "rule": "Market resolves Yes if STL wins the game on 2026-05-03",
+        "settlement_date": "2026-05-03"
+      },
+      "polymarket": {
+        "source": "Polymarket US retail market",
+        "rule": "Market resolves Yes if STL wins the game on 2026-05-03",
+        "settlement_date": "2026-05-03"
+      },
+      "criteria_match": "identical",
+      "polarity": "same",
+      "operator_note": "Auto-validated by comprehensive matcher + Kalshi API verification on 2026-04-27"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_BUN_20260502_TIE_25ac5e11",
+    "description": "Bundesliga: Draw/Tie on 2026-05-02",
+    "kalshi": "KXBUNDESLIGAGAME-26MAY02LEVRBL-TIE",
+    "polymarket": "atc-bun-lev-rbl-2026-05-02-draw",
+    "polymarket_question": "Bundesliga: Draw/Tie",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "bun",
+      "game-winner",
+      "cross-validated"
+    ],
+    "notes": "Structurally matched and verified via Kalshi API on 2026-04-27. Same polarity: both YES = TIE.",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi rulebook",
+        "rule": "Market resolves Yes if the game ends in a draw/tie",
+        "settlement_date": "2026-05-02"
+      },
+      "polymarket": {
+        "source": "Polymarket US retail market",
+        "rule": "Market resolves Yes if the game ends in a draw",
+        "settlement_date": "2026-05-02"
+      },
+      "criteria_match": "identical",
+      "polarity": "same",
+      "operator_note": "Auto-validated by comprehensive matcher + Kalshi API verification on 2026-04-27"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_SEA_20260502_GEN_3493309d",
+    "description": "Serie A: GEN wins on 2026-05-02",
+    "kalshi": "KXSERIEAGAME-26MAY02ATAGEN-GEN",
+    "polymarket": "atc-sea-ata-gen-2026-05-02-gen",
+    "polymarket_question": "Serie A: GEN wins",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "sea",
+      "game-winner",
+      "cross-validated"
+    ],
+    "notes": "Structurally matched and verified via Kalshi API on 2026-04-27. Same polarity: both YES = GEN.",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi rulebook",
+        "rule": "Market resolves Yes if GEN wins the game on 2026-05-02",
+        "settlement_date": "2026-05-02"
+      },
+      "polymarket": {
+        "source": "Polymarket US retail market",
+        "rule": "Market resolves Yes if GEN wins the game on 2026-05-02",
+        "settlement_date": "2026-05-02"
+      },
+      "criteria_match": "identical",
+      "polarity": "same",
+      "operator_note": "Auto-validated by comprehensive matcher + Kalshi API verification on 2026-04-27"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_SEA_20260504_TIE_4e4a3e5f",
+    "description": "Serie A: Draw/Tie on 2026-05-04",
+    "kalshi": "KXSERIEAGAME-26MAY04ROMFIO-TIE",
+    "polymarket": "atc-sea-rom-fio-2026-05-04-draw",
+    "polymarket_question": "Serie A: Draw/Tie",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "sea",
+      "game-winner",
+      "cross-validated"
+    ],
+    "notes": "Structurally matched and verified via Kalshi API on 2026-04-27. Same polarity: both YES = TIE.",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi rulebook",
+        "rule": "Market resolves Yes if the game ends in a draw/tie",
+        "settlement_date": "2026-05-04"
+      },
+      "polymarket": {
+        "source": "Polymarket US retail market",
+        "rule": "Market resolves Yes if the game ends in a draw",
+        "settlement_date": "2026-05-04"
+      },
+      "criteria_match": "identical",
+      "polarity": "same",
+      "operator_note": "Auto-validated by comprehensive matcher + Kalshi API verification on 2026-04-27"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_SEA_20260502_TIE_0cf27728",
+    "description": "Serie A: Draw/Tie on 2026-05-02",
+    "kalshi": "KXSERIEAGAME-26MAY02ATAGEN-TIE",
+    "polymarket": "atc-sea-ata-gen-2026-05-02-draw",
+    "polymarket_question": "Serie A: Draw/Tie",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "sea",
+      "game-winner",
+      "cross-validated"
+    ],
+    "notes": "Structurally matched and verified via Kalshi API on 2026-04-27. Same polarity: both YES = TIE.",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi rulebook",
+        "rule": "Market resolves Yes if the game ends in a draw/tie",
+        "settlement_date": "2026-05-02"
+      },
+      "polymarket": {
+        "source": "Polymarket US retail market",
+        "rule": "Market resolves Yes if the game ends in a draw",
+        "settlement_date": "2026-05-02"
+      },
+      "criteria_match": "identical",
+      "polarity": "same",
+      "operator_note": "Auto-validated by comprehensive matcher + Kalshi API verification on 2026-04-27"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260503_ATX_64b02bee",
+    "description": "MLS: ATX wins on 2026-05-03",
+    "kalshi": "KXMLSGAME-26MAY03ATXSTL-ATX",
+    "polymarket": "atc-mls-aus-stl-2026-05-03-aus",
+    "polymarket_question": "MLS: ATX wins",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "cross-validated"
+    ],
+    "notes": "Structurally matched and verified via Kalshi API on 2026-04-27. Same polarity: both YES = ATX.",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi rulebook",
+        "rule": "Market resolves Yes if ATX wins the game on 2026-05-03",
+        "settlement_date": "2026-05-03"
+      },
+      "polymarket": {
+        "source": "Polymarket US retail market",
+        "rule": "Market resolves Yes if AUS wins the game on 2026-05-03",
+        "settlement_date": "2026-05-03"
+      },
+      "criteria_match": "identical",
+      "polarity": "same",
+      "operator_note": "Auto-validated by comprehensive matcher + Kalshi API verification on 2026-04-27"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260503_TIE_199ef6df",
+    "description": "MLS: Draw/Tie on 2026-05-03",
+    "kalshi": "KXMLSGAME-26MAY03ATXSTL-TIE",
+    "polymarket": "atc-mls-aus-stl-2026-05-03-draw",
+    "polymarket_question": "MLS: Draw/Tie",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "cross-validated"
+    ],
+    "notes": "Structurally matched and verified via Kalshi API on 2026-04-27. Same polarity: both YES = TIE.",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi rulebook",
+        "rule": "Market resolves Yes if the game ends in a draw/tie",
+        "settlement_date": "2026-05-03"
+      },
+      "polymarket": {
+        "source": "Polymarket US retail market",
+        "rule": "Market resolves Yes if the game ends in a draw",
+        "settlement_date": "2026-05-03"
+      },
+      "criteria_match": "identical",
+      "polarity": "same",
+      "operator_note": "Auto-validated by comprehensive matcher + Kalshi API verification on 2026-04-27"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260428_HOU_4c6f8dd1",
+    "description": "MLB: HOU wins on 2026-04-28",
+    "kalshi": "KXMLBGAME-26APR281835HOUBAL-HOU",
+    "polymarket": "aec-mlb-hou-bal-2026-04-28",
+    "polymarket_question": "MLB: HOU wins",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "cross-validated"
+    ],
+    "notes": "Structurally matched and verified via Kalshi API on 2026-04-27. Same polarity: both YES = HOU.",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi rulebook",
+        "rule": "Market resolves Yes if HOU wins the game on 2026-04-28",
+        "settlement_date": "2026-04-28"
+      },
+      "polymarket": {
+        "source": "Polymarket US retail market",
+        "rule": "Market resolves Yes if first team listed wins the game on 2026-04-28",
+        "settlement_date": "2026-04-28"
+      },
+      "criteria_match": "identical",
+      "polarity": "same",
+      "operator_note": "Auto-validated by comprehensive matcher + Kalshi API verification on 2026-04-27"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_BUN_20260503_BVB_52af5fbf",
+    "description": "Bundesliga: BVB wins on 2026-05-03",
+    "kalshi": "KXBUNDESLIGAGAME-26MAY03BMGBVB-BVB",
+    "polymarket": "atc-bun-bmg-bvb-2026-05-03-bvb",
+    "polymarket_question": "Bundesliga: BVB wins",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "bun",
+      "game-winner",
+      "cross-validated"
+    ],
+    "notes": "Structurally matched and verified via Kalshi API on 2026-04-27. Same polarity: both YES = BVB.",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi rulebook",
+        "rule": "Market resolves Yes if BVB wins the game on 2026-05-03",
+        "settlement_date": "2026-05-03"
+      },
+      "polymarket": {
+        "source": "Polymarket US retail market",
+        "rule": "Market resolves Yes if BVB wins the game on 2026-05-03",
+        "settlement_date": "2026-05-03"
+      },
+      "criteria_match": "identical",
+      "polarity": "same",
+      "operator_note": "Auto-validated by comprehensive matcher + Kalshi API verification on 2026-04-27"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_BUN_20260503_TIE_dad548fd",
+    "description": "Bundesliga: Draw/Tie on 2026-05-03",
+    "kalshi": "KXBUNDESLIGAGAME-26MAY03BMGBVB-TIE",
+    "polymarket": "atc-bun-bmg-bvb-2026-05-03-draw",
+    "polymarket_question": "Bundesliga: Draw/Tie",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "bun",
+      "game-winner",
+      "cross-validated"
+    ],
+    "notes": "Structurally matched and verified via Kalshi API on 2026-04-27. Same polarity: both YES = TIE.",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi rulebook",
+        "rule": "Market resolves Yes if the game ends in a draw/tie",
+        "settlement_date": "2026-05-03"
+      },
+      "polymarket": {
+        "source": "Polymarket US retail market",
+        "rule": "Market resolves Yes if the game ends in a draw",
+        "settlement_date": "2026-05-03"
+      },
+      "criteria_match": "identical",
+      "polarity": "same",
+      "operator_note": "Auto-validated by comprehensive matcher + Kalshi API verification on 2026-04-27"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_LAL_20260502_BAR_58ad4ae6",
+    "description": "La Liga: BAR wins on 2026-05-02",
+    "kalshi": "KXLALIGAGAME-26MAY02OSABAR-BAR",
+    "polymarket": "atc-lal-osa-fcb-2026-05-02-fcb",
+    "polymarket_question": "La Liga: BAR wins",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "lal",
+      "game-winner",
+      "cross-validated"
+    ],
+    "notes": "Structurally matched and verified via Kalshi API on 2026-04-27. Same polarity: both YES = BAR.",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi rulebook",
+        "rule": "Market resolves Yes if BAR wins the game on 2026-05-02",
+        "settlement_date": "2026-05-02"
+      },
+      "polymarket": {
+        "source": "Polymarket US retail market",
+        "rule": "Market resolves Yes if FCB wins the game on 2026-05-02",
+        "settlement_date": "2026-05-02"
+      },
+      "criteria_match": "identical",
+      "polarity": "same",
+      "operator_note": "Auto-validated by comprehensive matcher + Kalshi API verification on 2026-04-27"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_LAL_20260502_TIE_cd9cb5df",
+    "description": "La Liga: Draw/Tie on 2026-05-02",
+    "kalshi": "KXLALIGAGAME-26MAY02OSABAR-TIE",
+    "polymarket": "atc-lal-osa-fcb-2026-05-02-draw",
+    "polymarket_question": "La Liga: Draw/Tie",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "lal",
+      "game-winner",
+      "cross-validated"
+    ],
+    "notes": "Structurally matched and verified via Kalshi API on 2026-04-27. Same polarity: both YES = TIE.",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi rulebook",
+        "rule": "Market resolves Yes if the game ends in a draw/tie",
+        "settlement_date": "2026-05-02"
+      },
+      "polymarket": {
+        "source": "Polymarket US retail market",
+        "rule": "Market resolves Yes if the game ends in a draw",
+        "settlement_date": "2026-05-02"
+      },
+      "criteria_match": "identical",
+      "polarity": "same",
+      "operator_note": "Auto-validated by comprehensive matcher + Kalshi API verification on 2026-04-27"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_LAL_20260502_OSA_0291f937",
+    "description": "La Liga: OSA wins on 2026-05-02",
+    "kalshi": "KXLALIGAGAME-26MAY02OSABAR-OSA",
+    "polymarket": "atc-lal-osa-fcb-2026-05-02-osa",
+    "polymarket_question": "La Liga: OSA wins",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "lal",
+      "game-winner",
+      "cross-validated"
+    ],
+    "notes": "Structurally matched and verified via Kalshi API on 2026-04-27. Same polarity: both YES = OSA.",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi rulebook",
+        "rule": "Market resolves Yes if OSA wins the game on 2026-05-02",
+        "settlement_date": "2026-05-02"
+      },
+      "polymarket": {
+        "source": "Polymarket US retail market",
+        "rule": "Market resolves Yes if OSA wins the game on 2026-05-02",
+        "settlement_date": "2026-05-02"
+      },
+      "criteria_match": "identical",
+      "polarity": "same",
+      "operator_note": "Auto-validated by comprehensive matcher + Kalshi API verification on 2026-04-27"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_SEA_20260504_FIO_eb8804ed",
+    "description": "Serie A: FIO wins on 2026-05-04",
+    "kalshi": "KXSERIEAGAME-26MAY04ROMFIO-FIO",
+    "polymarket": "atc-sea-rom-fio-2026-05-04-fio",
+    "polymarket_question": "Serie A: FIO wins",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "sea",
+      "game-winner",
+      "cross-validated"
+    ],
+    "notes": "Structurally matched and verified via Kalshi API on 2026-04-27. Same polarity: both YES = FIO.",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi rulebook",
+        "rule": "Market resolves Yes if FIO wins the game on 2026-05-04",
+        "settlement_date": "2026-05-04"
+      },
+      "polymarket": {
+        "source": "Polymarket US retail market",
+        "rule": "Market resolves Yes if FIO wins the game on 2026-05-04",
+        "settlement_date": "2026-05-04"
+      },
+      "criteria_match": "identical",
+      "polarity": "same",
+      "operator_note": "Auto-validated by comprehensive matcher + Kalshi API verification on 2026-04-27"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_SEA_20260504_ROM_0dbfd99c",
+    "description": "Serie A: ROM wins on 2026-05-04",
+    "kalshi": "KXSERIEAGAME-26MAY04ROMFIO-ROM",
+    "polymarket": "atc-sea-rom-fio-2026-05-04-rom",
+    "polymarket_question": "Serie A: ROM wins",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "sea",
+      "game-winner",
+      "cross-validated"
+    ],
+    "notes": "Structurally matched and verified via Kalshi API on 2026-04-27. Same polarity: both YES = ROM.",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi rulebook",
+        "rule": "Market resolves Yes if ROM wins the game on 2026-05-04",
+        "settlement_date": "2026-05-04"
+      },
+      "polymarket": {
+        "source": "Polymarket US retail market",
+        "rule": "Market resolves Yes if ROM wins the game on 2026-05-04",
+        "settlement_date": "2026-05-04"
+      },
+      "criteria_match": "identical",
+      "polarity": "same",
+      "operator_note": "Auto-validated by comprehensive matcher + Kalshi API verification on 2026-04-27"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_BUN_20260502_LEV_599c6552",
+    "description": "Bundesliga: LEV wins on 2026-05-02",
+    "kalshi": "KXBUNDESLIGAGAME-26MAY02LEVRBL-LEV",
+    "polymarket": "atc-bun-lev-rbl-2026-05-02-lev",
+    "polymarket_question": "Bundesliga: LEV wins",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "bun",
+      "game-winner",
+      "cross-validated"
+    ],
+    "notes": "Structurally matched and verified via Kalshi API on 2026-04-27. Same polarity: both YES = LEV.",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi rulebook",
+        "rule": "Market resolves Yes if LEV wins the game on 2026-05-02",
+        "settlement_date": "2026-05-02"
+      },
+      "polymarket": {
+        "source": "Polymarket US retail market",
+        "rule": "Market resolves Yes if LEV wins the game on 2026-05-02",
+        "settlement_date": "2026-05-02"
+      },
+      "criteria_match": "identical",
+      "polarity": "same",
+      "operator_note": "Auto-validated by comprehensive matcher + Kalshi API verification on 2026-04-27"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_BUN_20260502_RBL_87e2c6e1",
+    "description": "Bundesliga: RBL wins on 2026-05-02",
+    "kalshi": "KXBUNDESLIGAGAME-26MAY02LEVRBL-RBL",
+    "polymarket": "atc-bun-lev-rbl-2026-05-02-rbl",
+    "polymarket_question": "Bundesliga: RBL wins",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "bun",
+      "game-winner",
+      "cross-validated"
+    ],
+    "notes": "Structurally matched and verified via Kalshi API on 2026-04-27. Same polarity: both YES = RBL.",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi rulebook",
+        "rule": "Market resolves Yes if RBL wins the game on 2026-05-02",
+        "settlement_date": "2026-05-02"
+      },
+      "polymarket": {
+        "source": "Polymarket US retail market",
+        "rule": "Market resolves Yes if RBL wins the game on 2026-05-02",
+        "settlement_date": "2026-05-02"
+      },
+      "criteria_match": "identical",
+      "polarity": "same",
+      "operator_note": "Auto-validated by comprehensive matcher + Kalshi API verification on 2026-04-27"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260429_DET_6cbee712",
+    "description": "MLB: DET wins on 2026-04-29",
+    "kalshi": "KXMLBGAME-26APR291915DETATL-DET",
+    "polymarket": "aec-mlb-det-atl-2026-04-29",
+    "polymarket_question": "MLB: DET wins on 2026-04-29",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered",
+      "expanded"
+    ],
+    "notes": "Expanded discovery 2026-04-27 18:25. Kalshi: Detroit vs Atlanta Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Detroit vs Atlanta Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: DET wins on 2026-04-29"
+      },
+      "criteria_match": "identical"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_SEA_20260503_BFC_3d3b13b1",
+    "description": "Serie A: Bologna wins on 2026-05-03",
+    "kalshi": "KXSERIEAGAME-26MAY03BFCCAG-BFC",
+    "polymarket": "atc-sea-bol-cag-2026-05-03-bol",
+    "polymarket_question": "Serie A: Bologna wins on 2026-05-03",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "sea",
+      "game-winner",
+      "manual-verified"
+    ],
+    "notes": "Manual verification 2026-04-27 18:30. Kalshi: Bologna vs Cagliari Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Bologna vs Cagliari Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "Serie A: Bologna wins on 2026-05-03"
+      },
+      "criteria_match": "identical"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_SEA_20260503_CAG_59b77473",
+    "description": "Serie A: Cagliari wins on 2026-05-03",
+    "kalshi": "KXSERIEAGAME-26MAY03BFCCAG-CAG",
+    "polymarket": "atc-sea-bol-cag-2026-05-03-cag",
+    "polymarket_question": "Serie A: Cagliari wins on 2026-05-03",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "sea",
+      "game-winner",
+      "manual-verified"
+    ],
+    "notes": "Manual verification 2026-04-27 18:30. Kalshi: Bologna vs Cagliari Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Bologna vs Cagliari Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "Serie A: Cagliari wins on 2026-05-03"
+      },
+      "criteria_match": "identical"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_SEA_20260503_TIE_d8a04b06",
+    "description": "Serie A: Draw on 2026-05-03 (Bologna vs Cagliari)",
+    "kalshi": "KXSERIEAGAME-26MAY03BFCCAG-TIE",
+    "polymarket": "atc-sea-bol-cag-2026-05-03-draw",
+    "polymarket_question": "Serie A: Draw on 2026-05-03 (Bologna vs Cagliari)",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "sea",
+      "game-winner",
+      "manual-verified"
+    ],
+    "notes": "Manual verification 2026-04-27 18:30. Kalshi: Bologna vs Cagliari Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Bologna vs Cagliari Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "Serie A: Draw on 2026-05-03 (Bologna vs Cagliari)"
+      },
+      "criteria_match": "identical"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260429_WSH_9b7fb6cc",
+    "description": "MLB: WSH wins on 2026-04-29",
+    "kalshi": "KXMLBGAME-26APR291910WSHNYM-WSH",
+    "polymarket": "aec-mlb-wsh-nym-2026-04-29",
+    "polymarket_question": "MLB: WSH wins on 2026-04-29",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-04-28 12:01. Kalshi title: Washington vs New York M Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Washington vs New York M Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: WSH wins on 2026-04-29"
+      },
+      "criteria_match": "identical"
+    },
+    "resolution_match_status": "identical"
   }
 ]

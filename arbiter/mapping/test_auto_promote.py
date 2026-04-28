@@ -224,29 +224,27 @@ async def test_llm_maybe_is_not_yes():
     assert result.reason == "llm_no"
 
 
-# ─── Condition 5: Liquidity depth ≥ PHASE5_MAX_ORDER_USD × 2 (ARITHMETIC) ────
+# ─── Condition 5: Liquidity depth ≥ PHASE5_MAX_ORDER_USD (ARITHMETIC) ────────
 
 @pytest.mark.asyncio
 async def test_liquidity_low_arithmetic():
-    """Gate 5: Liquidity test using arithmetic on fake orderbook.
+    """Gate 5: combined bid+ask depth on either venue below PHASE5_MAX_ORDER_USD → fail.
 
-    PHASE5_MAX_ORDER_USD = 50.0 → required depth = 50.0 × 2 = 100.0 USD.
-    Kalshi orderbook: single bid at price=0.5, qty=100 → depth = 0.5 × 100 = 50.0 USD.
-    50.0 < 100.0 → FAIL.
+    PHASE5_MAX_ORDER_USD = 50.0 → required depth = 50.0 USD.
+    Kalshi orderbook: single bid at price=0.5, qty=40 → depth = 20.0 USD.
+    20.0 < 50.0 → FAIL.
     """
     phase5_max = 50.0
-    required_depth = phase5_max * 2  # = 100.0 USD
+    required_depth = phase5_max  # = 50.0 USD (1× now, both sides counted)
 
-    # Kalshi: depth = 0.5 × 100 = 50.0 USD (BELOW required 100.0)
-    kalshi_depth = 0.5 * 100  # = 50.0 USD
+    kalshi_depth = 0.5 * 40  # = 20.0 USD
     assert kalshi_depth < required_depth, "test precondition: kalshi depth should be below threshold"
 
     settings = _make_settings(phase5_max_order_usd=phase5_max)
     candidate = _make_candidate(score=0.90)
 
-    # Construct orderbooks with known depth arithmetic
     orderbooks = {
-        "kalshi": {"bids": [{"px": 0.5, "qty": 100}], "offers": []},       # depth = 50.0
+        "kalshi": {"bids": [{"px": 0.5, "qty": 40}], "offers": []},        # depth = 20.0
         "polymarket": {"bids": [{"px": 0.5, "qty": 400}], "offers": []},   # depth = 200.0
     }
     llm = _make_llm_verifier("YES")
@@ -267,17 +265,17 @@ async def test_liquidity_low_arithmetic():
 
 @pytest.mark.asyncio
 async def test_liquidity_passes_arithmetic():
-    """Gate 5 PASS: both sides have depth ≥ PHASE5_MAX_ORDER_USD × 2.
+    """Gate 5 PASS: combined depth ≥ PHASE5_MAX_ORDER_USD on both venues.
 
-    PHASE5_MAX_ORDER_USD = 50.0 → required = 100.0 USD.
-    Kalshi: price=0.5, qty=400 → depth = 200.0 USD ≥ 100.0 ✓
-    Poly:   price=0.5, qty=400 → depth = 200.0 USD ≥ 100.0 ✓
+    PHASE5_MAX_ORDER_USD = 50.0 → required = 50.0 USD.
+    Kalshi: price=0.5, qty=200 → depth = 100.0 USD ≥ 50.0 ✓
+    Poly:   price=0.5, qty=200 → depth = 100.0 USD ≥ 50.0 ✓
     """
     phase5_max = 50.0
-    required_depth = phase5_max * 2  # = 100.0
+    required_depth = phase5_max  # = 50.0
 
-    kalshi_depth = 0.5 * 400   # = 200.0 ≥ 100.0 ✓
-    poly_depth = 0.5 * 400     # = 200.0 ≥ 100.0 ✓
+    kalshi_depth = 0.5 * 200   # = 100.0 ≥ 50.0 ✓
+    poly_depth = 0.5 * 200     # = 100.0 ≥ 50.0 ✓
     assert kalshi_depth >= required_depth
     assert poly_depth >= required_depth
 
@@ -285,8 +283,8 @@ async def test_liquidity_passes_arithmetic():
     candidate = _make_candidate(score=0.90)
 
     orderbooks = {
-        "kalshi": {"bids": [{"px": 0.5, "qty": 400}], "offers": []},
-        "polymarket": {"bids": [{"px": 0.5, "qty": 400}], "offers": []},
+        "kalshi": {"bids": [{"px": 0.5, "qty": 200}], "offers": []},
+        "polymarket": {"bids": [{"px": 0.5, "qty": 200}], "offers": []},
     }
     llm = _make_llm_verifier("YES")
 
@@ -301,6 +299,33 @@ async def test_liquidity_passes_arithmetic():
     )
 
     # Should NOT fail on liquidity — may fail on a later gate but not liquidity_low
+    assert result.reason != "liquidity_low"
+
+
+@pytest.mark.asyncio
+async def test_liquidity_counts_asks_when_bids_thin():
+    """Ask-side depth counts toward Gate 5: a market with thin bids but heavy asks passes."""
+    phase5_max = 50.0
+    settings = _make_settings(phase5_max_order_usd=phase5_max)
+    candidate = _make_candidate(score=0.90)
+
+    # 0 bid depth, 100 USD ask depth → 100 ≥ 50 → passes
+    orderbooks = {
+        "kalshi": {"bids": [], "asks": [{"px": 0.5, "qty": 200}]},
+        "polymarket": {"bids": [], "asks": [{"px": 0.5, "qty": 200}]},
+    }
+    llm = _make_llm_verifier("YES")
+
+    result = await maybe_promote(
+        candidate,
+        settings=settings,
+        orderbooks=orderbooks,
+        llm_verifier=llm,
+        today_promoted_count=0,
+        cooling_state={},
+        resolution_checker=_resolution_check_identical,
+    )
+
     assert result.reason != "liquidity_low"
 
 
