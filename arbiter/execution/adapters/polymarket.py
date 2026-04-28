@@ -571,6 +571,67 @@ class PolymarketAdapter:
                 return (True, best_ask)
         return (False, best_ask)
 
+    # --- best_executable_price -------------------------------------------
+
+    async def best_executable_price(
+        self, market_id: str, side: str, required_qty: int,
+    ) -> tuple[bool, float]:
+        """Walk the asks to find the worst price needed to fill
+        ``required_qty``. Used by the engine as the FOK limit price; without
+        this, FOK at the top-of-book price rejects when the level itself is
+        thin even though the deeper book has the liquidity.
+        """
+        client = self._get_client()
+        if client is None:
+            return (False, 0.0)
+        loop = asyncio.get_event_loop()
+        try:
+            book_future = loop.run_in_executor(
+                None, lambda: client.get_order_book(market_id)
+            )
+            price_future = loop.run_in_executor(
+                None, lambda: client.get_price(market_id, side.upper())
+            )
+            book = await book_future
+            tick_price = await price_future
+        except Exception as exc:
+            log.warning(
+                "polymarket.executable_price.failed",
+                market_id=market_id, err=str(exc),
+            )
+            return (False, 0.0)
+
+        asks = self._extract_levels(book, "asks")
+        bids = self._extract_levels(book, "bids")
+        if not asks:
+            return (False, 0.0)
+
+        sorted_asks = sorted(asks, key=lambda lvl: lvl[0])
+        best_ask = sorted_asks[0][0]
+        best_bid = max((lvl[0] for lvl in bids), default=0.0)
+
+        # Stale-book guard (Pitfall 1) — keep parity with check_depth.
+        if tick_price is not None:
+            try:
+                tick = float(tick_price)
+                if tick > best_ask + 0.01 or tick < best_bid - 0.01:
+                    log.warning(
+                        "polymarket.executable_price.stale_book",
+                        market_id=market_id, tick=tick,
+                        best_ask=best_ask, best_bid=best_bid,
+                    )
+                    return (False, 0.0)
+            except (TypeError, ValueError):
+                pass
+
+        cumulative = 0.0
+        for level in sorted_asks:
+            cumulative += float(level[1])
+            if cumulative >= float(required_qty):
+                return (True, float(level[0]))
+        deepest = float(sorted_asks[-1][0])
+        return (False, deepest)
+
     @staticmethod
     def _extract_levels(book: Any, key: str) -> list:
         """Normalize book levels into a list of (price, size) tuples.
@@ -680,6 +741,136 @@ class PolymarketAdapter:
             )
             self._warned_no_client_order_id = True
         return []
+
+    # --- place_unwind_sell ----------------------------------------------
+
+    async def place_unwind_sell(
+        self,
+        arb_id: str,
+        market_id: str,
+        canonical_id: str,
+        side: str,
+        qty: int,
+        panic_price: float = 0.01,
+    ) -> Order:
+        """SELL IOC at a panic price to unwind a naked long position.
+
+        ``side`` is the engine-side label of the position we hold ("yes" or
+        "no"); ``market_id`` is the token id of THAT position. The CLOB matches
+        the SELL against any standing bid >= ``panic_price``. Partial fills
+        return whatever was absorbed; the unfilled remainder is cancelled
+        because of IOC semantics. Always returns an Order in a terminal
+        state; never raises.
+        """
+        now = time.time()
+        if not getattr(self.config.polymarket, "private_key", None):
+            return self._failed_order(
+                arb_id, market_id, canonical_id, side, panic_price, qty, now,
+                "Polymarket wallet not configured for unwind",
+            )
+        if not self.circuit.can_execute():
+            return self._failed_order(
+                arb_id, market_id, canonical_id, side, panic_price, qty, now,
+                "polymarket circuit open",
+            )
+        client = self._get_client()
+        if client is None:
+            return self._failed_order(
+                arb_id, market_id, canonical_id, side, panic_price, qty, now,
+                "Unable to initialize Polymarket client for unwind",
+            )
+
+        loop = asyncio.get_event_loop()
+        try:
+            await self.rate_limiter.acquire()
+            from py_clob_client.clob_types import OrderArgs, OrderType
+            order_args = OrderArgs(
+                token_id=market_id,
+                price=round(panic_price, 2),
+                size=float(qty),
+                side="SELL",
+            )
+            signed = await loop.run_in_executor(
+                None, lambda: client.create_order(order_args)
+            )
+            # Use FAK (Fill-And-Kill) — matches as much as possible at the
+            # limit price, cancels the rest. Polymarket SDK calls this FAK;
+            # other venues call it IOC. Critical that this is NOT FOK,
+            # because a FOK panic-sell would reject if the book can't
+            # fully absorb us — we'd rather take a partial unwind than
+            # leave the entire position naked.
+            response = await loop.run_in_executor(
+                None, lambda: client.post_order(signed, OrderType.FAK)
+            )
+        except Exception as exc:
+            if self._is_rate_limit_error(exc):
+                self.circuit.record_failure()
+                return self._failed_order(
+                    arb_id, market_id, canonical_id, side, panic_price, qty, now,
+                    "Polymarket unwind rate-limited",
+                )
+            self.circuit.record_failure()
+            log.error("polymarket.unwind.error", arb_id=arb_id, err=str(exc))
+            return self._failed_order(
+                arb_id, market_id, canonical_id, side, panic_price, qty, now,
+                f"Polymarket unwind exception: {exc}",
+            )
+
+        self.circuit.record_success()
+        if isinstance(response, dict) and not response.get("success", True):
+            return self._failed_order(
+                arb_id, market_id, canonical_id, side, panic_price, qty, now,
+                str(response.get("errorMsg", "Unwind rejected")),
+            )
+
+        if isinstance(response, dict):
+            order_id = str(
+                response.get("orderID", response.get("id", f"{arb_id}-{side.upper()}-UNWIND"))
+            )
+            api_status = str(response.get("status", "matched")).lower()
+            try:
+                fill_qty = float(response.get("size_matched", 0) or 0)
+            except (TypeError, ValueError):
+                fill_qty = 0.0
+        else:
+            order_id = f"{arb_id}-{side.upper()}-UNWIND"
+            api_status = "matched"
+            fill_qty = 0.0
+
+        status_map = {
+            "matched":   OrderStatus.FILLED,
+            "filled":    OrderStatus.FILLED,
+            "executed":  OrderStatus.FILLED,
+            "canceled":  OrderStatus.CANCELLED,
+            "cancelled": OrderStatus.CANCELLED,
+            "rejected":  OrderStatus.FAILED,
+        }
+        mapped = status_map.get(api_status, OrderStatus.SUBMITTED)
+        # IOC partial: if fill_qty > 0 but < qty, mark PARTIAL so caller can
+        # see residual exposure.
+        if 0 < fill_qty < float(qty) and mapped == OrderStatus.FILLED:
+            mapped = OrderStatus.PARTIAL
+
+        log.info(
+            "polymarket.unwind.placed",
+            arb_id=arb_id, status=api_status,
+            fill_qty=fill_qty, target_qty=qty,
+        )
+
+        return Order(
+            order_id=order_id,
+            platform="polymarket",
+            market_id=market_id,
+            canonical_id=canonical_id,
+            side=side,
+            price=panic_price,
+            quantity=qty,
+            status=mapped,
+            fill_price=panic_price,
+            fill_qty=fill_qty,
+            timestamp=now,
+            external_client_order_id=None,
+        )
 
     # --- helpers ---------------------------------------------------------
 

@@ -423,6 +423,16 @@ class ExecutionEngine:
         # Plan 03-01: late-injected reference to SafetySupervisor for the
         # one-leg hook (plan 03-03) and shutdown trip (plan 03-05).
         self._safety: Optional["SafetySupervisor"] = safety
+        # INTER_LEG_DELAY_MS: pause between primary fill and secondary
+        # placement so the second venue's orderbook can stabilize after
+        # the first leg moves the cross-venue price. Default 500ms.
+        try:
+            self._inter_leg_delay_ms = float(
+                _os_init.getenv("INTER_LEG_DELAY_MS", "500") or "500"
+            )
+        except (TypeError, ValueError):
+            self._inter_leg_delay_ms = 500.0
+        self._inter_leg_delay_ms = max(0.0, self._inter_leg_delay_ms)
 
     def set_trade_gate(self, gate) -> None:
         self._trade_gate = gate
@@ -976,10 +986,64 @@ class ExecutionEngine:
                     # Return None — auto_executor will set cooldown for this canonical_id
                     return None
 
+            # Step 0b: Resolve a FOK-safe primary price by walking the book.
+            # Using `primary_price` (the opportunity quote, typically top-of-book)
+            # is what caused 7/10 production trades to fail with Kalshi 409
+            # `fill_or_kill_insufficient_resting_volume` — the level was thinner
+            # than expected. `best_executable_price` returns the worst price
+            # required to absorb effective_qty across all visible levels;
+            # placing the FOK at that price means the order can sweep deeper
+            # into the book if needed but still respects our profitability
+            # gate (validated below).
+            primary_fok_price = primary_price
+            if primary_adapter is not None and hasattr(
+                primary_adapter, "best_executable_price",
+            ):
+                fillable, exec_price = await primary_adapter.best_executable_price(
+                    primary_market, primary_side, effective_qty,
+                )
+                if fillable and exec_price > 0:
+                    primary_fok_price = exec_price
+                    if exec_price > primary_price:
+                        # We're paying worse than the quoted opportunity price.
+                        # Re-validate net-edge using the actual executable price
+                        # so we never knowingly cross a slippage threshold that
+                        # eats the entire arb.
+                        primary_yes_price = (
+                            exec_price if primary_side == "yes" else opp.yes_price
+                        )
+                        primary_no_price = (
+                            exec_price if primary_side == "no" else opp.no_price
+                        )
+                        revised_total = primary_yes_price + primary_no_price
+                        revised_gross = 1.0 - revised_total
+                        revised_yes_fee = compute_fee(
+                            opp.yes_platform, primary_yes_price,
+                            effective_qty, opp.yes_fee_rate,
+                        ) / max(effective_qty, 1)
+                        revised_no_fee = compute_fee(
+                            opp.no_platform, primary_no_price,
+                            effective_qty, opp.no_fee_rate,
+                        ) / max(effective_qty, 1)
+                        revised_net = revised_gross - revised_yes_fee - revised_no_fee
+                        if revised_net * 100 < MIN_NET_EDGE_CENTS:
+                            logger.info(
+                                "  ✗ SKIP: best_executable_price=%.4f exceeds quoted "
+                                "%.4f and revised net edge %.2f¢ < %.1f¢ minimum",
+                                exec_price, primary_price,
+                                revised_net * 100, MIN_NET_EDGE_CENTS,
+                            )
+                            return None
+                        logger.info(
+                            "  ↑ FOK price walked %.4f→%.4f (book deeper than top-of-book); "
+                            "revised net edge %.2f¢",
+                            primary_price, exec_price, revised_net * 100,
+                        )
+
             # Step 1: Execute the primary leg (Kalshi FOK)
             primary_leg = await self._place_order_for_leg(
                 arb_id, primary_platform, primary_market,
-                opp.canonical_id, primary_side, primary_price, effective_qty,
+                opp.canonical_id, primary_side, primary_fok_price, effective_qty,
             )
 
             # Step 2: Only proceed if primary leg FILLED
@@ -1009,9 +1073,57 @@ class ExecutionEngine:
                     primary_leg.fill_qty * primary_leg.fill_price,
                     primary_platform, secondary_side.upper(),
                 )
+
+                # Inter-leg delay — give the secondary venue's order book a
+                # chance to refresh after the cross-venue print from the
+                # primary leg. Default 500ms; tune via INTER_LEG_DELAY_MS.
+                if self._inter_leg_delay_ms > 0:
+                    await asyncio.sleep(self._inter_leg_delay_ms / 1000.0)
+
+                # Walk the secondary book too — same FOK-pricing fix as the
+                # primary leg. If the secondary's executable price now exceeds
+                # the quoted secondary price by more than our remaining edge,
+                # bail before placing the secondary (we'd rather take a single
+                # naked-leg-recovery path than two losing legs).
+                secondary_fok_price = secondary_price
+                secondary_adapter = self.adapters.get(secondary_platform)
+                if secondary_adapter is not None and hasattr(
+                    secondary_adapter, "best_executable_price",
+                ):
+                    s_fillable, s_exec = await secondary_adapter.best_executable_price(
+                        secondary_market, secondary_side, effective_qty,
+                    )
+                    if s_fillable and s_exec > 0:
+                        secondary_fok_price = s_exec
+                        if s_exec > secondary_price:
+                            actual_yes_price = (
+                                primary_leg.fill_price if primary_side == "yes"
+                                else s_exec
+                            )
+                            actual_no_price = (
+                                primary_leg.fill_price if primary_side == "no"
+                                else s_exec
+                            )
+                            actual_total = actual_yes_price + actual_no_price
+                            actual_gross = 1.0 - actual_total
+                            actual_yes_fee = compute_fee(
+                                opp.yes_platform, actual_yes_price,
+                                effective_qty, opp.yes_fee_rate,
+                            ) / max(effective_qty, 1)
+                            actual_no_fee = compute_fee(
+                                opp.no_platform, actual_no_price,
+                                effective_qty, opp.no_fee_rate,
+                            ) / max(effective_qty, 1)
+                            actual_net = actual_gross - actual_yes_fee - actual_no_fee
+                            logger.info(
+                                "  ↑ Secondary FOK price walked %.4f→%.4f; "
+                                "post-walk net edge %.2f¢",
+                                secondary_price, s_exec, actual_net * 100,
+                            )
+
                 secondary_leg = await self._place_order_for_leg(
                     arb_id, secondary_platform, secondary_market,
-                    opp.canonical_id, secondary_side, secondary_price, effective_qty,
+                    opp.canonical_id, secondary_side, secondary_fok_price, effective_qty,
                 )
 
                 if secondary_leg.status not in {OrderStatus.FILLED, OrderStatus.SUBMITTED, OrderStatus.PARTIAL}:
@@ -1129,6 +1241,25 @@ class ExecutionEngine:
             needs_recovery = True
         elif leg_yes.status == OrderStatus.FILLED and leg_no.status == OrderStatus.FILLED:
             status = "filled"
+        elif (
+            (leg_yes.status == OrderStatus.FILLED
+             and leg_no.status in {OrderStatus.SUBMITTED, OrderStatus.PENDING}
+             and float(leg_no.fill_qty) < float(leg_no.quantity))
+            or
+            (leg_no.status == OrderStatus.FILLED
+             and leg_yes.status in {OrderStatus.SUBMITTED, OrderStatus.PENDING}
+             and float(leg_yes.fill_qty) < float(leg_yes.quantity))
+        ):
+            # Soft-naked: one leg confirmed FILLED while the other is
+            # platform-accepted but unfilled (fill_qty < quantity). 3/10
+            # production trades hit this case and fell through to
+            # ``status="submitted"`` with no recovery, leaving real exposure
+            # on the filled side until manual intervention. Treat as
+            # "recovering" so _recover_one_leg_risk runs (cancels the
+            # resting leg + attempts reverse-order unwind on the filled
+            # leg).
+            status = "recovering"
+            needs_recovery = True
 
         realized_pnl = opp.net_edge * min(max(leg_yes.fill_qty, 0), max(leg_no.fill_qty, 0)) if status in {"filled", "submitted"} else 0.0
         yes_cost = leg_yes.fill_qty * leg_yes.fill_price if leg_yes.fill_qty > 0 else 0.0
@@ -1469,6 +1600,62 @@ class ExecutionEngine:
                             unfilled_qty * leg.price,
                             platform=leg.platform,
                         )
+
+        # Reverse-order unwind on the filled leg (best-effort). Closes the
+        # naked position created when one leg confirmed FILLED while the
+        # hedge never filled (the soft-naked pattern that 3/10 production
+        # trades hit). The cancel loop above already removed the resting
+        # hedge so this SELL faces no race against a late hedge fill.
+        if yes_filled ^ no_filled:
+            filled_leg = leg_yes if yes_filled else leg_no
+            adapter = self.adapters.get(filled_leg.platform)
+            if adapter is not None and hasattr(adapter, "place_unwind_sell"):
+                unwind_target = max(int(filled_leg.fill_qty), 0)
+                if unwind_target > 0:
+                    try:
+                        unwind_order = await adapter.place_unwind_sell(
+                            f"{arb_id}-UNWIND",
+                            filled_leg.market_id,
+                            filled_leg.canonical_id,
+                            filled_leg.side,
+                            unwind_target,
+                        )
+                    except Exception as exc:
+                        logger.error(
+                            "auto_unwind.exception platform=%s side=%s err=%s",
+                            filled_leg.platform, filled_leg.side, exc,
+                        )
+                        notes.append(f"unwind-{filled_leg.side}:exception")
+                    else:
+                        unwound_qty = float(unwind_order.fill_qty or 0)
+                        notes.append(
+                            f"unwind-{filled_leg.side}:{unwind_order.status.value}"
+                            f"({unwound_qty:.0f}/{unwind_target})"
+                        )
+                        if unwound_qty > 0:
+                            self.risk.release_trade(
+                                opp.canonical_id,
+                                unwound_qty * float(filled_leg.fill_price),
+                                platform=filled_leg.platform,
+                            )
+                            try:
+                                await self._record_incident(
+                                    arb_id, opp, "warning",
+                                    f"Auto-unwind closed {unwound_qty:.0f}/"
+                                    f"{unwind_target} contracts on {filled_leg.platform}",
+                                    metadata={
+                                        "event_type": "auto_unwind",
+                                        "platform": filled_leg.platform,
+                                        "side": filled_leg.side,
+                                        "fill_qty": unwound_qty,
+                                        "target_qty": unwind_target,
+                                        "panic_price": float(unwind_order.price),
+                                    },
+                                )
+                            except Exception as exc:
+                                logger.warning(
+                                    "auto_unwind incident emit failed: %s", exc,
+                                )
         return notes
 
     async def _cancel_order(self, order: Order) -> bool:

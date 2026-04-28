@@ -43,6 +43,27 @@ class PlatformAdapter(Protocol):
         """
         ...
 
+    async def best_executable_price(
+        self, market_id: str, side: str, required_qty: int,
+    ) -> tuple[bool, float]:
+        """Return the worst price needed to fully fill ``required_qty`` (FOK-safe).
+
+        Walks the visible asks (for buys), summing depth until cumulative
+        >= required_qty. Returns (fillable, worst_price):
+          fillable: True if visible book contains >= required_qty across all levels
+          worst_price: the highest ask price that the FOK must touch to absorb
+                       required_qty. Returned as a probability in [0, 1].
+
+        Distinct from ``check_depth`` (which returns the BEST price at the top
+        of book). This method is what should be used as the FOK limit price
+        — placing FOK at the top-of-book price when liquidity is fragmented
+        across levels is the root cause of the Kalshi 409
+        ``fill_or_kill_insufficient_resting_volume`` rejections.
+
+        On any error returns (False, 0.0); never raises.
+        """
+        ...
+
     async def place_fok(
         self,
         arb_id: str,

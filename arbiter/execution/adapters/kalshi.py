@@ -292,6 +292,135 @@ class KalshiAdapter:
             resp_headers = dict(response.headers) if response.headers else {}
             return response.status, payload, resp_headers
 
+    # ─── place_unwind_sell ────────────────────────────────────────────────
+
+    async def place_unwind_sell(
+        self,
+        arb_id: str,
+        market_id: str,
+        canonical_id: str,
+        side: str,
+        qty: int,
+        panic_price: float = 0.01,
+    ) -> Order:
+        """Submit a SELL IOC at a panic price to close out a naked position.
+
+        Used by ``ExecutionEngine._recover_one_leg_risk`` when one leg has
+        confirmed FILLED but the hedge leg never filled. We sell whatever
+        the orderbook will absorb at >= ``panic_price`` (default 1¢) and
+        cancel the unfilled remainder. Partial fills are returned to the
+        caller — residual exposure becomes a manual-resolution incident.
+
+        Always returns an Order in a terminal state; never raises across
+        this boundary. ``side`` matches the side originally bought
+        (selling YES that we hold long, or selling NO that we hold long).
+        """
+        now = time.time()
+        if not self.auth or not getattr(self.auth, "is_authenticated", False):
+            return self._failed_order(
+                arb_id, market_id, canonical_id, side, panic_price, qty, now,
+                "Kalshi auth not configured for unwind",
+            )
+        if not self.circuit.can_execute():
+            return self._failed_order(
+                arb_id, market_id, canonical_id, side, panic_price, qty, now,
+                "kalshi circuit open",
+            )
+
+        client_order_id = f"{arb_id}-{side.upper()}-UNWIND-{uuid.uuid4().hex[:8]}"
+        order_body: dict[str, Any] = {
+            "ticker": market_id,
+            "client_order_id": client_order_id,
+            "action": "sell",
+            "side": side,
+            "type": "limit",
+            "count_fp": f"{float(qty):.2f}",
+            "time_in_force": "immediate_or_cancel",
+        }
+        if side == "yes":
+            order_body["yes_price_dollars"] = f"{panic_price:.4f}"
+        else:
+            order_body["no_price_dollars"] = f"{panic_price:.4f}"
+
+        try:
+            response_status, payload, _ = await self._post_order(order_body)
+        except TRANSIENT_EXCEPTIONS as exc:
+            self.circuit.record_failure()
+            return self._failed_order(
+                arb_id, market_id, canonical_id, side, panic_price, qty, now,
+                f"Kalshi unwind transient: {exc}",
+            )
+        except Exception as exc:
+            self.circuit.record_failure()
+            return self._failed_order(
+                arb_id, market_id, canonical_id, side, panic_price, qty, now,
+                f"Kalshi unwind exception: {exc}",
+            )
+
+        if response_status not in (200, 201):
+            self.circuit.record_failure()
+            log.error(
+                "kalshi.unwind.rejected",
+                status=response_status,
+                body=payload[:200],
+                client_order_id=client_order_id,
+            )
+            return self._failed_order(
+                arb_id, market_id, canonical_id, side, panic_price, qty, now,
+                f"Kalshi unwind {response_status}: {payload[:200]}",
+            )
+
+        self.circuit.record_success()
+        try:
+            data = json.loads(payload)
+        except Exception as exc:
+            return self._failed_order(
+                arb_id, market_id, canonical_id, side, panic_price, qty, now,
+                f"Kalshi unwind response parse: {exc}",
+            )
+
+        order_data = data.get("order", data) if isinstance(data, dict) else {}
+        api_status = order_data.get("status", "executed")
+        mapped_status = _FOK_STATUS_MAP.get(api_status, OrderStatus.SUBMITTED)
+        fill_qty = float(
+            order_data.get("fill_count_fp", order_data.get("count_filled", "0")) or "0"
+        )
+        fill_price_raw = order_data.get(
+            "yes_price_dollars",
+            order_data.get(
+                "no_price_dollars",
+                order_data.get("avg_price", str(panic_price)),
+            ),
+        )
+        try:
+            fill_price = float(fill_price_raw) if fill_price_raw is not None else panic_price
+        except (TypeError, ValueError):
+            fill_price = panic_price
+
+        log.info(
+            "kalshi.unwind.placed",
+            arb_id=arb_id,
+            client_order_id=client_order_id,
+            status=api_status,
+            fill_qty=fill_qty,
+            target_qty=qty,
+        )
+
+        return Order(
+            order_id=str(order_data.get("order_id", client_order_id)),
+            platform="kalshi",
+            market_id=market_id,
+            canonical_id=canonical_id,
+            side=side,
+            price=panic_price,
+            quantity=qty,
+            status=mapped_status,
+            fill_price=fill_price,
+            fill_qty=fill_qty,
+            timestamp=now,
+            external_client_order_id=client_order_id,
+        )
+
     # ─── place_resting_limit (Plan 04-02.1 scope expansion) ──────────────
 
     async def place_resting_limit(
@@ -785,6 +914,59 @@ class KalshiAdapter:
         except (IndexError, TypeError, KeyError) as exc:
             log.warning(
                 "kalshi.depth.parse_failed", market_id=market_id, err=str(exc),
+            )
+            return (False, 0.0)
+
+    # ─── best_executable_price ────────────────────────────────────────────
+
+    async def best_executable_price(
+        self, market_id: str, side: str, required_qty: int,
+    ) -> tuple[bool, float]:
+        """Walk the orderbook to find the worst price needed to fill
+        ``required_qty``. Used to set the FOK limit price so Kalshi does NOT
+        reject with ``fill_or_kill_insufficient_resting_volume`` when liquidity
+        is fragmented across multiple price levels.
+        """
+        try:
+            return await self._fetch_executable_price(market_id, side, required_qty)
+        except Exception as exc:
+            log.warning(
+                "kalshi.executable_price.failed", market_id=market_id, err=str(exc),
+            )
+            return (False, 0.0)
+
+    @transient_retry()
+    async def _fetch_executable_price(
+        self, market_id: str, side: str, required_qty: int,
+    ) -> tuple[bool, float]:
+        url = f"{self.config.kalshi.base_url}/markets/{market_id}/orderbook?depth=100"
+        async with self.session.get(url) as response:
+            if response.status != 200:
+                return (False, 0.0)
+            payload = await response.text()
+        data = json.loads(payload)
+        orderbook = data.get("orderbook", {}) or {}
+        levels = orderbook.get(side, []) or []
+        if not levels:
+            return (False, 0.0)
+
+        try:
+            sorted_levels = sorted(levels, key=lambda lvl: lvl[0])
+            cumulative = 0.0
+            for level in sorted_levels:
+                cumulative += float(level[1])
+                level_price_cents = float(level[0])
+                if cumulative >= float(required_qty):
+                    # Found the level that absorbs the full required_qty.
+                    return (True, level_price_cents / 100.0)
+            # Walked the whole book; depth insufficient. Return the deepest
+            # price seen so callers can still log a useful number.
+            deepest_price = float(sorted_levels[-1][0])
+            return (False, deepest_price / 100.0)
+        except (IndexError, TypeError, KeyError) as exc:
+            log.warning(
+                "kalshi.executable_price.parse_failed",
+                market_id=market_id, err=str(exc),
             )
             return (False, 0.0)
 

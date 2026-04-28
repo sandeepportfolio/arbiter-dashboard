@@ -316,6 +316,119 @@ async def test_check_depth_non_200():
     assert best == 0.0
 
 
+# ─── best_executable_price ──────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_best_executable_price_returns_level_price_when_sweeping_book():
+    """3 contracts at 55¢ + 4 at 56¢ + 3 at 57¢ = 10 needed; FOK must price at
+    57¢ to absorb the full 10 contracts. Returning 55¢ (top of book) would
+    cause Kalshi to reject with fill_or_kill_insufficient_resting_volume."""
+    body = json.dumps({"orderbook": {"yes": [[55, 3], [56, 4], [57, 5]]}})
+    session = _session_with_get(200, body)
+    adapter = _make_adapter(session)
+    fillable, price = await adapter.best_executable_price("T", "yes", required_qty=10)
+    assert fillable is True
+    assert abs(price - 0.57) < 1e-9
+
+
+@pytest.mark.asyncio
+async def test_best_executable_price_returns_top_when_top_level_sufficient():
+    body = json.dumps({"orderbook": {"yes": [[55, 50], [56, 10]]}})
+    session = _session_with_get(200, body)
+    adapter = _make_adapter(session)
+    fillable, price = await adapter.best_executable_price("T", "yes", required_qty=10)
+    assert fillable is True
+    assert abs(price - 0.55) < 1e-9
+
+
+@pytest.mark.asyncio
+async def test_best_executable_price_insufficient_returns_false():
+    body = json.dumps({"orderbook": {"yes": [[55, 3], [56, 2]]}})
+    session = _session_with_get(200, body)
+    adapter = _make_adapter(session)
+    fillable, price = await adapter.best_executable_price("T", "yes", required_qty=10)
+    assert fillable is False
+    assert abs(price - 0.56) < 1e-9
+
+
+@pytest.mark.asyncio
+async def test_best_executable_price_empty_book():
+    body = json.dumps({"orderbook": {"yes": []}})
+    session = _session_with_get(200, body)
+    adapter = _make_adapter(session)
+    fillable, price = await adapter.best_executable_price("T", "yes", required_qty=1)
+    assert fillable is False
+    assert price == 0.0
+
+
+@pytest.mark.asyncio
+async def test_best_executable_price_non_200_returns_false():
+    session = _session_with_get(500, "")
+    adapter = _make_adapter(session)
+    fillable, price = await adapter.best_executable_price("T", "yes", required_qty=10)
+    assert fillable is False
+    assert price == 0.0
+
+
+# ─── place_unwind_sell ──────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_place_unwind_sell_posts_sell_ioc_at_panic_price():
+    body = json.dumps({"order": {
+        "order_id": "K-UNWIND-1",
+        "status": "executed",
+        "fill_count_fp": "10.0",
+        "yes_price_dollars": "0.4500",
+    }})
+    session = _session_with_post(200, body)
+    adapter = _make_adapter(session)
+    order = await adapter.place_unwind_sell(
+        "ARB-7-UNWIND", "TICKER", "C", "yes", qty=10,
+    )
+    assert order.status == OrderStatus.FILLED
+    assert order.fill_qty == 10.0
+    # Verify order body shape: action=sell, IOC, panic price 0.01
+    posted_body = session.post.call_args.kwargs["json"]
+    assert posted_body["action"] == "sell"
+    assert posted_body["time_in_force"] == "immediate_or_cancel"
+    assert posted_body["yes_price_dollars"] == "0.0100"
+    assert posted_body["count_fp"] == "10.00"
+
+
+@pytest.mark.asyncio
+async def test_place_unwind_sell_returns_failed_when_no_auth():
+    session = _session_with_post(200, "{}")
+    adapter = _make_adapter(session, authenticated=False)
+    order = await adapter.place_unwind_sell(
+        "ARB-NA", "T", "C", "yes", qty=5,
+    )
+    assert order.status == OrderStatus.FAILED
+    assert "auth not configured" in (order.error or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_place_unwind_sell_returns_failed_when_circuit_open():
+    session = _session_with_post(200, "{}")
+    adapter = _make_adapter(session, can_execute=False)
+    order = await adapter.place_unwind_sell(
+        "ARB-CO", "T", "C", "yes", qty=5,
+    )
+    assert order.status == OrderStatus.FAILED
+    assert "circuit open" in (order.error or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_place_unwind_sell_no_side_passes_no_price():
+    body = json.dumps({"order": {"order_id": "K-U", "status": "executed", "fill_count_fp": "5"}})
+    session = _session_with_post(200, body)
+    adapter = _make_adapter(session)
+    await adapter.place_unwind_sell("ARB-N", "T", "C", "no", qty=5)
+    posted_body = session.post.call_args.kwargs["json"]
+    assert posted_body["side"] == "no"
+    assert posted_body["no_price_dollars"] == "0.0100"
+    assert "yes_price_dollars" not in posted_body
+
+
 # ─── cancel_order ────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio

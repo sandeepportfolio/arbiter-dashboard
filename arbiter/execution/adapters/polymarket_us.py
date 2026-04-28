@@ -267,6 +267,49 @@ class PolymarketUSAdapter:
                 return (True, best_price)
         return (False, best_price)
 
+    # ─── best_executable_price ────────────────────────────────────────────
+
+    async def best_executable_price(
+        self, market_id: str, side: str, required_qty: int
+    ) -> tuple[bool, float]:
+        """Walk the order book to find the worst price needed to fill
+        ``required_qty`` for a buy. Used as the FOK limit price."""
+        try:
+            book = await self._client.get_orderbook(market_id, depth=10)
+        except Exception as exc:
+            logger.warning(
+                "polymarket_us.executable_price.failed",
+                market_id=market_id,
+                err=str(exc),
+            )
+            return (False, 0.0)
+
+        market_data = book.get("marketData", book) if isinstance(book, dict) else {}
+        side_is_yes = str(side).lower() in ("buy", "yes")
+        levels_key = "offers" if side_is_yes else "bids"
+        levels = list(market_data.get(levels_key, []))
+        if not levels:
+            return (False, 0.0)
+
+        cumulative = 0.0
+        worst_price = 0.0
+        sort_reverse = not side_is_yes
+        for lvl in sorted(
+            levels,
+            key=lambda x: _amount_value(x.get("px", x.get("price"))),
+            reverse=sort_reverse,
+        ):
+            raw_price = _amount_value(lvl.get("px", lvl.get("price")))
+            level_price = raw_price if side_is_yes else max(1.0 - raw_price, 0.0)
+            try:
+                cumulative += float(lvl.get("qty", lvl.get("size", 0)))
+            except (TypeError, ValueError):
+                continue
+            worst_price = level_price
+            if cumulative >= float(required_qty):
+                return (True, level_price)
+        return (False, worst_price)
+
     # ─── list_open_orders_by_client_id ────────────────────────────────────
 
     async def list_open_orders_by_client_id(

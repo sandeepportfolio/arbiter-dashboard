@@ -28,6 +28,11 @@ class _StubAdapter:
     async def check_depth(self, market_id: str, side: str, required_qty: int) -> tuple[bool, float]:
         return (True, 0.50)
 
+    async def best_executable_price(
+        self, market_id: str, side: str, required_qty: int,
+    ) -> tuple[bool, float]:
+        return (True, 0.50)
+
     async def place_fok(
         self, arb_id: str, market_id: str, canonical_id: str,
         side: str, price: float, qty: int,
@@ -69,6 +74,9 @@ class _MissingMethodAdapter:
     async def check_depth(self, *args, **kwargs):
         return (False, 0.0)
 
+    async def best_executable_price(self, *args, **kwargs):
+        return (False, 0.0)
+
     async def place_fok(self, *args, **kwargs):
         return None  # type: ignore
 
@@ -88,6 +96,9 @@ class _MissingAttributeAdapter:
     checking is weaker (see test_missing_attribute_stub_fails_protocol)."""
 
     async def check_depth(self, *args, **kwargs):
+        return (False, 0.0)
+
+    async def best_executable_price(self, *args, **kwargs):
         return (False, 0.0)
 
     async def place_fok(self, *args, **kwargs):
@@ -143,6 +154,7 @@ def test_protocol_lists_expected_methods():
     """
     expected = {
         "check_depth",
+        "best_executable_price",
         "place_fok",
         "cancel_order",
         "cancel_all",

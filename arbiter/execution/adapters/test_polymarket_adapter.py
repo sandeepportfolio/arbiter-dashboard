@@ -298,6 +298,147 @@ async def test_check_depth_exception_returns_false():
     assert best == 0.0
 
 
+# --- best_executable_price ------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_best_executable_price_walks_levels():
+    client = MagicMock()
+    client.get_order_book = MagicMock(return_value={
+        "asks": [[0.55, 3], [0.56, 4], [0.57, 5]],
+        "bids": [[0.54, 5]],
+    })
+    client.get_price = MagicMock(return_value=0.55)
+    adapter = _make_adapter(client=client)
+    fillable, price = await adapter.best_executable_price(
+        "TOKEN", "yes", required_qty=10,
+    )
+    assert fillable is True
+    assert abs(price - 0.57) < 1e-6
+
+
+@pytest.mark.asyncio
+async def test_best_executable_price_returns_top_when_top_level_sufficient():
+    client = MagicMock()
+    client.get_order_book = MagicMock(return_value={
+        "asks": [[0.55, 50]],
+        "bids": [[0.54, 5]],
+    })
+    client.get_price = MagicMock(return_value=0.55)
+    adapter = _make_adapter(client=client)
+    fillable, price = await adapter.best_executable_price(
+        "TOKEN", "yes", required_qty=10,
+    )
+    assert fillable is True
+    assert abs(price - 0.55) < 1e-6
+
+
+@pytest.mark.asyncio
+async def test_best_executable_price_insufficient_returns_false():
+    client = MagicMock()
+    client.get_order_book = MagicMock(return_value={
+        "asks": [[0.55, 3], [0.56, 2]],
+        "bids": [[0.54, 5]],
+    })
+    client.get_price = MagicMock(return_value=0.55)
+    adapter = _make_adapter(client=client)
+    fillable, price = await adapter.best_executable_price(
+        "TOKEN", "yes", required_qty=10,
+    )
+    assert fillable is False
+
+
+@pytest.mark.asyncio
+async def test_best_executable_price_empty_book_returns_false():
+    client = MagicMock()
+    client.get_order_book = MagicMock(return_value={"asks": [], "bids": []})
+    client.get_price = MagicMock(return_value=0.55)
+    adapter = _make_adapter(client=client)
+    fillable, price = await adapter.best_executable_price(
+        "TOKEN", "yes", required_qty=1,
+    )
+    assert fillable is False
+    assert price == 0.0
+
+
+# --- place_unwind_sell ----------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_place_unwind_sell_uses_sell_side_and_ioc_at_panic_price():
+    from py_clob_client.clob_types import OrderType
+    client = MagicMock()
+    client.create_order = MagicMock(return_value="SIGNED")
+    client.post_order = MagicMock(return_value={
+        "success": True,
+        "orderID": "P-UNWIND",
+        "status": "matched",
+        "size_matched": 10,
+    })
+    adapter = _make_adapter(client=client)
+    order = await adapter.place_unwind_sell(
+        "ARB-1-UNWIND", "TOKEN", "C", "yes", qty=10,
+    )
+    assert order.status == OrderStatus.FILLED
+    assert order.fill_qty == 10.0
+    # Verify the OrderArgs used: SELL side, panic price 0.01
+    args = client.create_order.call_args.args[0]
+    assert args.side == "SELL"
+    assert abs(args.price - 0.01) < 1e-9
+    assert args.size == 10.0
+    # FAK type (Fill-And-Kill, IOC-equivalent on the CLOB) so partial
+    # fills are accepted instead of the whole order being rejected.
+    post_kwargs = client.post_order.call_args
+    assert OrderType.FAK == post_kwargs.args[1]
+
+
+@pytest.mark.asyncio
+async def test_place_unwind_sell_partial_fill_marked_partial():
+    client = MagicMock()
+    client.create_order = MagicMock(return_value="SIGNED")
+    client.post_order = MagicMock(return_value={
+        "success": True,
+        "orderID": "P-UNWIND-2",
+        "status": "matched",
+        "size_matched": 7,  # only 7 of 10 filled
+    })
+    adapter = _make_adapter(client=client)
+    order = await adapter.place_unwind_sell(
+        "ARB-2-UNWIND", "TOKEN", "C", "yes", qty=10,
+    )
+    assert order.status == OrderStatus.PARTIAL
+    assert order.fill_qty == 7.0
+
+
+@pytest.mark.asyncio
+async def test_place_unwind_sell_failed_response_returns_failed():
+    client = MagicMock()
+    client.create_order = MagicMock(return_value="SIGNED")
+    client.post_order = MagicMock(return_value={
+        "success": False,
+        "errorMsg": "no liquidity",
+    })
+    adapter = _make_adapter(client=client)
+    order = await adapter.place_unwind_sell(
+        "ARB-3", "TOKEN", "C", "yes", qty=10,
+    )
+    assert order.status == OrderStatus.FAILED
+    assert "no liquidity" in (order.error or "")
+
+
+@pytest.mark.asyncio
+async def test_place_unwind_sell_circuit_open_returns_failed_without_call():
+    client = MagicMock()
+    client.create_order = MagicMock()
+    client.post_order = MagicMock()
+    adapter = _make_adapter(client=client, can_execute=False)
+    order = await adapter.place_unwind_sell(
+        "ARB-CO", "TOKEN", "C", "yes", qty=10,
+    )
+    assert order.status == OrderStatus.FAILED
+    assert "circuit open" in (order.error or "").lower()
+    assert not client.create_order.called
+    assert not client.post_order.called
+
+
 # --- cancel_order ----------------------------------------------------------
 
 @pytest.mark.asyncio
