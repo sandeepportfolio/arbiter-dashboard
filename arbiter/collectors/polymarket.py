@@ -174,7 +174,7 @@ class PolymarketCollector:
                     yes_token_id = str(token_ids[0]) if len(token_ids) > 0 else ""
                     no_token_id = str(token_ids[1]) if len(token_ids) > 1 else ""
                     yes_price = _safe_float(prices[0]) if len(prices) > 0 else 0.0
-                    no_price = _safe_float(prices[1]) if len(prices) > 1 else max(1.0 - yes_price, 0.0)
+                    no_price = _safe_float(prices[1]) if len(prices) > 1 else 0.0
                     # Per D-09: Try dynamic fee fetch first, fall back to category-based rates (D-10)
                     fee_rate = self._fetch_dynamic_fee_rate(
                         token_id=yes_token_id,
@@ -228,7 +228,7 @@ class PolymarketCollector:
             no_bid = self._best_price(no_book.get("bids"))
             no_ask = self._best_price(no_book.get("asks"))
             yes_price = yes_ask or yes_bid or token_data.get("yes_price", 0.0)
-            no_price = no_ask or no_bid or token_data.get("no_price", max(1.0 - yes_price, 0.0))
+            no_price = no_ask or no_bid or token_data.get("no_price", 0.0)
 
             mapping = MARKET_MAP.get(canonical_id, {})
             price = PricePoint(
@@ -331,7 +331,7 @@ class PolymarketCollector:
                 platform="polymarket",
                 canonical_id=canonical_id,
                 yes_price=yes_price,
-                no_price=no_price or max(1.0 - yes_price, 0.0),
+                no_price=no_price or 0.0,
                 yes_volume=existing.yes_volume if existing else 0.0,
                 no_volume=existing.no_volume if existing else 0.0,
                 timestamp=time.time(),

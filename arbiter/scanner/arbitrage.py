@@ -5,10 +5,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Deque, Dict, List
+
+import re
 
 from ..config.settings import (
     MARKET_MAP,
@@ -19,6 +22,22 @@ from ..config.settings import (
 from ..utils.price_store import PricePoint, PriceStore
 
 logger = logging.getLogger("arbiter.scanner")
+
+# ── Bracket-vs-binary mismatch filter (defense-in-depth) ─────────────
+# Even if auto-discovery lets a bad mapping through, the scanner must
+# never generate opportunities for structurally incompatible pairs.
+_BRACKET_TICKER_RE = re.compile(r"KX[DR](?:SENATE|HOUSE)SEATS", re.IGNORECASE)
+
+
+def _mapping_is_bracket_mismatch(mapping: dict) -> bool:
+    """Return True if a mapping pairs a Kalshi seat-count bracket market
+    with a Polymarket binary control market."""
+    kalshi = str(mapping.get("kalshi", "") or mapping.get("kalshi_market_id", "") or "")
+    poly = str(mapping.get("polymarket", "") or mapping.get("polymarket_slug", "") or "")
+    if _BRACKET_TICKER_RE.search(kalshi):
+        if any(kw in poly.lower() for kw in ("midterms", "control", "usse", "usho")):
+            return True
+    return False
 
 
 @dataclass
@@ -139,10 +158,13 @@ class ArbitrageScanner:
     survive multiple scans and pass stale-data and liquidity checks.
     """
 
-    def __init__(self, config: ScannerConfig, price_store: PriceStore):
+    def __init__(self, config: ScannerConfig, price_store: PriceStore,
+                 balance_provider=None):
         self.config = config
         self.store = price_store
+        self._balance_provider = balance_provider  # callable returning {platform: balance}
         self._running = False
+        self._paused = False
         self._opportunities: List[ArbitrageOpportunity] = []
         self._subscribers: List[asyncio.Queue] = []
         self._scan_count = 0
@@ -164,7 +186,11 @@ class ArbitrageScanner:
         scan_start = time.time()
 
         for canonical_id, mapping in MARKET_MAP.items():
-            if mapping.get("status") == "disabled":
+            if mapping.get("status") != "confirmed":
+                continue
+
+            # Defense-in-depth: skip structurally incompatible mappings
+            if _mapping_is_bracket_mismatch(mapping):
                 continue
 
             prices = await self.store.get_all_for_market(canonical_id)
@@ -254,10 +280,28 @@ class ArbitrageScanner:
         yes_price_point: PricePoint,
         no_price_point: PricePoint,
     ) -> ArbitrageOpportunity | None:
-        yes_price = yes_price_point.yes_price
-        no_price = no_price_point.no_price
+        # Use executable ASK prices (what you'd actually pay to enter)
+        # Fall back to mid-quote only if ASK is unavailable
+        yes_price = yes_price_point.yes_ask if yes_price_point.yes_ask > 0 else yes_price_point.yes_price
+        no_price = no_price_point.no_ask if no_price_point.no_ask > 0 else no_price_point.no_price
         if yes_price <= 0 or no_price <= 0:
             return None
+
+        # ── Non-binary market guard ───────────────────────────────────
+        # A valid binary market has yes_price + no_price ≈ $1.00 on each
+        # platform independently. If a platform's own yes+no deviates by
+        # more than 15¢ from $1.00, it's likely a multi-outcome market
+        # (e.g., "Who will win?" with many candidates) where buying YES
+        # on one candidate + NO on another candidate is NOT a riskless arb.
+        MAX_BINARY_DEVIATION = 0.15
+        for pp, label in [(yes_price_point, "YES-source"), (no_price_point, "NO-source")]:
+            platform_sum = pp.yes_price + pp.no_price
+            if platform_sum > 0 and abs(platform_sum - 1.0) > MAX_BINARY_DEVIATION:
+                logger.debug(
+                    "Non-binary market skip: %s %s (%s) yes+no=$%.2f deviates from $1.00 by %.0f¢",
+                    canonical_id, label, pp.platform, platform_sum, abs(platform_sum - 1.0) * 100,
+                )
+                return None
 
         gross_edge = 1.0 - yes_price - no_price
         if gross_edge <= 0:
@@ -331,19 +375,50 @@ class ArbitrageScanner:
         )
 
     def _resolve_status(self, opportunity: ArbitrageOpportunity, mapping: dict) -> str:
-        if opportunity.mapping_status != "confirmed":
+        # ══════════════════════════════════════════════════════════════
+        # SAFETY-CRITICAL: Only CONFIRMED mappings with allow_auto_trade
+        # can reach "tradable". Auto-discovered mappings MUST stay in
+        # "review" regardless of edge size, because the auto-discovery
+        # pipeline produces false matches (e.g., pairing a soccer draw
+        # market with an NBA player prop). With real money at stake,
+        # every mapping must be operator-verified before trading.
+        # ══════════════════════════════════════════════════════════════
+        is_confirmed = opportunity.mapping_status == "confirmed"
+        is_auto_tradable = mapping.get("allow_auto_trade", False)
+
+        # Non-confirmed mappings ALWAYS go to review — no exceptions
+        if not is_confirmed:
             return "review"
+        # Confirmed but not auto-tradable → still needs operator approval
+        if not is_auto_tradable:
+            return "review"
+        # Resolution criteria must be "identical" for live trading.
+        # This blocks any mapping (hand-curated or auto-promoted) where
+        # the resolution criteria haven't been verified as matching.
+        res_status = str(mapping.get("resolution_match_status", "pending_operator_review")).lower()
+        if res_status != "identical":
+            return "review"
+        # Stale quotes
         if opportunity.quote_age_seconds > self.config.max_quote_age_seconds:
             return "stale"
+        # Insufficient liquidity
         if opportunity.min_available_liquidity < self.config.min_liquidity:
             return "illiquid"
+        # Must persist across multiple scans
         if opportunity.persistence_count < self.config.persistence_scans:
             return "candidate"
+        # Manual flag
         if opportunity.requires_manual:
             return "manual"
-        if not mapping.get("allow_auto_trade", False):
-            return "review"
+        # Confidence threshold
         if opportunity.confidence < self.config.confidence_threshold:
+            return "candidate"
+        # ── Net edge floor re-check (defense-in-depth) ────────────────
+        # Even after all gates pass, verify the net edge is still above
+        # the minimum threshold. This catches stale-price drift between
+        # the time the opportunity was built and now, and prevents
+        # trading on rounding-error edges.
+        if opportunity.net_edge_cents < self.config.min_edge_cents:
             return "candidate"
         return "tradable"
 
@@ -363,9 +438,28 @@ class ArbitrageScanner:
         no_price: float,
     ) -> int:
         cost_per_pair = max(yes_price + no_price, 0.01)
-        capital_limited = int(self.config.max_position_usd / cost_per_pair)
+
+        # Balance-proportioned sizing: use min of per-platform balance caps
+        # so we never try to spend more than either platform has
+        max_cap = self.config.max_position_usd
+        if self._balance_provider:
+            try:
+                balances = self._balance_provider()
+                yes_bal = balances.get(yes_price_point.platform, max_cap)
+                no_bal = balances.get(no_price_point.platform, max_cap)
+                # Cap per-leg spend to platform balance (leave 10% reserve)
+                RESERVE_FRACTION = 0.10
+                yes_cap = max(yes_bal * (1 - RESERVE_FRACTION), 0) / max(yes_price, 0.01)
+                no_cap = max(no_bal * (1 - RESERVE_FRACTION), 0) / max(no_price, 0.01)
+                balance_limited = int(min(yes_cap, no_cap))
+            except Exception:
+                balance_limited = int(max_cap / cost_per_pair)
+        else:
+            balance_limited = int(max_cap / cost_per_pair)
+
+        config_limited = int(max_cap / cost_per_pair)
         liquidity_limited = int(max(min(yes_price_point.yes_volume, no_price_point.no_volume), 1))
-        size = max(1, min(capital_limited, liquidity_limited))
+        size = max(1, min(config_limited, liquidity_limited, balance_limited))
         return max(size, 0)
 
     def _compute_confidence(
@@ -405,7 +499,22 @@ class ArbitrageScanner:
             "min_liquidity": self.config.min_liquidity,
             "confidence_threshold": self.config.confidence_threshold,
             "published": self._published_count,
+            "paused": self._paused,
         }
+
+    def pause(self) -> None:
+        """Pause scanning. The scanner loop stays alive but skips scan_once()."""
+        self._paused = True
+        logger.info("Scanner PAUSED by operator")
+
+    def resume(self) -> None:
+        """Resume scanning after a pause."""
+        self._paused = False
+        logger.info("Scanner RESUMED by operator")
+
+    @property
+    def is_paused(self) -> bool:
+        return self._paused
 
     async def run(self):
         self._running = True
@@ -419,7 +528,8 @@ class ArbitrageScanner:
 
         while self._running:
             try:
-                await self.scan_once()
+                if not self._paused:
+                    await self.scan_once()
                 await asyncio.sleep(self.config.scan_interval)
             except asyncio.CancelledError:
                 break
