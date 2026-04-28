@@ -244,6 +244,7 @@ class ArbiterAPI:
         app.router.add_get("/api/live-prices/{canonical_id}", self.handle_live_prices_for_market)
         app.router.add_get("/api/stats", self.handle_system)
         app.router.add_get("/api/markets", self.handle_market_mappings)
+        app.router.add_get("/api/mappings", self.handle_market_mappings)
         app.router.add_get("/api/market-mappings", self.handle_market_mappings)
         app.router.add_post("/api/market-mappings/{canonical_id}", self.handle_market_mapping_action)
         app.router.add_get("/api/market-mappings/{canonical_id}/audit", self.handle_market_mapping_audit)
