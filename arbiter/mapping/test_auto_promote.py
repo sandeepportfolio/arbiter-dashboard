@@ -61,8 +61,9 @@ def _make_settings(
     advisory_scans: int = 30,
     min_score: float = 0.85,
     max_days: int = 90,
+    **overrides,
 ) -> dict:
-    return {
+    settings = {
         "AUTO_PROMOTE_ENABLED": auto_promote_enabled,
         "PHASE5_MAX_ORDER_USD": phase5_max_order_usd,
         "AUTO_PROMOTE_DAILY_CAP": daily_cap,
@@ -70,6 +71,8 @@ def _make_settings(
         "AUTO_PROMOTE_MIN_SCORE": min_score,
         "AUTO_PROMOTE_MAX_DAYS": max_days,
     }
+    settings.update(overrides)
+    return settings
 
 
 def _make_orderbooks(
@@ -203,10 +206,10 @@ async def test_llm_no():
 
 
 @pytest.mark.asyncio
-async def test_llm_maybe_is_not_yes():
-    """MAYBE from LLM is also treated as not-YES → reason='llm_no'."""
-    settings = _make_settings()
-    candidate = _make_candidate(score=0.90)
+async def test_llm_maybe_with_low_score_rejected():
+    """MAYBE from LLM with score below AUTO_PROMOTE_MAYBE_MIN_SCORE → reject."""
+    settings = _make_settings(min_score=0.18, AUTO_PROMOTE_MAYBE_MIN_SCORE=0.30)
+    candidate = _make_candidate(score=0.20)
     orderbooks = _make_orderbooks()
     llm = _make_llm_verifier("MAYBE")
 
@@ -221,7 +224,7 @@ async def test_llm_maybe_is_not_yes():
     )
 
     assert not result.promoted
-    assert result.reason == "llm_no"
+    assert result.reason == "llm_maybe_low_score"
 
 
 # ─── Condition 5: Liquidity depth ≥ PHASE5_MAX_ORDER_USD (ARITHMETIC) ────────

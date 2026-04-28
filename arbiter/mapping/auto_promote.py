@@ -6,7 +6,7 @@ Returns the first-failing reason or promoted=True.
 
 Conditions (in order — first failing wins):
 1. AUTO_PROMOTE_ENABLED=true
-2. score >= 0.85
+2. score >= AUTO_PROMOTE_MIN_SCORE  (env var; default 0.85 if unset)
 3. resolution_check(...) == IDENTICAL
 4. LLM verifier returns YES
 5. Both orderbooks have combined (bid + ask) depth >= PHASE5_MAX_ORDER_USD
@@ -14,11 +14,17 @@ Conditions (in order — first failing wins):
 7. today_promoted_count < AUTO_PROMOTE_DAILY_CAP (default 20)
 8. Cooling-off: first AUTO_PROMOTE_ADVISORY_SCANS after first-see are advisory-only
 
+Tunable thresholds (read from env when not present in `settings`):
+  AUTO_PROMOTE_MIN_SCORE          — Gate 2 minimum score (default 0.85)
+  AUTO_PROMOTE_MAYBE_MIN_SCORE    — Gate 4 LLM=MAYBE minimum score (default 0.30)
+  AUTO_PROMOTE_PENDING_SCORE_BUMP — Gate 4 PENDING resolution score bump (default 0.02)
+
 Metrics: increments auto_promote_rejections_total{reason=...} counter when available.
 """
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any, Callable, Optional
@@ -33,6 +39,16 @@ def _setting(settings: dict, *keys: str, default):
         if key in settings:
             return settings[key]
     return default
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
 
 
 # ─── Try to import Prometheus counter (optional — no-op if unavailable) ───────
@@ -150,7 +166,12 @@ async def maybe_promote(
         return _reject("auto_promote_disabled")
 
     # ── Gate 2: score >= configured threshold ──────────────────────────────────
-    min_score = float(_setting(settings, "AUTO_PROMOTE_MIN_SCORE", "auto_promote_min_score", default=0.85))
+    # Settings dict (operator-runtime) wins; falls back to AUTO_PROMOTE_MIN_SCORE
+    # env var (containers using env_file but no settings store), else 0.85.
+    min_score = float(_setting(
+        settings, "AUTO_PROMOTE_MIN_SCORE", "auto_promote_min_score",
+        default=_env_float("AUTO_PROMOTE_MIN_SCORE", 0.85),
+    ))
     score = float(candidate.get("score", 0.0))
     if score < min_score:
         return _reject("score_low")
@@ -172,25 +193,31 @@ async def maybe_promote(
     # When resolution_check returned PENDING (not enough structured data),
     # the LLM is the primary validator. When IDENTICAL, the LLM is a
     # second opinion that must also agree.
-    # MAYBE is accepted when score >= 0.30 (decent textual overlap suggests
-    # the markets are related even if the LLM can't be certain from question
-    # text alone — e.g. different phrasing of the same underlying event).
+    # MAYBE is accepted when score >= AUTO_PROMOTE_MAYBE_MIN_SCORE (decent
+    # textual overlap suggests the markets are related even if the LLM
+    # can't be certain from question text alone — e.g. different phrasing
+    # of the same underlying event).
     kalshi_q = candidate.get("kalshi_title", "")
     poly_q = candidate.get("poly_question", "")
     llm_result = await llm_verifier(kalshi_q, poly_q)
     if llm_result == "NO":
         return _reject("llm_no")
-    if llm_result == "MAYBE" and score < 0.30:
+    maybe_min_score = float(_setting(
+        settings, "AUTO_PROMOTE_MAYBE_MIN_SCORE", "auto_promote_maybe_min_score",
+        default=_env_float("AUTO_PROMOTE_MAYBE_MIN_SCORE", 0.30),
+    ))
+    if llm_result == "MAYBE" and score < maybe_min_score:
         return _reject("llm_maybe_low_score")
 
-    # If resolution was only PENDING (not IDENTICAL), require a modestly
-    # higher text-similarity score as additional safety.  The LLM already
-    # returned YES, so this is a secondary sanity check — not the primary
     # When resolution data is PENDING (not enough structured data to confirm),
     # the LLM is the primary validator.  We only need a modest score bump
     # above the base threshold as a sanity check — the LLM already said YES.
     if not resolution_is_identical:
-        high_score_threshold = min_score + 0.02
+        pending_bump = float(_setting(
+            settings, "AUTO_PROMOTE_PENDING_SCORE_BUMP", "auto_promote_pending_score_bump",
+            default=_env_float("AUTO_PROMOTE_PENDING_SCORE_BUMP", 0.02),
+        ))
+        high_score_threshold = min_score + pending_bump
         if score < high_score_threshold:
             return _reject("score_low_for_pending_resolution")
 
@@ -211,8 +238,11 @@ async def maybe_promote(
         )
         return _reject("liquidity_low")
 
-    # ── Gate 6: resolution_date within 90 days ────────────────────────────────
-    max_days = int(_setting(settings, "AUTO_PROMOTE_MAX_DAYS", "auto_promote_max_days", default=90))
+    # ── Gate 6: resolution_date within AUTO_PROMOTE_MAX_DAYS ──────────────────
+    max_days = int(_setting(
+        settings, "AUTO_PROMOTE_MAX_DAYS", "auto_promote_max_days",
+        default=int(_env_float("AUTO_PROMOTE_MAX_DAYS", 90.0)),
+    ))
     resolution_date_str = candidate.get("resolution_date") or candidate.get("kalshi_resolution_date") or candidate.get("polymarket_resolution_date")
     if resolution_date_str:
         try:
@@ -226,13 +256,19 @@ async def maybe_promote(
     # If no resolution date provided, skip this gate (insufficient data)
 
     # ── Gate 7: daily cap ─────────────────────────────────────────────────────
-    daily_cap = int(_setting(settings, "AUTO_PROMOTE_DAILY_CAP", "auto_promote_daily_cap", default=20))
+    daily_cap = int(_setting(
+        settings, "AUTO_PROMOTE_DAILY_CAP", "auto_promote_daily_cap",
+        default=int(_env_float("AUTO_PROMOTE_DAILY_CAP", 20.0)),
+    ))
     if today_promoted_count >= daily_cap:
         return _reject("daily_cap")
 
     # ── Gate 8: cooling-off ───────────────────────────────────────────────────
     ticker = candidate.get("kalshi_ticker", "")
-    advisory_scans = int(_setting(settings, "AUTO_PROMOTE_ADVISORY_SCANS", "auto_promote_advisory_scans", default=30))
+    advisory_scans = int(_setting(
+        settings, "AUTO_PROMOTE_ADVISORY_SCANS", "auto_promote_advisory_scans",
+        default=int(_env_float("AUTO_PROMOTE_ADVISORY_SCANS", 30.0)),
+    ))
     if ticker and ticker in cooling_state:
         scans_so_far = int(cooling_state[ticker])
         if scans_so_far < advisory_scans:

@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import os
 import re
 import time
 from collections import defaultdict
@@ -20,6 +21,16 @@ from typing import Any
 from arbiter.config.settings import normalize_market_text, similarity_score
 
 logger = logging.getLogger("arbiter.mapping.auto_discovery")
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
 
 _COMMON_TOKENS = {
     "a", "an", "and", "are", "be", "for", "if", "in", "is", "of", "on", "or",
@@ -460,12 +471,18 @@ async def _apply_auto_promote(
     concurrency = max(1, min(24, int(8 if concurrency_raw is None else concurrency_raw)))
     semaphore = asyncio.Semaphore(concurrency)
 
-    min_score_raw = promotion_settings.get("auto_promote_min_score", 0.85)
-    min_score = float(0.85 if min_score_raw is None else min_score_raw)
-    max_days_raw = promotion_settings.get("auto_promote_max_days", 90)
-    max_days = int(90 if max_days_raw is None else max_days_raw)
-    advisory_scans_raw = promotion_settings.get("auto_promote_advisory_scans", 30)
-    advisory_scans = int(30 if advisory_scans_raw is None else advisory_scans_raw)
+    # Settings dict (operator-runtime) wins; falls back to env var
+    # AUTO_PROMOTE_MIN_SCORE (containers using env_file but no settings
+    # store), else 0.85.  Same fallback pattern for max_days and advisory.
+    min_score_default = _env_float("AUTO_PROMOTE_MIN_SCORE", 0.85)
+    min_score_raw = promotion_settings.get("auto_promote_min_score", min_score_default)
+    min_score = float(min_score_default if min_score_raw is None else min_score_raw)
+    max_days_default = int(_env_float("AUTO_PROMOTE_MAX_DAYS", 90.0))
+    max_days_raw = promotion_settings.get("auto_promote_max_days", max_days_default)
+    max_days = int(max_days_default if max_days_raw is None else max_days_raw)
+    advisory_scans_default = int(_env_float("AUTO_PROMOTE_ADVISORY_SCANS", 30.0))
+    advisory_scans_raw = promotion_settings.get("auto_promote_advisory_scans", advisory_scans_default)
+    advisory_scans = int(advisory_scans_default if advisory_scans_raw is None else advisory_scans_raw)
     today = date.today()
 
     async def _evaluate(candidate: dict[str, Any]) -> tuple[dict[str, Any], Any]:

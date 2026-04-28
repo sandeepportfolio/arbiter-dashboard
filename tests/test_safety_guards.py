@@ -284,12 +284,15 @@ class TestAutoPromoteGate4:
         assert not result.promoted
         assert result.reason == "llm_no"
 
-    def test_llm_maybe_rejects(self):
-        """MAYBE is a fail-safe — treated as rejection."""
+    def test_llm_maybe_with_low_score_rejects(self):
+        """MAYBE is fail-safe ONLY when score < AUTO_PROMOTE_MAYBE_MIN_SCORE."""
         result = asyncio.get_event_loop().run_until_complete(
             maybe_promote(
-                _make_candidate(),
-                settings=_make_settings(),
+                _make_candidate(score=0.20),
+                settings=_make_settings(
+                    AUTO_PROMOTE_MIN_SCORE=0.18,
+                    AUTO_PROMOTE_MAYBE_MIN_SCORE=0.30,
+                ),
                 orderbooks=_make_orderbooks(),
                 llm_verifier=_maybe_verifier,
                 today_promoted_count=0,
@@ -298,7 +301,7 @@ class TestAutoPromoteGate4:
             )
         )
         assert not result.promoted
-        assert result.reason == "llm_no"
+        assert result.reason == "llm_maybe_low_score"
 
 
 class TestAutoPromoteGate5:
@@ -309,7 +312,7 @@ class TestAutoPromoteGate5:
             maybe_promote(
                 _make_candidate(),
                 settings=_make_settings(PHASE5_MAX_ORDER_USD=50.0),
-                orderbooks=_make_orderbooks(kalshi_depth=50.0, poly_depth=200.0),
+                orderbooks=_make_orderbooks(kalshi_depth=20.0, poly_depth=200.0),
                 llm_verifier=_yes_verifier,
                 today_promoted_count=0,
                 cooling_state={},
