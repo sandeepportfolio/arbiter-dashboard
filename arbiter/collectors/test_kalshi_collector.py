@@ -49,6 +49,121 @@ def test_kalshi_build_price_point_reads_live_dollar_fields():
     asyncio.run(runner())
 
 
+def test_kalshi_yes_ask_does_not_fall_back_to_last_price():
+    """yes_ask must come ONLY from real ask fields, never from last_price/last_price_dollars."""
+    async def runner():
+        original = MARKET_MAP.get("TEST_KALSHI_LAST")
+        MARKET_MAP["TEST_KALSHI_LAST"] = {
+            "description": "Test",
+            "status": "confirmed",
+            "kalshi": "TEST",
+            "mapping_score": 0.9,
+        }
+        try:
+            collector = KalshiCollector(KalshiConfig(), PriceStore(ttl=120))
+            # Only last_price is populated — no real ask side.
+            price = collector._build_price_point(
+                "TEST_KALSHI_LAST",
+                "TEST",
+                {
+                    "ticker": "TEST-MKT",
+                    "title": "Stale market",
+                    "yes_bid_dollars": "0.4000",
+                    "no_bid_dollars": "0.5500",
+                    "last_price_dollars": "0.7500",
+                    "response_price_units": "usd_cent",
+                },
+            )
+
+            # yes_ask must NOT pick up last_price (0.75). It should be 0
+            # because no real yes_ask field is present.
+            assert price is not None
+            assert price.yes_ask == 0.0, f"yes_ask leaked from last_price: {price.yes_ask}"
+            # no_ask must be 0 too (no_ask field absent), not synthesized.
+            assert price.no_ask == 0.0, f"no_ask leaked: {price.no_ask}"
+        finally:
+            if original is None:
+                MARKET_MAP.pop("TEST_KALSHI_LAST", None)
+            else:
+                MARKET_MAP["TEST_KALSHI_LAST"] = original
+
+    asyncio.run(runner())
+
+
+def test_kalshi_no_price_does_not_synthesize_from_yes_price():
+    """When no real no orderbook side, no_price must be 0.0 — not 1.0 - yes_price."""
+    async def runner():
+        original = MARKET_MAP.get("TEST_KALSHI_SYNTH")
+        MARKET_MAP["TEST_KALSHI_SYNTH"] = {
+            "description": "Test",
+            "status": "confirmed",
+            "kalshi": "TEST",
+            "mapping_score": 0.9,
+        }
+        try:
+            collector = KalshiCollector(KalshiConfig(), PriceStore(ttl=120))
+            price = collector._build_price_point(
+                "TEST_KALSHI_SYNTH",
+                "TEST",
+                {
+                    "ticker": "TEST-MKT",
+                    "title": "One-sided market",
+                    "yes_ask_dollars": "0.6000",
+                    "yes_bid_dollars": "0.5500",
+                    # no side absent — must NOT synthesize 1 - yes_price = 0.40
+                    "response_price_units": "usd_cent",
+                },
+            )
+
+            assert price is not None
+            assert price.yes_price == 0.60
+            assert price.no_price == 0.0, f"no_price was synthesized: {price.no_price}"
+            assert price.no_ask == 0.0
+            assert price.no_bid == 0.0
+        finally:
+            if original is None:
+                MARKET_MAP.pop("TEST_KALSHI_SYNTH", None)
+            else:
+                MARKET_MAP["TEST_KALSHI_SYNTH"] = original
+
+    asyncio.run(runner())
+
+
+def test_kalshi_yes_price_does_not_use_last_price():
+    """yes_price must be ask-or-bid only — last_price must NEVER reach it."""
+    async def runner():
+        original = MARKET_MAP.get("TEST_KALSHI_YPRICE")
+        MARKET_MAP["TEST_KALSHI_YPRICE"] = {
+            "description": "Test",
+            "status": "confirmed",
+            "kalshi": "TEST",
+            "mapping_score": 0.9,
+        }
+        try:
+            collector = KalshiCollector(KalshiConfig(), PriceStore(ttl=120))
+            # last_price is 0.99 (stale, post-resolution print). No live quote.
+            price = collector._build_price_point(
+                "TEST_KALSHI_YPRICE",
+                "TEST",
+                {
+                    "ticker": "TEST-MKT",
+                    "title": "Stale-only market",
+                    "last_price_dollars": "0.9900",
+                    "response_price_units": "usd_cent",
+                },
+            )
+
+            # With no real orderbook, _build_price_point returns None.
+            assert price is None
+        finally:
+            if original is None:
+                MARKET_MAP.pop("TEST_KALSHI_YPRICE", None)
+            else:
+                MARKET_MAP["TEST_KALSHI_YPRICE"] = original
+
+    asyncio.run(runner())
+
+
 def test_kalshi_skips_ambiguous_submarkets_without_confident_match():
     collector = KalshiCollector(KalshiConfig(), PriceStore(ttl=120))
     market = collector._select_market_for_canonical(

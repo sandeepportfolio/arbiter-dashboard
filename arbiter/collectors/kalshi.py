@@ -454,11 +454,11 @@ class KalshiCollector:
 
     def _build_price_point(self, canonical_id: str, event_ticker: str, market: dict) -> Optional[PricePoint]:
         yes_bid = self._normalize_price(self._market_float(market, "yes_bid", "bid", "yes_bid_dollars"))
-        yes_ask = self._normalize_price(self._market_float(market, "yes_ask", "ask", "yes_ask_dollars", "last_price", "last_price_dollars"))
+        yes_ask = self._normalize_price(self._market_float(market, "yes_ask", "ask", "yes_ask_dollars"))
         no_bid = self._normalize_price(self._market_float(market, "no_bid", "no_bid_dollars"))
         no_ask = self._normalize_price(self._market_float(market, "no_ask", "no_ask_dollars"))
-        yes_price = self._normalize_price(self._market_float(market, "last_price", "last_price_dollars")) or yes_ask or yes_bid
-        no_price = no_ask or no_bid or (1.0 - yes_price if yes_price else 0.0)
+        yes_price = yes_ask or yes_bid
+        no_price = no_ask or no_bid or 0.0
 
         if yes_price == 0.0 and no_price == 0.0:
             return None
@@ -478,9 +478,9 @@ class KalshiCollector:
             yes_market_id=market.get("ticker", event_ticker),
             no_market_id=market.get("ticker", event_ticker),
             yes_bid=float(yes_bid or 0),
-            yes_ask=float(yes_ask or yes_price or 0),
+            yes_ask=float(yes_ask or 0),
             no_bid=float(no_bid or 0),
-            no_ask=float(no_ask or no_price or 0),
+            no_ask=float(no_ask or 0),
             fee_rate=KALSHI_TAKER_FEE_RATE,
             mapping_status=str(mapping.get("status", "candidate")),
             mapping_score=float(mapping.get("mapping_score", 0.0)),

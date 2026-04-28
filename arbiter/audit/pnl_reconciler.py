@@ -102,6 +102,13 @@ class PnLReconciler:
     # Minimum balance change to classify as deposit/withdrawal vs noise
     DEPOSIT_DETECTION_THRESHOLD = 1.00  # $1.00
 
+    # Window during which a deposit event with the same platform +
+    # balance_before + balance_after is treated as a duplicate of an earlier
+    # event and silently skipped. Guards against the auto-detector and a
+    # manual API record colliding, or a re-poll racing within one cycle.
+    DEPOSIT_DEDUP_WINDOW_SEC = 600.0  # 10 minutes
+    DEPOSIT_DEDUP_TOLERANCE = 0.01  # cent-level float tolerance
+
     def __init__(self, discrepancy_threshold: float = 0.50,
                  check_interval: float = 300.0,
                  log_to_disk: bool = True,
@@ -269,15 +276,52 @@ class PnLReconciler:
             self._recorded_pnl[yes_platform] = self._recorded_pnl.get(yes_platform, 0.0) + split_pnl
             self._recorded_pnl[no_platform] = self._recorded_pnl.get(no_platform, 0.0) + split_pnl
 
+    def _is_duplicate_deposit(self, platform: str, balance_before: float,
+                              balance_after: float, now: float) -> bool:
+        """Return True if a recent event matches platform + before + after.
+
+        Walks the tail of the event list (most recent first) and stops as
+        soon as we drop outside the dedup window — events are appended in
+        chronological order, so anything earlier is also outside the window.
+        """
+        cutoff = now - self.DEPOSIT_DEDUP_WINDOW_SEC
+        tol = self.DEPOSIT_DEDUP_TOLERANCE
+        for prior in reversed(self._deposit_events):
+            if prior.timestamp < cutoff:
+                return False
+            if (
+                prior.platform == platform
+                and abs(prior.balance_before - balance_before) <= tol
+                and abs(prior.balance_after - balance_after) <= tol
+            ):
+                return True
+        return False
+
     def record_deposit(self, platform: str, amount: float,
                        balance_before: float, balance_after: float):
-        """Record a detected deposit/withdrawal and adjust the starting balance."""
+        """Record a detected deposit/withdrawal and adjust the starting balance.
+
+        Skips the record if a deposit event with the same platform +
+        balance_before + balance_after exists within
+        ``DEPOSIT_DEDUP_WINDOW_SEC``. This prevents double-counting when the
+        auto-detector and a manual API record collide, or when a re-poll
+        races within one reconciliation cycle.
+        """
+        now = time.time()
+        if self._is_duplicate_deposit(platform, balance_before, balance_after, now):
+            logger.warning(
+                "Duplicate deposit suppressed on %s: $%.2f (balance $%.2f → $%.2f) "
+                "matches a recent event within %.0fs window",
+                platform, amount, balance_before, balance_after,
+                self.DEPOSIT_DEDUP_WINDOW_SEC,
+            )
+            return
         event = DepositEvent(
             platform=platform,
             amount=amount,
             balance_before=balance_before,
             balance_after=balance_after,
-            timestamp=time.time(),
+            timestamp=now,
         )
         self._deposit_events.append(event)
         self._total_deposits[platform] = self._total_deposits.get(platform, 0.0) + amount
