@@ -771,6 +771,11 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
         supervisor=safety,
         mapping_store=mapping_store or make_settings_mapping_adapter(MARKET_MAP),
         config_env=os.environ,
+        # Pre-flight deps: fresh quotes from price_store and orderbook depth
+        # checks via the engine's adapters. Auto-disabled when adapters dict
+        # is empty (dry-run / api-only).
+        price_store=price_store,
+        adapters_provider=lambda: dict(getattr(engine, "adapters", {}) or {}),
     )
     # Expose to the api server so /api/metrics can surface auto_executor stats
     # and so persisted operator settings can hydrate the runtime knobs.

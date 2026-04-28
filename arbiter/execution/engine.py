@@ -380,6 +380,12 @@ class ExecutionEngine:
         self._aborted_count = 0
         self._manual_count = 0
         self._recovery_count = 0
+        # Post-trade naked-leg tracking (every event where one leg
+        # confirms FILLED while the other is non-FILLED at the moment we
+        # finalize the execution record — i.e. either terminally failed
+        # OR still SUBMITTED/resting). Surfaced via .stats.
+        self._naked_leg_count = 0
+        self._naked_leg_exposure_usd = 0.0
         import os as _os_init
         _p5 = float(_os_init.getenv("PHASE5_MAX_ORDER_USD", "0") or "0")
         _mp = float(_os_init.getenv("MAX_POSITION_USD", "0") or "0")
@@ -978,14 +984,77 @@ class ExecutionEngine:
                 if secondary_leg.status not in {OrderStatus.FILLED, OrderStatus.SUBMITTED, OrderStatus.PARTIAL}:
                     # Secondary failed — we have a naked position. Log critical
                     # incident for manual resolution. Do NOT auto-unwind.
+                    # Recovery path (_recover_one_leg_risk) creates the
+                    # structured incident; here we just log + count.
+                    exposure_usd = float(primary_leg.fill_qty) * float(primary_leg.fill_price)
+                    self._naked_leg_count += 1
+                    self._naked_leg_exposure_usd += exposure_usd
                     logger.error(
                         "NAKED POSITION: secondary %s FAILED (status=%s) after primary %s filled on %s. "
-                        "Exposure: %d contracts @ %.4f = $%.2f. Manual resolution required.",
+                        "Exposure: %d contracts @ %.4f = $%.2f. Manual resolution required. "
+                        "Cumulative naked legs: %d events / $%.2f exposure.",
                         secondary_side.upper(), secondary_leg.status.value,
                         primary_side.upper(), primary_platform,
                         primary_leg.fill_qty, primary_leg.fill_price,
-                        primary_leg.fill_qty * primary_leg.fill_price,
+                        exposure_usd,
+                        self._naked_leg_count, self._naked_leg_exposure_usd,
                     )
+                elif secondary_leg.status != OrderStatus.FILLED:
+                    # Soft-naked: secondary accepted (SUBMITTED/PARTIAL) but
+                    # not FILLED. Primary is fully on the books while the
+                    # hedge is resting / partially filled — real exposure
+                    # until the secondary clears. Three of the first ten
+                    # production trades hit this case and were not flagged
+                    # by the FAILED-only check above. _recover_one_leg_risk
+                    # is NOT triggered here (status will be "submitted",
+                    # not "recovering"), so emit the critical incident
+                    # directly so operators are paged.
+                    primary_filled_usd = float(primary_leg.fill_qty) * float(primary_leg.fill_price)
+                    secondary_unfilled_qty = max(
+                        float(secondary_leg.quantity) - float(secondary_leg.fill_qty), 0.0,
+                    )
+                    self._naked_leg_count += 1
+                    self._naked_leg_exposure_usd += primary_filled_usd
+                    logger.error(
+                        "SOFT NAKED POSITION: primary %s FILLED on %s (%d @ $%.4f = $%.2f) "
+                        "but secondary %s on %s only %s (filled %d/%d). "
+                        "Exposed until secondary clears. "
+                        "Cumulative naked legs: %d events / $%.2f exposure.",
+                        primary_side.upper(), primary_platform,
+                        primary_leg.fill_qty, primary_leg.fill_price, primary_filled_usd,
+                        secondary_side.upper(), secondary_platform,
+                        secondary_leg.status.value,
+                        secondary_leg.fill_qty, secondary_leg.quantity,
+                        self._naked_leg_count, self._naked_leg_exposure_usd,
+                    )
+                    try:
+                        await self._record_incident(
+                            arb_id,
+                            opp,
+                            "critical",
+                            "Soft naked position: secondary leg accepted but not filled",
+                            metadata={
+                                "event_type": "soft_naked_leg",
+                                "primary_platform": primary_platform,
+                                "primary_side": primary_side,
+                                "primary_filled_qty": primary_leg.fill_qty,
+                                "primary_filled_price": primary_leg.fill_price,
+                                "primary_exposure_usd": primary_filled_usd,
+                                "secondary_platform": secondary_platform,
+                                "secondary_side": secondary_side,
+                                "secondary_status": secondary_leg.status.value,
+                                "secondary_filled_qty": secondary_leg.fill_qty,
+                                "secondary_unfilled_qty": secondary_unfilled_qty,
+                                "cumulative_naked_count": self._naked_leg_count,
+                                "cumulative_naked_exposure_usd": round(
+                                    self._naked_leg_exposure_usd, 2,
+                                ),
+                            },
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "soft_naked_leg incident emit failed: %s", exc,
+                        )
 
             # Assign to leg_yes / leg_no based on which side was primary
             if primary_side == "yes":
@@ -1620,6 +1689,8 @@ class ExecutionEngine:
             "total_pnl": round(total_pnl, 2),
             "dry_run": self.scanner_config.dry_run,
             "audit": self._auditor.stats,
+            "naked_leg_count": self._naked_leg_count,
+            "naked_leg_exposure_usd": round(self._naked_leg_exposure_usd, 2),
         }
 
     async def run(self, arb_queue: asyncio.Queue):
