@@ -198,6 +198,7 @@ class ArbiterAPI:
         self._site_index = Path(__file__).resolve().parent.parent / "index.html"
         self._dashboard_dir = Path(__file__).resolve().parent / "web"
         self.auto_executor = None
+        self.retry_scheduler = None
         self._broadcast_task: Optional[asyncio.Task] = None
         self._operator_settings_store = OperatorSettingsStore()
         self._market_discovery_settings = load_market_discovery_settings(self._operator_settings_store)
@@ -217,6 +218,10 @@ class ArbiterAPI:
         self.auto_executor = auto_executor
         self._restore_operator_settings()
 
+    def attach_retry_scheduler(self, retry_scheduler) -> None:
+        """Wire the RetryScheduler so /api/failed-trades can surface its records."""
+        self.retry_scheduler = retry_scheduler
+
     async def serve(self):
         app = web.Application(middlewares=[self._cors_middleware])
         app.router.add_get("/", self.handle_site_index)
@@ -234,6 +239,9 @@ class ArbiterAPI:
         app.router.add_get("/api/balances", self.handle_balances)
         app.router.add_get("/api/trades", self.handle_trades)
         app.router.add_get("/api/executions", self.handle_trades)
+        app.router.add_get("/api/failed-trades", self.handle_failed_trades)
+        app.router.add_post("/api/failed-trades/{arb_id}/retry", self.handle_failed_trade_retry)
+        app.router.add_get("/api/live-prices/{canonical_id}", self.handle_live_prices_for_market)
         app.router.add_get("/api/stats", self.handle_system)
         app.router.add_get("/api/markets", self.handle_market_mappings)
         app.router.add_get("/api/market-mappings", self.handle_market_mappings)
@@ -439,6 +447,253 @@ class ArbiterAPI:
 
     async def handle_trades(self, request):
         return web.json_response([execution.to_dict() for execution in self.engine.execution_history[-100:]])
+
+    async def handle_failed_trades(self, request):
+        """Return failed executions enriched with retry-scheduler context.
+
+        Each row carries the classified failure reason, which leg failed,
+        original edge at attempt time, and any retry attempts made by the
+        background RetryScheduler.
+        """
+        from .execution.retry_scheduler import classify_failure
+
+        records_by_arb: Dict[str, dict] = {}
+        if self.retry_scheduler is not None:
+            for record in self.retry_scheduler.failed_trades:
+                records_by_arb[record.arb_id] = record.to_dict()
+
+        out = []
+        for execution in self.engine.execution_history[-200:]:
+            if execution.status != "failed":
+                continue
+            payload = execution.to_dict()
+            details = payload.get("failure_details") or records_by_arb.get(execution.arb_id)
+            if details is None:
+                # Fall back to live classification when the scheduler hasn't
+                # processed this execution yet (e.g. retry scheduler disabled
+                # or arb just failed).
+                try:
+                    side, platform, reason = classify_failure(execution)
+                except Exception:
+                    side, platform, reason = "", "", "Platform error"
+                opp = execution.opportunity
+                primary = execution.leg_yes if side == "yes" else execution.leg_no
+                details = {
+                    "arb_id": execution.arb_id,
+                    "canonical_id": opp.canonical_id,
+                    "description": opp.description,
+                    "yes_platform": opp.yes_platform,
+                    "no_platform": opp.no_platform,
+                    "failed_leg_side": side,
+                    "failed_leg_platform": platform,
+                    "failure_reason": reason,
+                    "failure_raw": getattr(primary, "error", "") or "",
+                    "original_yes_price": round(opp.yes_price, 4),
+                    "original_no_price": round(opp.no_price, 4),
+                    "original_net_edge_cents": round(opp.net_edge_cents, 2),
+                    "retry_attempts": 0,
+                    "retry_arb_ids": [],
+                    "retry_edges_cents": [],
+                    "final_disposition": "pending",
+                    "final_reason": "",
+                    "retried_arb_id": None,
+                    "timestamp": execution.timestamp,
+                }
+            payload["failure_details"] = details
+            out.append(payload)
+        # Newest first.
+        out.sort(key=lambda x: x.get("timestamp") or 0, reverse=True)
+        return web.json_response(out)
+
+    async def handle_failed_trade_retry(self, request):
+        """Operator-triggered retry of a previously failed arb.
+
+        Re-fetches fresh quotes for the canonical market via PriceStore,
+        rebuilds an opportunity with current edge, and routes it through
+        ``engine.execute_opportunity`` (which performs its own pre-trade
+        re-quote, risk gating, and audit). Returns the new arb_id and edge
+        if it executes, or a structured reason if the retry is skipped.
+        """
+        await require_auth(request)
+        arb_id = request.match_info["arb_id"]
+
+        target = next(
+            (e for e in self.engine.execution_history if e.arb_id == arb_id),
+            None,
+        )
+        if target is None:
+            return web.json_response({"error": f"Unknown arb_id: {arb_id}"}, status=404)
+        if target.status not in ("failed", "aborted"):
+            return web.json_response(
+                {
+                    "error": (
+                        f"Cannot retry arb {arb_id}: status is "
+                        f"'{target.status}' (only failed/aborted retriable)"
+                    )
+                },
+                status=400,
+            )
+
+        if self.safety is not None and getattr(self.safety, "is_armed", False):
+            return web.json_response(
+                {"error": "Kill switch is armed — retries are disabled"},
+                status=409,
+            )
+
+        opp = target.opportunity
+        # Build a fresh opportunity from current quotes — mirrors the
+        # RetryScheduler._requote math so manual retries and scheduler retries
+        # use identical edge accounting.
+        from dataclasses import replace
+        from .scanner.arbitrage import compute_fee
+
+        try:
+            current_yes = await self.store.get(opp.yes_platform, opp.canonical_id)
+            current_no = await self.store.get(opp.no_platform, opp.canonical_id)
+        except Exception as exc:
+            return web.json_response(
+                {"error": f"price store error: {exc}"}, status=503,
+            )
+
+        if not current_yes or not current_no:
+            return web.json_response(
+                {
+                    "error": "no fresh quotes available — re-fetch prices first",
+                    "yes_quote": current_yes.to_dict() if current_yes else None,
+                    "no_quote": current_no.to_dict() if current_no else None,
+                },
+                status=409,
+            )
+
+        yes_price = float(current_yes.yes_price)
+        no_price = float(current_no.no_price)
+        gross_edge = 1.0 - yes_price - no_price
+        qty = max(int(opp.suggested_qty or 1), 1)
+        total_fees = (
+            compute_fee(opp.yes_platform, yes_price, qty, getattr(current_yes, "fee_rate", 0.0))
+            + compute_fee(opp.no_platform, no_price, qty, getattr(current_no, "fee_rate", 0.0))
+        ) / qty
+        net_edge = gross_edge - total_fees
+        net_edge_cents = round(net_edge * 100.0, 2)
+
+        requoted = replace(
+            opp,
+            yes_price=yes_price,
+            no_price=no_price,
+            yes_market_id=getattr(current_yes, "yes_market_id", "") or opp.yes_market_id,
+            no_market_id=getattr(current_no, "no_market_id", "") or opp.no_market_id,
+            gross_edge=gross_edge,
+            total_fees=total_fees,
+            net_edge=net_edge,
+            net_edge_cents=net_edge_cents,
+            quote_age_seconds=max(
+                getattr(current_yes, "age_seconds", 0.0),
+                getattr(current_no, "age_seconds", 0.0),
+            ),
+            timestamp=time.time(),
+            yes_fee_rate=getattr(current_yes, "fee_rate", 0.0),
+            no_fee_rate=getattr(current_no, "fee_rate", 0.0),
+            status="tradable",
+        )
+
+        try:
+            result = await self.engine.execute_opportunity(requoted)
+        except Exception as exc:
+            logger.exception("Manual retry of %s raised", arb_id)
+            return web.json_response(
+                {"error": f"Execution raised: {exc}"}, status=500,
+            )
+
+        if result is None:
+            return web.json_response(
+                {
+                    "status": "skipped",
+                    "reason": (
+                        "Engine rejected retry (risk gate, dedup window, or "
+                        "edge collapsed below threshold)"
+                    ),
+                    "current_yes_price": round(yes_price, 4),
+                    "current_no_price": round(no_price, 4),
+                    "current_net_edge_cents": net_edge_cents,
+                },
+                status=200,
+            )
+
+        return web.json_response(
+            {
+                "status": "executed",
+                "original_arb_id": arb_id,
+                "new_arb_id": result.arb_id,
+                "execution_status": result.status,
+                "current_yes_price": round(yes_price, 4),
+                "current_no_price": round(no_price, 4),
+                "current_net_edge_cents": net_edge_cents,
+            }
+        )
+
+    async def handle_live_prices_for_market(self, request):
+        """Return fresh per-platform quotes for a single canonical market.
+
+        Computes a live cross-platform net edge so the operator can decide
+        whether to retry a failed arb without leaving the dashboard.
+        """
+        from .scanner.arbitrage import compute_fee
+
+        canonical_id = request.match_info["canonical_id"]
+        prices = await self.store.get_all_for_market(canonical_id)
+
+        out: Dict[str, dict] = {}
+        for platform, price in prices.items():
+            payload = price.to_dict()
+            payload["age_seconds"] = round(price.age_seconds, 2)
+            out[platform] = payload
+
+        kalshi = prices.get("kalshi")
+        polymarket = prices.get("polymarket")
+        edge_summary: Optional[dict] = None
+        if kalshi and polymarket:
+            # Both directions: kalshi YES + polymarket NO and vice versa.
+            directions = []
+            for yes_pf, yes_pp, no_pf, no_pp in (
+                ("kalshi", kalshi, "polymarket", polymarket),
+                ("polymarket", polymarket, "kalshi", kalshi),
+            ):
+                yes_price = float(yes_pp.yes_price)
+                no_price = float(no_pp.no_price)
+                gross = 1.0 - yes_price - no_price
+                qty = 1
+                fees = (
+                    compute_fee(yes_pf, yes_price, qty, getattr(yes_pp, "fee_rate", 0.0))
+                    + compute_fee(no_pf, no_price, qty, getattr(no_pp, "fee_rate", 0.0))
+                )
+                net = gross - fees
+                directions.append(
+                    {
+                        "yes_platform": yes_pf,
+                        "yes_price": round(yes_price, 4),
+                        "no_platform": no_pf,
+                        "no_price": round(no_price, 4),
+                        "gross_edge_cents": round(gross * 100.0, 2),
+                        "fees_cents": round(fees * 100.0, 2),
+                        "net_edge_cents": round(net * 100.0, 2),
+                    }
+                )
+            best = max(directions, key=lambda d: d["net_edge_cents"])
+            edge_summary = {"directions": directions, "best": best}
+
+        mapping_payload = None
+        if canonical_id in MARKET_MAP:
+            mapping_payload = {"canonical_id": canonical_id, **MARKET_MAP[canonical_id]}
+
+        return web.json_response(
+            {
+                "canonical_id": canonical_id,
+                "fetched_at": time.time(),
+                "prices": out,
+                "edge": edge_summary,
+                "mapping": mapping_payload,
+            }
+        )
 
     async def handle_market_mappings(self, request):
         payload = []

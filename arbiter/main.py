@@ -310,6 +310,7 @@ async def cleanup_runtime(
     store: Optional[ExecutionStore],
     mapping_store: Optional[MarketMappingStore],
     shared_session: aiohttp.ClientSession,
+    retry_scheduler=None,
 ) -> None:
     """Best-effort teardown for shutdown and failed startup paths."""
 
@@ -321,6 +322,8 @@ async def cleanup_runtime(
 
     engine.stop_heartbeat()
     await _await_cleanup("auto_executor.stop", auto_executor.stop())
+    if retry_scheduler is not None:
+        await _await_cleanup("retry_scheduler.stop", retry_scheduler.stop())
     await _await_cleanup("kalshi.stop", kalshi.stop())
     if polymarket is not None:
         await _await_cleanup("polymarket.stop", polymarket.stop())
@@ -772,6 +775,20 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     # Expose to the api server so /api/metrics can surface auto_executor stats
     # and so persisted operator settings can hydrate the runtime knobs.
     api.attach_auto_executor(auto_executor)
+
+    # ── RetryScheduler ────────────────────────────────────────
+    # Subscribes to ExecutionEngine and retries failed arbs once fresh quotes
+    # arrive. Wired into the API so /api/failed-trades surfaces classified
+    # failure reasons and per-arb retry history.
+    from .execution.retry_scheduler import make_retry_scheduler_from_env
+
+    retry_scheduler = make_retry_scheduler_from_env(
+        engine=engine,
+        price_store=price_store,
+        supervisor=safety,
+        config_env=os.environ,
+    )
+    api.attach_retry_scheduler(retry_scheduler)
     logger.info(
         f"  Auto-execute: {'✓ ENABLED' if auto_executor._config.enabled else '✗ disabled (AUTO_EXECUTE_ENABLED=false)'}"
     )
@@ -836,6 +853,9 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
             tasks.append(asyncio.create_task(engine.polymarket_heartbeat_loop(), name="poly-heartbeat"))
         # Auto-executor only runs outside api_only mode (it needs scanner+engine).
         await auto_executor.start()
+        # Retry scheduler subscribes to engine executions and auto-retries
+        # failed arbs with fresh quotes; safe to run in api_only-skipped paths.
+        await retry_scheduler.start()
 
     # ── Auto-resolve stale critical incidents from previous runs ─────
     # On fresh startup, any leftover critical incidents from a prior session
@@ -950,6 +970,7 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
             store=store,
             mapping_store=mapping_store,
             shared_session=shared_session,
+            retry_scheduler=retry_scheduler,
         )
         raise
 
@@ -973,6 +994,7 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
         store=store,
         mapping_store=mapping_store,
         shared_session=shared_session,
+        retry_scheduler=retry_scheduler,
     )
 
     # Final stats

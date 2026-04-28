@@ -184,6 +184,9 @@ class ArbExecution:
             "realized_pnl": round(self.realized_pnl, 4),
             "timestamp": self.timestamp,
             "notes": self.notes,
+            # RetryScheduler attaches this attribute dynamically when a failed
+            # arb finishes its retry chain (see retry_scheduler.py:387).
+            "failure_details": getattr(self, "failure_details", None),
         }
 
     def to_audit_dict(self) -> dict:
