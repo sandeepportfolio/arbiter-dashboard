@@ -21,10 +21,42 @@ logger = logging.getLogger("arbiter.monitor")
 # An alert is only safe to send if ALL of these hold. These match the
 # scanner's "tradable" status guarantees but are duplicated here so a
 # regression in scanner gating cannot cause us to push misleading
-# "ARBITRAGE FOUND" alerts.
+# "ARBITRAGE FOUND" alerts. Past incident: a stale Kalshi last_price of
+# $0.04 paired with a real Polymarket ask paged the operator with a
+# fake 49¢ edge — hence the explicit price floor below.
 ALERT_MIN_NET_EDGE_CENTS = 3.0  # buffer above break-even (covers slippage)
 ALERT_MAX_QUOTE_AGE_SECONDS = 30.0
 ALERT_MIN_CONFIDENCE = 0.5
+# Below this, a "price" is almost certainly a stale last_price or phantom
+# quote (real bids/asks on tradeable political markets sit well above 5¢
+# until the very last moments of resolution). Reject before notifying so
+# we don't alert on illusory edge.
+ALERT_MIN_PRICE = 0.05
+
+
+def _normalize_for_compare(text: str) -> str:
+    """Lower + collapse whitespace + strip punctuation noise for comparing
+    an outcome name to a canonical description. Generous on purpose: we
+    want any reasonable equivalence to count, since a vague-only alert
+    is the failure mode."""
+    import re as _re
+    return _re.sub(r"[\s\W_]+", " ", (text or "").lower()).strip()
+
+
+def _alert_outcome_is_specific(opp: ArbitrageOpportunity) -> bool:
+    """Return True if at least one side carries an outcome name that
+    differs from the canonical mapping description.
+
+    Past incident: the alert displayed "U.S Senate Midterm Winner" — the
+    market category — instead of "Democrats" or "Republicans". Without
+    a specific outcome the operator has no way to tell which side is
+    being traded, so we suppress."""
+    description_norm = _normalize_for_compare(opp.description)
+    yes_norm = _normalize_for_compare(opp.yes_outcome_name)
+    no_norm = _normalize_for_compare(opp.no_outcome_name)
+    yes_specific = bool(yes_norm) and yes_norm != description_norm
+    no_specific = bool(no_norm) and no_norm != description_norm
+    return yes_specific or no_specific
 
 
 def _alert_is_safe_to_send(opp: ArbitrageOpportunity) -> bool:
@@ -45,10 +77,10 @@ def _alert_is_safe_to_send(opp: ArbitrageOpportunity) -> bool:
             opp.canonical_id, opp.status,
         )
         return False
-    if opp.yes_price <= 0 or opp.no_price <= 0:
+    if opp.yes_price < ALERT_MIN_PRICE or opp.no_price < ALERT_MIN_PRICE:
         logger.warning(
-            "Alert suppressed [%s] non-positive price yes=%.3f no=%.3f",
-            opp.canonical_id, opp.yes_price, opp.no_price,
+            "Alert suppressed [%s] price below $%.2f floor (yes=$%.3f no=$%.3f) — likely stale/phantom quote",
+            opp.canonical_id, ALERT_MIN_PRICE, opp.yes_price, opp.no_price,
         )
         return False
     if opp.yes_price + opp.no_price >= 1.0:
@@ -63,10 +95,16 @@ def _alert_is_safe_to_send(opp: ArbitrageOpportunity) -> bool:
             opp.canonical_id, opp.net_edge_cents, ALERT_MIN_NET_EDGE_CENTS,
         )
         return False
-    if opp.quote_age_seconds > ALERT_MAX_QUOTE_AGE_SECONDS:
+    # Per-side age check is stricter than the legacy max(yes,no) because
+    # both legs must be fresh — a stale leg means the displayed price
+    # isn't actionable. yes_quote_age_seconds / no_quote_age_seconds may
+    # be 0.0 on legacy opportunities; fall back to the aggregate.
+    yes_age = opp.yes_quote_age_seconds or opp.quote_age_seconds
+    no_age = opp.no_quote_age_seconds or opp.quote_age_seconds
+    if yes_age > ALERT_MAX_QUOTE_AGE_SECONDS or no_age > ALERT_MAX_QUOTE_AGE_SECONDS:
         logger.warning(
-            "Alert suppressed [%s] quote_age=%.1fs > %.0fs (stale)",
-            opp.canonical_id, opp.quote_age_seconds, ALERT_MAX_QUOTE_AGE_SECONDS,
+            "Alert suppressed [%s] quote_age yes=%.1fs no=%.1fs (>%.0fs limit, stale)",
+            opp.canonical_id, yes_age, no_age, ALERT_MAX_QUOTE_AGE_SECONDS,
         )
         return False
     if opp.confidence < ALERT_MIN_CONFIDENCE:
@@ -81,6 +119,12 @@ def _alert_is_safe_to_send(opp: ArbitrageOpportunity) -> bool:
             opp.canonical_id, opp.suggested_qty,
         )
         return False
+    if not _alert_outcome_is_specific(opp):
+        logger.warning(
+            "Alert suppressed [%s] outcome name not specific (yes=%r no=%r matches canonical %r)",
+            opp.canonical_id, opp.yes_outcome_name, opp.no_outcome_name, opp.description,
+        )
+        return False
     return True
 
 
@@ -89,6 +133,83 @@ def _truncate(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 1].rstrip() + "…"
+
+
+def _short_market_id(value: str, head: int = 8, tail: int = 4) -> str:
+    """Shorten long Polymarket token IDs for display, keep Kalshi tickers intact."""
+    value = (value or "").strip()
+    if len(value) <= head + tail + 1:
+        return value
+    return f"{value[:head]}…{value[-tail:]}"
+
+
+def _pick_alert_outcome(opp: ArbitrageOpportunity) -> str:
+    """Pick the most specific outcome name for the alert header.
+
+    Prefer whichever side has a name that differs from the canonical
+    description. Falls back to canonical description only if both sides
+    are blank (gate should have rejected such an alert already)."""
+    description_norm = _normalize_for_compare(opp.description)
+    for candidate in (opp.yes_outcome_name, opp.no_outcome_name):
+        if candidate and _normalize_for_compare(candidate) != description_norm:
+            return candidate
+    # Both blank or both equal canonical — fall back, gate normally rejects.
+    return opp.yes_outcome_name or opp.no_outcome_name or opp.description
+
+
+def _format_arb_alert(opp: ArbitrageOpportunity) -> str:
+    """Render the user-facing arbitrage alert.
+
+    Output is HTML (Telegram parse_mode=HTML). Includes per-side outcome,
+    market id, executable bid/ask, quote age, and the math summary so the
+    operator can verify the trade on each platform before submitting."""
+    outcome_header = _pick_alert_outcome(opp)
+    yes_age = opp.yes_quote_age_seconds or opp.quote_age_seconds
+    no_age = opp.no_quote_age_seconds or opp.quote_age_seconds
+    yes_id = _short_market_id(opp.yes_market_id) if opp.yes_platform == "polymarket" else opp.yes_market_id
+    no_id = _short_market_id(opp.no_market_id) if opp.no_platform == "polymarket" else opp.no_market_id
+
+    yes_bid_ask = (
+        f"${opp.yes_bid:.3f}/${opp.yes_ask:.3f}"
+        if (opp.yes_bid or opp.yes_ask)
+        else "n/a"
+    )
+    no_bid_ask = (
+        f"${opp.no_bid:.3f}/${opp.no_ask:.3f}"
+        if (opp.no_bid or opp.no_ask)
+        else "n/a"
+    )
+
+    yes_question_line = (
+        f"\n  ❓ <i>{_truncate(opp.yes_question, 140)}</i>" if opp.yes_question else ""
+    )
+    no_question_line = (
+        f"\n  ❓ <i>{_truncate(opp.no_question, 140)}</i>" if opp.no_question else ""
+    )
+
+    return (
+        f"💰 <b>ARBITRAGE: {_truncate(outcome_header, 80)}</b>\n"
+        f"<code>{opp.canonical_id}</code>\n"
+        f"\n"
+        f"<b>{opp.yes_platform.upper()}</b>: BUY <b>YES</b> @ ${opp.yes_price:.3f} "
+        f"(ask, {yes_age:.0f}s old)\n"
+        f"  ├ Market: <code>{yes_id}</code>\n"
+        f"  └ Bid/Ask: {yes_bid_ask}"
+        f"{yes_question_line}\n"
+        f"<b>{opp.no_platform.upper()}</b>: BUY <b>NO</b> @ ${opp.no_price:.3f} "
+        f"(ask, {no_age:.0f}s old)\n"
+        f"  ├ Market: <code>{no_id}</code>\n"
+        f"  └ Bid/Ask: {no_bid_ask}"
+        f"{no_question_line}\n"
+        f"\n"
+        f"Edge: {opp.gross_edge*100:.1f}¢ gross → "
+        f"<b>{opp.net_edge_cents:.1f}¢ net</b> (after {opp.total_fees*100:.1f}¢ fees)\n"
+        f"Qty: <b>{opp.suggested_qty}</b> | Max profit: <b>${opp.max_profit_usd:.2f}</b>\n"
+        f"Confidence: {opp.confidence*100:.0f}% | Mapping: {opp.mapping_status} "
+        f"(score {opp.mapping_score:.2f})\n"
+        f"\n"
+        f"⚠️ <i>Verify both legs target the SAME outcome on the apps before trading.</i>"
+    )
 
 
 @dataclass
@@ -307,40 +428,8 @@ class BalanceMonitor:
             return
 
         self._last_alert_time[key] = now
-        total_cost = opp.yes_price + opp.no_price
-        yes_q_line = f"\n  ❓ <i>{_truncate(opp.yes_question, 140)}</i>" if opp.yes_question else ""
-        no_q_line = f"\n  ❓ <i>{_truncate(opp.no_question, 140)}</i>" if opp.no_question else ""
-
-        msg = (
-            f"💰 <b>ARBITRAGE FOUND</b>\n"
-            f"\n"
-            f"🎯 <b>Outcome:</b> {opp.description}\n"
-            f"🆔 <code>{opp.canonical_id}</code>\n"
-            f"\n"
-            f"📈 <b>BUY YES on {opp.yes_platform.upper()}</b> @ ${opp.yes_price:.3f}\n"
-            f"  📍 Market: <code>{opp.yes_market_id}</code>"
-            f"{yes_q_line}\n"
-            f"\n"
-            f"📉 <b>BUY NO on {opp.no_platform.upper()}</b> @ ${opp.no_price:.3f}\n"
-            f"  📍 Market: <code>{opp.no_market_id}</code>"
-            f"{no_q_line}\n"
-            f"\n"
-            f"💵 <b>Profit math (per contract):</b>\n"
-            f"├ Cost: ${total_cost:.3f} (YES + NO)\n"
-            f"├ Gross edge: {opp.gross_edge*100:.2f}¢\n"
-            f"├ Fees: {opp.total_fees*100:.2f}¢\n"
-            f"└ <b>Net profit: {opp.net_edge_cents:.2f}¢ after fees ✅</b>\n"
-            f"\n"
-            f"📊 Suggested qty: <b>{opp.suggested_qty}</b>\n"
-            f"💎 Max profit: <b>${opp.max_profit_usd:.2f}</b>\n"
-            f"\n"
-            f"🔒 Mapping: {opp.mapping_status} (score {opp.mapping_score:.2f})\n"
-            f"⏱ Quote age: {opp.quote_age_seconds:.1f}s\n"
-            f"🎯 Confidence: {opp.confidence*100:.0f}%\n"
-            f"\n"
-            f"⚠️ <i>Verify both legs target the SAME outcome on the apps before trading.</i>"
-        )
-        await self.notifier.send(msg)
+        msg = _format_arb_alert(opp)
+        await self.notifier.send(msg, dedup_key=key)
 
     async def send_daily_summary(self):
         """Send daily summary of balances and activity."""

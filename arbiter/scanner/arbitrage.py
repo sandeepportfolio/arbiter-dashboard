@@ -71,6 +71,20 @@ class ArbitrageOpportunity:
     fee_breakdown: Dict[str, float] = field(default_factory=dict)
     yes_fee_rate: float = 0.0
     no_fee_rate: float = 0.0
+    # Side-specific outcome metadata (populated for alerting / audit so the
+    # operator sees the SPECIFIC outcome being traded, not just the market
+    # category). Falls back to empty string if the collector did not emit
+    # a subtitle/question.
+    yes_outcome_name: str = ""
+    no_outcome_name: str = ""
+    yes_question: str = ""
+    no_question: str = ""
+    yes_bid: float = 0.0
+    yes_ask: float = 0.0
+    no_bid: float = 0.0
+    no_ask: float = 0.0
+    yes_quote_age_seconds: float = 0.0
+    no_quote_age_seconds: float = 0.0
 
     def key(self) -> str:
         return f"{self.canonical_id}:{self.yes_platform}:{self.no_platform}:{self.yes_market_id}:{self.no_market_id}"
@@ -106,6 +120,16 @@ class ArbitrageOpportunity:
             "fee_breakdown": {name: round(value, 4) for name, value in self.fee_breakdown.items()},
             "yes_fee_rate": round(self.yes_fee_rate, 6),
             "no_fee_rate": round(self.no_fee_rate, 6),
+            "yes_outcome_name": self.yes_outcome_name,
+            "no_outcome_name": self.no_outcome_name,
+            "yes_question": self.yes_question,
+            "no_question": self.no_question,
+            "yes_bid": round(self.yes_bid, 4),
+            "yes_ask": round(self.yes_ask, 4),
+            "no_bid": round(self.no_bid, 4),
+            "no_ask": round(self.no_ask, 4),
+            "yes_quote_age_seconds": round(self.yes_quote_age_seconds, 2),
+            "no_quote_age_seconds": round(self.no_quote_age_seconds, 2),
         }
 
     def to_audit_dict(self) -> dict:
@@ -139,7 +163,48 @@ class ArbitrageOpportunity:
             "fee_breakdown": dict(self.fee_breakdown),
             "yes_fee_rate": self.yes_fee_rate,
             "no_fee_rate": self.no_fee_rate,
+            "yes_outcome_name": self.yes_outcome_name,
+            "no_outcome_name": self.no_outcome_name,
+            "yes_question": self.yes_question,
+            "no_question": self.no_question,
+            "yes_bid": self.yes_bid,
+            "yes_ask": self.yes_ask,
+            "no_bid": self.no_bid,
+            "no_ask": self.no_ask,
+            "yes_quote_age_seconds": self.yes_quote_age_seconds,
+            "no_quote_age_seconds": self.no_quote_age_seconds,
         }
+
+
+def extract_outcome_metadata(price_point: PricePoint, side: str) -> tuple[str, str]:
+    """Return ``(outcome_name, question_text)`` for a side ("yes" or "no").
+
+    The "outcome name" is the SPECIFIC choice being traded (e.g.
+    "Democrats", "Republicans") — distinct from the canonical market
+    category (e.g. "U.S Senate Midterm Winner"). Used by the Telegram
+    alert so operators see what they're actually buying. Returns empty
+    strings if the upstream collector did not populate metadata, in
+    which case the alert gate will reject the opportunity.
+    """
+    md = price_point.metadata or {}
+    if price_point.platform == "kalshi":
+        # Kalshi event = umbrella, market = specific outcome. ``yes_sub_title``
+        # / ``no_sub_title`` carry the per-side outcome name; ``market_title``
+        # is the full question (e.g. "Will Democrats win Senate Majority…?").
+        if side == "yes":
+            outcome = str(md.get("yes_sub_title") or "").strip()
+        else:
+            outcome = str(md.get("no_sub_title") or "").strip()
+        question = str(md.get("market_title") or "").strip()
+        if not outcome:
+            outcome = question
+        return outcome, question
+    if price_point.platform == "polymarket":
+        # Polymarket binary markets encode the specific outcome inside the
+        # ``question`` field (e.g. "Will Democrats win Senate Majority in 2026?")
+        question = str(md.get("question") or "").strip()
+        return question, question
+    return "", ""
 
 
 def compute_fee(platform: str, price: float, quantity: int, fee_rate: float = 0.0) -> float:
@@ -348,6 +413,8 @@ class ArbitrageScanner:
 
         yes_market_id = yes_price_point.yes_market_id or yes_price_point.raw_market_id
         no_market_id = no_price_point.no_market_id or no_price_point.raw_market_id
+        yes_outcome_name, yes_question_text = extract_outcome_metadata(yes_price_point, "yes")
+        no_outcome_name, no_question_text = extract_outcome_metadata(no_price_point, "no")
         return ArbitrageOpportunity(
             canonical_id=canonical_id,
             description=description,
@@ -379,6 +446,16 @@ class ArbitrageScanner:
             },
             yes_fee_rate=yes_price_point.fee_rate,
             no_fee_rate=no_price_point.fee_rate,
+            yes_outcome_name=yes_outcome_name,
+            no_outcome_name=no_outcome_name,
+            yes_question=yes_question_text,
+            no_question=no_question_text,
+            yes_bid=float(yes_price_point.yes_bid or 0.0),
+            yes_ask=float(yes_price_point.yes_ask or 0.0),
+            no_bid=float(no_price_point.no_bid or 0.0),
+            no_ask=float(no_price_point.no_ask or 0.0),
+            yes_quote_age_seconds=float(yes_price_point.age_seconds),
+            no_quote_age_seconds=float(no_price_point.age_seconds),
         )
 
     def _resolve_status(self, opportunity: ArbitrageOpportunity, mapping: dict) -> str:
