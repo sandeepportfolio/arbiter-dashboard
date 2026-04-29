@@ -1469,7 +1469,7 @@ window.TimeRange = TimeRange;
 const { useState: oppUseState, useMemo: oppUseMemo } = React;
 
 function PageOpportunities() {
-  const { t, setDrawer, minEdge, setMinEdge, autoExec, setAutoExec, toast } = window.useApp();
+  const { t, setDrawer, setModal, minEdge, setMinEdge, autoExec, setAutoExec, toast } = window.useApp();
   const M = window.MOCK;
   const [filter, setFilter] = oppUseState('all'); // all | tradable | candidate | review
   const [sort, setSort] = oppUseState('edge');
@@ -1580,7 +1580,7 @@ function PageOpportunities() {
               : 'default'; // stale → gray
             return <window.Pill tone={tone}>{r.status}</window.Pill>;
           }},
-          { label: '', w: '90px', align: 'right', render: r => r.status === 'tradable' ? <window.Btn variant="primary" size="sm">Execute →</window.Btn> : <span style={{ fontSize: 11, color: t.textMuted }}>—</span> },
+          { label: '', w: '90px', align: 'right', render: r => r.status === 'tradable' ? <window.Btn variant="primary" size="sm" onClick={(e) => { e.stopPropagation(); setModal({ kind: 'execute', payload: M.opportunities.indexOf(r) }); }}>Execute →</window.Btn> : <span style={{ fontSize: 11, color: t.textMuted }}>—</span> },
         ]} rows={filtered} onRowClick={(r) => setDrawer({ kind: 'opp', payload: M.opportunities.indexOf(r) })} />
       </window.Card>
     </div>
@@ -1612,7 +1612,7 @@ function AutoExecToggle() {
 
 // ── Opportunity drawer ───────────────────────────────────────────────
 function OppDrawer() {
-  const { t, drawer, setDrawer, setModal } = window.useApp();
+  const { t, drawer, setDrawer, setModal, toast } = window.useApp();
   if (!drawer || drawer.kind !== 'opp') return null;
   const o = window.MOCK.opportunities[drawer.payload];
   if (!o) return null;
@@ -1679,7 +1679,7 @@ function OppDrawer() {
         <div style={{ padding: '16px 24px', borderTop: `1px solid ${t.border}`, display:'flex', gap: 8 }}>
           <window.Btn variant="ghost" onClick={() => setDrawer(null)}>Cancel</window.Btn>
           <div style={{ flex: 1 }}/>
-          <window.Btn variant="secondary" icon="◇">Mark for review</window.Btn>
+          <window.Btn variant="secondary" icon="◇" onClick={() => { setDrawer(null); toast('Marked for review', { sub: o.canonical_id }); }}>Mark for review</window.Btn>
           <window.Btn variant="primary" icon="→" onClick={() => { setDrawer(null); setModal({ kind: 'execute', payload: drawer.payload }); }}>Execute trade</window.Btn>
         </div>
       </div>
@@ -1915,13 +1915,13 @@ function ReconRow({ label, value, ok, pillTone }) {
 
 // ── Markets ─────────────────────────────────────────────────────────
 function PageMarkets() {
-  const { t } = window.useApp();
+  const { t, setModal } = window.useApp();
   const M = window.MOCK;
   return (
     <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto' }}>
       <window.PageHeader kicker="Mapped universe" title="Markets" sub="312 confirmed mappings across 8 categories. Click any market to see live prices on both platforms.">
-        <window.Btn variant="secondary" size="sm" icon="↓">Export</window.Btn>
-        <window.Btn variant="primary" size="sm" icon="+">New mapping</window.Btn>
+        <window.Btn variant="secondary" size="sm" icon="↓" onClick={() => setModal({ kind: 'export', payload: 'markets' })}>Export</window.Btn>
+        <window.Btn variant="primary" size="sm" icon="+" onClick={() => setModal({ kind: 'newMapping' })}>New mapping</window.Btn>
       </window.PageHeader>
 
       <div style={{ display:'grid', gridTemplateColumns:'repeat(8, 1fr)', gap: 8, marginBottom: 16 }}>
@@ -1949,7 +1949,7 @@ function PageMarkets() {
           { label: 'Spread', w: '90px', align:'right', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12, color: t.text }}>{((r.yes_price - (1 - r.no_price)) * 100).toFixed(1)}¢</span> },
           { label: 'Volume 24h', w: '120px', align:'right', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12, color: t.textDim }}>{(r.yes_volume + r.no_volume).toLocaleString()}</span> },
           { label: 'Edge', w: '90px', align:'right', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12.5, color: r.net_edge_cents >= 1 ? t.green : t.textDim, fontWeight: 600 }}>{window.fmtC(r.net_edge_cents)}</span> },
-        ]} rows={M.opportunities}/>
+        ]} rows={M.opportunities} onRowClick={(r) => setModal({ kind: 'market', payload: r })}/>
       </window.Card>
     </div>
   );
@@ -2099,7 +2099,7 @@ function KV({ k, v }) {
 
 // ── Audit ───────────────────────────────────────────────────────────
 function PageAudit() {
-  const { t, tradingMode } = window.useApp();
+  const { t, tradingMode, setTradingMode, setConfirm, toast } = window.useApp();
   const M = window.MOCK;
   const gates = [
     { name: 'Configuration valid', ok: true, detail: 'All required env vars set; API keys reachable.' },
@@ -2124,7 +2124,13 @@ function PageAudit() {
           <div style={{ fontSize: 24, fontWeight: 600, color: t.text, marginBottom: 4 }}>Live trading authorized</div>
           <div style={{ fontSize: 13, color: t.textDim }}>All 7 readiness gates passing · audit score {(M.health.audit.audit_score * 100).toFixed(2)}% · uptime {(M.health.uptime_seconds/3600).toFixed(1)}h</div>
         </div>
-        <window.Btn variant="danger" size="md">⏹ Engage kill switch</window.Btn>
+        <window.Btn variant="danger" size="md" onClick={() => setConfirm({
+          title: 'Engage kill switch?',
+          body: 'Halts the scanner, cancels all open orders, and locks trading until manually re-armed.',
+          tone: 'danger',
+          confirmLabel: 'Engage',
+          onConfirm: () => { setTradingMode('killed'); toast('Kill switch engaged · trading halted', { tone: 'error' }); },
+        })}>⏹ Engage kill switch</window.Btn>
       </div>
 
       <window.Card title="Readiness gates" padding={0}>
@@ -2599,7 +2605,7 @@ function Row({ k, v, bold, positive }) {
 
 // ── Trade detail ────────────────────────────────────────────────────
 function TradeDetailModal() {
-  const { t, modal, setModal } = window.useApp();
+  const { t, modal, setModal, toast } = window.useApp();
   const r = modal.payload;
   const tl = [
     { ok: true, label: 'Opportunity detected', t: 'T+0.000s', detail: `Net edge ${window.fmtC(4.8)} · 12 persistence scans` },
@@ -2648,8 +2654,8 @@ function TradeDetailModal() {
       </div>
 
       <div style={{ padding: '14px 24px', borderTop: `1px solid ${t.border}`, background: t.bgSubtle, display:'flex', justifyContent:'flex-end', gap: 8 }}>
-        <window.Btn variant="ghost" size="sm">Copy ID</window.Btn>
-        <window.Btn variant="secondary" size="sm">View raw JSON</window.Btn>
+        <window.Btn variant="ghost" size="sm" onClick={() => { navigator.clipboard?.writeText(r.arb_id).catch(()=>{}); toast('Trade ID copied', { sub: r.arb_id }); }}>Copy ID</window.Btn>
+        <window.Btn variant="secondary" size="sm" onClick={() => { try { const json = JSON.stringify(r, null, 2); const w = window.open('', '_blank'); if (w) { w.document.write('<pre style="font-family:ui-monospace,monospace;font-size:12px;padding:16px;">' + json.replace(/[<>&]/g, s => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[s])) + '</pre>'); w.document.title = r.arb_id + ' · raw JSON'; } else { toast('Pop-up blocked'); } } catch { toast('Could not open JSON view'); } }}>View raw JSON</window.Btn>
       </div>
     </Shell>
   );
@@ -4154,7 +4160,7 @@ function PnLStat({ label, value, t, neutral }) {
 }
 
 function MobHealth() {
-  const { t, scanner, setScanner } = window.useApp();
+  const { t, scanner, setScanner, setTradingMode, setConfirm, toast } = window.useApp();
   const M = window.MOCK;
   const gates = [
     { l: 'Scanner heartbeat', v: 'Live · 1s ago', ok: scanner },
@@ -4191,13 +4197,19 @@ function MobHealth() {
         <button onClick={() => setScanner(!scanner)} style={{ padding: '11px', background: scanner ? t.amberSoft : t.greenSoft, color: scanner ? t.amber : t.green, border: `1px solid ${scanner ? t.amber : t.green}40`, borderRadius: 10, fontSize: 12, fontWeight: 600, cursor:'pointer' }}>
           {scanner ? 'Pause scanner' : 'Resume scanner'}
         </button>
-        <button style={{ padding: '11px', background: t.bgCard, border:`1px solid ${t.border}`, borderRadius: 10, fontSize: 12, fontWeight: 600, color: t.text, cursor:'pointer' }}>Run health check</button>
+        <button onClick={() => toast('Health check passed', { sub: 'all gates pass · 0 flags' })} style={{ padding: '11px', background: t.bgCard, border:`1px solid ${t.border}`, borderRadius: 10, fontSize: 12, fontWeight: 600, color: t.text, cursor:'pointer' }}>Run health check</button>
       </div>
 
       <div style={{ background: t.redSoft, border:`1px solid ${t.red}40`, borderRadius: 12, padding: 14 }}>
         <div style={{ fontSize: 12, fontWeight: 600, color: t.red, marginBottom: 4 }}>Emergency kill switch</div>
         <div style={{ fontSize: 11, color: t.red, opacity: 0.8, marginBottom: 10 }}>Halts scanner, cancels all open orders, locks trading. Requires confirmation.</div>
-        <button style={{ width:'100%', padding: '10px', background: t.red, color:'#fff', border:'none', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor:'pointer', letterSpacing:'0.04em' }}>HALT ALL TRADING</button>
+        <button onClick={() => setConfirm({
+          title: 'Halt all trading?',
+          body: 'Pauses the scanner, cancels open orders, and locks both platforms until manually re-armed.',
+          tone: 'danger',
+          confirmLabel: 'Halt now',
+          onConfirm: () => { setTradingMode('killed'); setScanner(false); toast('Trading halted', { tone: 'error' }); },
+        })} style={{ width:'100%', padding: '10px', background: t.red, color:'#fff', border:'none', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor:'pointer', letterSpacing:'0.04em' }}>HALT ALL TRADING</button>
       </div>
     </div>
   );
@@ -4244,7 +4256,7 @@ function MobSettings() {
       <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.08em', padding: '0 4px 8px' }}>SECURITY</div>
       <div style={{ background: t.bgCard, border:`1px solid ${t.border}`, borderRadius: 12, overflow:'hidden', marginBottom: 16 }}>
         <MobRow icon="◈" label="Two-factor auth" sub="Authenticator · enabled" tone="green" onClick={() => setModal({ kind:'reset2fa' })}/>
-        <MobRow icon="◌" label="Session timeout" sub="30 minutes" onClick={() => setModal({ kind:'editSetting', payload: { key:'sessionTimeout', label:'Session timeout', kind:'options', value:30, options:[{v:15,l:'15 min'},{v:30,l:'30 min'},{v:60,l:'1 hour'},{v:240,l:'4 hours'}] } })} last/>
+        <MobRow icon="◌" label="Session timeout" sub="30 minutes" onClick={() => setModal({ kind:'editSetting', payload: { key:'sessionTimeout', label:'Session timeout', kind:'options', options:['15 min','30 min','1 hour','4 hours'], desc:'How long until you are automatically signed out.' } })} last/>
       </div>
     </div>
   );
