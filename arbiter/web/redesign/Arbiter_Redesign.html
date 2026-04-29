@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<style data-omelette-injected>html,body{background:transparent}</style><script data-omelette-injected>(()=>{var j=["https://claude.ai","https://preview.claude.ai","https://eap-omelette.claude.ai"];var S=false;var m=30000;var h=3000;document.addEventListener("DOMContentLoaded",()=>{const Y=window.Babel;const X="om-src-id";if(Y&&Y.registerPlugin&&!(Y.availablePlugins&&Y.availablePlugins[X])){Y.registerPlugin(X,({types:$})=>({visitor:{JSXOpeningElement(L,Q){const J=L.node;if(J.name&&J.name.type==="JSXMemberExpression")return;for(let V=0;V<J.attributes.length;V++){const H=J.attributes[V];if(H.type==="JSXAttribute"&&H.name&&H.name.name==="data-om-id")return}const W=Q.file&&Q.file.opts&&Q.file.opts.filename||"?";const Z=J.loc&&J.loc.start;const z=`jsx:${W}:${J.start??0}:${Z?Z.line:0}:${Z?Z.column+1:0}`;J.attributes.push($.jsxAttribute($.jsxIdentifier("data-om-id"),$.stringLiteral(z)))}}}))}const D="om-text-extract";let A=false;if(S&&Y&&Y.registerPlugin&&!(Y.availablePlugins&&Y.availablePlugins[D])){const $=window.React;if($&&$.useSyncExternalStore&&$.createElement){A=true;const L={};const Q=new Set;let J=0;window.__omTextO=L;window.__omTextSet=(z)=>{for(const V in z){const H=z[V];if(H==null)delete L[V];else L[V]=H}J++;Q.forEach((V)=>V())};const W=(z)=>{Q.add(z);return()=>Q.delete(z)};const Z=()=>J;window.__OmT=function z(V){$.useSyncExternalStore(W,Z,Z);return $.createElement("span",{"data-om-text":V.i,className:"__om-t"},V.i in L?L[V.i]:V.children)};Y.registerPlugin(D,({types:z})=>{const V={style:1,script:1,noscript:1,textarea:1,title:1,option:1,text:1,tspan:1,textPath:1};const H={placeholder:1,alt:1,title:1,label:1,"aria-label":1,"aria-description":1,"aria-placeholder":1};const M=(F,q)=>z.logicalExpression("??",z.memberExpression(z.logicalExpression("||",z.memberExpression(z.identifier("window"),z.identifier("__omTextO")),z.objectExpression([])),z.stringLiteral(F),true),q);const E=(F)=>F.file&&F.file.opts&&F.file.opts.filename||"?";const B=(F)=>F.file&&F.file.code||"";const R=(F,q,N)=>{let k=false;const U=F.children.map((C)=>{if(C.type!=="JSXText")return C;if(C.start==null||C.end==null)return C;const K=N.slice(C.start,C.end);const u=K.length-K.trimStart().length;const y=K.length-K.trimEnd().length;if(u+y>=K.length)return C;const b=`txt:${q}:${C.start+u}:${C.end-y}`;k=true;return z.jsxElement(z.jsxOpeningElement(z.jsxIdentifier("__OmT"),[z.jsxAttribute(z.jsxIdentifier("i"),z.stringLiteral(b))],false),z.jsxClosingElement(z.jsxIdentifier("__OmT")),[C],false)});if(k)F.children=U};return{visitor:{JSXOpeningElement(F,q){const N=F.node;const k=E(q);const U={};for(let C=0;C<N.attributes.length;C++){const K=N.attributes[C];if(K.type!=="JSXAttribute"||!K.name)continue;const u=K.name.name;if(!H[u])continue;if(!K.value||K.value.type!=="StringLiteral")continue;if(K.value.start==null||K.value.end==null)continue;const y=`txt:${k}:${K.value.start}:${K.value.end}`;U[u]=y;K.value=z.jsxExpressionContainer(M(y,z.stringLiteral(K.value.value)))}if(Object.keys(U).length){N.attributes.push(z.jsxAttribute(z.jsxIdentifier("data-om-text-attrs"),z.stringLiteral(JSON.stringify(U))))}},JSXElement(F,q){const N=F.node;const k=N.openingElement;const U=k&&k.name&&k.name.name;if(U==="__OmT")return;if(typeof U==="string"&&V[U])return;R(N,E(q),B(q))},JSXFragment(F,q){R(F.node,E(q),B(q))}}}})}}const w=A?["transform-react-jsx-source",X,D]:["transform-react-jsx-source",X];document.querySelectorAll('script[type="text/babel"],script[type="text/jsx"]').forEach(($,L)=>{const Q=$.getAttribute("data-plugins")||"";const J=w.filter((W)=>Q.indexOf(W)<0);if(J.length){$.setAttribute("data-plugins",Q?`${Q},${J.join(",")}`:J.join(","))}if(!$.hasAttribute("data-filename")){$.setAttribute("data-filename",$.getAttribute("src")||`inline-${L}`)}})});var G=window.parent;if(G&&G!==window){const Y=(Q,J)=>{try{G.postMessage({__omelette_log:true,type:Q,data:J},"*")}catch{}};["log","warn","error"].forEach((Q)=>{const J=console[Q];console[Q]=(...W)=>{const Z=W.map((z)=>{try{return typeof z==="object"?JSON.stringify(z):String(z)}catch{try{return String(z)}catch{return"[unstringifiable]"}}}).join(" ");Y(Q,Z);J.apply(console,W)}});window.addEventListener("error",(Q)=>{const J=Q.target;if(J&&J!==window&&J.tagName){const W=J.src||J.href||"";Y("resource_error",`${J.tagName} failed to load: ${W}`)}else{Y("error",`${Q.message||"Unknown error"} at ${Q.filename||"?"}:${Q.lineno||0}:${Q.colno||0}`)}},true);window.addEventListener("unhandledrejection",(Q)=>{const J=Q.reason;const W=J instanceof Error?`${J.message} ${J.stack}`:String(J);Y("error",`Unhandled rejection: ${W}`)});const X=()=>{try{G.postMessage({type:"omelette:height",height:document.documentElement.scrollHeight},"*")}catch{}};if(document.readyState==="complete")X();else window.addEventListener("load",X);if(window.ResizeObserver)new ResizeObserver(X).observe(document.documentElement);const D={};let A=0;window.claude={complete(Q){return new Promise((J,W)=>{if(!j.length){W(new Error("claude.complete: no parent origin"));return}const Z=`c${++A}`;const z=()=>setTimeout(()=>{delete D[Z];W(new Error(`claude.complete: no data for ${m/1000}s`))},m);const V=z();D[Z]={resolve:J,reject:W,text:"",t:V,arm:z};try{for(const H of j){G.postMessage({__om_api:true,id:Z,body:Q},H)}}catch(H){clearTimeout(V);delete D[Z];W(H)}})}};const w={};let $=0;window.omelette={writeFile:(Q,J)=>new Promise((W,Z)=>{if(!j.length){W();return}const z=`f${++$}`;const V=setTimeout(()=>{delete w[z];W()},h);w[z]={resolve:W,reject:Z,t:V};try{for(const H of j){G.postMessage({__om_file:true,id:z,op:"write",path:Q,content:J},H)}}catch{clearTimeout(V);delete w[z];W()}})};const L=(Q)=>{try{return JSON.stringify(Q)}catch{return JSON.stringify(String(Q))}};window.addEventListener("message",(Q)=>{if(j.indexOf(Q.origin)<0)return;if(Q.source!==G)return;const J=Q.data;if(!J)return;if(J.__om_file_r){const z=w[J.id];if(!z)return;clearTimeout(z.t);delete w[J.id];if(J.ok)z.resolve();else z.reject(new Error(J.error||"write failed"));return}if(J.__om_api_r){const z=D[J.id];if(!z)return;if(J.error!=null){clearTimeout(z.t);delete D[J.id];z.reject(new Error(J.error));return}if(J.chunk!=null){clearTimeout(z.t);z.t=z.arm();z.text+=J.chunk;return}if(J.done){clearTimeout(z.t);delete D[J.id];z.resolve(J.text!=null?J.text:z.text);return}return}if(!J.__om_eval)return;const W=J;const Z=(z)=>{Q.source.postMessage({...z,__om_eval_r:1,id:W.id},Q.origin)};try{const z=(0,eval)(W.code);if(z&&typeof z.then==="function"){z.then((V)=>Z({ok:1,v:L(V)}),(V)=>Z({ok:0,e:String(V)}))}else{Z({ok:1,v:L(z)})}}catch(z){Z({ok:0,e:String(z)})}})}})();
+</script>
+
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Arbiter — Operator desk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; padding: 0; background: #FAFAF9; font-family: "Inter", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+  * { box-sizing: border-box; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes cliBlink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(127,127,127,0.25); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(127,127,127,0.4); }
+  button { font-family: inherit; }
+  input { font-family: inherit; }
+</style>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="theme.js"></script>
+<script src="mock-data.js"></script>
+<script type="text/babel" src="charts.jsx"></script>
+<script type="text/babel" src="ios-frame.jsx"></script>
+<script type="text/babel" src="design-canvas.jsx"></script>
+<script type="text/babel" src="app-shell.jsx"></script>
+<script type="text/babel" src="ui-primitives.jsx"></script>
+<script type="text/babel" src="page-overview.jsx"></script>
+<script type="text/babel" src="page-opportunities.jsx"></script>
+<script type="text/babel" src="pages-rest.jsx"></script>
+<script type="text/babel" src="modals.jsx"></script>
+<script type="text/babel" src="actions.jsx"></script>
+<script type="text/babel" src="agent-validate.jsx"></script>
+<script type="text/babel" src="mobile.jsx"></script>
+<script type="text/babel" src="login.jsx"></script>
+<script type="text/babel" src="tweaks.jsx"></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="env,react">
+  const { useState, useEffect } = React;
+
+  function PageRouter() {
+    const { page, t } = window.useApp();
+    const map = {
+      overview: window.PageOverview,
+      opportunities: window.PageOpportunities,
+      trades: window.PageTrades,
+      pnl: window.PagePnL,
+      markets: window.PageMarkets,
+      mappings: window.PageMappings,
+      scanner: window.PageScanner,
+      audit: window.PageAudit,
+      deposits: window.PageDeposits,
+      settings: window.PageSettings,
+    };
+    const titles = {
+      overview: ['Overview', 'Operator desk · Live'],
+      opportunities: ['Opportunities', 'Live scan · 14 tradable'],
+      trades: ['Trades', 'Execution ledger · 87 trades'],
+      pnl: ['P&L', 'Performance · since inception'],
+      markets: ['Markets', 'Mapped universe · 312 markets'],
+      mappings: ['Mappings', 'Cross-platform · 28 pending review'],
+      scanner: ['Scanner', 'Real-time · 18,420 scans'],
+      audit: ['Audit & Readiness', 'System integrity · 7/7 gates'],
+      deposits: ['Funds', 'Capital · 2 platforms connected'],
+      settings: ['Settings', 'Configuration · operator: Sam'],
+    };
+    const Page = map[page] || window.PageOverview;
+    const [title, sub] = titles[page] || titles.overview;
+    return (
+      <div style={{ display:'flex', height:'100%', background: t.bg, overflow:'hidden' }}>
+        <window.Sidebar/>
+        <div style={{ flex: 1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+          <window.TopBar title={title} sub={sub}/>
+          <div style={{ flex: 1, overflow:'auto' }}>
+            <Page/>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function DesktopApp() {
+    return (
+      <window.AppProvider>
+        <DesktopShell/>
+      </window.AppProvider>
+    );
+  }
+
+  function DesktopShell() {
+    const { t } = window.useApp();
+    return (
+      <div style={{ width: '100%', height: '100%', background: t.bg, color: t.text, fontFamily: window.FONTS.sans, position:'relative' }}>
+        <PageRouter/>
+        <window.OppDrawer/>
+        <window.Modal/>
+        <window.ExtraModal/>
+        <window.AgentValidateModal/>
+        <window.RefetchMappingsModal/>
+        <window.CommandPalette/>
+        <window.AlertsInbox/>
+        <window.UserMenu/>
+        <window.ConfirmDialog/>
+        <window.ToastHost/>
+        <window.TweaksHook/>
+      </div>
+    );
+  }
+
+  function MobileApp() {
+    return (
+      <window.AppProvider>
+        <window.MobileDashboard/>
+        <window.Modal/>
+        <window.ExtraModal/>
+        <window.AgentValidateModal/>
+        <window.RefetchMappingsModal/>
+        <window.ToastHost/>
+      </window.AppProvider>
+    );
+  }
+
+  function LoginApp() {
+    const [signed, setSigned] = useState(false);
+    return (
+      <window.AppProvider>
+        <window.LoginScreen onSignIn={() => setSigned(true)}/>
+      </window.AppProvider>
+    );
+  }
+
+  // Top-level: design canvas with three artboards: Login, Desktop, Mobile.
+  function App() {
+    const DC = window.DesignCanvas;
+    const Section = window.DCSection;
+    const Artboard = window.DCArtboard;
+    const IOSFrame = window.IOSFrame;
+
+    return (
+      <DC initialZoom={0.55} title="Arbiter — Operator desk">
+        <Section id="desktop" title="Desktop · Operator workstation">
+          <Artboard id="desktop-app" label="Operator desk — full app (10 pages, drawer, modals, ⌘K, alerts)" width={1440} height={900}>
+            <DesktopApp/>
+          </Artboard>
+        </Section>
+
+        <Section id="mobile" title="Mobile · Companion">
+          <Artboard id="mobile-app" label="Mobile companion — home, opportunities, trades, account" width={390} height={844}>
+            <IOSFrame width={390} height={844}>
+              <MobileApp/>
+            </IOSFrame>
+          </Artboard>
+        </Section>
+
+        <Section id="auth" title="Authentication · Sign in">
+          <Artboard id="login" label="Sign in — system status + connect" width={1440} height={900}>
+            <LoginApp/>
+          </Artboard>
+        </Section>
+      </DC>
+    );
+  }
+
+  function mount() {
+    if (!window.IOSFrame && window.IOSDevice) { window.IOSFrame = window.IOSDevice; }
+    if (!window.DesignCanvas || !window.PageOverview || !window.PageOpportunities || !window.MOCK || !window.AreaChart || !window.AppProvider || !window.MobileDashboard || !window.LoginScreen || !window.Modal || !window.ExtraModal || !window.ToastHost || !window.UserMenu || !window.ConfirmDialog || !window.AgentValidateModal || !window.RefetchMappingsModal || !window.IOSFrame) {
+      return setTimeout(mount, 50);
+    }
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  }
+  mount();
+</script>
+</body>
+</html>
