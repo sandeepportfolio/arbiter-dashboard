@@ -67,6 +67,10 @@ class MarketMapping:
     # immutable-ish and lines up 1:1 with the JSONB column.
     resolution_criteria_json: str = ""
     resolution_match_status: str = "pending_operator_review"
+    # polarity_flipped: True when Polymarket's YES outcome corresponds to
+    # Kalshi's NO. Discovery flags these so the scanner can swap sides
+    # during arb math instead of dropping the pair entirely.
+    polarity_flipped: bool = False
 
     def to_dict(self) -> dict:
         # T-3-06-F: malformed JSON in resolution_criteria_json must not crash
@@ -103,6 +107,7 @@ class MarketMapping:
             # SAFE-06: expose resolution-criteria side-by-side with core fields.
             "resolution_criteria": resolution_criteria,
             "resolution_match_status": self.resolution_match_status,
+            "polarity_flipped": self.polarity_flipped,
         }
 
     @classmethod
@@ -132,6 +137,7 @@ class MarketMapping:
             confidence=score,
             resolution_criteria_json=criteria_json,
             resolution_match_status=record.resolution_match_status or "pending_operator_review",
+            polarity_flipped=bool(getattr(record, "polarity_flipped", False)),
         )
 
     @classmethod
@@ -157,6 +163,7 @@ class MarketMapping:
                 payload.get("resolution_match_status", "pending_operator_review")
                 or "pending_operator_review"
             ),
+            polarity_flipped=bool(payload.get("polarity_flipped", False)),
         )
 
 
@@ -224,6 +231,12 @@ ALTER TABLE market_mappings
 -- Widen canonical_id to VARCHAR(200) so long slugs don't truncate (idempotent).
 ALTER TABLE market_mappings    ALTER COLUMN canonical_id TYPE VARCHAR(200);
 ALTER TABLE mapping_candidates ALTER COLUMN canonical_id TYPE VARCHAR(200);
+
+-- Polarity-flipped flag: True when Polymarket YES = Kalshi NO (same market,
+-- inverted polarity). The scanner swaps Polymarket sides during arb math.
+-- Idempotent ADD COLUMN IF NOT EXISTS.
+ALTER TABLE market_mappings
+    ADD COLUMN IF NOT EXISTS polarity_flipped BOOLEAN NOT NULL DEFAULT FALSE;
 """
 
 
@@ -315,10 +328,11 @@ class MarketMappingStore:
                         aliases, tags, kalshi_market_id, polymarket_slug,
                         polymarket_question,
                         notes, mapping_score, confidence, updated_at,
-                        resolution_criteria, resolution_match_status
+                        resolution_criteria, resolution_match_status,
+                        polarity_flipped
                     ) VALUES (
                         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(),
-                        $13::jsonb, $14
+                        $13::jsonb, $14, $15
                     ) ON CONFLICT (canonical_id) DO UPDATE SET
                         description = EXCLUDED.description,
                         status = EXCLUDED.status,
@@ -333,6 +347,7 @@ class MarketMappingStore:
                         confidence = EXCLUDED.confidence,
                         resolution_criteria = EXCLUDED.resolution_criteria,
                         resolution_match_status = EXCLUDED.resolution_match_status,
+                        polarity_flipped = EXCLUDED.polarity_flipped,
                         updated_at = NOW()
                     """,
                     mapping.canonical_id,
@@ -349,6 +364,7 @@ class MarketMappingStore:
                     mapping.confidence,
                     criteria_value,
                     mapping.resolution_match_status or "pending_operator_review",
+                    bool(mapping.polarity_flipped),
                 )
                 inserted += 1
 
@@ -395,9 +411,10 @@ class MarketMappingStore:
                     polymarket_question,
                     notes, review_note, mapping_score, confidence,
                     expires_at, last_validated_at, created_at, updated_at,
-                    resolution_criteria, resolution_match_status
+                    resolution_criteria, resolution_match_status,
+                    polarity_flipped
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-                    $18::jsonb, $19
+                    $18::jsonb, $19, $20
                 ) ON CONFLICT (canonical_id) DO UPDATE SET
                     description = EXCLUDED.description,
                     status = EXCLUDED.status,
@@ -415,7 +432,8 @@ class MarketMappingStore:
                     last_validated_at = EXCLUDED.last_validated_at,
                     updated_at = NOW(),
                     resolution_criteria = EXCLUDED.resolution_criteria,
-                    resolution_match_status = EXCLUDED.resolution_match_status
+                    resolution_match_status = EXCLUDED.resolution_match_status,
+                    polarity_flipped = EXCLUDED.polarity_flipped
                 """,
                 mapping.canonical_id,
                 mapping.description,
@@ -436,6 +454,7 @@ class MarketMappingStore:
                 now,
                 criteria_value,
                 mapping.resolution_match_status or "pending_operator_review",
+                bool(mapping.polarity_flipped),
             )
             mapping.updated_at = now
             upsert_runtime_market_mapping(mapping.canonical_id, mapping.to_dict())
@@ -920,6 +939,11 @@ class MarketMappingStore:
             candidate.get("resolution_match_status", existing.resolution_match_status or "pending_operator_review")
             or "pending_operator_review"
         )
+        # Polarity flag — discovery scripts and auto_discovery flag mappings
+        # where Polymarket YES corresponds to Kalshi NO. Preserve any prior
+        # value if the new candidate doesn't explicitly set it.
+        if "polarity_flipped" in candidate:
+            existing.polarity_flipped = bool(candidate.get("polarity_flipped"))
         if existing.status == MappingStatus.CONFIRMED:
             existing.allow_auto_trade = existing.allow_auto_trade
         elif candidate_status == MappingStatus.CONFIRMED:
@@ -982,4 +1006,5 @@ class MarketMappingStore:
             resolution_criteria_json=criteria_json,
             resolution_match_status=row_dict.get("resolution_match_status")
                 or "pending_operator_review",
+            polarity_flipped=bool(row_dict.get("polarity_flipped", False)),
         )

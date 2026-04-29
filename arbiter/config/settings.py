@@ -187,6 +187,11 @@ class MarketMappingRecord:
     # the top level so API clients and the dashboard can read status without
     # inspecting the criteria dict.
     resolution_match_status: str = "pending_operator_review"
+    # When True, Polymarket's YES outcome corresponds to Kalshi's NO (same
+    # underlying market with inverted polarity). The scanner swaps the
+    # Polymarket sides during arb math; the engine refuses to auto-trade
+    # unless ENABLE_POLARITY_FLIPPED_AUTO_TRADE is also true. Defaults False.
+    polarity_flipped: bool = False
 
     def to_dict(self) -> dict:
         payload = asdict(self)
@@ -201,6 +206,7 @@ class MarketMappingRecord:
         # can safely .get() them without branching.
         payload["resolution_criteria"] = self.resolution_criteria
         payload["resolution_match_status"] = self.resolution_match_status
+        payload["polarity_flipped"] = self.polarity_flipped
         return payload
 
 
@@ -354,6 +360,7 @@ def _load_auto_seeds() -> Tuple[MarketMappingRecord, ...]:
                     notes=item.get("notes", ""),
                     resolution_criteria=item.get("resolution_criteria"),
                     resolution_match_status=item.get("resolution_match_status", "pending_operator_review"),
+                    polarity_flipped=bool(item.get("polarity_flipped", False)),
                 )
             )
         except (KeyError, TypeError, ValueError) as exc:
@@ -395,6 +402,7 @@ def upsert_runtime_market_mapping(canonical_id: str, payload: Dict[str, Any]) ->
         "resolution_match_status",
         current.get("resolution_match_status", "pending_operator_review"),
     )
+    merged.setdefault("polarity_flipped", bool(current.get("polarity_flipped", False)))
     MARKET_MAP[canonical_id] = merged
     return merged
 

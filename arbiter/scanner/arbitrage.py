@@ -176,6 +176,36 @@ class ArbitrageOpportunity:
         }
 
 
+def _flipped_view(price_point: PricePoint) -> PricePoint:
+    """Return a shallow PricePoint with YES/NO sides swapped for polarity-flipped pairs.
+
+    When a mapping has ``polarity_flipped=True`` the Polymarket YES outcome
+    corresponds to the Kalshi NO outcome (and vice versa). Rather than
+    branch every price comparison in the scanner, we present a swapped view
+    of the Polymarket price point. The original PricePoint is not mutated.
+    """
+    return PricePoint(
+        canonical_id=price_point.canonical_id,
+        platform=price_point.platform,
+        raw_market_id=price_point.raw_market_id,
+        yes_price=price_point.no_price,
+        no_price=price_point.yes_price,
+        yes_volume=price_point.no_volume,
+        no_volume=price_point.yes_volume,
+        timestamp=price_point.timestamp,
+        fee_rate=price_point.fee_rate,
+        mapping_status=price_point.mapping_status,
+        mapping_score=price_point.mapping_score,
+        yes_bid=price_point.no_bid,
+        yes_ask=price_point.no_ask,
+        no_bid=price_point.yes_bid,
+        no_ask=price_point.yes_ask,
+        yes_market_id=price_point.no_market_id,
+        no_market_id=price_point.yes_market_id,
+        metadata=price_point.metadata,
+    )
+
+
 def extract_outcome_metadata(price_point: PricePoint, side: str) -> tuple[str, str]:
     """Return ``(outcome_name, question_text)`` for a side ("yes" or "no").
 
@@ -266,6 +296,13 @@ class ArbitrageScanner:
             platforms = list(prices.keys())
             mapping_status = str(mapping.get("status", "candidate"))
             mapping_score = float(mapping.get("mapping_score", 0.0))
+            # Polarity flip: when True, Polymarket YES = Kalshi NO. Present a
+            # swapped view of the Polymarket price point so the rest of the
+            # scanner pipeline can treat it identically to a normal mapping.
+            polarity_flipped = bool(mapping.get("polarity_flipped", False))
+            if polarity_flipped and "polymarket" in prices:
+                prices = dict(prices)
+                prices["polymarket"] = _flipped_view(prices["polymarket"])
 
             for yes_platform in platforms:
                 for no_platform in platforms:
@@ -484,6 +521,17 @@ class ArbitrageScanner:
                 opportunity.canonical_id,
             )
             return "review"
+        # Polarity-flipped mappings are valid (the math is correct) but the
+        # operator must explicitly enable them via env flag. Default is
+        # "manual" so the dashboard surfaces the edge without trading.
+        if mapping.get("polarity_flipped"):
+            allow_flipped = os.getenv("ENABLE_POLARITY_FLIPPED_AUTO_TRADE", "false").strip().lower() in {"1", "true", "yes", "on"}
+            if not allow_flipped:
+                logger.debug(
+                    "scanner.skip canonical=%s reason=polarity_flipped_manual_only",
+                    opportunity.canonical_id,
+                )
+                return "manual"
         res_status = str(mapping.get("resolution_match_status", "pending_operator_review")).lower()
         if res_status != "identical":
             logger.debug(
