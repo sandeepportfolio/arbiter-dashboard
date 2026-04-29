@@ -1936,8 +1936,8 @@ function PageOpportunities() {
       {/* Toolbar */}
       <div style={{ display:'flex', gap: 8, marginBottom: 12, alignItems:'center' }}>
         <input placeholder="Filter by description or canonical ID…" value={search} onChange={e => setSearch(e.target.value)} style={{ flex: 1, padding: '8px 12px', background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 7, fontSize: 12.5, color: t.text, outline: 'none' }} />
-        <window.Btn variant="secondary" size="sm" onClick={() => setSort(sort === 'edge' ? 'profit' : 'edge')}>Sort: {sort === 'edge' ? 'Net edge ↓' : 'Expected profit ↓'}</window.Btn>
-        <window.Btn variant="secondary" size="sm" icon="↓" hint="Download all visible opportunities as CSV" onClick={exportCsv}>Export CSV</window.Btn>
+        <window.Btn variant="secondary" size="sm" hint="Toggle between sorting by net edge (¢) and expected profit ($)" onClick={() => setSort(sort === 'edge' ? 'profit' : 'edge')}>Sort: {sort === 'edge' ? 'Net edge ↓' : 'Expected profit ↓'}</window.Btn>
+        <window.Btn variant="secondary" size="sm" icon="↓" disabled={filtered.length === 0} hint="Download the visible opportunities (post-filter, post-search) as a CSV" disabledHint="No active opportunities to export — clear the filter or wait for the scanner to publish one" onClick={exportCsv}>Export CSV</window.Btn>
       </div>
 
       {/* Table */}
@@ -2310,7 +2310,7 @@ function PageMarkets() {
   return (
     <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto' }}>
       <window.PageHeader kicker="Mapped universe" title="Markets" sub="312 confirmed mappings across 8 categories. Click any market to see live prices on both platforms.">
-        <window.Btn variant="secondary" size="sm" icon="↓" onClick={() => setModal({ kind: 'export', payload: 'markets' })}>Export</window.Btn>
+        <window.Btn variant="secondary" size="sm" icon="↓" hint="Download the full mapped-market list as CSV or JSON" onClick={() => setModal({ kind: 'export', payload: 'markets' })}>Export</window.Btn>
         <window.Btn variant="primary" size="sm" icon="+" hint="Manually add a cross-platform market pair" onClick={() => setModal({ kind: 'newMapping' })}>New mapping</window.Btn>
       </window.PageHeader>
 
@@ -2627,8 +2627,8 @@ function PlatformBalCard({ platform, color }) {
       <div style={{ fontSize: 36, fontWeight: 600, color: t.text, fontFamily: window.FONTS.mono, letterSpacing:'-0.02em', marginBottom: 4 }}>{window.fmt$(bal)}</div>
       <div style={{ fontSize: 12, color: pnl >= 0 ? t.green : t.red, marginBottom: 16 }}>{window.fmt$Sign(pnl)} ({window.fmtPct(pnl/start)}) since inception</div>
       <div style={{ display:'flex', gap: 8 }}>
-        <window.Btn variant="secondary" size="sm" onClick={() => setModal({ kind: 'deposit', payload: platform })}>Deposit</window.Btn>
-        <window.Btn variant="ghost" size="sm" onClick={() => setModal({ kind: 'withdraw', payload: platform })}>Withdraw</window.Btn>
+        <window.Btn variant="secondary" size="sm" hint={`Move funds INTO ${platform === 'kalshi' ? 'Kalshi' : 'Polymarket'} — increases buying power for this venue`} onClick={() => setModal({ kind: 'deposit', payload: platform })}>Deposit</window.Btn>
+        <window.Btn variant="ghost" size="sm" hint={`Pull funds OUT of ${platform === 'kalshi' ? 'Kalshi' : 'Polymarket'} — reduces buying power; settles in 1–2 business days`} onClick={() => setModal({ kind: 'withdraw', payload: platform })}>Withdraw</window.Btn>
       </div>
     </div>
   );
@@ -3088,8 +3088,8 @@ function TradeDetailModal() {
       </div>
 
       <div style={{ padding: '14px 24px', borderTop: `1px solid ${t.border}`, background: t.bgSubtle, display:'flex', justifyContent:'flex-end', gap: 8 }}>
-        <window.Btn variant="ghost" size="sm" onClick={() => { navigator.clipboard?.writeText(r.arb_id).catch(()=>{}); toast('Trade ID copied', { sub: r.arb_id }); }}>Copy ID</window.Btn>
-        <window.Btn variant="secondary" size="sm" onClick={() => { try { const json = JSON.stringify(r, null, 2); const w = window.open('', '_blank'); if (w) { w.document.write('<pre style="font-family:ui-monospace,monospace;font-size:12px;padding:16px;">' + json.replace(/[<>&]/g, s => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[s])) + '</pre>'); w.document.title = r.arb_id + ' · raw JSON'; } else { toast('Pop-up blocked'); } } catch { toast('Could not open JSON view'); } }}>View raw JSON</window.Btn>
+        <window.Btn variant="ghost" size="sm" hint="Copy the arb_id to clipboard — paste into logs/Slack to look up this trade" onClick={() => { navigator.clipboard?.writeText(r.arb_id).catch(()=>{}); toast('Trade ID copied', { sub: r.arb_id }); }}>Copy ID</window.Btn>
+        <window.Btn variant="secondary" size="sm" hint="Open the full trade record (legs, fills, fees, incidents) as raw JSON in a new tab" onClick={() => { try { const json = JSON.stringify(r, null, 2); const w = window.open('', '_blank'); if (w) { w.document.write('<pre style="font-family:ui-monospace,monospace;font-size:12px;padding:16px;">' + json.replace(/[<>&]/g, s => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[s])) + '</pre>'); w.document.title = r.arb_id + ' · raw JSON'; } else { toast('Pop-up blocked'); } } catch { toast('Could not open JSON view'); } }}>View raw JSON</window.Btn>
       </div>
     </Shell>
   );
@@ -3367,7 +3367,7 @@ function MarketDetailModal() {
         </div>
       </div>
       <Footer>
-        <window.Btn variant="ghost" size="sm" onClick={() => { setWatchlist(w => inList ? w.filter(x=>x!==o.canonical_id) : [...w, o.canonical_id]); toast(inList ? 'Removed from watchlist' : 'Added to watchlist'); }}>{inList ? '★ Watching' : '☆ Watch'}</window.Btn>
+        <window.Btn variant="ghost" size="sm" hint={inList ? 'Remove this market from your watchlist — stops surfacing it on Overview' : 'Pin this market to your watchlist — appears at the top of Overview while edge persists'} onClick={() => { setWatchlist(w => inList ? w.filter(x=>x!==o.canonical_id) : [...w, o.canonical_id]); toast(inList ? 'Removed from watchlist' : 'Added to watchlist'); }}>{inList ? '★ Watching' : '☆ Watch'}</window.Btn>
         <window.Btn variant="secondary" size="sm" onClick={() => { setModal(null); setPage('mappings'); }}>View mapping</window.Btn>
         <window.Btn variant="primary" size="sm" icon="→" onClick={() => { const idx = M.opportunities.indexOf(o); setModal(null); setPage('opportunities'); setDrawer({ kind:'opp', payload: idx >= 0 ? idx : 0 }); }}>Open opportunity</window.Btn>
       </Footer>
@@ -4078,10 +4078,10 @@ function AgentSession({ candidate, onAccept, mobile }) {
           </div>
         )}
         <div style={{ display:'flex', gap: 6, flexShrink: 0 }}>
-          {!done && <window.Btn variant="ghost" size={mobile ? 'sm' : 'sm'} onClick={() => setPaused(p => !p)}>{paused ? 'Resume' : 'Pause'}</window.Btn>}
-          {done && verdict?.verdict === 'confirm' && <window.Btn variant="primary" size="sm" onClick={() => onAccept(verdict)}>{mobile ? 'Confirm' : 'Apply confirm'}</window.Btn>}
-          {done && verdict?.verdict === 'reject' && <window.Btn variant="danger" size="sm" onClick={() => onAccept(verdict)}>{mobile ? 'Reject' : 'Apply reject'}</window.Btn>}
-          {done && verdict?.verdict === 'manual_review' && <window.Btn variant="secondary" size="sm" onClick={() => onAccept({ verdict:'review' })}>{mobile ? 'Review' : 'Keep for review'}</window.Btn>}
+          {!done && <window.Btn variant="ghost" size={mobile ? 'sm' : 'sm'} hint={paused ? 'Resume the agent — continue running validation steps' : 'Pause the agent mid-step — useful if you want to inspect intermediate output'} onClick={() => setPaused(p => !p)}>{paused ? 'Resume' : 'Pause'}</window.Btn>}
+          {done && verdict?.verdict === 'confirm' && <window.Btn variant="primary" size="sm" hint="Mark this mapping as confirmed — enables it for live scanning" onClick={() => onAccept(verdict)}>{mobile ? 'Confirm' : 'Apply confirm'}</window.Btn>}
+          {done && verdict?.verdict === 'reject' && <window.Btn variant="danger" size="sm" hint="Mark this mapping as not-a-match — removes it from the scanner" onClick={() => onAccept(verdict)}>{mobile ? 'Reject' : 'Apply reject'}</window.Btn>}
+          {done && verdict?.verdict === 'manual_review' && <window.Btn variant="secondary" size="sm" hint="Keep this pair in the review queue for a human decision" onClick={() => onAccept({ verdict:'review' })}>{mobile ? 'Review' : 'Keep for review'}</window.Btn>}
         </div>
       </div>
     </div>
