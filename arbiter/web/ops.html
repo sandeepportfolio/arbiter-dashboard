@@ -1107,39 +1107,58 @@ const STATUS_INFO = {
 window.STATUS_INFO = STATUS_INFO;
 
 // ── Tooltip (hover on desktop, tap on mobile) ───────────────────────
-function Tooltip({ text, children }) {
+function Tooltip({ text, children, placement = 'top' }) {
   const { t } = window.useApp();
   const [show, setShow] = React.useState(false);
   const ref = React.useRef(null);
-  const isMobile = window.innerWidth <= 1023;
+  // Trust touch capability over viewport size — a wide tablet in landscape
+  // still has no hover, so it should still tap-to-reveal.
+  const isMobile = typeof window !== 'undefined' && window.matchMedia
+    ? window.matchMedia('(hover: none), (max-width: 1023px)').matches
+    : false;
 
-  // close on outside tap (mobile)
   React.useEffect(() => {
-    if (!show || !isMobile) return;
-    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setShow(false); };
-    document.addEventListener('touchstart', handler, { passive: true });
-    return () => document.removeEventListener('touchstart', handler);
-  }, [show, isMobile]);
+    if (!show) return;
+    const tapOut = (e) => { if (ref.current && !ref.current.contains(e.target)) setShow(false); };
+    const onKey = (e) => { if (e.key === 'Escape') setShow(false); };
+    document.addEventListener('touchstart', tapOut, { passive: true });
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('touchstart', tapOut);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [show]);
+
+  if (!text) return <>{children}</>;
+  const above = placement !== 'bottom';
 
   return (
     <span ref={ref} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}
       onMouseEnter={isMobile ? undefined : () => setShow(true)}
       onMouseLeave={isMobile ? undefined : () => setShow(false)}
+      onFocus={() => setShow(true)}
+      onBlur={() => setShow(false)}
       onClick={isMobile ? (e) => { e.stopPropagation(); setShow(s => !s); } : undefined}
     >
       {children}
-      {show && text && (
-        <span style={{
-          position: 'absolute', bottom: 'calc(100% + 6px)', left: '50%', transform: 'translateX(-50%)',
+      {show && (
+        <span role="tooltip" style={{
+          position: 'absolute',
+          [above ? 'bottom' : 'top']: 'calc(100% + 6px)',
+          left: '50%', transform: 'translateX(-50%)',
           background: t.bg2 || t.bgSubtle, color: t.text, border: `1px solid ${t.border}`,
-          padding: '6px 10px', borderRadius: 8, fontSize: 11, lineHeight: 1.4,
-          whiteSpace: 'nowrap', maxWidth: 260, zIndex: 9999,
-          boxShadow: '0 4px 16px rgba(0,0,0,0.35)', pointerEvents: 'none',
-          fontWeight: 400, letterSpacing: 0, textTransform: 'none',
+          padding: '7px 11px', borderRadius: 8, fontSize: 11.5, lineHeight: 1.45,
+          whiteSpace: 'normal', width: 'max-content', maxWidth: 260, zIndex: 9999,
+          boxShadow: '0 6px 24px rgba(0,0,0,0.45)', pointerEvents: 'none',
+          fontWeight: 400, letterSpacing: 0, textTransform: 'none', textAlign: 'left',
         }}>
-          <span style={{ position: 'absolute', top: '100%', left: '50%', transform: 'translateX(-50%)',
-            width: 0, height: 0, borderLeft: '5px solid transparent', borderRight: '5px solid transparent',
-            borderTop: `5px solid ${t.border}`,
+          <span style={{
+            position: 'absolute',
+            [above ? 'top' : 'bottom']: '100%',
+            left: '50%', transform: 'translateX(-50%)',
+            width: 0, height: 0,
+            borderLeft: '5px solid transparent', borderRight: '5px solid transparent',
+            [above ? 'borderTop' : 'borderBottom']: `5px solid ${t.border}`,
           }}/>
           {text}
         </span>
@@ -2359,7 +2378,7 @@ function PageMappings() {
     <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto' }}>
       <window.PageHeader kicker="Cross-platform" title="Mappings" sub="Semantic matches between Kalshi and Polymarket markets, scored by description similarity, dates, and resolution criteria.">
         <window.Btn variant="secondary" size="sm" icon="↻" hint="Pull latest mapping data from the discovery pipeline" onClick={() => setModal({ kind:'refetchMappings' })}>Re-fetch mappings</window.Btn>
-        <window.Btn variant="primary" size="sm" icon="◇" onClick={() => {
+        <window.Btn variant="primary" size="sm" icon="◇" hint="Run a Claude agent against every pending candidate — produces a confirm/reject verdict for each" onClick={() => {
           // ⚠ BACKEND NOTE: this validates each pending candidate with an agent in
           // sequence. Real impl should fan out concurrent agents (cap=4) and stream
           // a multi-pane progress view. For now we open the first reviewable.
@@ -2963,7 +2982,7 @@ function ExecuteModal() {
             <span style={{ fontSize: 11, color: t.textDim }}>⚡ Both legs submitted atomically. Auto-recovery on partial fill.</span>
             <div style={{ flex: 1 }}/>
             <window.Btn variant="ghost" onClick={() => setModal(null)}>Cancel</window.Btn>
-            <window.Btn variant="primary" onClick={submit} icon="→">Submit trade</window.Btn>
+            <window.Btn variant="primary" onClick={submit} icon="→" hint="Place YES + NO orders atomically — partial fills will trigger auto-recovery">Submit trade</window.Btn>
           </div>
         </>
       )}
@@ -3505,7 +3524,7 @@ function ApiKeyModal() {
       </div>
       <Footer>
         <window.Btn variant="ghost" size="sm" onClick={() => setModal(null)}>Close</window.Btn>
-        <window.Btn variant="danger" size="sm" onClick={() => { setModal(null); toast('API key rotated', { sub:'old key revoked', tone:'warn' }); }}>Rotate key</window.Btn>
+        <window.Btn variant="danger" size="sm" hint="Generate a new API key — old key is revoked instantly. Update integrations before rotating." onClick={() => { setModal(null); toast('API key rotated', { sub:'old key revoked', tone:'warn' }); }}>Rotate key</window.Btn>
       </Footer>
     </Shell>
   );
