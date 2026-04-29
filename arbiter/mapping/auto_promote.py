@@ -161,6 +161,19 @@ async def maybe_promote(
         logger.debug("auto_promote REJECTED candidate=%s reason=%s", candidate.get("kalshi_ticker"), reason)
         return PromotionResult(promoted=False, reason=reason)
 
+    # ── Gate 0: Structural safety — refuse multi-leg / bracket Kalshi tickers
+    # These cannot be cleanly arbed against single-leg binary Polymarket markets.
+    # The scanner has separate guards but they fire AT TRADE TIME — failing
+    # promotion here keeps these out of the runtime cache entirely.
+    kalshi_ticker = (candidate.get("kalshi_ticker", "") or "").upper()
+    _MULTI_LEG_PREFIXES = (
+        "KXMVE", "KXMVECROSSCATEGORY",
+        "KXDSENATESEATS", "KXRSENATESEATS",
+        "KXDHOUSESEATS", "KXRHOUSESEATS",
+    )
+    if any(kalshi_ticker.startswith(prefix) for prefix in _MULTI_LEG_PREFIXES):
+        return _reject("structurally_unsafe_multi_leg")
+
     # ── Gate 1: AUTO_PROMOTE_ENABLED ──────────────────────────────────────────
     if not _setting(settings, "AUTO_PROMOTE_ENABLED", "auto_promote_enabled", default=False):
         return _reject("auto_promote_disabled")

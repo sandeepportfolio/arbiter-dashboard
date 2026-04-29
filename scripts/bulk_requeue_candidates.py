@@ -34,6 +34,38 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from arbiter.mapping.auto_promote import maybe_promote
+from arbiter.mapping.auto_discovery import _looks_like_multi_leg_kalshi_market
+
+
+# Kalshi ticker prefixes that represent structurally non-binary markets
+# (multi-leg parlays, cross-category, seat-count brackets). The scanner
+# already refuses to act on these via the bracket guard, but the
+# auto_promote gate doesn't know about them. Block them here so the
+# bulk-requeue path doesn't promote a parlay against a single-game prop.
+_MULTI_LEG_PREFIXES = (
+    "KXMVE",                # Multi-leg sports parlays
+    "KXMVECROSSCATEGORY",   # Cross-category compound bets
+    "KXDSENATESEATS",       # Seat-count brackets (vs binary control markets)
+    "KXRSENATESEATS",
+    "KXDHOUSESEATS",
+    "KXRHOUSESEATS",
+)
+
+
+def _is_structurally_safe(mapping) -> bool:
+    """Reject mappings whose Kalshi ticker is a known multi-leg/bracket type."""
+    ticker = (mapping.kalshi_market_id or "").upper()
+    if any(ticker.startswith(prefix) for prefix in _MULTI_LEG_PREFIXES):
+        return False
+    # Also drop anything the discovery-side multi-leg heuristic would reject
+    fake_market = {
+        "ticker": ticker,
+        "event_ticker": ticker,
+        "title": mapping.description or "",
+    }
+    if _looks_like_multi_leg_kalshi_market(fake_market):
+        return False
+    return True
 from arbiter.mapping.llm_verifier import verify as llm_verify
 from arbiter.mapping.market_map import MappingStatus, MarketMappingStore
 
@@ -105,12 +137,14 @@ async def main() -> int:
         await store.disconnect()
         return 3
 
-    eligible = [m for m in candidates
-                if (m.mapping_score or m.confidence or 0.0) >= args.min_score
-                and m.kalshi_market_id and m.polymarket_slug]
+    pre_eligible = [m for m in candidates
+                    if (m.mapping_score or m.confidence or 0.0) >= args.min_score
+                    and m.kalshi_market_id and m.polymarket_slug]
+    eligible = [m for m in pre_eligible if _is_structurally_safe(m)]
+    skipped_multi_leg = len(pre_eligible) - len(eligible)
 
-    logger.info("Loaded %d candidates total, %d above score >= %.2f",
-                len(candidates), len(eligible), args.min_score)
+    logger.info("Loaded %d candidates total, %d above score >= %.2f, %d eligible after multi-leg filter (skipped %d)",
+                len(candidates), len(pre_eligible), args.min_score, len(eligible), skipped_multi_leg)
 
     promotion_settings = {
         "AUTO_PROMOTE_ENABLED": True,

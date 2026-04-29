@@ -450,6 +450,54 @@ async def test_all_gates_pass_returns_promoted():
 
 
 @pytest.mark.asyncio
+async def test_multi_leg_kalshi_tickers_rejected_before_other_gates():
+    """KXMVE* and bracket-seat tickers must never promote, regardless of LLM
+    or score. The scanner guards these too, but failing here keeps them out
+    of the runtime cache entirely."""
+    settings = _make_settings()
+    settings["AUTO_PROMOTE_FAST_PATH_SCORE"] = 0.95
+    candidate = _make_candidate(score=0.99, resolution_date=_days_from_now(30))
+    candidate["kalshi_ticker"] = "KXMVESPORTSMULTIGAMEEXTENDED-FOO-BAR"
+
+    async def _llm_yes(*args, **kwargs):
+        return "YES"  # even a yes shouldn't help
+
+    result = await maybe_promote(
+        candidate,
+        settings=settings,
+        orderbooks=_make_orderbooks(),
+        llm_verifier=_llm_yes,
+        today_promoted_count=0,
+        cooling_state={},
+        resolution_checker=_resolution_check_identical,
+    )
+    assert not result.promoted
+    assert result.reason == "structurally_unsafe_multi_leg"
+
+
+@pytest.mark.asyncio
+async def test_seat_count_bracket_tickers_rejected():
+    settings = _make_settings()
+    candidate = _make_candidate(score=0.95, resolution_date=_days_from_now(30))
+    candidate["kalshi_ticker"] = "KXDSENATESEATS-27-47"
+
+    async def _llm_yes(*args, **kwargs):
+        return "YES"
+
+    result = await maybe_promote(
+        candidate,
+        settings=settings,
+        orderbooks=_make_orderbooks(),
+        llm_verifier=_llm_yes,
+        today_promoted_count=0,
+        cooling_state={},
+        resolution_checker=_resolution_check_identical,
+    )
+    assert not result.promoted
+    assert result.reason == "structurally_unsafe_multi_leg"
+
+
+@pytest.mark.asyncio
 async def test_fast_path_skips_llm_when_resolution_identical_and_score_high():
     """Fast-path: resolution=IDENTICAL + score >= AUTO_PROMOTE_FAST_PATH_SCORE
     should skip the LLM call entirely, treating it as implicit YES."""
