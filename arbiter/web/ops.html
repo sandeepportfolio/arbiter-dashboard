@@ -1079,8 +1079,78 @@ function Stat({ label, value, sub, tone, mono, big }) {
   );
 }
 
+// ── Status descriptions (shared) ────────────────────────────────────
+const STATUS_INFO = {
+  // Execution statuses
+  filled:     { tone: 'green',  icon: '✓', desc: 'Order fully executed at target price' },
+  submitted:  { tone: 'amber',  icon: '◌', desc: 'Order sent to exchange, awaiting fill confirmation' },
+  failed:     { tone: 'red',    icon: '✕', desc: 'Order rejected or timed out — no capital at risk' },
+  recovering: { tone: 'blue',   icon: '↻', desc: 'One leg filled, system working to close the other side' },
+  aborted:    { tone: 'default',icon: '⊘', desc: 'Safety kill — prevented naked leg exposure' },
+  // Opportunity statuses
+  tradable:   { tone: 'green',  icon: '●', desc: 'Edge confirmed, liquidity verified — ready to execute' },
+  candidate:  { tone: 'blue',   icon: '◎', desc: 'Potential arb detected, awaiting persistence confirmation' },
+  review:     { tone: 'purple', icon: '⌕', desc: 'Needs manual review — mapping or polarity uncertain' },
+  stale:      { tone: 'default',icon: '◦', desc: 'Quote too old (>30s) — edge may no longer exist' },
+  illiquid:   { tone: 'red',    icon: '△', desc: 'Insufficient orderbook depth to fill at quoted price' },
+  expired:    { tone: 'default',icon: '—', desc: 'Market has closed or settled' },
+  // Mapping statuses
+  confirmed:  { tone: 'green',  icon: '✓', desc: 'Cross-platform pair verified and active for trading' },
+  pending:    { tone: 'amber',  icon: '◌', desc: 'Awaiting agent validation before auto-trading' },
+  rejected:   { tone: 'red',    icon: '✕', desc: 'Mapping rejected — platforms do not match' },
+  // System
+  pass:       { tone: 'green',  icon: '✓', desc: 'Gate check passed' },
+  fail:       { tone: 'red',    icon: '✕', desc: 'Gate check failed — action may be needed' },
+  connected:  { tone: 'green',  icon: '●', desc: 'Exchange API connected and responsive' },
+  settled:    { tone: 'green',  icon: '✓', desc: 'Position fully settled, P&L realized' },
+};
+window.STATUS_INFO = STATUS_INFO;
+
+// ── Tooltip (hover on desktop, tap on mobile) ───────────────────────
+function Tooltip({ text, children }) {
+  const { t } = window.useApp();
+  const [show, setShow] = React.useState(false);
+  const ref = React.useRef(null);
+  const isMobile = window.innerWidth <= 1023;
+
+  // close on outside tap (mobile)
+  React.useEffect(() => {
+    if (!show || !isMobile) return;
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setShow(false); };
+    document.addEventListener('touchstart', handler, { passive: true });
+    return () => document.removeEventListener('touchstart', handler);
+  }, [show, isMobile]);
+
+  return (
+    <span ref={ref} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}
+      onMouseEnter={isMobile ? undefined : () => setShow(true)}
+      onMouseLeave={isMobile ? undefined : () => setShow(false)}
+      onClick={isMobile ? (e) => { e.stopPropagation(); setShow(s => !s); } : undefined}
+    >
+      {children}
+      {show && text && (
+        <span style={{
+          position: 'absolute', bottom: 'calc(100% + 6px)', left: '50%', transform: 'translateX(-50%)',
+          background: t.bg2 || t.bgSubtle, color: t.text, border: `1px solid ${t.border}`,
+          padding: '6px 10px', borderRadius: 8, fontSize: 11, lineHeight: 1.4,
+          whiteSpace: 'nowrap', maxWidth: 260, zIndex: 9999,
+          boxShadow: '0 4px 16px rgba(0,0,0,0.35)', pointerEvents: 'none',
+          fontWeight: 400, letterSpacing: 0, textTransform: 'none',
+        }}>
+          <span style={{ position: 'absolute', top: '100%', left: '50%', transform: 'translateX(-50%)',
+            width: 0, height: 0, borderLeft: '5px solid transparent', borderRight: '5px solid transparent',
+            borderTop: `5px solid ${t.border}`,
+          }}/>
+          {text}
+        </span>
+      )}
+    </span>
+  );
+}
+window.Tooltip = Tooltip;
+
 // ── Pill / Badge ────────────────────────────────────────────────────
-function Pill({ children, tone = 'default', size = 'sm' }) {
+function Pill({ children, tone = 'default', size = 'sm', hint, icon }) {
   const { t } = window.useApp();
   const map = {
     green:   [t.green, t.greenSoft],
@@ -1093,12 +1163,22 @@ function Pill({ children, tone = 'default', size = 'sm' }) {
   };
   const [fg, bg] = map[tone] || map.default;
   const sm = size === 'sm';
-  return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: sm ? '2px 8px' : '4px 11px', background: bg, color: fg, borderRadius: 99, fontSize: sm ? 10.5 : 11.5, fontWeight: 600, letterSpacing: '0.02em', whiteSpace:'nowrap', lineHeight: 1.5, textTransform: 'capitalize', verticalAlign: 'middle' }}>
+  const pill = (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: sm ? '2px 8px' : '4px 11px', background: bg, color: fg, borderRadius: 99, fontSize: sm ? 10.5 : 11.5, fontWeight: 600, letterSpacing: '0.02em', whiteSpace:'nowrap', lineHeight: 1.5, textTransform: 'capitalize', verticalAlign: 'middle', cursor: hint ? 'help' : undefined }}>
+      {icon && <span style={{ fontSize: sm ? 9 : 10, lineHeight: 1, opacity: 0.85 }}>{icon}</span>}
       {children}
     </span>
   );
+  if (hint) return <window.Tooltip text={hint}>{pill}</window.Tooltip>;
+  return pill;
 }
+
+// ── StatusBadge — auto-colorized + tooltip from STATUS_INFO ─────────
+function StatusBadge({ status, size = 'sm', showIcon = true }) {
+  const info = STATUS_INFO[status] || { tone: 'default', icon: '', desc: '' };
+  return <Pill tone={info.tone} size={size} hint={info.desc} icon={showIcon ? info.icon : null}>{status}</Pill>;
+}
+window.StatusBadge = StatusBadge;
 
 // ── PlatformChip — Kalshi / Polymarket ──────────────────────────────
 function PlatformChip({ name, side }) {
@@ -1115,7 +1195,10 @@ function PlatformChip({ name, side }) {
 }
 
 // ── Button ──────────────────────────────────────────────────────────
-function Btn({ children, variant = 'secondary', size = 'md', onClick, icon, disabled }) {
+// `hint` shows a tooltip on hover/tap describing the action.
+// `disabledHint` overrides `hint` when the button is disabled, so the user
+// learns *why* it's disabled instead of just seeing the action description.
+function Btn({ children, variant = 'secondary', size = 'md', onClick, icon, disabled, hint, disabledHint }) {
   const { t } = window.useApp();
   const sm = size === 'sm';
   const variants = {
@@ -1126,7 +1209,7 @@ function Btn({ children, variant = 'secondary', size = 'md', onClick, icon, disa
     accent:    { bg: t.accent, fg: '#fff', bd: t.accent },
   };
   const v = variants[variant];
-  return (
+  const btn = (
     <button onClick={onClick} disabled={disabled} style={{
       display:'inline-flex', alignItems:'center', gap: 6,
       padding: sm ? '5px 10px' : '7px 14px',
@@ -1139,6 +1222,9 @@ function Btn({ children, variant = 'secondary', size = 'md', onClick, icon, disa
       {children}
     </button>
   );
+  const tip = disabled ? (disabledHint || hint) : hint;
+  if (tip) return <window.Tooltip text={tip}>{btn}</window.Tooltip>;
+  return btn;
 }
 
 // ── DataTable ───────────────────────────────────────────────────────
@@ -1583,8 +1669,8 @@ function PageOverview() {
   return (
     <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto' }}>
       <window.PageHeader kicker="Operator desk" title="Overview" sub="Live arbitrage activity across Kalshi and Polymarket. The scanner is monitoring 312 mapped markets.">
-        <window.Btn variant="secondary" size="sm" icon="↓" onClick={() => setPage('deposits')}>Deposit</window.Btn>
-        <window.Btn variant="primary" size="sm" icon="◇" onClick={() => setPage('opportunities')}>View opportunities</window.Btn>
+        <window.Btn variant="secondary" size="sm" icon="↓" hint="Add funds to Kalshi or Polymarket" onClick={() => setPage('deposits')}>Deposit</window.Btn>
+        <window.Btn variant="primary" size="sm" icon="◇" hint="Browse all detected cross-platform arb edges" onClick={() => setPage('opportunities')}>View opportunities</window.Btn>
       </window.PageHeader>
 
       {/* KPI strip — sparklines fall back to a flat line at the current value
@@ -1683,7 +1769,7 @@ function PageOverview() {
           { label: 'Time', w: '90px', render: r => <span style={{ fontFamily: window.FONTS.mono, color: t.textDim, fontSize: 11.5 }}>{window.ago(r.timestamp)}</span> },
           { label: 'ID', w: '110px', render: r => <span style={{ fontFamily: window.FONTS.mono, color: t.text, fontSize: 11.5 }}>{r.arb_id}</span> },
           { label: 'Market', render: r => <span style={{ fontSize: 12.5 }}>{r.opportunity.description}</span> },
-          { label: 'Status', w: '120px', render: r => <window.Pill tone={r.status === 'filled' ? 'green' : r.status === 'recovering' ? 'amber' : 'red'}>{r.status}</window.Pill> },
+          { label: 'Status', w: '120px', render: r => <window.StatusBadge status={r.status}/> },
           { label: 'P&L', w: '110px', align: 'right', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12.5, color: r.realized_pnl >= 0 ? t.green : t.red, fontWeight: 600 }}>{window.fmt$Sign(r.realized_pnl)}</span> },
         ]} rows={execs.slice(0, 5)} onRowClick={(r) => { setPage('trades'); }} emptyTitle="No trades yet" emptyHint="Filled and recovering arbitrage trades will show up here." emptyIcon="↗"/>
       </window.Card>
@@ -1832,7 +1918,7 @@ function PageOpportunities() {
       <div style={{ display:'flex', gap: 8, marginBottom: 12, alignItems:'center' }}>
         <input placeholder="Filter by description or canonical ID…" value={search} onChange={e => setSearch(e.target.value)} style={{ flex: 1, padding: '8px 12px', background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 7, fontSize: 12.5, color: t.text, outline: 'none' }} />
         <window.Btn variant="secondary" size="sm" onClick={() => setSort(sort === 'edge' ? 'profit' : 'edge')}>Sort: {sort === 'edge' ? 'Net edge ↓' : 'Expected profit ↓'}</window.Btn>
-        <window.Btn variant="secondary" size="sm" icon="↓" onClick={exportCsv}>Export CSV</window.Btn>
+        <window.Btn variant="secondary" size="sm" icon="↓" hint="Download all visible opportunities as CSV" onClick={exportCsv}>Export CSV</window.Btn>
       </div>
 
       {/* Table */}
@@ -1868,15 +1954,8 @@ function PageOpportunities() {
               <div style={{ fontSize: 10, color: t.textMuted, fontFamily: window.FONTS.mono }}>{r.suggested_qty} sh</div>
             </div>
           )},
-          { label: 'Status', w: '110px', render: r => {
-            const tone = r.status === 'tradable' ? 'green'
-              : r.status === 'candidate' ? 'blue'
-              : r.status === 'review' ? 'amber'
-              : r.status === 'illiquid' ? 'red'
-              : 'default'; // stale → gray
-            return <window.Pill tone={tone}>{r.status}</window.Pill>;
-          }},
-          { label: '', w: '90px', align: 'right', render: r => r.status === 'tradable' ? <window.Btn variant="primary" size="sm" onClick={(e) => { e.stopPropagation(); setModal({ kind: 'execute', payload: M.opportunities.indexOf(r) }); }}>Execute →</window.Btn> : <span style={{ fontSize: 11, color: t.textMuted }}>—</span> },
+          { label: 'Status', w: '110px', render: r => <window.StatusBadge status={r.status}/> },
+          { label: '', w: '90px', align: 'right', render: r => r.status === 'tradable' ? <window.Btn variant="primary" size="sm" hint="Open the execution dialog — review size, then place YES + NO legs simultaneously" onClick={(e) => { e.stopPropagation(); setModal({ kind: 'execute', payload: M.opportunities.indexOf(r) }); }}>Execute →</window.Btn> : <span style={{ fontSize: 11, color: t.textMuted }}>—</span> },
         ]} rows={filtered} onRowClick={(r) => setDrawer({ kind: 'opp', payload: M.opportunities.indexOf(r) })} emptyTitle={search || filter !== 'all' ? 'No matching opportunities' : 'No opportunities right now'} emptyHint={search || filter !== 'all' ? 'Try a different filter or clear the search.' : 'The scanner is running. Cross-platform edges will appear here as soon as one opens.'} emptyIcon="◇"/>
       </window.Card>
     </div>
@@ -1924,7 +2003,7 @@ function OppDrawer() {
       <div onClick={e => e.stopPropagation()} style={{ width: 520, height: '100%', background: t.bgCard, borderLeft: `1px solid ${t.border}`, display:'flex', flexDirection:'column', boxShadow: t.shadowLg }}>
         <div style={{ padding: '20px 24px', borderBottom: `1px solid ${t.border}` }}>
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom: 10 }}>
-            <window.Pill tone={o.status === 'tradable' ? 'green' : 'blue'}>{o.status}</window.Pill>
+            <window.StatusBadge status={o.status}/>
             <button onClick={() => setDrawer(null)} style={{ background:'none', border:'none', color: t.textMuted, fontSize: 18, cursor:'pointer' }}>✕</button>
           </div>
           <div style={{ fontSize: 17, fontWeight: 600, color: t.text, lineHeight: 1.35, marginBottom: 6 }}>{o.description}</div>
@@ -1975,8 +2054,8 @@ function OppDrawer() {
         <div style={{ padding: '16px 24px', borderTop: `1px solid ${t.border}`, display:'flex', gap: 8 }}>
           <window.Btn variant="ghost" onClick={() => setDrawer(null)}>Cancel</window.Btn>
           <div style={{ flex: 1 }}/>
-          <window.Btn variant="secondary" icon="◇" onClick={() => { setDrawer(null); toast('Marked for review', { sub: o.canonical_id }); }}>Mark for review</window.Btn>
-          <window.Btn variant="primary" icon="→" onClick={() => { setDrawer(null); setModal({ kind: 'execute', payload: drawer.payload }); }}>Execute trade</window.Btn>
+          <window.Btn variant="secondary" icon="◇" hint="Flag this pair for an agent re-check — keeps it in the queue but skips auto-execution" onClick={() => { setDrawer(null); toast('Marked for review', { sub: o.canonical_id }); }}>Mark for review</window.Btn>
+          <window.Btn variant="primary" icon="→" hint="Open the execution dialog — review size, then place YES + NO legs simultaneously" onClick={() => { setDrawer(null); setModal({ kind: 'execute', payload: drawer.payload }); }}>Execute trade</window.Btn>
         </div>
       </div>
     </div>
@@ -2083,10 +2162,7 @@ function PageTrades() {
           )},
           { label: 'YES', w: '160px', render: r => <LegCell leg={r.leg_yes} platform={r.opportunity.yes_platform}/> },
           { label: 'NO', w: '160px', render: r => <LegCell leg={r.leg_no} platform={r.opportunity.no_platform}/> },
-          { label: 'Status', w: '100px', render: r => {
-            const tone = r.status === 'filled' ? 'green' : r.status === 'recovering' ? 'amber' : 'red';
-            return <window.Pill tone={tone}>{r.status}</window.Pill>;
-          }},
+          { label: 'Status', w: '100px', render: r => <window.StatusBadge status={r.status}/> },
           { label: 'P&L', w: '100px', align: 'right', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12.5, color: r.realized_pnl > 0 ? t.green : r.realized_pnl < 0 ? t.red : t.textDim, fontWeight: 600 }}>{window.fmt$Sign(r.realized_pnl)}</span> },
         ]} rows={filtered} onRowClick={(r) => setModal({ kind: 'trade', payload: r })} emptyTitle="No trades in ledger" emptyHint="Once the executor fires its first arbitrage, every trade and recovery will land here." emptyIcon="↗"/>
       </window.Card>
@@ -2096,12 +2172,11 @@ function PageTrades() {
 
 function LegCell({ leg, platform }) {
   const { t } = window.useApp();
-  const tone = leg.status === 'filled' ? 'green' : leg.status === 'submitted' ? 'amber' : leg.status === 'failed' ? 'red' : 'default';
   return (
     <div>
       <window.PlatformChip name={platform}/>
       <div style={{ display:'flex', alignItems:'baseline', gap: 6, marginTop: 4, fontFamily: window.FONTS.mono, fontSize: 11 }}>
-        <window.Pill tone={tone} size="sm">{leg.status}</window.Pill>
+        <window.StatusBadge status={leg.status} size="sm"/>
         <span style={{ color: t.textDim }}>{leg.fill_qty}@${leg.fill_price.toFixed(2)}</span>
       </div>
     </div>
@@ -2217,7 +2292,7 @@ function PageMarkets() {
     <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto' }}>
       <window.PageHeader kicker="Mapped universe" title="Markets" sub="312 confirmed mappings across 8 categories. Click any market to see live prices on both platforms.">
         <window.Btn variant="secondary" size="sm" icon="↓" onClick={() => setModal({ kind: 'export', payload: 'markets' })}>Export</window.Btn>
-        <window.Btn variant="primary" size="sm" icon="+" onClick={() => setModal({ kind: 'newMapping' })}>New mapping</window.Btn>
+        <window.Btn variant="primary" size="sm" icon="+" hint="Manually add a cross-platform market pair" onClick={() => setModal({ kind: 'newMapping' })}>New mapping</window.Btn>
       </window.PageHeader>
 
       <div style={{ display:'grid', gridTemplateColumns:'repeat(8, 1fr)', gap: 8, marginBottom: 16 }}>
@@ -2283,7 +2358,7 @@ function PageMappings() {
   return (
     <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto' }}>
       <window.PageHeader kicker="Cross-platform" title="Mappings" sub="Semantic matches between Kalshi and Polymarket markets, scored by description similarity, dates, and resolution criteria.">
-        <window.Btn variant="secondary" size="sm" icon="↻" onClick={() => setModal({ kind:'refetchMappings' })}>Re-fetch mappings</window.Btn>
+        <window.Btn variant="secondary" size="sm" icon="↻" hint="Pull latest mapping data from the discovery pipeline" onClick={() => setModal({ kind:'refetchMappings' })}>Re-fetch mappings</window.Btn>
         <window.Btn variant="primary" size="sm" icon="◇" onClick={() => {
           // ⚠ BACKEND NOTE: this validates each pending candidate with an agent in
           // sequence. Real impl should fan out concurrent agents (cap=4) and stream
@@ -2310,7 +2385,7 @@ function PageMappings() {
           )},
           { label: 'Kalshi ticker', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12, color: t.text }}>{r.k}</span> },
           { label: 'Polymarket slug', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 11.5, color: t.textDim }}>{r.p}</span> },
-          { label: 'Status', w: '110px', render: r => <window.Pill tone={r.s === 'confirmed' ? 'green' : r.s === 'pending' ? 'amber' : r.s === 'review' ? 'blue' : 'red'}>{r.s}</window.Pill> },
+          { label: 'Status', w: '110px', render: r => <window.StatusBadge status={r.s}/> },
           { label: '', w: '230px', align:'right', render: r => {
             if (r.s === 'confirmed') return <span style={{ fontSize: 11, color: t.textMuted }}>Active · scanned every 5s</span>;
             if (r.s === 'rejected') return <window.Btn variant="ghost" size="sm" onClick={async (e) => {
@@ -2322,7 +2397,7 @@ function PageMappings() {
                 if (window.__arbiterTick) { try { await window.__arbiterTick(); } catch {} }
               }
               toast('Re-opened for review', { sub: id });
-            }}>Re-open</window.Btn>;
+            }} hint="Restore this rejected pair to the review queue for another agent pass">Re-open</window.Btn>;
             // pending / review → show "Validate with agent" + accept/reject quick actions
             return (
               <div style={{ display:'flex', gap: 6, justifyContent:'flex-end' }}>
@@ -2335,8 +2410,8 @@ function PageMappings() {
                     if (window.__arbiterTick) { try { await window.__arbiterTick(); } catch {} }
                   }
                   toast('Mapping rejected', { sub: id });
-                }}>Reject</window.Btn>
-                <window.Btn variant="secondary" size="sm" icon="◇" onClick={(e) => { e.stopPropagation(); setModal({ kind:'agentValidate', payload: r }); }}>Validate</window.Btn>
+                }} hint="Mark this pair as not-a-match — removes it from the scanner immediately">Reject</window.Btn>
+                <window.Btn variant="secondary" size="sm" icon="◇" hint="Spin up a Claude agent to compare resolution criteria and produce a confidence verdict" onClick={(e) => { e.stopPropagation(); setModal({ kind:'agentValidate', payload: r }); }}>Validate</window.Btn>
               </div>
             );
           }},
@@ -2358,7 +2433,7 @@ function PageScanner() {
   return (
     <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto' }}>
       <window.PageHeader kicker="Real-time" title="Scanner" sub="Continuously polls Kalshi and Polymarket order books, computes net edge, and publishes opportunities crossing the threshold.">
-        <window.Btn variant={scanner ? 'danger' : 'accent'} size="sm" onClick={async () => {
+        <window.Btn variant={scanner ? 'danger' : 'accent'} size="sm" hint={scanner ? 'Stop polling order books — opportunities will not refresh until resumed' : 'Resume polling Kalshi + Polymarket for cross-platform edges'} onClick={async () => {
           const next = !scanner;
           if (window.__arbiterScannerControl) {
             const res = await window.__arbiterScannerControl(next ? 'resume' : 'pause');
@@ -2452,7 +2527,7 @@ function PageAudit() {
           <div style={{ fontSize: 24, fontWeight: 600, color: t.text, marginBottom: 4 }}>Live trading authorized</div>
           <div style={{ fontSize: 13, color: t.textDim }}>All 7 readiness gates passing · audit score {(M.health.audit.audit_score * 100).toFixed(2)}% · uptime {(M.health.uptime_seconds/3600).toFixed(1)}h</div>
         </div>
-        <window.Btn variant="danger" size="md" onClick={() => setConfirm({
+        <window.Btn variant="danger" size="md" hint="Emergency halt — stops scanner, cancels open orders, locks trading. Requires manual re-arm." onClick={() => setConfirm({
           title: 'Engage kill switch?',
           body: 'Halts the scanner, cancels all open orders, and locks trading until manually re-armed.',
           tone: 'danger',
@@ -2479,7 +2554,7 @@ function PageAudit() {
               <div style={{ fontSize: 13, color: t.text, fontWeight: 500, marginBottom: 2 }}>{g.name}</div>
               <div style={{ fontSize: 11.5, color: t.textDim }}>{g.detail}</div>
             </div>
-            <window.Pill tone={g.ok ? 'green' : 'red'}>{g.ok ? 'pass' : 'fail'}</window.Pill>
+            <window.StatusBadge status={g.ok ? 'pass' : 'fail'}/>
           </div>
         ))}
       </window.Card>
@@ -2494,8 +2569,8 @@ function PageDeposits() {
   return (
     <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto' }}>
       <window.PageHeader kicker="Capital" title="Funds" sub="Deposit history and platform balances. Deposits are excluded from trading P&L computations.">
-        <window.Btn variant="secondary" size="sm" icon="↓" onClick={() => setModal({ kind: 'deposit', payload: 'kalshi' })}>Deposit Kalshi</window.Btn>
-        <window.Btn variant="primary" size="sm" icon="↓" onClick={() => setModal({ kind: 'deposit', payload: 'polymarket' })}>Deposit Polymarket</window.Btn>
+        <window.Btn variant="secondary" size="sm" icon="↓" hint="Record a deposit to your Kalshi account" onClick={() => setModal({ kind: 'deposit', payload: 'kalshi' })}>Deposit Kalshi</window.Btn>
+        <window.Btn variant="primary" size="sm" icon="↓" hint="Record a deposit to your Polymarket account" onClick={() => setModal({ kind: 'deposit', payload: 'polymarket' })}>Deposit Polymarket</window.Btn>
       </window.PageHeader>
 
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 14, marginBottom: 18 }}>
@@ -2509,7 +2584,7 @@ function PageDeposits() {
           { label: 'Type', w: '110px', render: r => <window.Pill tone="blue">{r.type}</window.Pill> },
           { label: 'Platform', w: '160px', render: r => <window.PlatformChip name={r.platform}/> },
           { label: 'Amount', align:'right', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 13, color: t.green, fontWeight: 600 }}>+{window.fmt$(r.amount)}</span> },
-          { label: 'Status', w: '100px', render: r => <window.Pill tone="green">settled</window.Pill> },
+          { label: 'Status', w: '100px', render: r => <window.StatusBadge status="settled"/> },
         ]} rows={(M.deposits && M.deposits.deposits) || []} emptyTitle="No deposits yet" emptyHint="Deposit history will appear here once funds are added to either platform. Use the buttons above to deposit." emptyIcon="◐"/>
       </window.Card>
     </div>
@@ -2528,7 +2603,7 @@ function PlatformBalCard({ platform, color }) {
       <div style={{ display:'flex', alignItems:'center', gap: 10, marginBottom: 18 }}>
         <span style={{ width: 10, height: 10, borderRadius: '50%', background: color }}/>
         <div style={{ fontSize: 16, fontWeight: 600, color: t.text, textTransform:'capitalize' }}>{platform}</div>
-        <window.Pill tone="green">connected</window.Pill>
+        <window.StatusBadge status="connected"/>
       </div>
       <div style={{ fontSize: 36, fontWeight: 600, color: t.text, fontFamily: window.FONTS.mono, letterSpacing:'-0.02em', marginBottom: 4 }}>{window.fmt$(bal)}</div>
       <div style={{ fontSize: 12, color: pnl >= 0 ? t.green : t.red, marginBottom: 16 }}>{window.fmt$Sign(pnl)} ({window.fmtPct(pnl/start)}) since inception</div>
@@ -2961,7 +3036,7 @@ function TradeDetailModal() {
         <div>
           <div style={{ display:'flex', alignItems:'center', gap: 10, marginBottom: 4 }}>
             <span style={{ fontFamily: window.FONTS.mono, fontSize: 13, fontWeight: 700, color: t.text }}>{r.arb_id}</span>
-            <window.Pill tone={r.status === 'filled' ? 'green' : r.status === 'recovering' ? 'amber' : 'red'}>{r.status}</window.Pill>
+            <window.StatusBadge status={r.status}/>
           </div>
           <div style={{ fontSize: 13, color: t.textDim }}>{r.opportunity.description}</div>
         </div>
@@ -3324,7 +3399,7 @@ function NewMappingModal() {
       </div>
       <Footer>
         <window.Btn variant="ghost" size="sm" onClick={() => setModal(null)}>Cancel</window.Btn>
-        <window.Btn variant="primary" size="sm" disabled={!k || !p} onClick={() => { setModal(null); toast('Mapping queued for scoring', { sub: k.slice(0, 18) }); }}>Score &amp; submit</window.Btn>
+        <window.Btn variant="primary" size="sm" disabled={!k || !p} hint="Queue this pair for semantic scoring — auto-confirms if score ≥ 0.85" disabledHint="Enter both a Kalshi ticker and a Polymarket slug to enable scoring" onClick={() => { setModal(null); toast('Mapping queued for scoring', { sub: k.slice(0, 18) }); }}>Score &amp; submit</window.Btn>
       </Footer>
     </Shell>
   );
@@ -3452,7 +3527,7 @@ function TeamModal() {
       <div style={{ padding: 24 }}>
         <div style={{ display:'flex', gap: 8, marginBottom: 16 }}>
           <input value={inv} onChange={e => setInv(e.target.value)} placeholder="email@company.com" style={{ flex: 1, padding:'9px 12px', background: t.bgCard, border:`1px solid ${t.borderBright}`, borderRadius: 7, fontSize: 12, color: t.text, outline:'none' }}/>
-          <window.Btn variant="primary" size="sm" disabled={!inv} onClick={() => { setMembers(m => [...m, {name: inv.split('@')[0], email: inv, role:'Viewer'}]); setInv(''); toast(`Invite sent to ${inv}`); }}>Invite</window.Btn>
+          <window.Btn variant="primary" size="sm" disabled={!inv} hint="Send an invite email to add a Viewer to the workspace" disabledHint="Enter an email address to send an invite" onClick={() => { setMembers(m => [...m, {name: inv.split('@')[0], email: inv, role:'Viewer'}]); setInv(''); toast(`Invite sent to ${inv}`); }}>Invite</window.Btn>
         </div>
         <div style={{ border:`1px solid ${t.border}`, borderRadius: 8, overflow:'hidden' }}>
           {members.map((m, i) => (
@@ -4346,7 +4421,7 @@ function MobOpps() {
           <div style={{ display:'flex', alignItems:'center', flexWrap:'wrap', gap: 6, paddingTop: 10, borderTop: `1px solid ${t.border}` }}>
             <window.PlatformChip name={o.yes_platform} side="Y"/>
             <window.PlatformChip name={o.no_platform} side="N"/>
-            <window.Pill tone={o.status === 'tradable' ? 'green' : 'blue'} size="sm">{o.status}</window.Pill>
+            <window.StatusBadge status={o.status} size="sm"/>
           </div>
         </div>
       ))}
@@ -4364,7 +4439,7 @@ function MobTrades() {
         <div key={i} style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 14, marginBottom: 8 }}>
           <div style={{ display:'flex', alignItems:'center', gap: 8, marginBottom: 6 }}>
             <span style={{ fontSize: 11, fontFamily: window.FONTS.mono, fontWeight: 700, color: t.text }}>{r.arb_id}</span>
-            <window.Pill tone={r.status === 'filled' ? 'green' : r.status === 'recovering' ? 'amber' : 'red'} size="sm">{r.status}</window.Pill>
+            <window.StatusBadge status={r.status} size="sm"/>
             <span style={{ marginLeft:'auto', fontSize: 11, color: t.textDim, fontFamily: window.FONTS.mono }}>{window.ago(r.timestamp)}</span>
           </div>
           <div style={{ fontSize: 12, color: t.text, marginBottom: 8, lineHeight: 1.35 }}>{r.opportunity.description}</div>
@@ -4723,7 +4798,7 @@ function MobMappings() {
                 <div style={{ fontSize: 11.5, color: t.text, fontFamily: window.FONTS.mono, fontWeight: 600, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{c.k}</div>
                 <div style={{ fontSize: 10.5, color: t.textDim, fontFamily: window.FONTS.mono, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>⇄ {c.p}</div>
               </div>
-              <window.Pill tone={tone} size="sm">{c.s}</window.Pill>
+              <window.StatusBadge status={c.s} size="sm"/>
             </div>
             {actionable && (
               <div style={{ display:'flex', gap: 6, paddingTop: 8, borderTop: `1px solid ${t.border}` }}>
