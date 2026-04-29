@@ -32,15 +32,32 @@
      mode doesn't fall back to the browser's near-black default. */
   input::placeholder, textarea::placeholder { color: currentColor; opacity: 0.45; }
   /* Loading splash, replaced once React mounts. */
-  #boot-splash { position: fixed; inset: 0; display:flex; align-items:center; justify-content:center; flex-direction:column; gap: 14px; background:#FAFAF9; color:#6B6B66; font-family: "Inter", system-ui, sans-serif; }
+  #boot-splash { position: fixed; inset: 0; display:flex; align-items:center; justify-content:center; flex-direction:column; gap: 14px; background:#FAFAF9; color:#6B6B66; font-family: "Inter", system-ui, sans-serif; padding: 24px; text-align: center; }
   #boot-splash .ring { width: 28px; height: 28px; border:2px solid #E8E6E0; border-top-color:#5B5BD6; border-radius: 50%; animation: spin 0.8s linear infinite; }
   html[data-theme="dark"] #boot-splash { background: #0B0C10; color: #8B92A0; }
   html[data-theme="dark"] #boot-splash .ring { border-color: #22262F; border-top-color: #8B8DF5; }
+  html[data-theme="dark"] #boot-splash .err h1 { color:#E8ECF1; }
+  html[data-theme="dark"] #boot-splash .err p { color:#8B92A0; }
+  html[data-theme="dark"] #boot-splash .err code { background:#191C24; color:#E8ECF1; }
+  html[data-theme="dark"] #boot-splash .err button { background:#E8ECF1; color:#0B0C10; }
   @media (prefers-color-scheme: dark) {
     html:not([data-theme]), html:not([data-theme]) body { background: #0B0C10; color: #8B92A0; }
     html:not([data-theme]) #boot-splash { background: #0B0C10; color: #8B92A0; }
     html:not([data-theme]) #boot-splash .ring { border-color: #22262F; border-top-color: #8B8DF5; }
+    html:not([data-theme]) #boot-splash .err h1 { color:#E8ECF1; }
+    html:not([data-theme]) #boot-splash .err p { color:#8B92A0; }
+    html:not([data-theme]) #boot-splash .err code { background:#191C24; color:#E8ECF1; }
+    html:not([data-theme]) #boot-splash .err button { background:#E8ECF1; color:#0B0C10; }
   }
+  /* Splash failure UI — surfaced when a CDN script fails to load or boot times out. */
+  #boot-splash .err { display:none; max-width: 480px; }
+  #boot-splash.failed .ring { display: none; }
+  #boot-splash.failed .msg { display: none; }
+  #boot-splash.failed .err { display: block; }
+  #boot-splash .err h1 { font-size: 16px; font-weight: 600; color:#1A1A17; margin: 0 0 8px; }
+  #boot-splash .err p { font-size: 13px; line-height: 1.55; color:#6B6B66; margin: 0 0 14px; }
+  #boot-splash .err code { font-family: ui-monospace, "JetBrains Mono", monospace; font-size: 11.5px; background:#F4F4F2; padding: 1px 5px; border-radius: 4px; color:#1A1A17; }
+  #boot-splash .err button { padding: 8px 14px; background:#1A1A17; color:#FAFAF9; border:none; border-radius: 7px; font-size: 12.5px; font-weight: 600; cursor:pointer; font-family: inherit; }
 </style>
 <script>
 // Apply the saved theme to <html> before any paint, so the splash and
@@ -56,9 +73,9 @@
   } catch (_) { /* localStorage may be blocked; fall back to media query CSS */ }
 })();
 </script>
-<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" integrity="sha384-DGyLxAyjq0f9SPpVevD6IgztCFlnMF6oW/XQGmfe+IsZ8TqEiDrcHkMLKI6fiB/Z" crossorigin="anonymous" onerror="window.__arbiterCdnFail&&window.__arbiterCdnFail('react')"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" integrity="sha384-gTGxhz21lVGYNMcdJOyq01Edg0jhn/c22nsx0kyqP0TxaV5WVdsSH1fSDUf5YJj1" crossorigin="anonymous" onerror="window.__arbiterCdnFail&&window.__arbiterCdnFail('react-dom')"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous" onerror="window.__arbiterCdnFail&&window.__arbiterCdnFail('babel')"></script>
 <script>
 // Light + dark theme tokens for Arbiter v2 (Direction B - Modern Fintech)
 window.THEMES = {
@@ -900,8 +917,12 @@ function Btn({ children, variant = 'secondary', size = 'md', onClick, icon, disa
 }
 
 // ── DataTable ───────────────────────────────────────────────────────
-function DataTable({ columns, rows, onRowClick }) {
+function DataTable({ columns, rows, onRowClick, emptyTitle, emptyHint, emptyIcon }) {
   const { t } = window.useApp();
+  // Defensive: callers occasionally pass undefined when API responses haven't
+  // landed yet. Treat as an empty list so we render a helpful state instead
+  // of throwing on `rows.map`.
+  const safeRows = Array.isArray(rows) ? rows : [];
   // For each column, build a track. Fixed widths (e.g. '110px') stay fixed;
   // '1fr' becomes minmax(<minw>, 1fr) so flex columns never collapse.
   const trackFor = (c) => {
@@ -927,9 +948,15 @@ function DataTable({ columns, rows, onRowClick }) {
         <div style={{ display:'grid', gridTemplateColumns: tracks, padding: '10px 18px', fontSize: 10.5, fontWeight: 600, color: t.textMuted, letterSpacing: '0.06em', textTransform: 'uppercase', borderBottom: `1px solid ${t.border}`, background: t.bgSubtle, gap: 12 }}>
           {columns.map((c, i) => <div key={i} style={{ textAlign: c.align || 'left', minWidth: 0 }}>{c.label}</div>)}
         </div>
-        {rows.map((r, i) => (
+        {safeRows.length === 0 ? (
+          <div style={{ padding: '40px 24px', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap: 8, color: t.textDim, textAlign:'center' }}>
+            <div style={{ width: 36, height: 36, borderRadius: 9, background: t.bgSubtle, display:'flex', alignItems:'center', justifyContent:'center', fontSize: 16, color: t.textMuted, marginBottom: 4 }}>{emptyIcon || '∅'}</div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: t.text }}>{emptyTitle || 'Nothing to show yet'}</div>
+            <div style={{ fontSize: 11.5, color: t.textDim, lineHeight: 1.5, maxWidth: 360 }}>{emptyHint || 'Rows will appear here once the backend returns data.'}</div>
+          </div>
+        ) : safeRows.map((r, i) => (
           <div key={i} onClick={() => onRowClick?.(r, i)} style={{
-            display:'grid', gridTemplateColumns: tracks, padding: '12px 18px', fontSize: 12.5, color: t.text, borderBottom: i < rows.length - 1 ? `1px solid ${t.border}` : 'none', cursor: onRowClick ? 'pointer' : 'default', alignItems: 'center', gap: 12,
+            display:'grid', gridTemplateColumns: tracks, padding: '12px 18px', fontSize: 12.5, color: t.text, borderBottom: i < safeRows.length - 1 ? `1px solid ${t.border}` : 'none', cursor: onRowClick ? 'pointer' : 'default', alignItems: 'center', gap: 12,
           }} onMouseEnter={e => { if (onRowClick) e.currentTarget.style.background = t.bgSubtle; }} onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
             {columns.map((c, j) => <div key={j} style={{ textAlign: c.align || 'left', minWidth: 0, overflow: 'hidden' }}>{c.render ? c.render(r) : r[c.key]}</div>)}
           </div>
@@ -1051,6 +1078,8 @@ const NAV = [
 
 function Sidebar() {
   const { t, page, setPage } = window.useApp();
+  const opps = Array.isArray(window.MOCK?.opportunities) ? window.MOCK.opportunities : [];
+  const tradableCount = opps.filter(o => o.status === 'tradable').length;
   return (
     <div style={{ width: 220, background: t.bgCard, borderRight: `1px solid ${t.border}`, padding: '20px 14px', display:'flex', flexDirection:'column', flexShrink: 0 }}>
       <div style={{ display:'flex', alignItems:'center', gap: 10, padding: '4px 8px 22px', cursor:'pointer' }} onClick={() => setPage('overview')}>
@@ -1082,7 +1111,7 @@ function Sidebar() {
           >
             <span style={{ width: 14, fontSize: 13, color: active ? t.accent : t.textMuted, fontFamily: window.FONTS.mono, textAlign:'center' }}>{n.icon}</span>
             <span>{n.label}</span>
-            {n.id === 'opportunities' && <span style={{ marginLeft:'auto', fontSize: 10, padding: '1px 6px', background: t.accent, color: '#fff', borderRadius: 99, fontWeight: 500 }}>14</span>}
+            {n.id === 'opportunities' && tradableCount > 0 && <span style={{ marginLeft:'auto', fontSize: 10, padding: '1px 6px', background: t.accent, color: '#fff', borderRadius: 99, fontWeight: 500 }}>{tradableCount}</span>}
           </div>
         );
       })}
@@ -1296,10 +1325,15 @@ const { useState: oUseState } = React;
 function PageOverview() {
   const { t, setPage, setDrawer, scanner, minEdge, setMinEdge, autoExec, setAutoExec } = window.useApp();
   const M = window.MOCK;
+  const opps = Array.isArray(M.opportunities) ? M.opportunities : [];
+  const execs = Array.isArray(M.executions) ? M.executions : [];
+  const equity = Array.isArray(M.equity) && M.equity.length ? M.equity : [{ t: 0, v: 0 }];
   const totalBal = M.balances.kalshi.balance + M.balances.polymarket.balance;
   const totalPnl = M.pnl.recorded_trading_pnl.kalshi + M.pnl.recorded_trading_pnl.polymarket;
-  const tradable = M.opportunities.filter(o => o.status === 'tradable');
-  const last24Pnl = M.executions.reduce((s, e) => s + (e.realized_pnl || 0), 0);
+  const tradable = opps.filter(o => o.status === 'tradable');
+  const last24Pnl = execs.reduce((s, e) => s + (e.realized_pnl || 0), 0);
+  const bestEdge = opps.length ? opps[0].net_edge_cents : null;
+  const lastEquity = equity[equity.length - 1].v;
 
   return (
     <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto' }}>
@@ -1312,8 +1346,8 @@ function PageOverview() {
       <div style={{ display:'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, marginBottom: 18 }}>
         <KpiCard label="Total balance" value={window.fmt$(totalBal)} sub={`Kalshi ${window.fmt$(M.balances.kalshi.balance)} · Poly ${window.fmt$(M.balances.polymarket.balance)}`} sparkData={M.equity.slice(-48)} sparkColor={t.accent} />
         <KpiCard label="Trading P&L" value={window.fmt$Sign(totalPnl)} sub="Net of fees · since inception" tone={totalPnl >= 0 ? 'green' : 'red'} sparkData={M.equity.slice(-48).map(d => ({ ...d, v: d.v - 1000 }))} sparkColor={totalPnl >= 0 ? t.green : t.red} />
-        <KpiCard label="Live opportunities" value={tradable.length} sub={`${M.opportunities.length - tradable.length} candidates · best ${window.fmtC(M.opportunities[0].net_edge_cents)}`} tone="accent" sparkData={M.health.scanner.history.slice(-30).map(h => ({ v: h.tradable }))} sparkColor={t.accent} />
-        <KpiCard label="24h fills" value={M.executions.filter(e => e.status === 'filled').length} sub={`${window.fmt$Sign(last24Pnl)} realized`} tone={last24Pnl >= 0 ? 'green' : 'red'} sparkData={M.equity.slice(-48)} sparkColor={t.green} />
+        <KpiCard label="Live opportunities" value={tradable.length} sub={`${opps.length - tradable.length} candidates · best ${bestEdge != null ? window.fmtC(bestEdge) : '—'}`} tone="accent" sparkData={M.health.scanner.history.slice(-30).map(h => ({ v: h.tradable }))} sparkColor={t.accent} />
+        <KpiCard label="24h fills" value={execs.filter(e => e.status === 'filled').length} sub={`${window.fmt$Sign(last24Pnl)} realized`} tone={last24Pnl >= 0 ? 'green' : 'red'} sparkData={equity.slice(-48)} sparkColor={t.green} />
       </div>
 
       {/* Equity + opportunities */}
@@ -1321,19 +1355,24 @@ function PageOverview() {
         <window.Card title="Equity curve" action={<TimeRange/>} padding={0}>
           <div style={{ padding: '18px 22px 8px', display:'flex', alignItems:'baseline', gap: 16 }}>
             <div>
-              <div style={{ fontSize: 28, fontWeight: 600, color: t.text, letterSpacing:'-0.02em', fontFamily: window.FONTS.mono }}>{window.fmt$(M.equity[M.equity.length-1].v)}</div>
+              <div style={{ fontSize: 28, fontWeight: 600, color: t.text, letterSpacing:'-0.02em', fontFamily: window.FONTS.mono }}>{window.fmt$(lastEquity)}</div>
               <div style={{ fontSize: 11.5, color: totalPnl >= 0 ? t.green : t.red, marginTop: 2 }}>{window.fmt$Sign(totalPnl)} ({window.fmtPct(totalPnl/1000)}) · 24h</div>
             </div>
             <div style={{ marginLeft: 'auto', fontSize: 11, color: t.textMuted }}>Includes $100 deposit at 14:32</div>
           </div>
           <div style={{ height: 240, padding: '0 12px 12px' }}>
-            <window.AreaChart data={M.equity} width={780} height={240} stroke={t.accent} grid={t.border} accentDot={true}/>
+            <window.AreaChart data={equity} width={780} height={240} stroke={t.accent} grid={t.border} accentDot={true}/>
           </div>
         </window.Card>
 
         <window.Card title="Top opportunities" action={<a onClick={() => setPage('opportunities')} style={{ fontSize: 11, color: t.accent, cursor:'pointer', textDecoration: 'none' }}>View all →</a>} padding={0}>
           <div>
-            {M.opportunities.slice(0, 5).map((o, i) => (
+            {opps.length === 0 ? (
+              <div style={{ padding: '28px 18px', textAlign:'center', color: t.textDim, fontSize: 12.5 }}>
+                <div style={{ fontWeight: 600, color: t.text, marginBottom: 4 }}>No live opportunities</div>
+                <div style={{ fontSize: 11, color: t.textMuted, lineHeight: 1.5 }}>The scanner is running. Edges will appear here as soon as a cross-platform spread opens.</div>
+              </div>
+            ) : opps.slice(0, 5).map((o, i) => (
               <div key={i} onClick={() => { setPage('opportunities'); setDrawer({ kind: 'opp', payload: i }); }} style={{
                 padding: '14px 18px', borderBottom: i < 4 ? `1px solid ${t.border}` : 'none', cursor:'pointer',
               }} onMouseEnter={e => e.currentTarget.style.background = t.bgSubtle} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
@@ -1375,7 +1414,7 @@ function PageOverview() {
             <Mini label="Scans (24h)" value="18,420" mono/>
             <Mini label="Avg latency" value="214ms" mono/>
             <Mini label="Published" value="312" mono/>
-            <Mini label="Best edge" value={window.fmtC(M.opportunities[0].net_edge_cents)} mono tone="green"/>
+            <Mini label="Best edge" value={bestEdge != null ? window.fmtC(bestEdge) : '—'} mono tone="green"/>
           </div>
           <div style={{ padding: '0 18px 14px' }}>
             <div style={{ fontSize: 10, color: t.textMuted, letterSpacing: '0.08em', marginBottom: 6 }}>BEST EDGE — LAST 5 MIN, 5s BUCKETS</div>
@@ -1400,7 +1439,7 @@ function PageOverview() {
           { label: 'Market', render: r => <span style={{ fontSize: 12.5 }}>{r.opportunity.description}</span> },
           { label: 'Status', w: '120px', render: r => <window.Pill tone={r.status === 'filled' ? 'green' : r.status === 'recovering' ? 'amber' : 'red'}>{r.status}</window.Pill> },
           { label: 'P&L', w: '110px', align: 'right', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12.5, color: r.realized_pnl >= 0 ? t.green : t.red, fontWeight: 600 }}>{window.fmt$Sign(r.realized_pnl)}</span> },
-        ]} rows={M.executions.slice(0, 5)} onRowClick={(r) => { setPage('trades'); }} />
+        ]} rows={execs.slice(0, 5)} onRowClick={(r) => { setPage('trades'); }} emptyTitle="No trades yet" emptyHint="Filled and recovering arbitrage trades will show up here." emptyIcon="↗"/>
       </window.Card>
     </div>
   );
@@ -1581,7 +1620,7 @@ function PageOpportunities() {
             return <window.Pill tone={tone}>{r.status}</window.Pill>;
           }},
           { label: '', w: '90px', align: 'right', render: r => r.status === 'tradable' ? <window.Btn variant="primary" size="sm" onClick={(e) => { e.stopPropagation(); setModal({ kind: 'execute', payload: M.opportunities.indexOf(r) }); }}>Execute →</window.Btn> : <span style={{ fontSize: 11, color: t.textMuted }}>—</span> },
-        ]} rows={filtered} onRowClick={(r) => setDrawer({ kind: 'opp', payload: M.opportunities.indexOf(r) })} />
+        ]} rows={filtered} onRowClick={(r) => setDrawer({ kind: 'opp', payload: M.opportunities.indexOf(r) })} emptyTitle={search || filter !== 'all' ? 'No matching opportunities' : 'No opportunities right now'} emptyHint={search || filter !== 'all' ? 'Try a different filter or clear the search.' : 'The scanner is running. Cross-platform edges will appear here as soon as one opens.'} emptyIcon="◇"/>
       </window.Card>
     </div>
   );
@@ -1792,7 +1831,7 @@ function PageTrades() {
             return <window.Pill tone={tone}>{r.status}</window.Pill>;
           }},
           { label: 'P&L', w: '100px', align: 'right', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12.5, color: r.realized_pnl > 0 ? t.green : r.realized_pnl < 0 ? t.red : t.textDim, fontWeight: 600 }}>{window.fmt$Sign(r.realized_pnl)}</span> },
-        ]} rows={filtered} onRowClick={(r) => setModal({ kind: 'trade', payload: r })}/>
+        ]} rows={filtered} onRowClick={(r) => setModal({ kind: 'trade', payload: r })} emptyTitle="No trades in ledger" emptyHint="Once the executor fires its first arbitrage, every trade and recovery will land here." emptyIcon="↗"/>
       </window.Card>
     </div>
   );
@@ -1949,7 +1988,7 @@ function PageMarkets() {
           { label: 'Spread', w: '90px', align:'right', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12, color: t.text }}>{((r.yes_price - (1 - r.no_price)) * 100).toFixed(1)}¢</span> },
           { label: 'Volume 24h', w: '120px', align:'right', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12, color: t.textDim }}>{(r.yes_volume + r.no_volume).toLocaleString()}</span> },
           { label: 'Edge', w: '90px', align:'right', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12.5, color: r.net_edge_cents >= 1 ? t.green : t.textDim, fontWeight: 600 }}>{window.fmtC(r.net_edge_cents)}</span> },
-        ]} rows={M.opportunities} onRowClick={(r) => setModal({ kind: 'market', payload: r })}/>
+        ]} rows={M.opportunities} onRowClick={(r) => setModal({ kind: 'market', payload: r })} emptyTitle="No mapped markets" emptyHint="Once mappings between Kalshi and Polymarket are confirmed, the universe will populate here." emptyIcon="◈"/>
       </window.Card>
     </div>
   );
@@ -2026,7 +2065,7 @@ function PageMappings() {
               </div>
             );
           }},
-        ]} rows={candidates} onRowClick={(r) => { if (r.s === 'pending' || r.s === 'review') setModal({ kind:'agentValidate', payload: r }); }}/>
+        ]} rows={candidates} onRowClick={(r) => { if (r.s === 'pending' || r.s === 'review') setModal({ kind:'agentValidate', payload: r }); }} emptyTitle="No mapping candidates" emptyHint="The mapping pipeline will surface candidate cross-platform pairs here for review." emptyIcon="⇄"/>
       </window.Card>
 
       <div style={{ marginTop: 12, padding: '12px 14px', background: t.bgSubtle, border:`1px dashed ${t.border}`, borderRadius: 8, fontSize: 11, color: t.textDim, display:'flex', alignItems:'center', gap: 10 }}>
@@ -2172,7 +2211,7 @@ function PageDeposits() {
           { label: 'Platform', w: '160px', render: r => <window.PlatformChip name={r.platform}/> },
           { label: 'Amount', align:'right', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 13, color: t.green, fontWeight: 600 }}>+{window.fmt$(r.amount)}</span> },
           { label: 'Status', w: '100px', render: r => <window.Pill tone="green">settled</window.Pill> },
-        ]} rows={M.deposits.deposits}/>
+        ]} rows={(M.deposits && M.deposits.deposits) || []} emptyTitle="No deposits yet" emptyHint="Deposit history will appear here once funds are added to either platform. Use the buttons above to deposit." emptyIcon="◐"/>
       </window.Card>
     </div>
   );
@@ -4466,7 +4505,53 @@ window.LoginScreen = LoginScreen;
 </head>
 <body>
 <div id="root"></div>
-<div id="boot-splash"><div class="ring"></div><div>Loading Arbiter…</div></div>
+<div id="boot-splash">
+  <div class="ring"></div>
+  <div class="msg">Loading Arbiter…</div>
+  <div class="err">
+    <h1>Couldn't load the dashboard</h1>
+    <p id="boot-err-msg">A required script failed to load. Check your network connection, then reload.</p>
+    <button onclick="location.reload()">Reload</button>
+  </div>
+</div>
+<script>
+  // CDN/script-load failure handler. Wired via onerror on the <script integrity=…>
+  // tags above and the global error/unhandledrejection listeners below.
+  window.__arbiterCdnFail = function (which) {
+    var s = document.getElementById('boot-splash');
+    if (!s || s.classList.contains('failed')) return;
+    s.classList.add('failed');
+    var m = document.getElementById('boot-err-msg');
+    if (m && which) {
+      m.innerHTML = 'Failed to load <code>' + which + '</code> from the CDN. ' +
+        'Check your network connection or any blockers (ad blockers, corporate proxies, ' +
+        'subresource-integrity mismatches), then reload.';
+    }
+  };
+  window.addEventListener('error', function (e) {
+    // Catch script load errors that bypass onerror= (e.g. SRI mismatch).
+    if (e && e.target && e.target.tagName === 'SCRIPT' && e.target.src) {
+      var u = e.target.src;
+      window.__arbiterCdnFail(u.indexOf('react-dom') >= 0 ? 'react-dom'
+        : u.indexOf('react') >= 0 ? 'react'
+        : u.indexOf('babel') >= 0 ? 'babel'
+        : 'a required script');
+    }
+  }, true);
+  // If mount() never succeeds within 12s (e.g. CDN slow or SRI fail without
+  // surfacing an error event), surface the failure UI so the splash isn't
+  // an infinite spinner.
+  window.__arbiterBootDeadline = setTimeout(function () {
+    var s = document.getElementById('boot-splash');
+    if (!s) return;
+    var m = document.getElementById('boot-err-msg');
+    if (m) {
+      m.textContent = 'Bootstrap timed out after 12 seconds. The page may be blocked ' +
+        'by a network policy or the React/Babel CDN may be unreachable.';
+    }
+    s.classList.add('failed');
+  }, 12000);
+</script>
 <script type="text/babel" data-presets="env,react">
   // ─────────────────────────────────────────────────────────────────────
   // Top-level App: viewport-aware, polls the API every 10s and re-renders.
@@ -4538,26 +4623,67 @@ window.LoginScreen = LoginScreen;
     );
   }
 
-  function DesktopApp() {
+  // Inner desktop shell: sidebar + page router + every overlay/modal.
+  function DesktopShellInner() {
     return (
-      <window.AppProvider>
+      <>
         <DesktopShell/>
-      </window.AppProvider>
+      </>
     );
   }
 
-  function MobileApp() {
+  // Inner mobile shell: bottom-nav dashboard + only the overlays mobile uses.
+  function MobileShellInner() {
     return (
-      <window.AppProvider>
+      <>
         <window.MobileDashboard/>
         <window.Modal/>
         <window.ExtraModal/>
         <window.AgentValidateModal/>
         <window.RefetchMappingsModal/>
         <window.ConfirmDialog/>
-        <window.ToastHost/>
-      </window.AppProvider>
+      </>
     );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // ErrorBoundary: a render error in any subtree shouldn't blank the app.
+  // ─────────────────────────────────────────────────────────────────────
+  class ErrorBoundary extends React.Component {
+    constructor(props) {
+      super(props);
+      this.state = { error: null };
+    }
+    static getDerivedStateFromError(error) { return { error }; }
+    componentDidCatch(error, info) {
+      // Log so it's visible in the console even if rendering recovers.
+      console.error('Arbiter render error:', error, info);
+    }
+    render() {
+      if (this.state.error) {
+        const msg = (this.state.error && this.state.error.message) || String(this.state.error);
+        return (
+          <div style={{
+            minHeight: '100%', display:'flex', alignItems:'center', justifyContent:'center',
+            padding: 24, fontFamily: '"Inter", system-ui, sans-serif', color:'#1A1A17', background:'#FAFAF9',
+          }}>
+            <div style={{ maxWidth: 540, padding: 28, background:'#FFFFFF', border:'1px solid #E8E6E0', borderRadius: 12, boxShadow:'0 12px 32px rgba(0,0,0,0.08)' }}>
+              <div style={{ fontSize: 11, color:'#6B6B66', letterSpacing:'0.08em', textTransform:'uppercase', marginBottom: 6 }}>Render error</div>
+              <h1 style={{ fontSize: 18, fontWeight: 600, margin:'0 0 10px' }}>Something broke while rendering the dashboard.</h1>
+              <p style={{ fontSize: 13, color:'#6B6B66', lineHeight: 1.55, margin:'0 0 14px' }}>
+                The error has been logged to the browser console. Trading and execution are server-side and not affected by UI errors.
+              </p>
+              <pre style={{ fontFamily:'ui-monospace, "JetBrains Mono", monospace', fontSize: 11.5, background:'#F4F4F2', padding:'10px 12px', borderRadius: 7, color:'#1A1A17', whiteSpace:'pre-wrap', wordBreak:'break-word', margin:'0 0 14px', maxHeight: 200, overflow:'auto' }}>{msg}</pre>
+              <div style={{ display:'flex', gap: 8 }}>
+                <button onClick={() => this.setState({ error: null })} style={{ padding:'8px 14px', background:'#FFFFFF', color:'#1A1A17', border:'1px solid #D4D2CC', borderRadius: 7, fontSize: 12.5, fontWeight: 600, cursor:'pointer' }}>Try again</button>
+                <button onClick={() => location.reload()} style={{ padding:'8px 14px', background:'#1A1A17', color:'#FAFAF9', border:'none', borderRadius: 7, fontSize: 12.5, fontWeight: 600, cursor:'pointer' }}>Reload page</button>
+              </div>
+            </div>
+          </div>
+        );
+      }
+      return this.props.children;
+    }
   }
 
   function App() {
@@ -4565,6 +4691,9 @@ window.LoginScreen = LoginScreen;
     // space; the mobile shell handles those widths cleanly down to 320px.
     const MOBILE_MAX = 1023;
     const [isMobile, setIsMobile] = useState(() => window.innerWidth <= MOBILE_MAX);
+    const [signedIn, setSignedIn] = useState(() => {
+      try { return localStorage.getItem('arbiter-signed-in') === '1'; } catch { return false; }
+    });
     const [, setTick] = useState(0);
 
     // Track viewport size; re-render between desktop and mobile shells.
@@ -4574,15 +4703,24 @@ window.LoginScreen = LoginScreen;
       return () => window.removeEventListener('resize', onResize);
     }, []);
 
-    // Initial fetch + 10s polling. On each refresh, bump tick so the tree
-    // re-renders and reads the freshly-mutated window.MOCK. The tick fn is
-    // also exposed on window so operator-action handlers can request a
-    // synchronous refresh after a successful POST.
+    // Surface unhandled promise rejections to the console so they don't
+    // disappear silently. (Render errors go through ErrorBoundary above.)
     useEffect(() => {
+      const onRej = (e) => console.error('Arbiter unhandled rejection:', e.reason);
+      window.addEventListener('unhandledrejection', onRej);
+      return () => window.removeEventListener('unhandledrejection', onRej);
+    }, []);
+
+    // Initial fetch + 10s polling, but only after sign-in. On each refresh,
+    // bump tick so the tree re-renders and reads the freshly-mutated
+    // window.MOCK. The tick fn is also exposed on window so operator-action
+    // handlers can request a synchronous refresh after a successful POST.
+    useEffect(() => {
+      if (!signedIn) return;
       let cancelled = false;
       const tick = async () => {
         if (window.__arbiterRefresh) {
-          try { await window.__arbiterRefresh(); } catch {}
+          try { await window.__arbiterRefresh(); } catch (e) { console.warn('refresh failed', e); }
         }
         if (!cancelled) setTick(x => x + 1);
       };
@@ -4594,14 +4732,32 @@ window.LoginScreen = LoginScreen;
         clearInterval(id);
         if (window.__arbiterTick === tick) window.__arbiterTick = null;
       };
-    }, []);
+    }, [signedIn]);
 
-    return isMobile ? <MobileApp/> : <DesktopApp/>;
+    const handleSignIn = () => {
+      try { localStorage.setItem('arbiter-signed-in', '1'); } catch {}
+      setSignedIn(true);
+    };
+    const handleSignOut = () => {
+      try { localStorage.removeItem('arbiter-signed-in'); } catch {}
+      setSignedIn(false);
+    };
+
+    return (
+      <window.AppProvider onSignOut={handleSignOut}>
+        <ErrorBoundary>
+          {!signedIn
+            ? <window.LoginScreen onSignIn={handleSignIn}/>
+            : (isMobile ? <MobileShellInner/> : <DesktopShellInner/>)}
+          <window.ToastHost/>
+        </ErrorBoundary>
+      </window.AppProvider>
+    );
   }
 
   function mount() {
     const required = [
-      'AppProvider', 'Sidebar', 'TopBar',
+      'AppProvider', 'Sidebar', 'TopBar', 'LoginScreen',
       'PageOverview', 'PageOpportunities', 'PageTrades', 'PagePnL',
       'PageMarkets', 'PageMappings', 'PageScanner', 'PageAudit',
       'PageDeposits', 'PageSettings',
@@ -4614,9 +4770,25 @@ window.LoginScreen = LoginScreen;
     for (const k of required) {
       if (!window[k]) return setTimeout(mount, 50);
     }
+    if (window.__arbiterBootDeadline) {
+      clearTimeout(window.__arbiterBootDeadline);
+      window.__arbiterBootDeadline = null;
+    }
     const splash = document.getElementById('boot-splash');
     if (splash) splash.remove();
-    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    try {
+      ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    } catch (e) {
+      console.error('Arbiter mount failed:', e);
+      // Re-create the splash so the user isn't staring at a blank page.
+      const root = document.getElementById('root');
+      if (root) {
+        root.innerHTML = '<div style="min-height:100vh;display:flex;align-items:center;' +
+          'justify-content:center;font-family:Inter,system-ui,sans-serif;color:#6B6B66;' +
+          'padding:24px;text-align:center;">Failed to start the dashboard. ' +
+          'Check the browser console and reload.</div>';
+      }
+    }
   }
   mount();
 </script>
