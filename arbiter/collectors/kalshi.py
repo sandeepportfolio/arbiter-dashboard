@@ -144,6 +144,46 @@ class KalshiCollector:
             )
         self._ticker_map = ticker_map
 
+    async def _get_with_429_retry(
+        self,
+        url: str,
+        *,
+        params: dict,
+        path: str,
+        max_retries: int = 5,
+        fallback_delay: float = 5.0,
+    ) -> dict:
+        """GET helper that honors Retry-After on 429 and re-attempts.
+
+        Discovery pulls thousands of markets/events with cursor pagination.
+        Without 429 handling, a single 429 aborts the entire pass. Honoring
+        Retry-After (or falling back to ``fallback_delay``) lets us pace the
+        request and resume.
+        """
+        session = await self._get_session()
+        for attempt in range(max_retries):
+            await self.rate_limiter.acquire()
+            headers = {"Accept": "application/json"}
+            if self.auth.is_authenticated:
+                headers.update(self.auth.get_headers("GET", path))
+            async with session.get(url, params=params, headers=headers) as resp:
+                if resp.status == 429:
+                    delay = self.rate_limiter.apply_retry_after(
+                        resp.headers.get("Retry-After"),
+                        fallback_delay=fallback_delay * (attempt + 1),
+                        reason="kalshi_429_discovery",
+                    )
+                    logger.warning(
+                        "Kalshi 429 on %s (attempt %d/%d), backing off %.1fs",
+                        path, attempt + 1, max_retries, delay,
+                    )
+                    continue
+                resp.raise_for_status()
+                return await resp.json()
+        raise RuntimeError(
+            f"Kalshi 429 retry budget exhausted for {path} after {max_retries} attempts"
+        )
+
     async def list_all_markets(
         self,
         status: Optional[str] = None,
@@ -151,28 +191,21 @@ class KalshiCollector:
         max_pages: int = 20,
     ) -> list[dict]:
         """List Kalshi markets with cursor pagination for discovery."""
-        session = await self._get_session()
         cursor: Optional[str] = None
         all_markets: list[dict] = []
 
         for _ in range(max_pages):
-            await self.rate_limiter.acquire()
-            headers = {"Accept": "application/json"}
-            if self.auth.is_authenticated:
-                headers.update(self.auth.get_headers("GET", "/trade-api/v2/markets"))
             params = {"limit": str(page_size)}
             if status:
                 params["status"] = status
             if cursor:
                 params["cursor"] = cursor
 
-            async with session.get(
+            data = await self._get_with_429_retry(
                 f"{self.config.base_url}/markets",
                 params=params,
-                headers=headers,
-            ) as resp:
-                resp.raise_for_status()
-                data = await resp.json()
+                path="/trade-api/v2/markets",
+            )
 
             markets = list(data.get("markets") or [])
             all_markets.extend(markets)
@@ -188,26 +221,19 @@ class KalshiCollector:
         Events are dramatically less noisy than the raw global market feed and
         expose long-dated contracts that can be buried deep in market paging.
         """
-        session = await self._get_session()
         cursor: Optional[str] = None
         all_events: list[dict] = []
 
         for _ in range(max_pages):
-            await self.rate_limiter.acquire()
-            headers = {"Accept": "application/json"}
-            if self.auth.is_authenticated:
-                headers.update(self.auth.get_headers("GET", "/trade-api/v2/events"))
             params = {"limit": str(page_size)}
             if cursor:
                 params["cursor"] = cursor
 
-            async with session.get(
+            data = await self._get_with_429_retry(
                 f"{self.config.base_url}/events",
                 params=params,
-                headers=headers,
-            ) as resp:
-                resp.raise_for_status()
-                data = await resp.json()
+                path="/trade-api/v2/events",
+            )
 
             events = list(data.get("events") or [])
             all_events.extend(events)
@@ -219,33 +245,22 @@ class KalshiCollector:
 
     async def list_markets_for_event(self, event_ticker: str, limit: int = 50) -> list[dict]:
         """Fetch all submarkets for a specific Kalshi event ticker."""
-        session = await self._get_session()
-        await self.rate_limiter.acquire()
-        headers = {"Accept": "application/json"}
-        if self.auth.is_authenticated:
-            headers.update(self.auth.get_headers("GET", "/trade-api/v2/markets"))
-
-        async with session.get(
+        data = await self._get_with_429_retry(
             f"{self.config.base_url}/markets",
             params={"event_ticker": event_ticker, "limit": str(limit)},
-            headers=headers,
-        ) as resp:
-            resp.raise_for_status()
-            data = await resp.json()
+            path="/trade-api/v2/markets",
+        )
         return list(data.get("markets") or [])
 
     async def get_orderbook(self, market_id: str, depth: int = 100) -> dict:
         """Fetch a raw Kalshi market orderbook for mapping and execution checks."""
-        session = await self._get_session()
-        await self.rate_limiter.acquire()
-        headers = {"Accept": "application/json"}
-        async with session.get(
+        return await self._get_with_429_retry(
             f"{self.config.base_url}/markets/{market_id}/orderbook",
             params={"depth": str(depth)},
-            headers=headers,
-        ) as resp:
-            resp.raise_for_status()
-            return await resp.json()
+            path=f"/trade-api/v2/markets/{market_id}/orderbook",
+            max_retries=3,
+            fallback_delay=2.0,
+        )
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:

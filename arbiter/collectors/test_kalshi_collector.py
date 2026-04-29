@@ -190,6 +190,8 @@ def test_list_all_events_pages_through_event_catalog():
     class FakeResponse:
         def __init__(self, payload):
             self.payload = payload
+            self.status = 200
+            self.headers = {}
 
         async def __aenter__(self):
             return self
@@ -230,5 +232,97 @@ def test_list_all_events_pages_through_event_catalog():
             "CONTROLH-2026",
             "CONTROLS-2026",
         ]
+
+    asyncio.run(runner())
+
+
+def test_list_all_markets_retries_on_429_then_succeeds():
+    """A single 429 mid-pagination must not abort the discovery pass."""
+    class FakeResponse:
+        def __init__(self, status, payload, retry_after=None):
+            self.status = status
+            self.payload = payload
+            self.headers = {"Retry-After": retry_after} if retry_after else {}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def raise_for_status(self):
+            if self.status >= 400:
+                raise AssertionError(f"raise_for_status called on {self.status}")
+
+        async def json(self):
+            return self.payload
+
+    call_log = []
+
+    class FakeSession:
+        def get(self, url, params=None, headers=None):
+            call_log.append((url, dict(params or {})))
+            # First call → 429 with Retry-After=0
+            if len(call_log) == 1:
+                return FakeResponse(429, {}, retry_after="0")
+            return FakeResponse(200, {
+                "markets": [{"ticker": "KXTEST-1"}],
+                "cursor": None,
+            })
+
+    async def runner():
+        collector = KalshiCollector(KalshiConfig(), PriceStore(ttl=120))
+        collector.rate_limiter.acquire = lambda: asyncio.sleep(0)
+        collector._get_session = lambda: asyncio.sleep(0, result=FakeSession())
+        markets = await collector.list_all_markets(page_size=10, max_pages=2)
+
+        assert len(call_log) == 2, "Expected exactly one retry after 429"
+        assert markets == [{"ticker": "KXTEST-1"}]
+
+    asyncio.run(runner())
+
+
+def test_list_all_events_retries_on_429_then_succeeds():
+    """The events endpoint must also honor 429 Retry-After."""
+    class FakeResponse:
+        def __init__(self, status, payload):
+            self.status = status
+            self.payload = payload
+            self.headers = {}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def raise_for_status(self):
+            if self.status >= 400:
+                raise AssertionError(f"raise_for_status called on {self.status}")
+
+        async def json(self):
+            return self.payload
+
+    call_count = {"n": 0}
+
+    class FakeSession:
+        def get(self, url, params=None, headers=None):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return FakeResponse(429, {})
+            return FakeResponse(200, {
+                "events": [{"event_ticker": "FOO-1"}],
+                "cursor": None,
+            })
+
+    async def runner():
+        collector = KalshiCollector(KalshiConfig(), PriceStore(ttl=120))
+        collector.rate_limiter.acquire = lambda: asyncio.sleep(0)
+        # Bypass the penalty wait for fast tests
+        collector.rate_limiter.apply_retry_after = lambda *a, **k: 0.0
+        collector._get_session = lambda: asyncio.sleep(0, result=FakeSession())
+        events = await collector.list_all_events(page_size=10, max_pages=2)
+        assert call_count["n"] == 2
+        assert events == [{"event_ticker": "FOO-1"}]
 
     asyncio.run(runner())
