@@ -117,181 +117,86 @@ window.FONTS = {
 
 </script>
 <script>
-// Realistic mock data shaped like the actual Arbiter API responses.
-// Backed by /api/health, /api/opportunities, /api/executions, /api/pnl,
-// /api/deposits, /api/balances.
+// Live store, shaped like Arbiter API responses. All values start empty/zero
+// and are hydrated by the API integration layer below from /api/* endpoints.
+// Kept on the legacy `window.MOCK` global for backwards-compat with components,
+// but contains no mock data.
 
 window.MOCK = (() => {
   const NOW = Math.floor(Date.now() / 1000);
 
-  // ──────────────────────────────────────────────────────────────────────
-  // Balances
-  const balances = {
-    kalshi: { balance: 487.42, timestamp: NOW - 12, is_low: false },
-    polymarket: { balance: 612.08, timestamp: NOW - 8, is_low: false },
-  };
-
-  // ──────────────────────────────────────────────────────────────────────
-  // P&L
-  const pnl = {
-    starting_balances: { kalshi: 500.00, polymarket: 500.00 },
-    current_balances: { kalshi: 487.42, polymarket: 612.08 },
-    total_deposits: { kalshi: 0, polymarket: 100.00 },
-    total_deposits_all_platforms: 100.00,
-    recorded_trading_pnl: { kalshi: -12.58, polymarket: 12.0843 },
-    total_balance: 1099.50,
-  };
-
-  // ──────────────────────────────────────────────────────────────────────
-  // Equity curve — last 24h, 5-min buckets
-  const equity = [];
-  let v = 1000;
-  for (let i = 0; i < 288; i++) {
-    const drift = (Math.sin(i / 18) * 0.4 + Math.cos(i / 7) * 0.2) * 0.5;
-    const noise = (Math.random() - 0.48) * 1.4;
-    v += drift + noise;
-    if (i === 144) v += 100; // deposit bump
-    equity.push({ t: NOW - (288 - i) * 300, v: +v.toFixed(2) });
-  }
-
-  // ──────────────────────────────────────────────────────────────────────
-  // Opportunities
-  const oppRows = [
-    ['Will Trump win the 2028 GOP nomination?', 'TRUMP-2028-GOP-NOM', 'kalshi', 'polymarket', 0.62, 0.35, 4.8, 'tradable', 200, 9.6],
-    ['Fed cuts rates at June 2026 meeting?', 'FED-JUNE-2026-CUT', 'polymarket', 'kalshi', 0.71, 0.27, 3.6, 'tradable', 150, 5.4],
-    ['Bitcoin above $150K by end of 2026?', 'BTC-150K-EOY-2026', 'kalshi', 'polymarket', 0.41, 0.56, 4.2, 'tradable', 175, 7.35],
-    ['Will GPT-6 release before Q4 2026?', 'GPT6-Q4-2026', 'polymarket', 'kalshi', 0.33, 0.64, 3.1, 'tradable', 120, 3.72],
-    ['Senate balance after 2026 midterms?', 'SENATE-DEM-2026', 'kalshi', 'polymarket', 0.48, 0.50, 2.4, 'candidate', 90, 2.16],
-    ['Will SpaceX IPO in 2026?', 'SPACEX-IPO-2026', 'polymarket', 'kalshi', 0.18, 0.79, 2.1, 'review', 80, 1.68],
-    ['Tesla deliveries Q1 2026 over 500K?', 'TSLA-Q1-DEL-500K', 'kalshi', 'polymarket', 0.55, 0.42, 1.9, 'tradable', 100, 1.9],
-    ['Will OpenAI sign DoD contract in 2026?', 'OAI-DOD-2026', 'polymarket', 'kalshi', 0.27, 0.70, 1.6, 'candidate', 75, 1.2],
-    ['ETH above $8K by end of 2026?', 'ETH-8K-EOY-2026', 'kalshi', 'polymarket', 0.36, 0.61, 1.5, 'tradable', 90, 1.35],
-    ['Russia ceasefire signed by July 2026?', 'RU-CEASE-JUL-2026', 'polymarket', 'kalshi', 0.22, 0.74, 1.2, 'review', 60, 0.72],
-    ['Will Apple ship AR glasses in 2026?', 'AAPL-AR-2026', 'kalshi', 'polymarket', 0.31, 0.66, 1.1, 'candidate', 70, 0.77],
-    ['NBA Finals — Celtics win 2026?', 'NBA-CELTICS-2026', 'polymarket', 'kalshi', 0.24, 0.73, 0.9, 'stale', 50, 0.45],
-    ['Will US enter recession in 2026?', 'US-RECESSION-2026', 'kalshi', 'polymarket', 0.39, 0.58, 0.8, 'illiquid', 40, 0.32],
-    ['Argentina inflation under 50% in 2026?', 'ARG-INFL-2026', 'polymarket', 'kalshi', 0.44, 0.54, 0.6, 'candidate', 30, 0.18],
-  ];
-
-  const opportunities = oppRows.map(([desc, cid, yp, np, yPrice, nPrice, edge, status, qty, profit], i) => ({
-    description: desc,
-    canonical_id: cid,
-    yes_platform: yp,
-    no_platform: np,
-    yes_price: yPrice,
-    no_price: nPrice,
-    net_edge_cents: edge,
-    net_edge: edge / 100,
-    status,
-    suggested_qty: qty,
-    expected_profit: profit,
-    yes_volume: 4000 + Math.floor(Math.random() * 12000),
-    no_volume: 4000 + Math.floor(Math.random() * 12000),
-    fee_rate_yes: yp === 'kalshi' ? 0.025 : 0.020,
-    fee_rate_no: np === 'kalshi' ? 0.025 : 0.020,
-    last_seen: NOW - i * 3,
-    persistence_scans: 12 - i,
-  }));
-
-  // ──────────────────────────────────────────────────────────────────────
-  // Trades / executions
-  const tradeSeed = [
-    ['ARB-09421', 'Will Trump win the 2028 GOP nomination?', 'TRUMP-2028-GOP-NOM', 'filled', 'filled', 'filled', 200, 0.62, 200, 0.35, 6.4124, NOW - 720],
-    ['ARB-09418', 'Fed cuts rates at June 2026 meeting?', 'FED-JUNE-2026-CUT', 'filled', 'filled', 'filled', 150, 0.71, 150, 0.27, 4.1037, NOW - 1840],
-    ['ARB-09415', 'Bitcoin above $150K by end of 2026?', 'BTC-150K-EOY-2026', 'filled', 'filled', 'filled', 175, 0.41, 175, 0.56, 5.0192, NOW - 3270],
-    ['ARB-09412', 'Tesla deliveries Q1 2026 over 500K?', 'TSLA-Q1-DEL-500K', 'recovering', 'filled', 'submitted', 100, 0.55, 100, 0.42, 0, NOW - 4100],
-    ['ARB-09408', 'Will GPT-6 release before Q4 2026?', 'GPT6-Q4-2026', 'filled', 'filled', 'filled', 120, 0.33, 120, 0.64, 2.4831, NOW - 5980],
-    ['ARB-09405', 'ETH above $8K by end of 2026?', 'ETH-8K-EOY-2026', 'failed', 'filled', 'failed', 90, 0.36, 0, 0.61, -0.84, NOW - 7220],
-    ['ARB-09401', 'Will Apple ship AR glasses in 2026?', 'AAPL-AR-2026', 'filled', 'filled', 'filled', 70, 0.31, 70, 0.66, 0.7129, NOW - 9460],
-    ['ARB-09397', 'NBA Finals — Celtics win 2026?', 'NBA-CELTICS-2026', 'filled', 'filled', 'filled', 50, 0.24, 50, 0.73, 0.3187, NOW - 12300],
-    ['ARB-09390', 'Argentina inflation under 50% in 2026?', 'ARG-INFL-2026', 'filled', 'filled', 'filled', 30, 0.44, 30, 0.54, 0.1592, NOW - 14820],
-    ['ARB-09385', 'Will SpaceX IPO in 2026?', 'SPACEX-IPO-2026', 'filled', 'filled', 'filled', 80, 0.18, 80, 0.79, 1.0840, NOW - 18900],
-  ];
-
-  const executions = tradeSeed.map(([id, desc, cid, status, yStat, nStat, yQ, yP, nQ, nP, pnl_v, ts]) => ({
-    arb_id: id,
-    status,
-    realized_pnl: pnl_v,
-    timestamp: ts,
-    opportunity: {
-      description: desc,
-      canonical_id: cid,
-      yes_platform: cid.includes('FED') || cid.includes('GPT') || cid.includes('SPACEX') || cid.includes('OAI') || cid.includes('RU-') || cid.includes('NBA') || cid.includes('ARG') ? 'polymarket' : 'kalshi',
-      no_platform: cid.includes('FED') || cid.includes('GPT') || cid.includes('SPACEX') || cid.includes('OAI') || cid.includes('RU-') || cid.includes('NBA') || cid.includes('ARG') ? 'kalshi' : 'polymarket',
-    },
-    leg_yes: { status: yStat, fill_qty: yQ, fill_price: yP },
-    leg_no:  { status: nStat, fill_qty: nQ, fill_price: nP },
-  }));
-
-  // ──────────────────────────────────────────────────────────────────────
-  // Deposits
-  const deposits = {
-    total_all: 100.00,
-    deposits: [
-      { type: 'deposit', amount: 100.00, platform: 'polymarket', timestamp: NOW - 86400 * 2 },
-      { type: 'deposit', amount: 500.00, platform: 'kalshi',     timestamp: NOW - 86400 * 9 },
-      { type: 'deposit', amount: 500.00, platform: 'polymarket', timestamp: NOW - 86400 * 9 },
-    ],
-  };
-
-  // ──────────────────────────────────────────────────────────────────────
-  // Health
-  const scanHistory = [];
-  for (let i = 0; i < 60; i++) {
-    scanHistory.push({
-      timestamp: NOW - (60 - i) * 5,
-      best_edge_cents: Math.max(0, 1.2 + Math.sin(i / 4) * 2 + Math.random() * 1.6),
-      active: 8 + Math.floor(Math.random() * 8),
-      tradable: 2 + Math.floor(Math.random() * 5),
-      scan_time_ms: 180 + Math.random() * 90,
-    });
-  }
-  const last = scanHistory[scanHistory.length - 1];
-
-  const health = {
-    status: 'ok',
-    mode: 'live',
-    live_trading_ready: true,
-    uptime_seconds: 9 * 3600 + 14 * 60,
-    scanner: {
-      scan_count: 18420,
-      published: 312,
-      scan_time_ms: 214,
-      history: scanHistory,
-    },
-    execution: {
-      total_executions: 87,
-      filled: 81,
-      failed: 4,
-      recovering: 2,
-    },
-    audit: { audit_score: 0.9982 },
-    profitability: { verdict: 'profitable', cumulative_pnl: -0.4957 },
-    reconciliation: { reconciliation_count: 1240, flag_count: 0 },
-    readiness: { ready: true, gates: 7, passing: 7 },
-  };
-
-  // ──────────────────────────────────────────────────────────────────────
-  // Edge histogram (current)
-  const edgeBuckets = [
-    { range: '0-1¢',  count: 142 },
-    { range: '1-2¢',  count: 86  },
-    { range: '2-3¢',  count: 41  },
-    { range: '3-4¢',  count: 18  },
-    { range: '4-5¢',  count: 7   },
-    { range: '5¢+',   count: 3   },
-  ];
-
   return {
     NOW,
-    balances,
-    pnl,
-    equity,
-    opportunities,
-    executions,
-    deposits,
-    health,
-    edgeBuckets,
+    // Flips true once the first refresh() pass completes. Components can show
+    // a loading state until then so empty defaults aren't mistaken for "the
+    // system is idle".
+    loaded: false,
+    lastFetch: 0,
+
+    // Balances ─ /api/balances
+    balances: {
+      kalshi:     { balance: 0, timestamp: 0, is_low: false },
+      polymarket: { balance: 0, timestamp: 0, is_low: false },
+    },
+
+    // P&L ─ /api/pnl
+    pnl: {
+      starting_balances: { kalshi: 0, polymarket: 0 },
+      current_balances:  { kalshi: 0, polymarket: 0 },
+      total_deposits:    { kalshi: 0, polymarket: 0 },
+      total_deposits_all_platforms: 0,
+      recorded_trading_pnl: { kalshi: 0, polymarket: 0 },
+      total_balance: 0,
+    },
+
+    // Equity curve points {t, v}. Backend has no historical store yet, so this
+    // stays empty until populated; refresh() falls back to a single
+    // current-balance point so charts have something to render.
+    equity: [],
+
+    // Tradable opportunities ─ /api/opportunities
+    opportunities: [],
+
+    // Execution ledger ─ /api/executions
+    executions: [],
+
+    // Deposit history ─ /api/deposits
+    deposits: { total_all: 0, deposits: [] },
+
+    // Failed trades ─ /api/failed-trades
+    failedTrades: [],
+
+    // Engine incidents ─ /api/errors
+    errors: [],
+
+    // Portfolio snapshot ─ /api/portfolio
+    portfolio: { positions: [], violations: [], total_exposure: 0, unrealized_pnl: 0 },
+
+    // Operator settings ─ /api/settings (nested: scanner, alerts,
+    // auto_executor, mapping, mode, meta). Null until first fetch.
+    settings: null,
+
+    // Market mappings ─ /api/mappings
+    mappings: [],
+
+    // Health rollup ─ /api/health (+ /api/readiness, /api/profitability,
+    // /api/reconciliation merge into the sub-fields).
+    health: {
+      status: 'unknown',
+      mode: 'unknown',
+      live_trading_ready: false,
+      uptime_seconds: 0,
+      scanner: { scan_count: 0, published: 0, scan_time_ms: 0, history: [] },
+      execution: { total_executions: 0, filled: 0, failed: 0, recovering: 0 },
+      audit: { audit_score: 0 },
+      profitability: { verdict: 'unknown', cumulative_pnl: 0 },
+      reconciliation: { reconciliation_count: 0, flag_count: 0 },
+      readiness: { ready: false, gates: 0, passing: 0 },
+    },
+
+    // Edge-bucket histogram. Computed at render time from current
+    // opportunities; backend doesn't expose this directly.
+    edgeBuckets: [],
   };
 })();
 
@@ -480,10 +385,66 @@ window.MOCK = (() => {
     M.mappings = rows;
   }
 
+  function mergeSettings(M, settings) {
+    if (!settings || typeof settings !== 'object') return;
+    M.settings = settings;
+  }
+
+  function mergeReconciliation(M, recon) {
+    if (!recon || typeof recon !== 'object') return;
+    if (recon.reconciliation_count != null) M.health.reconciliation.reconciliation_count = asNumber(recon.reconciliation_count, M.health.reconciliation.reconciliation_count);
+    if (recon.flag_count != null) M.health.reconciliation.flag_count = asNumber(recon.flag_count, M.health.reconciliation.flag_count);
+  }
+
+  function mergeReadiness(M, readiness) {
+    if (!readiness || typeof readiness !== 'object') return;
+    if (readiness.gates != null) M.health.readiness.gates = asNumber(readiness.gates, M.health.readiness.gates);
+    if (readiness.passing != null) M.health.readiness.passing = asNumber(readiness.passing, M.health.readiness.passing);
+    if (readiness.ready_for_live_trading != null) M.health.readiness.ready = !!readiness.ready_for_live_trading;
+    else if (readiness.ready != null) M.health.readiness.ready = !!readiness.ready;
+  }
+
+  function mergeProfitability(M, prof) {
+    if (!prof || typeof prof !== 'object') return;
+    if (prof.verdict) M.health.profitability.verdict = prof.verdict;
+    if (prof.cumulative_pnl != null) M.health.profitability.cumulative_pnl = asNumber(prof.cumulative_pnl, M.health.profitability.cumulative_pnl);
+  }
+
+  function mergeFailedTrades(M, rows) {
+    M.failedTrades = Array.isArray(rows) ? rows : [];
+  }
+
+  function mergeErrors(M, rows) {
+    M.errors = Array.isArray(rows) ? rows : [];
+  }
+
+  function mergePortfolio(M, p) {
+    if (!p || typeof p !== 'object') return;
+    M.portfolio = {
+      positions: Array.isArray(p.positions) ? p.positions : [],
+      violations: Array.isArray(p.violations) ? p.violations : [],
+      total_exposure: asNumber(p.total_exposure, 0),
+      unrealized_pnl: asNumber(p.unrealized_pnl, 0),
+    };
+  }
+
+  // Equity curve fallback: backend has no historical equity store yet, so
+  // when the curve is empty after a refresh we synthesise a single point
+  // anchored at the current total balance. Charts render a flat line rather
+  // than blowing up on an empty array.
+  function ensureEquityFallback(M) {
+    if (Array.isArray(M.equity) && M.equity.length > 0) return;
+    const total = asNumber(M.pnl.total_balance, 0)
+      || asNumber(M.balances.kalshi.balance, 0) + asNumber(M.balances.polymarket.balance, 0);
+    M.equity = [{ t: Math.floor(Date.now() / 1000), v: +total.toFixed(2) }];
+  }
+
   async function refresh() {
     const M = window.MOCK;
     if (!M) return;
-    const [health, balances, opps, execs, pnl, deposits, mappings] = await Promise.all([
+    const [health, balances, opps, execs, pnl, deposits, mappings,
+           settings, reconciliation, readiness, profitability,
+           failedTrades, errors, portfolio] = await Promise.all([
       safeJson('/api/health'),
       safeJson('/api/balances'),
       safeJson('/api/opportunities'),
@@ -491,6 +452,13 @@ window.MOCK = (() => {
       safeJson('/api/pnl'),
       safeJson('/api/deposits'),
       safeJson('/api/mappings'),
+      safeJson('/api/settings'),
+      safeJson('/api/reconciliation'),
+      safeJson('/api/readiness'),
+      safeJson('/api/profitability'),
+      safeJson('/api/failed-trades'),
+      safeJson('/api/errors'),
+      safeJson('/api/portfolio'),
     ]);
     mergeHealth(M, health);
     mergeBalances(M, balances);
@@ -499,7 +467,16 @@ window.MOCK = (() => {
     mergePnl(M, pnl);
     mergeDeposits(M, deposits);
     mergeMappings(M, mappings);
+    mergeSettings(M, settings);
+    mergeReconciliation(M, reconciliation);
+    mergeReadiness(M, readiness);
+    mergeProfitability(M, profitability);
+    mergeFailedTrades(M, failedTrades);
+    mergeErrors(M, errors);
+    mergePortfolio(M, portfolio);
+    ensureEquityFallback(M);
     M.lastFetch = Date.now();
+    M.loaded = true;
   }
 
   async function readError(r) {
@@ -586,11 +563,132 @@ window.MOCK = (() => {
     }
   }
 
+  // POST /api/settings — operator settings patch. Body matches the nested
+  // structure returned by GET /api/settings (scanner / alerts / auto_executor
+  // / mapping). Returns the post-update snapshot on success.
+  async function updateSettings(patch) {
+    if (!patch || typeof patch !== 'object') {
+      return { ok: false, error: 'settings patch required' };
+    }
+    try {
+      const r = await fetch(API + '/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(patch),
+      });
+      if (!r.ok) return { ok: false, error: await readError(r) };
+      return { ok: true, data: await r.json() };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  }
+
+  // POST /api/scanner/control — pause or resume the scanning loop.
+  // action ∈ {"pause", "resume"}.
+  async function scannerControl(action) {
+    const norm = String(action || '').toLowerCase();
+    if (norm !== 'pause' && norm !== 'resume') {
+      return { ok: false, error: 'action must be pause or resume' };
+    }
+    try {
+      const r = await fetch(API + '/api/scanner/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ action: norm }),
+      });
+      if (!r.ok) return { ok: false, error: await readError(r) };
+      return { ok: true, data: await r.json() };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  }
+
+  // POST /api/market-mappings/{canonical_id} — operator action on a candidate
+  // mapping. Body: {action, note?, resolution_criteria?, resolution_match_status?}.
+  // Common actions: "confirm", "review", "reject", "enable_auto_trade",
+  // "disable_auto_trade".
+  async function mappingAction(canonicalId, action, extra) {
+    const id = String(canonicalId || '').trim();
+    const act = String(action || '').toLowerCase().trim();
+    if (!id || !act) {
+      return { ok: false, error: 'canonical_id and action required' };
+    }
+    try {
+      const body = Object.assign({ action: act }, extra || {});
+      const r = await fetch(API + '/api/market-mappings/' + encodeURIComponent(id), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) return { ok: false, error: await readError(r) };
+      return { ok: true, data: await r.json() };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  }
+
+  // POST /api/auth/login — returns {status, email, token}; backend also sets
+  // the arbiter_session cookie. Body: {email, password}.
+  async function login(email, password) {
+    const e = String(email || '').trim();
+    const p = String(password || '');
+    if (!e || !p) return { ok: false, error: 'email and password required' };
+    try {
+      const r = await fetch(API + '/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ email: e, password: p }),
+      });
+      if (!r.ok) return { ok: false, error: await readError(r) };
+      return { ok: true, data: await r.json() };
+    } catch (err) {
+      return { ok: false, error: String((err && err.message) || err) };
+    }
+  }
+
+  // POST /api/auth/logout — invalidates the session cookie.
+  async function logout() {
+    try {
+      const r = await fetch(API + '/api/auth/logout', {
+        method: 'POST',
+        credentials: 'same-origin',
+      });
+      if (!r.ok) return { ok: false, error: await readError(r) };
+      return { ok: true, data: await r.json() };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  }
+
   window.__arbiterRefresh = refresh;
   window.__arbiterKillSwitch = killSwitch;
   window.__arbiterRetry = retryFailedTrade;
   window.__arbiterDeposit = recordDeposit;
   window.__arbiterLivePrices = liveMarketPrices;
+  window.__arbiterUpdateSettings = updateSettings;
+  window.__arbiterScannerControl = scannerControl;
+  window.__arbiterMappingAction = mappingAction;
+  window.__arbiterLogin = login;
+  window.__arbiterLogout = logout;
+
+  // Translate UI setting keys (used by the Settings page sliders) into the
+  // backend's nested settings payload. Returns null when the key isn't
+  // mapped to a server-side field — callers should still update local
+  // state in that case.
+  window.__arbiterSettingsPatch = function(uiKey, value) {
+    switch (uiKey) {
+      case 'minEdge':     return { scanner: { min_edge_cents: Number(value) } };
+      case 'minVolume':   return { scanner: { min_liquidity: Number(value) } };
+      case 'persistence': return { scanner: { persistence_scans: parseInt(value, 10) } };
+      case 'maxPos':      return { scanner: { max_position_usd: Number(value) } };
+      case 'autoExec':    return { auto_executor: { enabled: value === 'on' || value === true } };
+      default: return null;
+    }
+  };
 })();
 </script>
 <script type="text/babel" data-presets="env,react" data-filename="charts.jsx">
@@ -1041,7 +1139,10 @@ function AppProvider({ children, onSignOut }) {
     setToasts(t => [...t, { id, msg, ...opts }]);
     setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), opts.duration || 2800);
   };
-  const signOut = () => { onSignOut?.(); };
+  const signOut = async () => {
+    if (window.__arbiterLogout) { try { await window.__arbiterLogout(); } catch {} }
+    onSignOut?.();
+  };
 
   useE(() => {
     const onKey = (e) => {
@@ -2056,11 +2157,29 @@ function PageMappings() {
           { label: 'Status', w: '110px', render: r => <window.Pill tone={r.s === 'confirmed' ? 'green' : r.s === 'pending' ? 'amber' : r.s === 'review' ? 'blue' : 'red'}>{r.s}</window.Pill> },
           { label: '', w: '230px', align:'right', render: r => {
             if (r.s === 'confirmed') return <span style={{ fontSize: 11, color: t.textMuted }}>Active · scanned every 5s</span>;
-            if (r.s === 'rejected') return <window.Btn variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); toast('Re-opened for review', { sub: r.k }); }}>Re-open</window.Btn>;
+            if (r.s === 'rejected') return <window.Btn variant="ghost" size="sm" onClick={async (e) => {
+              e.stopPropagation();
+              const id = r.canonical_id || r.k;
+              if (window.__arbiterMappingAction) {
+                const res = await window.__arbiterMappingAction(id, 'review', { note: 're-opened from operator desk' });
+                if (!res.ok) { toast('Re-open failed', { sub: res.error, tone: 'error' }); return; }
+                if (window.__arbiterTick) { try { await window.__arbiterTick(); } catch {} }
+              }
+              toast('Re-opened for review', { sub: id });
+            }}>Re-open</window.Btn>;
             // pending / review → show "Validate with agent" + accept/reject quick actions
             return (
               <div style={{ display:'flex', gap: 6, justifyContent:'flex-end' }}>
-                <window.Btn variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); toast('Mapping rejected', { sub: r.k }); }}>Reject</window.Btn>
+                <window.Btn variant="ghost" size="sm" onClick={async (e) => {
+                  e.stopPropagation();
+                  const id = r.canonical_id || r.k;
+                  if (window.__arbiterMappingAction) {
+                    const res = await window.__arbiterMappingAction(id, 'reject', { note: 'rejected from operator desk' });
+                    if (!res.ok) { toast('Reject failed', { sub: res.error, tone: 'error' }); return; }
+                    if (window.__arbiterTick) { try { await window.__arbiterTick(); } catch {} }
+                  }
+                  toast('Mapping rejected', { sub: id });
+                }}>Reject</window.Btn>
                 <window.Btn variant="secondary" size="sm" icon="◇" onClick={(e) => { e.stopPropagation(); setModal({ kind:'agentValidate', payload: r }); }}>Validate</window.Btn>
               </div>
             );
@@ -2078,12 +2197,20 @@ function PageMappings() {
 
 // ── Scanner ─────────────────────────────────────────────────────────
 function PageScanner() {
-  const { t, scanner, setScanner } = window.useApp();
+  const { t, scanner, setScanner, toast } = window.useApp();
   const M = window.MOCK;
   return (
     <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto' }}>
       <window.PageHeader kicker="Real-time" title="Scanner" sub="Continuously polls Kalshi and Polymarket order books, computes net edge, and publishes opportunities crossing the threshold.">
-        <window.Btn variant={scanner ? 'danger' : 'accent'} size="sm" onClick={() => setScanner(!scanner)} icon={scanner ? '⏸' : '▶'}>{scanner ? 'Pause scanner' : 'Resume scanner'}</window.Btn>
+        <window.Btn variant={scanner ? 'danger' : 'accent'} size="sm" onClick={async () => {
+          const next = !scanner;
+          if (window.__arbiterScannerControl) {
+            const res = await window.__arbiterScannerControl(next ? 'resume' : 'pause');
+            if (!res.ok) { toast('Scanner ' + (next ? 'resume' : 'pause') + ' failed', { sub: res.error, tone: 'error' }); return; }
+          }
+          setScanner(next);
+          if (window.__arbiterTick) { try { await window.__arbiterTick(); } catch {} }
+        }} icon={scanner ? '⏸' : '▶'}>{scanner ? 'Pause scanner' : 'Resume scanner'}</window.Btn>
       </window.PageHeader>
 
       <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap: 14, marginBottom: 18 }}>
@@ -3089,7 +3216,17 @@ function EditSettingModal() {
       </div>
       <Footer>
         <window.Btn variant="ghost" size="sm" onClick={() => setModal(null)}>Cancel</window.Btn>
-        <window.Btn variant="primary" size="sm" onClick={() => {
+        <window.Btn variant="primary" size="sm" onClick={async () => {
+          // Map UI setting key to backend nested payload, then POST.
+          const patch = window.__arbiterSettingsPatch?.(cfg.key, v);
+          if (patch && window.__arbiterUpdateSettings) {
+            const res = await window.__arbiterUpdateSettings(patch);
+            if (!res.ok) {
+              toast(`Failed to save ${cfg.label}`, { sub: res.error, tone: 'error' });
+              return;
+            }
+            if (window.__arbiterTick) { try { await window.__arbiterTick(); } catch {} }
+          }
           setSettings(s => ({ ...s, [cfg.key]: v }));
           cfg.onSave?.(v);
           setModal(null);
@@ -4416,17 +4553,26 @@ function LoginScreen({ onSignIn }) {
 
           <div style={{ marginBottom: 14 }}>
             <div style={{ fontSize: 11, color: t.textDim, fontWeight: 500, marginBottom: 6 }}>Email</div>
-            <input defaultValue="sam@arbiter.app" style={{ width: '100%', padding: '11px 14px', background: t.bgCard, border: `1px solid ${t.borderBright}`, borderRadius: 8, fontSize: 13, color: t.text, outline:'none' }}/>
+            <input id="arbiter-login-email" defaultValue="" placeholder="you@example.com" style={{ width: '100%', padding: '11px 14px', background: t.bgCard, border: `1px solid ${t.borderBright}`, borderRadius: 8, fontSize: 13, color: t.text, outline:'none' }}/>
           </div>
           <div style={{ marginBottom: 18 }}>
             <div style={{ display:'flex', justifyContent:'space-between', marginBottom: 6 }}>
               <div style={{ fontSize: 11, color: t.textDim, fontWeight: 500 }}>Password</div>
               <a style={{ fontSize: 11, color: t.accent, cursor:'pointer' }}>Forgot?</a>
             </div>
-            <input type="password" defaultValue="••••••••••••" style={{ width: '100%', padding: '11px 14px', background: t.bgCard, border: `1px solid ${t.borderBright}`, borderRadius: 8, fontSize: 13, color: t.text, outline:'none', fontFamily: window.FONTS.mono }}/>
+            <input id="arbiter-login-password" type="password" defaultValue="" placeholder="" style={{ width: '100%', padding: '11px 14px', background: t.bgCard, border: `1px solid ${t.borderBright}`, borderRadius: 8, fontSize: 13, color: t.text, outline:'none', fontFamily: window.FONTS.mono }}/>
           </div>
 
-          <button onClick={onSignIn} style={{ padding: '12px 16px', background: t.text, color: t.bgCard, border:'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor:'pointer', marginBottom: 14 }}>Sign in →</button>
+          <button onClick={async () => {
+            const e = (document.getElementById('arbiter-login-email')?.value || '').trim();
+            const p = document.getElementById('arbiter-login-password')?.value || '';
+            if (!e || !p) { window.dispatchEvent(new CustomEvent('arbiter-login-error', { detail: 'email and password required' })); return; }
+            if (window.__arbiterLogin) {
+              const res = await window.__arbiterLogin(e, p);
+              if (!res.ok) { window.dispatchEvent(new CustomEvent('arbiter-login-error', { detail: res.error })); return; }
+            }
+            onSignIn?.();
+          }} style={{ padding: '12px 16px', background: t.text, color: t.bgCard, border:'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor:'pointer', marginBottom: 14 }}>Sign in →</button>
 
           <div style={{ display:'flex', alignItems:'center', gap: 10, marginBottom: 14 }}>
             <div style={{ flex: 1, height: 1, background: t.border }}/>
@@ -4743,15 +4889,32 @@ window.LoginScreen = LoginScreen;
       setSignedIn(false);
     };
 
+    // Once signed in, hold the dashboard shell behind a loading state until
+    // the first /api/* refresh resolves. Empty defaults shouldn't be shown
+    // as if they were the live picture of the system.
+    const dashboard = !window.MOCK.loaded
+      ? <BootLoading/>
+      : (isMobile ? <MobileShellInner/> : <DesktopShellInner/>);
+
     return (
       <window.AppProvider onSignOut={handleSignOut}>
         <ErrorBoundary>
           {!signedIn
             ? <window.LoginScreen onSignIn={handleSignIn}/>
-            : (isMobile ? <MobileShellInner/> : <DesktopShellInner/>)}
+            : dashboard}
           <window.ToastHost/>
         </ErrorBoundary>
       </window.AppProvider>
+    );
+  }
+
+  function BootLoading() {
+    const theme = window.THEMES[document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light'];
+    return (
+      <div style={{ width: '100%', height: '100%', background: theme.bg, color: theme.textDim, display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap: 14, fontFamily: window.FONTS.sans }}>
+        <div style={{ width: 28, height: 28, border: `2px solid ${theme.border}`, borderTopColor: theme.accent, borderRadius: '50%', animation: 'spin 0.8s linear infinite' }}/>
+        <div style={{ fontSize: 12.5 }}>Loading live data…</div>
+      </div>
     );
   }
 
