@@ -4871,9 +4871,9 @@ function LoginScreen({ onSignIn }) {
   const onKey = (ev) => { if (ev.key === 'Enter') submit(); };
 
   return (
-    <div style={{ width: '100%', height: '100%', background: t.bg, color: t.text, fontFamily: window.FONTS.sans, display:'flex', overflow: 'hidden' }}>
+    <div style={{ width: '100%', height: '100%', background: t.bg, color: t.text, fontFamily: window.FONTS.sans, display:'flex', flexDirection: window.innerWidth <= 1023 ? 'column' : 'row', overflow: 'auto' }}>
       {/* Left side - form */}
-      <div style={{ flex: '0 0 480px', padding: '48px 56px', display:'flex', flexDirection:'column', borderRight: `1px solid ${t.border}`, background: t.bgCard }}>
+      <div style={{ flex: window.innerWidth <= 1023 ? '1 1 auto' : '0 0 480px', padding: window.innerWidth <= 1023 ? '32px 24px' : '48px 56px', display:'flex', flexDirection:'column', borderRight: window.innerWidth <= 1023 ? 'none' : `1px solid ${t.border}`, background: t.bgCard }}>
         <div style={{ display:'flex', alignItems:'center', gap: 10, marginBottom: 64 }}>
           <div style={{ width: 30, height: 30, borderRadius: 8, background: t.text, color: t.bgCard, display:'flex', alignItems:'center', justifyContent:'center', fontSize: 14, fontWeight: 700 }}>A</div>
           <div style={{ fontSize: 15, fontWeight: 600, letterSpacing:'-0.01em' }}>Arbiter</div>
@@ -4920,8 +4920,8 @@ function LoginScreen({ onSignIn }) {
         </div>
       </div>
 
-      {/* Right side - status */}
-      <div style={{ flex: 1, padding: '48px 56px', display:'flex', flexDirection:'column', justifyContent:'center' }}>
+      {/* Right side - status (hidden on mobile) */}
+      <div style={{ flex: 1, padding: window.innerWidth <= 1023 ? '24px' : '48px 56px', display: window.innerWidth <= 1023 ? 'none' : 'flex', flexDirection:'column', justifyContent:'center' }}>
         <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.08em', textTransform:'uppercase', marginBottom: 14 }}>System status — public</div>
         <div style={{ fontSize: 22, fontWeight: 600, color: t.text, letterSpacing:'-0.018em', marginBottom: 32 }}>All systems nominal</div>
 
