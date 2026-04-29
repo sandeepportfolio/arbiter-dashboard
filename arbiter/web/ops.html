@@ -1469,11 +1469,30 @@ window.TimeRange = TimeRange;
 const { useState: oppUseState, useMemo: oppUseMemo } = React;
 
 function PageOpportunities() {
-  const { t, setDrawer, minEdge, setMinEdge, autoExec, setAutoExec } = window.useApp();
+  const { t, setDrawer, minEdge, setMinEdge, autoExec, setAutoExec, toast } = window.useApp();
   const M = window.MOCK;
   const [filter, setFilter] = oppUseState('all'); // all | tradable | candidate | review
   const [sort, setSort] = oppUseState('edge');
   const [search, setSearch] = oppUseState('');
+
+  const exportCsv = () => {
+    const cols = ['canonical_id','description','yes_platform','yes_price','no_platform','no_price','net_edge_cents','expected_profit','status','suggested_qty','persistence_scans'];
+    const escape = (v) => {
+      const s = String(v ?? '');
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const rows = [cols.join(',')].concat(filtered.map(r => cols.map(c => escape(r[c])).join(',')));
+    const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `opportunities-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    toast?.(`Exported ${filtered.length} rows`);
+  };
 
   const filtered = oppUseMemo(() => {
     let r = M.opportunities;
@@ -1516,8 +1535,8 @@ function PageOpportunities() {
       {/* Toolbar */}
       <div style={{ display:'flex', gap: 8, marginBottom: 12, alignItems:'center' }}>
         <input placeholder="Filter by description or canonical ID…" value={search} onChange={e => setSearch(e.target.value)} style={{ flex: 1, padding: '8px 12px', background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 7, fontSize: 12.5, color: t.text, outline: 'none' }} />
-        <window.Btn variant="secondary" size="sm">Sort: {sort === 'edge' ? 'Net edge ↓' : 'Expected profit ↓'}</window.Btn>
-        <window.Btn variant="secondary" size="sm" icon="↓">Export CSV</window.Btn>
+        <window.Btn variant="secondary" size="sm" onClick={() => setSort(sort === 'edge' ? 'profit' : 'edge')}>Sort: {sort === 'edge' ? 'Net edge ↓' : 'Expected profit ↓'}</window.Btn>
+        <window.Btn variant="secondary" size="sm" icon="↓" onClick={exportCsv}>Export CSV</window.Btn>
       </div>
 
       {/* Table */}
@@ -1554,7 +1573,11 @@ function PageOpportunities() {
             </div>
           )},
           { label: 'Status', w: '110px', render: r => {
-            const tone = r.status === 'tradable' ? 'green' : r.status === 'candidate' ? 'blue' : r.status === 'review' ? 'amber' : 'default';
+            const tone = r.status === 'tradable' ? 'green'
+              : r.status === 'candidate' ? 'blue'
+              : r.status === 'review' ? 'amber'
+              : r.status === 'illiquid' ? 'red'
+              : 'default'; // stale → gray
             return <window.Pill tone={tone}>{r.status}</window.Pill>;
           }},
           { label: '', w: '90px', align: 'right', render: r => r.status === 'tradable' ? <window.Btn variant="primary" size="sm">Execute →</window.Btn> : <span style={{ fontSize: 11, color: t.textMuted }}>—</span> },
