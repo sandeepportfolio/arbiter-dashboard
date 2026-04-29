@@ -2285,6 +2285,8 @@ function Modal() {
   if (modal.kind === 'trade') return <TradeDetailModal/>;
   if (modal.kind === 'deposit') return <DepositModal/>;
   if (modal.kind === 'reset2fa') return <Reset2faModal/>;
+  // withdraw, profile, editSetting, apiKey, notifPrefs are handled by ExtraModal
+  // to avoid double-rendering when both dispatchers are mounted.
   return null;
 }
 
@@ -2489,8 +2491,8 @@ function Reset2faModal() {
 function Shell({ children, width = 560 }) {
   const { t, setModal } = window.useApp();
   return (
-    <div onClick={() => setModal(null)} style={{ position:'fixed', inset: 0, background: t.overlay, zIndex: 95, display:'flex', justifyContent:'center', alignItems:'center', padding: 40 }}>
-      <div onClick={e => e.stopPropagation()} style={{ width, maxHeight: '90vh', background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 14, boxShadow: t.shadowLg, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+    <div onClick={() => setModal(null)} style={{ position:'fixed', inset: 0, background: t.overlay, zIndex: 95, display:'flex', justifyContent:'center', alignItems:'center', padding: 'clamp(12px, 4vw, 40px)' }}>
+      <div onClick={e => e.stopPropagation()} style={{ width, maxWidth: '100%', maxHeight: '90vh', background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 14, boxShadow: t.shadowLg, display:'flex', flexDirection:'column', overflow:'hidden' }}>
         {children}
       </div>
     </div>
@@ -2841,8 +2843,8 @@ function ExtraModal() {
 function Shell({ children, width = 480 }) {
   const { t, setModal } = window.useApp();
   return (
-    <div onClick={() => setModal(null)} style={{ position:'fixed', inset: 0, background: t.overlay, zIndex: 95, display:'flex', justifyContent:'center', alignItems:'center', padding: 40 }}>
-      <div onClick={e => e.stopPropagation()} style={{ width, maxHeight: '90vh', background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 14, boxShadow: t.shadowLg, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+    <div onClick={() => setModal(null)} style={{ position:'fixed', inset: 0, background: t.overlay, zIndex: 95, display:'flex', justifyContent:'center', alignItems:'center', padding: 'clamp(12px, 4vw, 40px)' }}>
+      <div onClick={e => e.stopPropagation()} style={{ width, maxWidth: '100%', maxHeight: '90vh', background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 14, boxShadow: t.shadowLg, display:'flex', flexDirection:'column', overflow:'hidden' }}>
         {children}
       </div>
     </div>
@@ -3022,9 +3024,9 @@ function EditSettingModal() {
         {cfg.desc && <div style={{ fontSize: 11.5, color: t.textDim, marginBottom: 18, lineHeight: 1.5 }}>{cfg.desc}</div>}
         {cfg.kind === 'slider' && (
           <>
-            <div style={{ display:'flex', alignItems:'center', gap: 12, marginBottom: 12 }}>
-              <input type="range" min={cfg.min} max={cfg.max} step={cfg.step} value={v ?? cfg.min} onChange={e => setV(+e.target.value)} style={{ flex: 1, accentColor: t.accent }}/>
-              <div style={{ width: 110, padding: '8px 12px', background: t.bgSubtle, border: `1px solid ${t.border}`, borderRadius: 7, fontFamily: window.FONTS.mono, fontSize: 14, fontWeight: 600, color: t.text, textAlign:'center' }}>{prefix}{v ?? cfg.min}{unit}</div>
+            <div style={{ display:'flex', alignItems:'center', gap: 12, marginBottom: 12, flexWrap:'wrap' }}>
+              <input type="range" min={cfg.min} max={cfg.max} step={cfg.step} value={v ?? cfg.min} onChange={e => setV(+e.target.value)} style={{ flex: 1, minWidth: 140, accentColor: t.accent }}/>
+              <div style={{ minWidth: 110, padding: '8px 12px', background: t.bgSubtle, border: `1px solid ${t.border}`, borderRadius: 7, fontFamily: window.FONTS.mono, fontSize: 14, fontWeight: 600, color: t.text, textAlign:'center' }}>{prefix}{v ?? cfg.min}{unit}</div>
             </div>
             <div style={{ display:'flex', justifyContent:'space-between', fontSize: 10.5, color: t.textMuted, fontFamily: window.FONTS.mono }}>
               <span>{prefix}{cfg.min}{unit}</span><span>{prefix}{cfg.max}{unit}</span>
@@ -3041,7 +3043,7 @@ function EditSettingModal() {
         {cfg.kind === 'options' && (
           <div style={{ display:'flex', flexDirection:'column', gap: 6 }}>
             {normOptions.map(opt => (
-              <button key={String(opt.v)} onClick={() => setV(opt.v)} style={{ padding: '10px 14px', background: v === opt.v ? t.bgSubtle : t.bgCard, border: `1px solid ${v === opt.v ? t.text : t.border}`, borderRadius: 7, fontSize: 12.5, color: t.text, fontWeight: 500, cursor:'pointer', textAlign:'left' }}>{opt.l}</button>
+              <button key={String(opt.v)} onClick={() => setV(opt.v)} style={{ padding: '12px 14px', background: v === opt.v ? t.bgSubtle : t.bgCard, border: `1px solid ${v === opt.v ? t.text : t.border}`, borderRadius: 7, fontSize: 12.5, color: t.text, fontWeight: 500, cursor:'pointer', textAlign:'left' }}>{opt.l}</button>
             ))}
           </div>
         )}
@@ -3848,21 +3850,21 @@ function MobileDashboard() {
   const switchTab = (k) => { setTab(k); setMeSub(null); };
 
   return (
-    <div style={{ width: '100%', height: '100%', background: t.bg, color: t.text, fontFamily: window.FONTS.sans, display:'flex', flexDirection:'column', overflow:'hidden' }}>
-      <div style={{ padding: '14px 18px 12px', display:'flex', alignItems:'center', gap: 10 }}>
+    <div style={{ position:'relative', width: '100%', height: '100%', background: t.bg, color: t.text, fontFamily: window.FONTS.sans, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+      <div style={{ padding: '14px 14px 12px', display:'flex', alignItems:'center', gap: 6 }}>
         {meSub ? (
-          <button onClick={() => setMeSub(null)} style={{ background:'none', border:'none', color: t.text, fontSize: 18, cursor:'pointer', padding: 0, marginRight: 4 }}>‹</button>
+          <button onClick={() => setMeSub(null)} aria-label="Back" style={{ background:'none', border:'none', color: t.text, fontSize: 22, cursor:'pointer', padding: 0, marginLeft: -8, width: 44, height: 44, display:'flex', alignItems:'center', justifyContent:'center', flexShrink: 0 }}>‹</button>
         ) : (
-          <div style={{ width: 26, height: 26, borderRadius: 7, background: t.text, color: t.bgCard, display:'flex', alignItems:'center', justifyContent:'center', fontSize: 12, fontWeight: 700 }}>A</div>
+          <div style={{ width: 26, height: 26, borderRadius: 7, background: t.text, color: t.bgCard, display:'flex', alignItems:'center', justifyContent:'center', fontSize: 12, fontWeight: 700, marginLeft: 4 }}>A</div>
         )}
-        <div style={{ fontSize: 13, fontWeight: 600 }}>{meSub ? ({ funds:'Funds & Deposits', pnl:'P&L', health:'System Health', settings:'Settings' }[meSub]) : 'Arbiter'}</div>
+        <div style={{ fontSize: 13, fontWeight: 600, marginLeft: meSub ? 0 : 4 }}>{meSub ? ({ funds:'Funds & Deposits', pnl:'P&L', health:'System Health', settings:'Settings' }[meSub]) : 'Arbiter'}</div>
         <div style={{ marginLeft:'auto', display:'flex', alignItems:'center', gap: 4, padding: '3px 8px', background: tradingMode === 'live' ? t.greenSoft : t.amberSoft, color: tradingMode === 'live' ? t.green : t.amber, borderRadius: 99, fontSize: 10.5, fontWeight: 600 }}>
           <span style={{ width: 5, height: 5, borderRadius:'50%', background: tradingMode === 'live' ? t.green : t.amber, animation: 'pulse 2s infinite' }}/>
           {tradingMode === 'live' ? 'LIVE' : 'STANDBY'}
         </div>
       </div>
 
-      <div style={{ flex: 1, overflow:'auto', padding: '0 16px 80px' }}>
+      <div style={{ flex: 1, overflow:'auto', padding: '0 16px', paddingBottom: 'calc(80px + env(safe-area-inset-bottom, 0px))', WebkitOverflowScrolling:'touch' }}>
         {meSub === 'funds' && <MobFunds/>}
         {meSub === 'pnl' && <MobPnL/>}
         {meSub === 'health' && <MobHealth/>}
@@ -3875,15 +3877,18 @@ function MobileDashboard() {
       </div>
 
       {/* Tab bar */}
-      <div style={{ position:'absolute', bottom: 0, left: 0, right: 0, padding: '8px 8px 24px', background: t.bgCard, borderTop: `1px solid ${t.border}`, display:'flex', justifyContent:'space-around' }}>
+      <div style={{ position:'absolute', bottom: 0, left: 0, right: 0, padding: '6px 8px calc(10px + env(safe-area-inset-bottom, 14px))', background: t.bgCard, borderTop: `1px solid ${t.border}`, display:'flex', justifyContent:'space-around' }}>
         {[
           ['home','Home','⌂'],['opps','Edge','◇'],['trades','Trades','↗'],['maps','Maps','⇄'],['me','Account','◐'],
-        ].map(([k, l, ic]) => (
-          <button key={k} onClick={() => switchTab(k)} style={{ flex: 1, padding: '6px 4px', background:'none', border:'none', cursor:'pointer', display:'flex', flexDirection:'column', alignItems:'center', gap: 2, color: tab === k && !meSub ? t.accent : t.textMuted, fontSize: 10 }}>
-            <span style={{ fontSize: 18, fontFamily: window.FONTS.mono }}>{ic}</span>
-            <span style={{ fontWeight: tab === k && !meSub ? 600 : 400 }}>{l}</span>
-          </button>
-        ))}
+        ].map(([k, l, ic]) => {
+          const active = tab === k && !meSub;
+          return (
+            <button key={k} onClick={() => switchTab(k)} aria-label={l} aria-pressed={active} style={{ flex: 1, minHeight: 48, padding: '6px 4px', background:'none', border:'none', cursor:'pointer', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap: 2, color: active ? t.accent : t.textMuted, fontSize: 10, transition:'color 0.15s' }}>
+              <span style={{ fontSize: 18, fontFamily: window.FONTS.mono }}>{ic}</span>
+              <span style={{ fontWeight: active ? 600 : 400 }}>{l}</span>
+            </button>
+          );
+        })}
       </div>
     </div>
   );
