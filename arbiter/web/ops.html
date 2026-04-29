@@ -316,6 +316,13 @@ window.MOCK = (() => {
       const noPrice = asNumber(o.no_price, 0.5);
       const edgeCents = asNumber(o.net_edge_cents, asNumber(o.net_edge, 0) * 100);
       const qty = asNumber(o.suggested_qty, asNumber(o.max_quantity, 100));
+      // Backend ArbitrageOpportunity.to_dict uses yes_fee_rate / no_fee_rate
+      // and a single min_available_liquidity. Fall back to legacy field names
+      // (fee_rate_yes / yes_volume) if anyone hand-rolls payloads.
+      const feeYes = asNumber(o.yes_fee_rate, asNumber(o.fee_rate_yes, yes === 'kalshi' ? 0.025 : 0.020));
+      const feeNo  = asNumber(o.no_fee_rate,  asNumber(o.fee_rate_no,  no  === 'kalshi' ? 0.025 : 0.020));
+      const liquidity = asNumber(o.min_available_liquidity, 5000);
+      const ts = asNumber(o.timestamp, asNumber(o.last_seen, Math.floor(Date.now() / 1000)));
       return {
         description: o.description || o.market_name || o.canonical_id || 'Untitled market',
         canonical_id: o.canonical_id || o.id || 'UNKNOWN',
@@ -327,13 +334,17 @@ window.MOCK = (() => {
         net_edge: edgeCents / 100,
         status: o.status || 'tradable',
         suggested_qty: qty,
-        expected_profit: asNumber(o.expected_profit, edgeCents * qty / 100),
-        yes_volume: asNumber(o.yes_volume, 5000),
-        no_volume: asNumber(o.no_volume, 5000),
-        fee_rate_yes: asNumber(o.fee_rate_yes, yes === 'kalshi' ? 0.025 : 0.020),
-        fee_rate_no:  asNumber(o.fee_rate_no,  no  === 'kalshi' ? 0.025 : 0.020),
-        last_seen: asNumber(o.last_seen, Math.floor(Date.now() / 1000)),
-        persistence_scans: asNumber(o.persistence_scans, asNumber(o.persistence_count, 1)),
+        expected_profit: asNumber(o.expected_profit, asNumber(o.max_profit_usd, edgeCents * qty / 100)),
+        yes_volume: asNumber(o.yes_volume, liquidity),
+        no_volume: asNumber(o.no_volume, liquidity),
+        min_available_liquidity: liquidity,
+        fee_rate_yes: feeYes,
+        fee_rate_no: feeNo,
+        yes_fee_rate: feeYes,
+        no_fee_rate: feeNo,
+        last_seen: ts,
+        timestamp: ts,
+        persistence_scans: asNumber(o.persistence_count, asNumber(o.persistence_scans, 1)),
         persistence_count: asNumber(o.persistence_count, asNumber(o.persistence_scans, 1)),
       };
     });
@@ -451,17 +462,37 @@ window.MOCK = (() => {
     M.lastFetch = Date.now();
   }
 
-  // ── Operator actions (write endpoints) ──────────────────────────────
-  async function killSwitch(state) {
+  async function readError(r) {
     try {
+      const j = await r.json();
+      if (j && j.error) return j.error;
+    } catch {}
+    return 'HTTP ' + r.status;
+  }
+
+  // ── Operator actions (write endpoints) ──────────────────────────────
+  // POST /api/kill-switch expects {action: "arm"|"reset", reason?, note?}.
+  // arm: requires non-empty reason; reset: respects safety cooldown.
+  async function killSwitch(armed, opts) {
+    opts = opts || {};
+    try {
+      const body = armed
+        ? { action: 'arm',   reason: String(opts.reason || '').trim() }
+        : { action: 'reset', note:   String(opts.note || 'operator reset').trim() };
+      if (armed && !body.reason) {
+        return { ok: false, error: 'reason required to arm kill switch' };
+      }
       const r = await fetch(API + '/api/kill-switch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
-        body: JSON.stringify({ engaged: !!state }),
+        body: JSON.stringify(body),
       });
-      return r.ok;
-    } catch { return false; }
+      if (!r.ok) return { ok: false, error: await readError(r) };
+      return { ok: true, state: await r.json() };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
   }
 
   async function retryFailedTrade(arbId) {
@@ -470,13 +501,56 @@ window.MOCK = (() => {
         method: 'POST',
         credentials: 'same-origin',
       });
-      return r.ok ? await r.json() : null;
-    } catch { return null; }
+      if (!r.ok) return { ok: false, error: await readError(r) };
+      return { ok: true, data: await r.json() };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  }
+
+  // POST /api/deposits — record a deposit/withdrawal (or set initial capital
+  // when type === 'initial_capital'). Body: {platform, amount, type?}.
+  async function recordDeposit({ platform, amount, type } = {}) {
+    try {
+      const body = { platform: String(platform || '').toLowerCase(), amount: Number(amount) };
+      if (type) body.type = String(type);
+      if (!body.platform || !Number.isFinite(body.amount) || body.amount === 0) {
+        return { ok: false, error: 'platform and non-zero amount required' };
+      }
+      const r = await fetch(API + '/api/deposits', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) return { ok: false, error: await readError(r) };
+      return { ok: true, data: await r.json() };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  }
+
+  // GET /api/live-prices/{canonical_id} — fresh per-platform quotes for one
+  // market. Returned by the dashboard when an operator wants to inspect a
+  // failed-arb retry or scan a single market on demand.
+  async function liveMarketPrices(canonicalId) {
+    if (!canonicalId) return { ok: false, error: 'canonical_id required' };
+    try {
+      const r = await fetch(API + '/api/live-prices/' + encodeURIComponent(canonicalId), {
+        credentials: 'same-origin',
+      });
+      if (!r.ok) return { ok: false, error: await readError(r) };
+      return { ok: true, data: await r.json() };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
   }
 
   window.__arbiterRefresh = refresh;
   window.__arbiterKillSwitch = killSwitch;
   window.__arbiterRetry = retryFailedTrade;
+  window.__arbiterDeposit = recordDeposit;
+  window.__arbiterLivePrices = liveMarketPrices;
 })();
 </script>
 <script type="text/babel" data-presets="env,react" data-filename="charts.jsx">
@@ -1052,10 +1126,27 @@ function ScannerToggle({ scanner, setScanner }) {
 }
 
 function ModeToggle({ mode, setMode }) {
-  const { t } = window.useApp();
+  const { t, toast } = window.useApp();
   const cfg = mode === 'live' ? [t.green, t.greenSoft, 'Live'] : mode === 'standby' ? [t.amber, t.amberSoft, 'Standby'] : [t.red, t.redSoft, 'Killed'];
+  const onClick = async () => {
+    const next = mode === 'live' ? 'standby' : mode === 'standby' ? 'killed' : 'live';
+    // 'killed' arms the safety supervisor; transitioning AWAY from killed
+    // resets it. 'standby' is local-only (auto-exec gate); the backend has
+    // no standby state, so we only POST when crossing the killed boundary.
+    if (next === 'killed' && window.__arbiterKillSwitch) {
+      const reason = (window.prompt('Reason for arming kill switch?') || '').trim();
+      if (!reason) return;
+      const res = await window.__arbiterKillSwitch(true, { reason });
+      if (!res.ok) { toast('Kill switch failed: ' + (res.error || 'unknown'), { tone: 'error' }); return; }
+    } else if (mode === 'killed' && next !== 'killed' && window.__arbiterKillSwitch) {
+      const res = await window.__arbiterKillSwitch(false, { note: 'operator reset from dashboard' });
+      if (!res.ok) { toast('Kill switch reset failed: ' + (res.error || 'unknown'), { tone: 'error' }); return; }
+    }
+    setMode(next);
+    if (window.__arbiterTick) window.__arbiterTick();
+  };
   return (
-    <button onClick={() => setMode(mode === 'live' ? 'standby' : mode === 'standby' ? 'killed' : 'live')} style={{ padding: '6px 10px', background: cfg[1], border: `1px solid ${cfg[0]}40`, borderRadius: 8, fontSize: 11.5, color: cfg[0], fontWeight: 600, cursor:'pointer', textTransform:'uppercase', letterSpacing:'0.06em' }}>
+    <button onClick={onClick} style={{ padding: '6px 10px', background: cfg[1], border: `1px solid ${cfg[0]}40`, borderRadius: 8, fontSize: 11.5, color: cfg[0], fontWeight: 600, cursor:'pointer', textTransform:'uppercase', letterSpacing:'0.06em' }}>
       {cfg[2]}
     </button>
   );
@@ -2512,10 +2603,29 @@ function Tile({ label, value, sub, tone }) {
 
 // ── Deposit ─────────────────────────────────────────────────────────
 function DepositModal() {
-  const { t, modal, setModal } = window.useApp();
+  const { t, modal, setModal, toast } = window.useApp();
   const platform = modal.payload;
   const [amount, setAmount] = mUseState(100);
-  const [stage, setStage] = mUseState('input');
+  const [stage, setStage] = mUseState('input'); // input | submitting | done
+
+  const onSubmit = async () => {
+    if (!Number.isFinite(amount) || amount === 0) {
+      toast('Enter a non-zero amount', { tone: 'error' });
+      return;
+    }
+    setStage('submitting');
+    if (window.__arbiterDeposit) {
+      const res = await window.__arbiterDeposit({ platform, amount });
+      if (!res.ok) {
+        toast('Deposit failed: ' + (res.error || 'unknown'), { tone: 'error' });
+        setStage('input');
+        return;
+      }
+      // Refresh balances + pnl + deposits so the modal closes onto fresh data.
+      if (window.__arbiterTick) { try { await window.__arbiterTick(); } catch {} }
+    }
+    setStage('done');
+  };
 
   return (
     <Shell width={460}>
@@ -2546,9 +2656,17 @@ function DepositModal() {
           </div>
           <div style={{ padding: '14px 24px', borderTop: `1px solid ${t.border}`, display:'flex', gap: 8, justifyContent:'flex-end' }}>
             <window.Btn variant="ghost" onClick={() => setModal(null)}>Cancel</window.Btn>
-            <window.Btn variant="primary" icon="↓" onClick={() => { setStage('done'); }}>Deposit ${amount}</window.Btn>
+            <window.Btn variant="primary" icon="↓" onClick={onSubmit}>Deposit ${amount}</window.Btn>
           </div>
         </>
+      )}
+
+      {stage === 'submitting' && (
+        <div style={{ padding: '40px 24px', textAlign:'center' }}>
+          <div style={{ width: 48, height: 48, margin: '0 auto 14px', border: `3px solid ${t.border}`, borderTopColor: t.accent, borderRadius: '50%', animation: 'spin 0.8s linear infinite' }}/>
+          <div style={{ fontSize: 14, fontWeight: 600, color: t.text, marginBottom: 4 }}>Recording deposit…</div>
+          <div style={{ fontSize: 12, color: t.textDim, fontFamily: window.FONTS.mono }}>${Number(amount).toFixed(2)} → {platform}</div>
+        </div>
       )}
 
       {stage === 'done' && (
@@ -4374,7 +4492,9 @@ window.LoginScreen = LoginScreen;
     }, []);
 
     // Initial fetch + 10s polling. On each refresh, bump tick so the tree
-    // re-renders and reads the freshly-mutated window.MOCK.
+    // re-renders and reads the freshly-mutated window.MOCK. The tick fn is
+    // also exposed on window so operator-action handlers can request a
+    // synchronous refresh after a successful POST.
     useEffect(() => {
       let cancelled = false;
       const tick = async () => {
@@ -4383,9 +4503,14 @@ window.LoginScreen = LoginScreen;
         }
         if (!cancelled) setTick(x => x + 1);
       };
+      window.__arbiterTick = tick;
       tick();
       const id = setInterval(tick, 10000);
-      return () => { cancelled = true; clearInterval(id); };
+      return () => {
+        cancelled = true;
+        clearInterval(id);
+        if (window.__arbiterTick === tick) window.__arbiterTick = null;
+      };
     }, []);
 
     return isMobile ? <MobileApp/> : <DesktopApp/>;
