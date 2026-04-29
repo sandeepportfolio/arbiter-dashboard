@@ -2254,6 +2254,16 @@ function PagePnL() {
           <div style={{ marginTop: 16, padding: 14, background: t.bgSubtle, borderRadius: 8, fontSize: 11.5, color: t.textDim, lineHeight: 1.55 }}>
             Trading P&L is computed as <span style={{ fontFamily: window.FONTS.mono, color: t.text }}>(current_balance − starting_balance − deposits)</span>, so deposit/withdrawal events do not pollute performance metrics.
           </div>
+          {M.health.reconciliation.flag_count > 0 && (
+            <window.Btn variant="secondary" size="sm" hint="Reset starting balances to current actuals — clears all reconciliation drift flags" style={{ marginTop: 12, width: '100%' }} onClick={async () => {
+              try {
+                const r = await fetch((window.__arbiterAPI || '') + '/api/reconciliation/rebaseline', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin' });
+                const d = await r.json();
+                if (d.status === 'ok') toast('Reconciliation re-baselined', { sub: 'Starting balances reset to current actuals' });
+                else toast('Rebaseline failed: ' + (d.error || 'unknown'), { tone: 'error' });
+              } catch (e) { toast('Rebaseline failed', { sub: String(e), tone: 'error' }); }
+            }}>↻ Re-baseline reconciliation</window.Btn>
+          )}
         </window.Card>
       </div>
     </div>
