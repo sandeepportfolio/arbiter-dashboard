@@ -235,6 +235,37 @@ class PnLReconciler:
             # Fire-and-forget persistence — don't block the caller
             asyncio.ensure_future(self._persist_balance(platform))
 
+    async def rebaseline(self, current_balances: dict):
+        """Reset starting balances to the current actual balances, clear all
+        recorded PnL and flags. Call when reconciliation drift is stale
+        (e.g. after manual deposit corrections or container restarts)."""
+        for platform, balance in current_balances.items():
+            self._starting_balances[platform] = balance
+            self._recorded_pnl[platform] = 0.0
+            self._total_deposits[platform] = 0.0
+        self._flag_count = 0
+        self._reports.clear()
+        self._reconciliation_count = 0
+        logger.info(
+            "Reconciler re-baselined: %s",
+            {p: f"${b:.2f}" for p, b in current_balances.items()},
+        )
+        # Persist the new baselines
+        if self._pg_pool is not None:
+            try:
+                async with self._pg_pool.acquire() as conn:
+                    for platform, balance in current_balances.items():
+                        await conn.execute(
+                            """INSERT INTO platform_balances (platform, starting_balance, total_deposits)
+                               VALUES ($1, $2, 0.0)
+                               ON CONFLICT (platform) DO UPDATE
+                               SET starting_balance = $2, total_deposits = 0.0""",
+                            platform, balance,
+                        )
+                logger.info("Persisted re-baselined starting balances to DB")
+            except Exception as exc:
+                logger.warning("Failed to persist rebaseline: %s", exc)
+
     def record_execution_pnl(self, platform: str, pnl: float):
         """Record P&L from a trade execution on a platform."""
         self._recorded_pnl[platform] = self._recorded_pnl.get(platform, 0.0) + pnl

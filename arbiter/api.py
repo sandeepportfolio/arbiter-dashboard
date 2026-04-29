@@ -257,6 +257,7 @@ class ArbiterAPI:
         app.router.add_get("/api/profitability", self.handle_profitability)
         app.router.add_get("/api/readiness", self.handle_readiness)
         app.router.add_get("/api/reconciliation", self.handle_reconciliation)
+        app.router.add_post("/api/reconciliation/rebaseline", self.handle_rebaseline)
         app.router.add_get("/api/pnl", self.handle_pnl_summary)
         app.router.add_get("/api/deposits", self.handle_deposits)
         app.router.add_post("/api/deposits", self.handle_add_deposit)
@@ -744,6 +745,25 @@ class ArbiterAPI:
 
     async def handle_reconciliation(self, request):
         return web.json_response(self._reconciliation_snapshot())
+
+    async def handle_rebaseline(self, request):
+        """POST /api/reconciliation/rebaseline — reset starting balances to
+        current actual balances, clearing all drift flags."""
+        if not self.reconciler:
+            return web.json_response({"error": "Reconciler not configured"}, status=400)
+        current = {
+            p: s.balance
+            for p, s in self.monitor.current_balances.items()
+        }
+        await self.reconciler.rebaseline(current)
+        # Force a fresh readiness check
+        if self.readiness:
+            self.readiness.refresh()
+        return web.json_response({
+            "status": "ok",
+            "message": "Reconciliation re-baselined",
+            "new_starting_balances": {k: round(v, 2) for k, v in current.items()},
+        })
 
     async def handle_pnl_summary(self, request):
         """Full P&L summary separating trading P&L from deposits.

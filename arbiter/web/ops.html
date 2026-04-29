@@ -1083,7 +1083,7 @@ function Stat({ label, value, sub, tone, mono, big }) {
 const STATUS_INFO = {
   // Execution statuses
   filled:     { tone: 'green',  icon: '✓', desc: 'Order fully executed at target price' },
-  submitted:  { tone: 'amber',  icon: '◌', desc: 'Order sent to exchange, awaiting fill confirmation' },
+  submitted:  { tone: 'purple', icon: '◌', desc: 'Order sent to exchange, awaiting fill confirmation' },
   failed:     { tone: 'red',    icon: '✕', desc: 'Order rejected or timed out — no capital at risk' },
   recovering: { tone: 'blue',   icon: '↻', desc: 'One leg filled, system working to close the other side' },
   aborted:    { tone: 'default',icon: '⊘', desc: 'Safety kill — prevented naked leg exposure' },
