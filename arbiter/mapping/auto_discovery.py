@@ -19,6 +19,7 @@ from difflib import SequenceMatcher
 from typing import Any
 
 from arbiter.config.settings import normalize_market_text, similarity_score
+from arbiter.mapping.team_aliases import norm_team
 
 logger = logging.getLogger("arbiter.mapping.auto_discovery")
 
@@ -35,7 +36,21 @@ def _env_float(name: str, default: float) -> float:
 _COMMON_TOKENS = {
     "a", "an", "and", "are", "be", "for", "if", "in", "is", "of", "on", "or",
     "the", "to", "vs", "will", "win", "winner", "yes", "no",
+    # Date noise that the scoring pipeline already accounts for via the
+    # parsed date_delta — keeping it as a token would inflate Jaccard
+    # without adding signal.
+    "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
+    "january", "february", "march", "april", "june", "july", "august",
+    "september", "october", "november", "december",
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+    "mon", "tue", "wed", "thu", "fri", "sat", "sun",
+    "am", "pm", "et", "est", "edt", "pst", "pdt", "utc", "gmt",
+    "20", "20s",
 }
+
+# Years ranging 1990..2099 are stripped from token lists since the date
+# match check already handles temporal alignment more precisely.
+_YEAR_RE = re.compile(r"^(?:19|20)\d{2}$")
 
 # ── Bracket-vs-binary mismatch guard ─────────────────────────────────
 # Kalshi offers bracket/seat-count markets (e.g., KXDSENATESEATS-27-47
@@ -84,11 +99,27 @@ _CATEGORY_ALIASES = {
 
 
 def _market_tokens(text: str) -> set[str]:
-    tokens = {
-        token
-        for token in normalize_market_text(text).split()
-        if token and (len(token) >= 3 or token.isdigit()) and token not in _COMMON_TOKENS
-    }
+    """Return the meaningful tokens for similarity scoring.
+
+    Two improvements over the naive split:
+      1. Drop year-only tokens (e.g. ``2026``) — already handled by the
+         resolution-date alignment check, and they would otherwise inflate
+         Jaccard whenever both questions mention the same year.
+      2. Apply team-alias canonicalization (BAR → fcb, ATX → aus, ...) so
+         a Kalshi ticker stem like ``HOUBAL`` and a Polymarket slug like
+         ``hou-bal`` share canonical tokens even when each platform spells
+         the team differently.
+    """
+    tokens: set[str] = set()
+    for raw in normalize_market_text(text).split():
+        if not raw or raw in _COMMON_TOKENS:
+            continue
+        if _YEAR_RE.match(raw):
+            continue
+        if len(raw) < 3 and not raw.isdigit():
+            continue
+        canonical = norm_team(raw)
+        tokens.add(canonical)
     return tokens
 
 

@@ -12,7 +12,31 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from arbiter.mapping.auto_discovery import discover
+from arbiter.mapping.auto_discovery import _market_tokens, discover
+
+
+def test_market_tokens_strips_years_and_canonicalizes_team_aliases():
+    """Year-only tokens drop out (date-alignment handles that signal),
+    and BAR ↔ FCB canonicalize to the same token so cross-platform team
+    aliases produce shared tokens during candidate generation."""
+    tokens = _market_tokens("Will BAR win the 2026 La Liga title")
+    assert "fcb" in tokens          # BAR → fcb
+    assert "2026" not in tokens     # year stripped
+    assert "liga" in tokens         # multi-word names preserved
+
+    # Two platforms spelling the same team differently still share a token
+    kalshi = _market_tokens("BAR title race 2026")
+    poly = _market_tokens("FCB Barcelona Catalan 2026")
+    assert "fcb" in (kalshi & poly)
+
+
+def test_market_tokens_drops_month_and_day_noise():
+    """Month abbreviations and weekdays are noise — drop them."""
+    tokens = _market_tokens("Will Yankees win on Saturday April 29 2026")
+    assert "saturday" not in tokens
+    assert "april" not in tokens
+    assert "2026" not in tokens
+    assert "yankees" in tokens
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
