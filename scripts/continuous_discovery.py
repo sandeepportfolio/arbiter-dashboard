@@ -15,6 +15,15 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from arbiter.mapping.team_aliases import (
+    KNOWN_NON_MATCHES,
+    detect_polarity,
+    norm_team,
+    same_team,
+    try_split_teams,
+)
+
 BASE = "http://localhost:8080"
 FIXTURE = Path(__file__).resolve().parent.parent / "arbiter" / "mapping" / "fixtures" / "market_seeds_auto.json"
 
@@ -76,56 +85,12 @@ SPORT_MAP = {
     "wtachallenger":"wta","itf":"itf","itfw":"wta",
 }
 
-TEAM_NORM = {
-    "atl":"atl","mtl":"mtl","mim":"mim","atx":"aus","aus":"aus","stl":"stl",
-    "hou":"hou","bal":"bal","det":"det","nyy":"nyy","tex":"tex","wsh":"wsh",
-    "nym":"nym","tor":"tor","min":"min","az":"az","mil":"mil","bos":"bos",
-    "sd":"sd","chc":"chc","buf":"buf","ana":"ana","edm":"edm",
-    "lev":"lev","rbl":"rbl","bmg":"bmg","bvb":"bvb",
-    "ata":"ata","gen":"gen","bol":"bol","bfc":"bol","cag":"cag","rom":"rom","fio":"fio",
-    "osa":"osa","bar":"fcb","fcb":"fcb",
-    "ars":"ars","ful":"ful","ast":"ast","tot":"tot","bor":"bor","cry":"cry",
-    "bre":"bre","whu":"whu","cfc":"cfc","not":"not",
-}
-
-def norm_team(t):
-    return TEAM_NORM.get(t.lower(), t.lower())
-
-def try_split_teams(combined, t1, t2):
-    combined = combined.lower()
-    t1, t2 = norm_team(t1), norm_team(t2)
-    for i in range(2, len(combined)):
-        a, b = norm_team(combined[:i]), norm_team(combined[i:])
-        if (a==t1 and b==t2) or (a==t2 and b==t1):
-            return True
-        if len(a)>=2 and len(b)>=2:
-            if (a[:3]==t1[:3] or t1[:3]==a[:3]) and (b[:3]==t2[:3] or t2[:3]==b[:3]):
-                return True
-            if (a[:3]==t2[:3] or t2[:3]==a[:3]) and (b[:3]==t1[:3] or t1[:3]==b[:3]):
-                return True
-    return False
+# Team normalization is centralized in arbiter/mapping/team_aliases.py.
 
 def side_matches(k_side, p_side):
     if not p_side:
         return True
-    ks, ps = norm_team(k_side), norm_team(p_side)
-    if ks == ps or ks[:3] == ps[:3]:
-        return True
-    if k_side.lower() in ("tie","draw") and p_side.lower() in ("tie","draw"):
-        return True
-    return False
-
-def is_flipped_polarity(kalshi_ticker, poly_slug):
-    """Check if Kalshi YES tracks opposite outcome from Polymarket YES."""
-    parts = poly_slug.split("-")
-    if len(parts) >= 8:  # Has side suffix — explicit polarity
-        return False
-    if len(parts) < 7:
-        return False
-    p_team2 = parts[3].lower()
-    k_side = kalshi_ticker.split("-")[-1].lower()
-    # If Kalshi side = Poly's second team AND no explicit side, it's flipped
-    return norm_team(k_side) == norm_team(p_team2)
+    return same_team(k_side, p_side)
 
 SPORT_NAMES = {
     "mlb":"MLB","nhl":"NHL","mls":"MLS","bun":"Bundesliga",
@@ -185,8 +150,6 @@ def main():
         k_teams = parsed.get("teams_raw", parsed.get("players_raw", ""))
 
         for p_slug, pp in candidates:
-            if not side_matches(parsed["side"], pp.get("side")):
-                continue
             if not try_split_teams(k_teams, pp["id1"], pp["id2"]):
                 continue
 
@@ -195,15 +158,24 @@ def main():
                 continue
             seen.add(pair_key)
 
-            # SAFETY: Skip flipped polarity
-            if is_flipped_polarity(ticker, p_slug):
-                print("  SKIP (flipped polarity): %s vs %s" % (ticker, p_slug))
+            # Known-trap guard (MTL/MIM and similar)
+            k_side_lc = (parsed.get("side") or "").lower()
+            p_side_lc = (pp.get("side") or "").lower()
+            if (k_side_lc, p_side_lc) in KNOWN_NON_MATCHES or (
+                p_side_lc, k_side_lc
+            ) in KNOWN_NON_MATCHES:
+                print("  SKIP (known non-match): %s vs %s" % (ticker, p_slug))
                 continue
 
-            # SAFETY: Skip MTL/MIM mismatch
-            if parsed["side"] == "mtl" and (pp.get("side") or "").lower() == "mim":
-                print("  SKIP (MTL/MIM mismatch): %s vs %s" % (ticker, p_slug))
+            polarity = detect_polarity(
+                kalshi_side=parsed["side"],
+                poly_side_suffix=pp.get("side"),
+                poly_team1=pp["id1"],
+                poly_team2=pp["id2"],
+            )
+            if polarity == "unrelated":
                 continue
+            polarity_flipped = polarity == "flipped"
 
             # Verify via Kalshi API
             km = fetch_kalshi_market(ticker)
@@ -221,6 +193,10 @@ def main():
                 parsed["side"].upper(), h
             )
 
+            tags = ["sports", p_sport, "game-winner", "auto-discovered"]
+            if polarity_flipped:
+                tags.append("polarity-flipped")
+
             entry = {
                 "canonical_id": canonical_id,
                 "description": desc,
@@ -229,10 +205,13 @@ def main():
                 "polymarket_question": desc,
                 "category": "sports",
                 "status": "confirmed",
-                "allow_auto_trade": True,
-                "tags": ["sports", p_sport, "game-winner", "auto-discovered"],
-                "notes": "Auto-discovered %s. Kalshi title: %s" % (
-                    datetime.now().strftime("%Y-%m-%d %H:%M"), k_title
+                "allow_auto_trade": not polarity_flipped,
+                "polarity_flipped": polarity_flipped,
+                "tags": tags,
+                "notes": "Auto-discovered %s. Kalshi title: %s%s" % (
+                    datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    k_title,
+                    " (polarity flipped — operator review required)" if polarity_flipped else "",
                 ),
                 "resolution_criteria": {
                     "kalshi": {"source": "Kalshi", "rule": k_title or desc},
@@ -242,7 +221,8 @@ def main():
                 "resolution_match_status": "identical",
             }
             new_pairs.append(entry)
-            print("  NEW: %s — %s" % (canonical_id, desc))
+            tag = "NEW (FLIPPED)" if polarity_flipped else "NEW"
+            print("  %s: %s — %s" % (tag, canonical_id, desc))
 
     # Merge new pairs into fixture
     if new_pairs:

@@ -19,6 +19,17 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 
+# Add repo root to PYTHONPATH so we can import the canonical alias table
+# without depending on PYTHONPATH being set by the caller.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from arbiter.mapping.team_aliases import (
+    KNOWN_NON_MATCHES,
+    detect_polarity,
+    norm_team,
+    same_team,
+    try_split_teams,
+)
+
 BASE = "http://localhost:8080"
 FIXTURE = Path(__file__).resolve().parent.parent / "arbiter" / "mapping" / "fixtures" / "market_seeds_auto.json"
 
@@ -74,60 +85,14 @@ SPORT_NAMES = {
     "atp":"ATP","wta":"WTA",
 }
 
-# Team/player normalization
-TEAM_NORM = {
-    "atl":"atl","mtl":"mtl","mim":"mim","atx":"aus","aus":"aus","stl":"stl",
-    "hou":"hou","bal":"bal","det":"det","nyy":"nyy","tex":"tex","wsh":"wsh",
-    "nym":"nym","tor":"tor","min":"min","az":"az","mil":"mil","bos":"bos",
-    "sd":"sd","chc":"chc","buf":"buf","ana":"ana","edm":"edm",
-    "lev":"lev","rbl":"rbl","bmg":"bmg","bvb":"bvb",
-    "ata":"ata","gen":"gen","bol":"bol","cag":"cag","rom":"rom","fio":"fio",
-    "osa":"osa","bar":"fcb","fcb":"fcb",
-    "ars":"ars","ful":"ful","ast":"ast","tot":"tot","bor":"bor","cry":"cry",
-    "bre":"bre","whu":"whu","cfc":"cfc","not":"not",
-    # NBA teams
-    "lal":"lal","bkn":"bkn","gsw":"gsw","phi":"phi","mia":"mia",
-    "chi":"chi","den":"den","dal":"dal","lac":"lac","sas":"sas",
-    "por":"por","okc":"okc","mem":"mem","nop":"nop","ind":"ind",
-    "cle":"cle","orl":"orl","cha":"cha","sac":"sac","uta":"uta",
-}
-
-def norm_team(t):
-    return TEAM_NORM.get(t.lower(), t.lower())
-
-def try_split_teams(combined, t1, t2):
-    combined = combined.lower()
-    t1, t2 = norm_team(t1), norm_team(t2)
-    for i in range(2, len(combined)):
-        a, b = norm_team(combined[:i]), norm_team(combined[i:])
-        if (a == t1 and b == t2) or (a == t2 and b == t1):
-            return True
-        if len(a) >= 2 and len(b) >= 2:
-            if (a[:3] == t1[:3] or t1[:3] == a[:3]) and (b[:3] == t2[:3] or t2[:3] == b[:3]):
-                return True
-            if (a[:3] == t2[:3] or t2[:3] == a[:3]) and (b[:3] == t1[:3] or t1[:3] == b[:3]):
-                return True
-    return False
+# Team normalization is now centralized in arbiter/mapping/team_aliases.py.
+# norm_team / try_split_teams are imported above.
 
 def side_matches(k_side, p_side):
+    """Same-direction side check. Returns True for None p_side (binary slug)."""
     if not p_side:
         return True
-    ks, ps = norm_team(k_side), norm_team(p_side)
-    if ks == ps or ks[:3] == ps[:3]:
-        return True
-    if k_side.lower() in ("tie","draw") and p_side.lower() in ("tie","draw"):
-        return True
-    return False
-
-def is_flipped_polarity(kalshi_ticker, poly_slug):
-    parts = poly_slug.split("-")
-    if len(parts) >= 8:
-        return False
-    if len(parts) < 7:
-        return False
-    p_team2 = parts[3].lower()
-    k_side = kalshi_ticker.split("-")[-1].lower()
-    return norm_team(k_side) == norm_team(p_team2)
+    return same_team(k_side, p_side)
 
 # ── Parsers ─────────────────────────────────────────────────────────
 
@@ -155,47 +120,66 @@ def parse_poly_slug(slug):
 
 # ── Validation helpers ─────────────────────────────────────────────
 
-def validate_pair(kalshi_ticker, poly_slug, k_parsed, p_parsed):
-    """Multi-check validation. Returns (valid, reason)."""
+def classify_pair(kalshi_ticker, poly_slug, k_parsed, p_parsed):
+    """Classify a (kalshi, polymarket) pair.
+
+    Returns (verdict, reason, polarity) where:
+      verdict:  "accept" | "reject"
+      reason:   short tag for the SUMMARY counters
+      polarity: "same" | "flipped" | "unrelated" (only meaningful when verdict=accept)
+
+    Replaces the older validate_pair() — the difference is that flipped-polarity
+    pairs are now ACCEPTED (with polarity=flipped), not rejected, so the
+    scanner can handle them via the polarity_flipped flag.
+    """
     # 1. Sport must match
     k_sport = k_parsed.get("sport", "")
     p_sport = p_parsed.get("sport", "")
     expected_p_sport = SPORT_MAP.get(k_sport)
     if expected_p_sport != p_sport:
-        return False, "sport_mismatch: K=%s P=%s" % (k_sport, p_sport)
+        return "reject", "sport_mismatch: K=%s P=%s" % (k_sport, p_sport), "unrelated"
 
     # 2. Date must match
     if k_parsed.get("date") != p_parsed.get("date"):
-        return False, "date_mismatch"
+        return "reject", "date_mismatch", "unrelated"
 
-    # 3. Side must match
-    if not side_matches(k_parsed.get("side",""), p_parsed.get("side")):
-        return False, "side_mismatch"
-
-    # 4. Teams must match
+    # 3. Teams must split correctly
     k_teams = k_parsed.get("teams_raw", k_parsed.get("players_raw", ""))
     if not try_split_teams(k_teams, p_parsed["id1"], p_parsed["id2"]):
-        return False, "teams_mismatch"
+        return "reject", "teams_mismatch", "unrelated"
 
-    # 5. Polarity check
-    if is_flipped_polarity(kalshi_ticker, poly_slug):
-        return False, "flipped_polarity"
-
-    # 6. MTL/MIM trap
-    k_side = k_parsed.get("side", "").lower()
+    # 4. Known-trap guard (e.g. MTL/MIM trap from KNOWN_NON_MATCHES)
+    k_side = (k_parsed.get("side", "") or "").lower()
     p_side = (p_parsed.get("side") or "").lower()
-    if k_side == "mtl" and p_side == "mim":
-        return False, "mtl_mim_mismatch"
+    if (k_side, p_side) in KNOWN_NON_MATCHES or (p_side, k_side) in KNOWN_NON_MATCHES:
+        return "reject", "known_non_match", "unrelated"
 
-    # 7. Date not expired
+    # 5. Date not expired
     try:
         game_date = datetime.strptime(k_parsed["date"], "%Y-%m-%d")
         if game_date < datetime.now() - timedelta(days=1):
-            return False, "expired_date"
+            return "reject", "expired_date", "unrelated"
     except (ValueError, KeyError):
         pass
 
-    return True, "ok"
+    # 6. Polarity classification — same / flipped / unrelated
+    polarity = detect_polarity(
+        kalshi_side=k_side,
+        poly_side_suffix=p_parsed.get("side"),
+        poly_team1=p_parsed.get("id1", ""),
+        poly_team2=p_parsed.get("id2", ""),
+    )
+    if polarity == "unrelated":
+        return "reject", "polarity_unrelated", "unrelated"
+
+    return "accept", "ok_%s" % polarity, polarity
+
+
+def validate_pair(kalshi_ticker, poly_slug, k_parsed, p_parsed):
+    """Backwards-compat shim — delegates to classify_pair() and collapses the
+    accept-flipped case so older callers still see (valid, reason)."""
+    verdict, reason, _ = classify_pair(kalshi_ticker, poly_slug, k_parsed, p_parsed)
+    return verdict == "accept", reason
 
 # ── Main discovery ──────────────────────────────────────────────────
 
@@ -267,11 +251,13 @@ def main():
                 continue
             seen.add(pair_key)
 
-            # Full validation
-            valid, reason = validate_pair(ticker, p_slug, parsed, pp)
-            if not valid:
+            verdict, reason, polarity = classify_pair(ticker, p_slug, parsed, pp)
+            if verdict != "accept":
                 skipped[reason] += 1
-                if reason not in ("sport_mismatch", "teams_mismatch", "side_mismatch", "expired_date"):
+                if reason not in (
+                    "sport_mismatch", "teams_mismatch", "expired_date",
+                    "polarity_unrelated",
+                ):
                     print("  SKIP (%s): %s vs %s" % (reason, ticker, p_slug))
                 continue
 
@@ -291,6 +277,14 @@ def main():
                 parsed.get("side","?").upper(), h
             )
 
+            polarity_flipped = polarity == "flipped"
+            tags = ["sports", p_sport, "game-winner", "auto-discovered", "expanded"]
+            if polarity_flipped:
+                tags.append("polarity-flipped")
+
+            # Flipped pairs land confirmed but allow_auto_trade=False — the
+            # operator has to explicitly enable them (or set the
+            # ENABLE_POLARITY_FLIPPED_AUTO_TRADE env var on the scanner).
             entry = {
                 "canonical_id": canonical_id,
                 "description": desc,
@@ -299,10 +293,13 @@ def main():
                 "polymarket_question": desc,
                 "category": "sports",
                 "status": "confirmed",
-                "allow_auto_trade": True,
-                "tags": ["sports", p_sport, "game-winner", "auto-discovered", "expanded"],
-                "notes": "Expanded discovery %s. Kalshi: %s" % (
-                    datetime.now().strftime("%Y-%m-%d %H:%M"), k_title
+                "allow_auto_trade": not polarity_flipped,
+                "polarity_flipped": polarity_flipped,
+                "tags": tags,
+                "notes": "Expanded discovery %s. Kalshi: %s%s" % (
+                    datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    k_title,
+                    " (polarity flipped — operator review required)" if polarity_flipped else "",
                 ),
                 "resolution_criteria": {
                     "kalshi": {"source": "Kalshi", "rule": k_title or desc},
@@ -312,7 +309,8 @@ def main():
                 "resolution_match_status": "identical",
             }
             new_pairs.append(entry)
-            print("  NEW: %s — %s" % (canonical_id, desc))
+            tag = "NEW (FLIPPED)" if polarity_flipped else "NEW"
+            print("  %s: %s — %s" % (tag, canonical_id, desc))
             print("    K: %s  P: %s" % (ticker, p_slug))
             if k_title:
                 print("    Title: %s" % k_title)
