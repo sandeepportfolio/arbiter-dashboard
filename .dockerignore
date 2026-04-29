@@ -13,3 +13,4 @@ logs/
 *.log
 .claude/
 data/
+.claude/
