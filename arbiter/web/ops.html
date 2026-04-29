@@ -483,7 +483,7 @@ window.MOCK = (() => {
 const { useMemo, useState, useRef, useEffect } = React;
 
 function buildPath(points, width, height, pad = 4) {
-  if (!points.length) return { area: '', line: '', dots: [] };
+  if (!points.length) return { area: '', line: '', dots: [], yMin: 0, yMax: 0 };
   const xs = points.map(p => p.x);
   const ys = points.map(p => p.y);
   const xMin = Math.min(...xs), xMax = Math.max(...xs);
@@ -505,8 +505,9 @@ function buildPath(points, width, height, pad = 4) {
 function AreaChart({ data, width = 600, height = 200, stroke = '#22C55E', fill = 'rgba(34,197,94,0.15)', grid = '#1E2230', showAxis = true, showGrid = true, currency = true, accentDot = true }) {
   const [hover, setHover] = useState(null);
   const ref = useRef(null);
-  const points = data.map((d, i) => ({ x: i, y: d.v, t: d.t }));
-  const { area, line, dots, yMin, yMax } = buildPath(points, width, height, 8);
+  const safeData = Array.isArray(data) ? data : [];
+  const points = safeData.map((d, i) => ({ x: i, y: d.v, t: d.t }));
+  const { area, line, dots, yMin = 0, yMax = 0 } = buildPath(points, width, height, 8);
 
   const onMove = e => {
     if (!ref.current) return;
@@ -557,7 +558,8 @@ function AreaChart({ data, width = 600, height = 200, stroke = '#22C55E', fill =
 
 // ── Sparkline ────────────────────────────────────────────────────────
 function Sparkline({ data, width = 120, height = 32, stroke = '#22C55E', fill = 'rgba(34,197,94,0.12)' }) {
-  const points = data.map((v, i) => ({ x: i, y: typeof v === 'object' ? v.v : v }));
+  const safeData = Array.isArray(data) ? data : [];
+  const points = safeData.map((v, i) => ({ x: i, y: typeof v === 'object' && v !== null ? v.v : v }));
   const { area, line } = buildPath(points, width, height, 2);
   return (
     <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" style={{ width: '100%', height: '100%', display: 'block' }}>
@@ -569,20 +571,24 @@ function Sparkline({ data, width = 120, height = 32, stroke = '#22C55E', fill = 
 
 // ── BarChart ─────────────────────────────────────────────────────────
 function BarChart({ data, width = 360, height = 160, color = '#818CF8', labelColor = '#8B90A0', valueLabel = true, accent }) {
-  const max = Math.max(...data.map(d => d.count));
+  const safeData = Array.isArray(data) && data.length ? data : [];
+  if (!safeData.length) {
+    return <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" style={{ width: '100%', height: '100%', display: 'block' }}/>;
+  }
+  const max = Math.max(1, ...safeData.map(d => d.count || 0));
   const padX = 12;
   const padY = 10;
   // Reserve space for the longest range label (chars * ~6.2px at fontSize 10 mono) and value label
-  const labelW = Math.max(...data.map(d => String(d.range).length)) * 6.4 + 8;
+  const labelW = Math.max(...safeData.map(d => String(d.range).length)) * 6.4 + 8;
   const valueW = valueLabel ? (String(max).length * 6.4 + 8) : 0;
   const trackX = padX + labelW;
   const trackW = width - trackX - padX - valueW;
-  const rowH = (height - padY * 2) / data.length;
+  const rowH = (height - padY * 2) / safeData.length;
   const barH = Math.max(8, rowH - 6);
   return (
     <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" style={{ width: '100%', height: '100%', display: 'block' }}>
-      {data.map((d, i) => {
-        const w = (d.count / max) * trackW;
+      {safeData.map((d, i) => {
+        const w = ((d.count || 0) / max) * trackW;
         const y = padY + i * rowH + (rowH - barH) / 2;
         const cy = y + barH / 2 + 3.5;
         const isAccent = accent && d.count >= max * 0.55;
@@ -600,7 +606,8 @@ function BarChart({ data, width = 360, height = 160, color = '#818CF8', labelCol
 
 // ── Donut ────────────────────────────────────────────────────────────
 function Donut({ slices, size = 140, thickness = 18, label, sublabel, labelColor = '#E8EAF0', dimColor = '#8B90A0' }) {
-  const total = slices.reduce((a, s) => a + s.value, 0);
+  const safeSlices = Array.isArray(slices) ? slices : [];
+  const total = safeSlices.reduce((a, s) => a + (s.value || 0), 0);
   const r = (size - thickness) / 2;
   const c = size / 2;
   const circ = 2 * Math.PI * r;
@@ -608,8 +615,8 @@ function Donut({ slices, size = 140, thickness = 18, label, sublabel, labelColor
   return (
     <svg viewBox={`0 0 ${size} ${size}`} style={{ width: '100%', height: '100%' }}>
       <circle cx={c} cy={c} r={r} fill="none" stroke="rgba(255,255,255,0.05)" strokeWidth={thickness} />
-      {slices.map((s, i) => {
-        const len = (s.value / total) * circ;
+      {total > 0 && safeSlices.map((s, i) => {
+        const len = ((s.value || 0) / total) * circ;
         const dash = `${len} ${circ - len}`;
         const offset = -acc;
         acc += len;
@@ -625,10 +632,10 @@ function Donut({ slices, size = 140, thickness = 18, label, sublabel, labelColor
 
 // ── EdgeStrip — horizontal heatmap of recent edges ───────────────────
 function EdgeStrip({ history, width = 600, height = 48, scale = ['#1A1D28', '#312E81', '#3B82F6', '#22C55E'] }) {
-  const max = Math.max(...history.map(h => h.best_edge_cents));
-  const cell = width / history.length;
+  const safeHistory = Array.isArray(history) && history.length ? history : [];
+  const cell = safeHistory.length ? width / safeHistory.length : 0;
   const colorFor = v => {
-    const t = Math.min(1, v / 5);
+    const t = Math.min(1, (v || 0) / 5);
     if (t < 0.25) return scale[0];
     if (t < 0.5) return scale[1];
     if (t < 0.75) return scale[2];
@@ -636,8 +643,8 @@ function EdgeStrip({ history, width = 600, height = 48, scale = ['#1A1D28', '#31
   };
   return (
     <svg viewBox={`0 0 ${width} ${height}`} style={{ width: '100%', height: '100%', display: 'block' }}>
-      {history.map((h, i) => (
-        <rect key={i} x={i * cell} y={0} width={cell - 0.5} height={height} fill={colorFor(h.best_edge_cents)} />
+      {safeHistory.map((h, i) => (
+        <rect key={i} x={i * cell} y={0} width={Math.max(0, cell - 0.5)} height={height} fill={colorFor(h.best_edge_cents)} />
       ))}
     </svg>
   );
