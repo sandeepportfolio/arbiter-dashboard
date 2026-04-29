@@ -428,15 +428,103 @@ window.MOCK = (() => {
     };
   }
 
-  // Equity curve fallback: backend has no historical equity store yet, so
-  // when the curve is empty after a refresh we synthesise a single point
-  // anchored at the current total balance. Charts render a flat line rather
-  // than blowing up on an empty array.
+  // Equity curve builder: backend has no historical equity store yet, so
+  // we synthesize one. On first load we walk back through executions and
+  // subtract realized_pnl in reverse to estimate the balance at each fill,
+  // anchoring the rightmost point at the current total balance. On every
+  // subsequent refresh we just append a fresh point (ring-buffered so the
+  // chart doesn't grow unbounded over a long session).
+  const EQUITY_MAX_POINTS = 240;
   function ensureEquityFallback(M) {
-    if (Array.isArray(M.equity) && M.equity.length > 0) return;
     const total = asNumber(M.pnl.total_balance, 0)
       || asNumber(M.balances.kalshi.balance, 0) + asNumber(M.balances.polymarket.balance, 0);
-    M.equity = [{ t: Math.floor(Date.now() / 1000), v: +total.toFixed(2) }];
+    const now = Math.floor(Date.now() / 1000);
+
+    // First-time seeding: build from execution history (newest → oldest), then
+    // sort ascending so the chart renders left-to-right.
+    if (!Array.isArray(M.equity) || M.equity.length === 0) {
+      const execs = Array.isArray(M.executions) ? [...M.executions] : [];
+      execs.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+      // Walk forward from a synthesized starting balance, accumulating P&L.
+      const totalPnlSeen = execs.reduce((s, e) => s + asNumber(e.realized_pnl, 0), 0);
+      let running = total - totalPnlSeen;
+      const seeded = [];
+      // Add a starting anchor at least 1h before the first exec (or now − 1h).
+      const firstTs = execs.length ? (execs[0].timestamp || now) - 60 : now - 3600;
+      seeded.push({ t: firstTs, v: +running.toFixed(2) });
+      for (const e of execs) {
+        running += asNumber(e.realized_pnl, 0);
+        seeded.push({ t: asNumber(e.timestamp, now), v: +running.toFixed(2) });
+      }
+      // Always cap with current balance as the rightmost point.
+      seeded.push({ t: now, v: +total.toFixed(2) });
+      M.equity = seeded;
+      return;
+    }
+
+    // Subsequent refreshes: append a new point if the value or timestamp
+    // moved meaningfully, then trim to the ring-buffer cap.
+    const last = M.equity[M.equity.length - 1];
+    const drift = Math.abs((last?.v ?? 0) - total);
+    const dt = now - (last?.t ?? 0);
+    if (dt >= 5 || drift >= 0.005) {
+      M.equity.push({ t: now, v: +total.toFixed(2) });
+    }
+    if (M.equity.length > EQUITY_MAX_POINTS) {
+      M.equity.splice(0, M.equity.length - EQUITY_MAX_POINTS);
+    }
+  }
+
+  // Scanner history ring buffer. The /api/health response gives us the
+  // *current* scan_count / scan_time_ms / etc. — the dashboard charts
+  // need a time series, so we build one client-side: every refresh
+  // pushes a new point. Capped at SCANNER_MAX_POINTS so the buffer stays
+  // bounded over a long session.
+  const SCANNER_MAX_POINTS = 60;
+  function appendScannerHistory(M) {
+    const now = Math.floor(Date.now() / 1000);
+    const opps = Array.isArray(M.opportunities) ? M.opportunities : [];
+    const tradable = opps.filter(o => o.status === 'tradable').length;
+    const bestEdge = opps.length
+      ? Math.max(0, ...opps.map(o => asNumber(o.net_edge_cents, 0)))
+      : 0;
+    const point = {
+      t: now,
+      timestamp: now,
+      scan_count: asNumber(M.health.scanner.scan_count, 0),
+      scan_time_ms: asNumber(M.health.scanner.scan_time_ms, 0),
+      published: asNumber(M.health.scanner.published, 0),
+      active_opportunities: opps.length,
+      tradable,
+      best_edge_cents: +bestEdge.toFixed(2),
+    };
+    if (!Array.isArray(M.health.scanner.history)) M.health.scanner.history = [];
+    M.health.scanner.history.push(point);
+    if (M.health.scanner.history.length > SCANNER_MAX_POINTS) {
+      M.health.scanner.history.splice(0, M.health.scanner.history.length - SCANNER_MAX_POINTS);
+    }
+  }
+
+  // Edge-bucket histogram for the Overview "Edge distribution" card.
+  // Computed at refresh time from current opportunities; fixed buckets
+  // mirror the strategy thresholds so operators can quickly see how many
+  // opportunities are clearing each tier.
+  function computeEdgeBuckets(M) {
+    const buckets = [
+      { range: '0–1¢',  min: 0,   max: 1,  count: 0 },
+      { range: '1–2¢',  min: 1,   max: 2,  count: 0 },
+      { range: '2–3¢',  min: 2,   max: 3,  count: 0 },
+      { range: '3–5¢',  min: 3,   max: 5,  count: 0 },
+      { range: '5¢+',   min: 5,   max: Infinity, count: 0 },
+    ];
+    const opps = Array.isArray(M.opportunities) ? M.opportunities : [];
+    for (const o of opps) {
+      const e = asNumber(o.net_edge_cents, 0);
+      for (const b of buckets) {
+        if (e >= b.min && e < b.max) { b.count += 1; break; }
+      }
+    }
+    M.edgeBuckets = buckets.map(({ range, count }) => ({ range, count }));
   }
 
   async function refresh() {
@@ -474,7 +562,12 @@ window.MOCK = (() => {
     mergeFailedTrades(M, failedTrades);
     mergeErrors(M, errors);
     mergePortfolio(M, portfolio);
+    // Synthesize the time-series data the dashboard charts need but the
+    // backend doesn't yet expose: equity curve, scanner history, edge
+    // bucket histogram. Each runs every refresh to keep charts moving.
     ensureEquityFallback(M);
+    appendScannerHistory(M);
+    computeEdgeBuckets(M);
     M.lastFetch = Date.now();
     M.loaded = true;
   }
@@ -700,17 +793,33 @@ const { useMemo, useState, useRef, useEffect } = React;
 
 function buildPath(points, width, height, pad = 4) {
   if (!points.length) return { area: '', line: '', dots: [], yMin: 0, yMax: 0 };
+  const W = width - pad * 2;
+  const H = height - pad * 2;
+  // Single-point series — render as a flat line at the point's value so the
+  // chart conveys "we have a value, no movement yet" instead of vanishing.
+  if (points.length === 1) {
+    const v = points[0].y;
+    const midY = pad + H / 2;
+    const mapped = [
+      { x: pad,         y: midY },
+      { x: pad + W,     y: midY },
+    ];
+    const line = `M${mapped[0].x},${mapped[0].y} L${mapped[1].x},${mapped[1].y}`;
+    const area = `${line} L${mapped[1].x},${pad + H} L${mapped[0].x},${pad + H} Z`;
+    return { area, line, dots: mapped, yMin: v, yMax: v };
+  }
   const xs = points.map(p => p.x);
   const ys = points.map(p => p.y);
   const xMin = Math.min(...xs), xMax = Math.max(...xs);
   const yMin = Math.min(...ys), yMax = Math.max(...ys);
   const xRange = xMax - xMin || 1;
   const yRange = yMax - yMin || 1;
-  const W = width - pad * 2;
-  const H = height - pad * 2;
   const mapped = points.map(p => ({
     x: pad + ((p.x - xMin) / xRange) * W,
-    y: pad + H - ((p.y - yMin) / yRange) * H,
+    // When all y-values are identical (yRange === 0), pin the line to the
+    // vertical center of the chart so it reads as "flat" rather than
+    // collapsing to the bottom edge.
+    y: yMax === yMin ? pad + H / 2 : pad + H - ((p.y - yMin) / yRange) * H,
   }));
   const line = mapped.map((p, i) => (i === 0 ? `M${p.x},${p.y}` : `L${p.x},${p.y}`)).join(' ');
   const area = `${line} L${mapped[mapped.length - 1].x},${pad + H} L${mapped[0].x},${pad + H} Z`;
@@ -794,13 +903,21 @@ function Sparkline({ data, width = 120, height = 32, stroke, fill }) {
 }
 
 // ── BarChart ─────────────────────────────────────────────────────────
-function BarChart({ data, width = 360, height = 160, color, labelColor, valueLabel = true, accent }) {
+function BarChart({ data, width = 360, height = 160, color, labelColor, valueLabel = true, accent, emptyLabel }) {
   const { t: theme } = window.useApp() || { t: window.THEMES.light };
   color = color || theme.bgHover;
   labelColor = labelColor || theme.textDim;
-  const safeData = Array.isArray(data) && data.length ? data : [];
-  if (!safeData.length) {
-    return <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" style={{ width: '100%', height: '100%', display: 'block' }}/>;
+  const safeData = Array.isArray(data) ? data : [];
+  // No bars at all — show a placeholder line of text inside the SVG so the
+  // chart area conveys "we know it's empty" rather than blank space.
+  const total = safeData.reduce((s, d) => s + (d.count || 0), 0);
+  if (!safeData.length || total === 0) {
+    const msg = emptyLabel || 'No data yet';
+    return (
+      <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" style={{ width: '100%', height: '100%', display: 'block' }}>
+        <text x={width / 2} y={height / 2} textAnchor="middle" fontSize="11" fill={labelColor} fontFamily={window.FONTS.sans}>{msg}</text>
+      </svg>
+    );
   }
   const max = Math.max(1, ...safeData.map(d => d.count || 0));
   const padX = 12;
@@ -862,11 +979,21 @@ function Donut({ slices, size = 140, thickness = 18, label, sublabel, labelColor
 }
 
 // ── EdgeStrip — horizontal heatmap of recent edges ───────────────────
-function EdgeStrip({ history, width = 600, height = 48, scale }) {
+function EdgeStrip({ history, width = 600, height = 48, scale, emptyLabel }) {
   const { t: theme } = window.useApp() || { t: window.THEMES.light };
   scale = scale || [theme.bgSubtle, theme.accentSoft, theme.accent + '90', theme.green];
   const safeHistory = Array.isArray(history) && history.length ? history : [];
-  const cell = safeHistory.length ? width / safeHistory.length : 0;
+  // When there's no scanner history yet, paint a lightly shaded full-width
+  // band so the card doesn't read as broken.
+  if (!safeHistory.length) {
+    return (
+      <svg viewBox={`0 0 ${width} ${height}`} style={{ width: '100%', height: '100%', display: 'block' }}>
+        <rect x={0} y={0} width={width} height={height} fill={scale[0]} />
+        <text x={width / 2} y={height / 2 + 3} textAnchor="middle" fontSize="10" fill={theme.textMuted} fontFamily={window.FONTS.sans}>{emptyLabel || 'Awaiting first scan…'}</text>
+      </svg>
+    );
+  }
+  const cell = width / safeHistory.length;
   const colorFor = v => {
     const t = Math.min(1, (v || 0) / 5);
     if (t < 0.25) return scale[0];
@@ -1242,13 +1369,27 @@ function ReadinessMini() {
 }
 
 function TopBar({ title, sub, actions }) {
-  const { t, setPalette, setAlerts, toggle, name, scanner, setScanner, tradingMode, setTradingMode, setUserMenu, profile } = window.useApp();
+  const { t, setPalette, setAlerts, toggle, name, scanner, setScanner, tradingMode, setTradingMode, setUserMenu, profile, toast } = window.useApp();
   const [narrow, setNarrow] = useS(() => typeof window !== 'undefined' && window.innerWidth < 1180);
+  const [refreshing, setRefreshing] = useS(false);
   useE(() => {
     const onR = () => setNarrow(window.innerWidth < 1180);
     window.addEventListener('resize', onR);
     return () => window.removeEventListener('resize', onR);
   }, []);
+  const onRefresh = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      if (window.__arbiterTick) await window.__arbiterTick();
+      else if (window.__arbiterRefresh) await window.__arbiterRefresh();
+      toast?.('Data refreshed', { sub: 'live store synced' });
+    } catch (e) {
+      toast?.('Refresh failed', { sub: String(e && e.message || e), tone: 'error' });
+    } finally {
+      setRefreshing(false);
+    }
+  };
   return (
     <div style={{ padding: '14px 28px', borderBottom: `1px solid ${t.border}`, display:'flex', alignItems:'center', justifyContent:'space-between', background: t.bg, gap: 16, flexShrink: 0 }}>
       <div style={{ minWidth: 0, flex: '1 1 auto', overflow: 'hidden' }}>
@@ -1266,6 +1407,9 @@ function TopBar({ title, sub, actions }) {
             <span style={{ marginLeft:'auto', fontSize: 10, color: t.textMuted, fontFamily: window.FONTS.mono, padding: '1px 5px', border:`1px solid ${t.border}`, borderRadius: 3 }}>⌘K</span>
           </button>
         )}
+        <IconBtn onClick={onRefresh} t={t} aria-label="Refresh" title={refreshing ? 'Refreshing…' : 'Refresh live data'}>
+          <span style={{ display:'inline-block', animation: refreshing ? 'spin 0.8s linear infinite' : 'none', fontSize: 14 }}>↻</span>
+        </IconBtn>
         <IconBtn onClick={() => setAlerts(true)} t={t} badge="3" aria-label="Alerts">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/>
@@ -1443,11 +1587,12 @@ function PageOverview() {
         <window.Btn variant="primary" size="sm" icon="◇" onClick={() => setPage('opportunities')}>View opportunities</window.Btn>
       </window.PageHeader>
 
-      {/* KPI strip */}
+      {/* KPI strip — sparklines fall back to a flat line at the current value
+          when their underlying series has 0–1 points (handled by Sparkline). */}
       <div style={{ display:'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, marginBottom: 18 }}>
-        <KpiCard label="Total balance" value={window.fmt$(totalBal)} sub={`Kalshi ${window.fmt$(M.balances.kalshi.balance)} · Poly ${window.fmt$(M.balances.polymarket.balance)}`} sparkData={M.equity.slice(-48)} sparkColor={t.accent} />
-        <KpiCard label="Trading P&L" value={window.fmt$Sign(totalPnl)} sub="Net of fees · since inception" tone={totalPnl >= 0 ? 'green' : 'red'} sparkData={M.equity.slice(-48).map(d => ({ ...d, v: d.v - 1000 }))} sparkColor={totalPnl >= 0 ? t.green : t.red} />
-        <KpiCard label="Live opportunities" value={tradable.length} sub={`${opps.length - tradable.length} candidates · best ${bestEdge != null ? window.fmtC(bestEdge) : '—'}`} tone="accent" sparkData={M.health.scanner.history.slice(-30).map(h => ({ v: h.tradable }))} sparkColor={t.accent} />
+        <KpiCard label="Total balance" value={window.fmt$(totalBal)} sub={`Kalshi ${window.fmt$(M.balances.kalshi.balance)} · Poly ${window.fmt$(M.balances.polymarket.balance)}`} sparkData={equity.slice(-48)} sparkColor={t.accent} />
+        <KpiCard label="Trading P&L" value={window.fmt$Sign(totalPnl)} sub="Net of fees · since inception" tone={totalPnl >= 0 ? 'green' : 'red'} sparkData={equity.slice(-48).map(d => ({ ...d, v: d.v - equity[0].v }))} sparkColor={totalPnl >= 0 ? t.green : t.red} />
+        <KpiCard label="Live opportunities" value={tradable.length} sub={`${Math.max(0, opps.length - tradable.length)} candidates · best ${bestEdge != null ? window.fmtC(bestEdge) : '—'}`} tone="accent" sparkData={(M.health.scanner.history || []).slice(-30).map(h => ({ v: h.tradable || 0 }))} sparkColor={t.accent} fallbackValue={tradable.length}/>
         <KpiCard label="24h fills" value={execs.filter(e => e.status === 'filled').length} sub={`${window.fmt$Sign(last24Pnl)} realized`} tone={last24Pnl >= 0 ? 'green' : 'red'} sparkData={equity.slice(-48)} sparkColor={t.green} />
       </div>
 
@@ -1525,9 +1670,9 @@ function PageOverview() {
           </div>
         </window.Card>
 
-        <window.Card title="Edge distribution" action={<span style={{ fontSize: 10.5, color: t.textMuted }}>NOW · 297 markets</span>} padding={20}>
+        <window.Card title="Edge distribution" action={<span style={{ fontSize: 10.5, color: t.textMuted }}>NOW · {opps.length} {opps.length === 1 ? 'market' : 'markets'}</span>} padding={20}>
           <div style={{ height: 180 }}>
-            <window.BarChart data={M.edgeBuckets} color={t.bgHover} accent={t.accent} labelColor={t.textDim}/>
+            <window.BarChart data={M.edgeBuckets} color={t.bgHover} accent={t.accent} labelColor={t.textDim} emptyLabel="No active opportunities — edges will plot here as soon as the scanner finds one."/>
           </div>
         </window.Card>
       </div>
@@ -1546,20 +1691,29 @@ function PageOverview() {
   );
 }
 
-function KpiCard({ label, value, sub, tone, sparkData, sparkColor }) {
+function KpiCard({ label, value, sub, tone, sparkData, sparkColor, fallbackValue }) {
   const { t } = window.useApp();
   const tones = { green: t.green, red: t.red, amber: t.amber, accent: t.accent };
+  // If no time series exists yet (scanner history just started, equity has
+  // a single point, etc.), feed the sparkline a 2-point flat series so it
+  // renders a horizontal baseline instead of vanishing.
+  const safeSpark = (() => {
+    const arr = Array.isArray(sparkData) ? sparkData : [];
+    if (arr.length >= 2) return arr;
+    const v = arr.length === 1
+      ? (typeof arr[0] === 'object' ? arr[0].v : arr[0])
+      : (typeof fallbackValue === 'number' ? fallbackValue : 0);
+    return [{ v }, { v }];
+  })();
   return (
     <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 10, padding: 18, overflow:'hidden' }}>
       <div style={{ fontSize: 11, color: t.textMuted, letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: 8, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{label}</div>
       <div style={{ fontSize: 24, fontWeight: 600, color: tones[tone] || t.text, letterSpacing:'-0.018em', fontFamily: window.FONTS.mono, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{value}</div>
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap: 10, marginTop: 4 }}>
         <div style={{ fontSize: 11, color: t.textDim, flex: 1, minWidth: 0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{sub}</div>
-        {sparkData && (
-          <div style={{ width: 64, height: 22, opacity: 0.85, flexShrink: 0 }}>
-            <window.Sparkline data={sparkData} width={64} height={22} stroke={sparkColor} fill={sparkColor + '22'}/>
-          </div>
-        )}
+        <div style={{ width: 64, height: 22, opacity: 0.85, flexShrink: 0 }}>
+          <window.Sparkline data={safeSpark} width={64} height={22} stroke={sparkColor} fill={sparkColor + '22'}/>
+        </div>
       </div>
     </div>
   );
@@ -2216,15 +2370,21 @@ function PageScanner() {
       </window.PageHeader>
 
       <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap: 14, marginBottom: 18 }}>
-        <window.Card padding={18}><window.Stat label="Total scans" value={M.health.scanner.scan_count.toLocaleString()} sub={`${(M.health.uptime_seconds/3600).toFixed(1)}h uptime`} mono/></window.Card>
-        <window.Card padding={18}><window.Stat label="Avg latency" value={`${M.health.scanner.scan_time_ms}ms`} sub="P50 across all markets" mono/></window.Card>
-        <window.Card padding={18}><window.Stat label="Published" value={M.health.scanner.published} sub="Above threshold" tone="green" mono/></window.Card>
-        <window.Card padding={18}><window.Stat label="Status" value={scanner ? 'Live' : 'Paused'} tone={scanner ? 'green' : 'amber'} sub="Heartbeat 1s ago" mono/></window.Card>
+        <window.Card padding={18}><window.Stat label="Total scans" value={(M.health.scanner.scan_count || 0).toLocaleString()} sub={`${((M.health.uptime_seconds || 0)/3600).toFixed(1)}h uptime`} mono/></window.Card>
+        <window.Card padding={18}><window.Stat label="Avg latency" value={`${M.health.scanner.scan_time_ms || 0}ms`} sub="P50 across all markets" mono/></window.Card>
+        <window.Card padding={18}><window.Stat label="Published" value={M.health.scanner.published || 0} sub="Above threshold" tone="green" mono/></window.Card>
+        <window.Card padding={18}><window.Stat label="Status" value={scanner ? 'Live' : 'Paused'} tone={scanner ? 'green' : 'amber'} sub={scanner ? 'Heartbeat live' : 'Resume to monitor'} mono/></window.Card>
       </div>
 
-      <window.Card title="Best edge — last 5 minutes" padding={0} style={{ marginBottom: 14 }}>
+      <window.Card title="Best edge — recent scans" padding={0} style={{ marginBottom: 14 }} action={<span style={{ fontSize: 10.5, color: t.textMuted, fontFamily: window.FONTS.mono }}>{(M.health.scanner.history || []).length} pts</span>}>
         <div style={{ height: 180, padding: 18 }}>
-          <window.AreaChart data={M.health.scanner.history.map((h, i) => ({ t: i, v: h.best_edge_cents }))} width={1320} height={160} stroke={t.green} grid={t.border} currency={false}/>
+          {(() => {
+            const hist = (M.health.scanner.history || []).map((h, i) => ({ t: i, v: h.best_edge_cents || 0 }));
+            if (!hist.length) {
+              return <div style={{ height:'100%', display:'flex', alignItems:'center', justifyContent:'center', color: t.textMuted, fontSize: 12 }}>Awaiting first scan…</div>;
+            }
+            return <window.AreaChart data={hist} width={1320} height={160} stroke={t.green} grid={t.border} currency={false}/>;
+          })()}
         </div>
       </window.Card>
 
@@ -2297,7 +2457,17 @@ function PageAudit() {
           body: 'Halts the scanner, cancels all open orders, and locks trading until manually re-armed.',
           tone: 'danger',
           confirmLabel: 'Engage',
-          onConfirm: () => { setTradingMode('killed'); toast('Kill switch engaged · trading halted', { tone: 'error' }); },
+          onConfirm: async () => {
+            const reason = (window.prompt('Reason for arming kill switch?') || '').trim();
+            if (!reason) { toast('Cancelled — reason required', { tone: 'error' }); return; }
+            if (window.__arbiterKillSwitch) {
+              const res = await window.__arbiterKillSwitch(true, { reason });
+              if (!res.ok) { toast('Kill switch failed', { sub: res.error, tone: 'error' }); return; }
+            }
+            setTradingMode('killed');
+            toast('Kill switch engaged · trading halted', { tone: 'error' });
+            if (window.__arbiterTick) { try { await window.__arbiterTick(); } catch {} }
+          },
         })}>⏹ Engage kill switch</window.Btn>
       </div>
 
@@ -4102,9 +4272,26 @@ function MobHome({ totalBal, totalPnl }) {
         <span style={{ width: 8, height: 8, borderRadius:'50%', background: scanner ? t.green : t.textMuted, animation: scanner ? 'pulse 2s infinite' : 'none' }}/>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 12, fontWeight: 600, color: scanner ? t.green : t.textDim }}>Scanner {scanner ? 'live' : 'paused'}</div>
-          <div style={{ fontSize: 10.5, color: t.textDim }}>{scanner ? '14 tradable · best 4.8¢ · 214ms' : 'Resume to monitor markets'}</div>
+          <div style={{ fontSize: 10.5, color: t.textDim }}>
+            {(() => {
+              const opps = Array.isArray(M.opportunities) ? M.opportunities : [];
+              const tradableN = opps.filter(o => o.status === 'tradable').length;
+              const best = opps.length ? Math.max(...opps.map(o => o.net_edge_cents || 0)) : 0;
+              const lat = M.health.scanner.scan_time_ms || 0;
+              return scanner
+                ? `${tradableN} tradable · best ${best ? best.toFixed(1) + '¢' : '—'} · ${lat || '—'}${lat ? 'ms' : ''}`
+                : 'Resume to monitor markets';
+            })()}
+          </div>
         </div>
-        <button onClick={() => setScanner(!scanner)} style={{ padding:'5px 10px', background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 6, fontSize: 11, fontWeight: 600, color: t.text, cursor:'pointer' }}>{scanner ? 'Pause' : 'Resume'}</button>
+        <button onClick={async () => {
+          const next = !scanner;
+          if (window.__arbiterScannerControl) {
+            const res = await window.__arbiterScannerControl(next ? 'resume' : 'pause');
+            if (!res.ok) { return; }
+          }
+          setScanner(next);
+        }} style={{ padding:'5px 10px', background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 6, fontSize: 11, fontWeight: 600, color: t.text, cursor:'pointer' }}>{scanner ? 'Pause' : 'Resume'}</button>
       </div>
 
       <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.08em', padding: '4px', marginTop: 8, marginBottom: 8 }}>TOP OPPORTUNITIES</div>
@@ -4377,10 +4564,21 @@ function MobHealth() {
       </div>
 
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 8, marginBottom: 12 }}>
-        <button onClick={() => setScanner(!scanner)} style={{ padding: '11px', background: scanner ? t.amberSoft : t.greenSoft, color: scanner ? t.amber : t.green, border: `1px solid ${scanner ? t.amber : t.green}40`, borderRadius: 10, fontSize: 12, fontWeight: 600, cursor:'pointer' }}>
+        <button onClick={async () => {
+          const next = !scanner;
+          if (window.__arbiterScannerControl) {
+            const res = await window.__arbiterScannerControl(next ? 'resume' : 'pause');
+            if (!res.ok) { toast('Scanner toggle failed', { sub: res.error, tone: 'error' }); return; }
+          }
+          setScanner(next);
+          if (window.__arbiterTick) { try { await window.__arbiterTick(); } catch {} }
+        }} style={{ padding: '11px', background: scanner ? t.amberSoft : t.greenSoft, color: scanner ? t.amber : t.green, border: `1px solid ${scanner ? t.amber : t.green}40`, borderRadius: 10, fontSize: 12, fontWeight: 600, cursor:'pointer' }}>
           {scanner ? 'Pause scanner' : 'Resume scanner'}
         </button>
-        <button onClick={() => toast('Health check passed', { sub: 'all gates pass · 0 flags' })} style={{ padding: '11px', background: t.bgCard, border:`1px solid ${t.border}`, borderRadius: 10, fontSize: 12, fontWeight: 600, color: t.text, cursor:'pointer' }}>Run health check</button>
+        <button onClick={async () => {
+          if (window.__arbiterTick) { try { await window.__arbiterTick(); } catch {} }
+          toast('Health check refreshed', { sub: 'live state synced' });
+        }} style={{ padding: '11px', background: t.bgCard, border:`1px solid ${t.border}`, borderRadius: 10, fontSize: 12, fontWeight: 600, color: t.text, cursor:'pointer' }}>Run health check</button>
       </div>
 
       <div style={{ background: t.redSoft, border:`1px solid ${t.red}40`, borderRadius: 12, padding: 14 }}>
@@ -4391,7 +4589,21 @@ function MobHealth() {
           body: 'Pauses the scanner, cancels open orders, and locks both platforms until manually re-armed.',
           tone: 'danger',
           confirmLabel: 'Halt now',
-          onConfirm: () => { setTradingMode('killed'); setScanner(false); toast('Trading halted', { tone: 'error' }); },
+          onConfirm: async () => {
+            const reason = (window.prompt('Reason for arming kill switch?') || '').trim();
+            if (!reason) { toast('Cancelled — reason required', { tone: 'error' }); return; }
+            if (window.__arbiterKillSwitch) {
+              const res = await window.__arbiterKillSwitch(true, { reason });
+              if (!res.ok) { toast('Kill switch failed', { sub: res.error, tone: 'error' }); return; }
+            }
+            if (window.__arbiterScannerControl) {
+              try { await window.__arbiterScannerControl('pause'); } catch {}
+            }
+            setTradingMode('killed');
+            setScanner(false);
+            toast('Trading halted', { tone: 'error' });
+            if (window.__arbiterTick) { try { await window.__arbiterTick(); } catch {} }
+          },
         })} style={{ width:'100%', padding: '10px', background: t.red, color:'#fff', border:'none', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor:'pointer', letterSpacing:'0.04em' }}>HALT ALL TRADING</button>
       </div>
     </div>
@@ -4534,9 +4746,35 @@ window.MobileDashboard = MobileDashboard;
 </script>
 <script type="text/babel" data-presets="env,react" data-filename="login.jsx">
 // Login / Connect screen
+const { useState: lUseState } = React;
 function LoginScreen({ onSignIn }) {
   const { t, name, toggle } = window.useApp();
   const M = window.MOCK;
+  const [email, setEmail] = lUseState('');
+  const [password, setPassword] = lUseState('');
+  const [error, setError] = lUseState('');
+  const [busy, setBusy] = lUseState(false);
+
+  const submit = async () => {
+    if (busy) return;
+    setError('');
+    const e = email.trim();
+    const p = password;
+    if (!e || !p) { setError('Email and password required.'); return; }
+    setBusy(true);
+    try {
+      if (window.__arbiterLogin) {
+        const res = await window.__arbiterLogin(e, p);
+        if (!res.ok) { setError(res.error || 'Sign-in failed.'); return; }
+      }
+      onSignIn?.();
+    } catch (err) {
+      setError(String((err && err.message) || err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const onKey = (ev) => { if (ev.key === 'Enter') submit(); };
 
   return (
     <div style={{ width: '100%', height: '100%', background: t.bg, color: t.text, fontFamily: window.FONTS.sans, display:'flex', overflow: 'hidden' }}>
@@ -4555,26 +4793,21 @@ function LoginScreen({ onSignIn }) {
 
           <div style={{ marginBottom: 14 }}>
             <div style={{ fontSize: 11, color: t.textDim, fontWeight: 500, marginBottom: 6 }}>Email</div>
-            <input id="arbiter-login-email" defaultValue="" placeholder="you@example.com" style={{ width: '100%', padding: '11px 14px', background: t.bgCard, border: `1px solid ${t.borderBright}`, borderRadius: 8, fontSize: 13, color: t.text, outline:'none' }}/>
+            <input value={email} onChange={(e) => setEmail(e.target.value)} onKeyDown={onKey} placeholder="you@example.com" autoComplete="username" style={{ width: '100%', padding: '11px 14px', background: t.bgCard, border: `1px solid ${t.borderBright}`, borderRadius: 8, fontSize: 13, color: t.text, outline:'none' }}/>
           </div>
-          <div style={{ marginBottom: 18 }}>
+          <div style={{ marginBottom: 14 }}>
             <div style={{ display:'flex', justifyContent:'space-between', marginBottom: 6 }}>
               <div style={{ fontSize: 11, color: t.textDim, fontWeight: 500 }}>Password</div>
               <a style={{ fontSize: 11, color: t.accent, cursor:'pointer' }}>Forgot?</a>
             </div>
-            <input id="arbiter-login-password" type="password" defaultValue="" placeholder="" style={{ width: '100%', padding: '11px 14px', background: t.bgCard, border: `1px solid ${t.borderBright}`, borderRadius: 8, fontSize: 13, color: t.text, outline:'none', fontFamily: window.FONTS.mono }}/>
+            <input value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={onKey} type="password" autoComplete="current-password" style={{ width: '100%', padding: '11px 14px', background: t.bgCard, border: `1px solid ${t.borderBright}`, borderRadius: 8, fontSize: 13, color: t.text, outline:'none', fontFamily: window.FONTS.mono }}/>
           </div>
 
-          <button onClick={async () => {
-            const e = (document.getElementById('arbiter-login-email')?.value || '').trim();
-            const p = document.getElementById('arbiter-login-password')?.value || '';
-            if (!e || !p) { window.dispatchEvent(new CustomEvent('arbiter-login-error', { detail: 'email and password required' })); return; }
-            if (window.__arbiterLogin) {
-              const res = await window.__arbiterLogin(e, p);
-              if (!res.ok) { window.dispatchEvent(new CustomEvent('arbiter-login-error', { detail: res.error })); return; }
-            }
-            onSignIn?.();
-          }} style={{ padding: '12px 16px', background: t.text, color: t.bgCard, border:'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor:'pointer', marginBottom: 14 }}>Sign in →</button>
+          {error && (
+            <div role="alert" style={{ marginBottom: 14, padding: '10px 12px', background: t.redSoft, border: `1px solid ${t.red}40`, borderRadius: 8, fontSize: 12, color: t.red, lineHeight: 1.45 }}>{error}</div>
+          )}
+
+          <button disabled={busy} onClick={submit} style={{ padding: '12px 16px', background: t.text, color: t.bgCard, border:'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: busy ? 'wait' : 'pointer', marginBottom: 14, opacity: busy ? 0.6 : 1 }}>{busy ? 'Signing in…' : 'Sign in →'}</button>
 
           <div style={{ display:'flex', alignItems:'center', gap: 10, marginBottom: 14 }}>
             <div style={{ flex: 1, height: 1, background: t.border }}/>
@@ -4583,8 +4816,8 @@ function LoginScreen({ onSignIn }) {
           </div>
 
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 8 }}>
-            <button style={{ padding: '10px', background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 8, fontSize: 12, color: t.text, cursor:'pointer', fontWeight: 500 }}>SSO / Okta</button>
-            <button style={{ padding: '10px', background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 8, fontSize: 12, color: t.text, cursor:'pointer', fontWeight: 500 }}>Hardware key</button>
+            <button onClick={() => setError('SSO sign-in is not configured for this deployment.')} style={{ padding: '10px', background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 8, fontSize: 12, color: t.text, cursor:'pointer', fontWeight: 500 }}>SSO / Okta</button>
+            <button onClick={() => setError('Hardware-key sign-in is not configured for this deployment.')} style={{ padding: '10px', background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 8, fontSize: 12, color: t.text, cursor:'pointer', fontWeight: 500 }}>Hardware key</button>
           </div>
         </div>
 
