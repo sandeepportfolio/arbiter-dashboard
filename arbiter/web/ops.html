@@ -10,6 +10,9 @@
 <style>
   html, body { margin: 0; padding: 0; background: #FAFAF9; font-family: "Inter", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
   html, body, #root { height: 100%; }
+  /* Honor saved theme on initial paint so we don't flash the wrong palette
+     before React mounts. The AppProvider syncs this attribute on toggle. */
+  html[data-theme="dark"], html[data-theme="dark"] body { background: #0B0C10; color: #E8ECF1; }
   * { box-sizing: border-box; }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
   @keyframes spin { to { transform: rotate(360deg); } }
@@ -25,14 +28,34 @@
   input { font-family: inherit; }
   /* Tabular figures stop currency/price columns from jittering as values update. */
   table, [data-tabular] { font-variant-numeric: tabular-nums; }
+  /* Placeholder text inherits a muted variant of the input's color so dark
+     mode doesn't fall back to the browser's near-black default. */
+  input::placeholder, textarea::placeholder { color: currentColor; opacity: 0.45; }
   /* Loading splash, replaced once React mounts. */
   #boot-splash { position: fixed; inset: 0; display:flex; align-items:center; justify-content:center; flex-direction:column; gap: 14px; background:#FAFAF9; color:#6B6B66; font-family: "Inter", system-ui, sans-serif; }
   #boot-splash .ring { width: 28px; height: 28px; border:2px solid #E8E6E0; border-top-color:#5B5BD6; border-radius: 50%; animation: spin 0.8s linear infinite; }
+  html[data-theme="dark"] #boot-splash { background: #0B0C10; color: #8B92A0; }
+  html[data-theme="dark"] #boot-splash .ring { border-color: #22262F; border-top-color: #8B8DF5; }
   @media (prefers-color-scheme: dark) {
-    html, body, #boot-splash { background:#0B0C10; color:#8B92A0; }
-    #boot-splash .ring { border-color:#22262F; border-top-color:#8B8DF5; }
+    html:not([data-theme]), html:not([data-theme]) body { background: #0B0C10; color: #8B92A0; }
+    html:not([data-theme]) #boot-splash { background: #0B0C10; color: #8B92A0; }
+    html:not([data-theme]) #boot-splash .ring { border-color: #22262F; border-top-color: #8B8DF5; }
   }
 </style>
+<script>
+// Apply the saved theme to <html> before any paint, so the splash and
+// initial styles match the user's choice. AppProvider keeps this in sync
+// when the theme is toggled.
+(function () {
+  try {
+    var saved = localStorage.getItem('arbiter-theme');
+    var name = saved === 'light' || saved === 'dark'
+      ? saved
+      : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    document.documentElement.setAttribute('data-theme', name);
+  } catch (_) { /* localStorage may be blocked; fall back to media query CSS */ }
+})();
+</script>
 <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
@@ -580,7 +603,12 @@ function buildPath(points, width, height, pad = 4) {
 }
 
 // ── AreaChart ─────────────────────────────────────────────────────────
-function AreaChart({ data, width = 600, height = 200, stroke = '#22C55E', fill = 'rgba(34,197,94,0.15)', grid = '#1E2230', showAxis = true, showGrid = true, currency = true, accentDot = true }) {
+function AreaChart({ data, width = 600, height = 200, stroke, fill, grid, showAxis = true, showGrid = true, currency = true, accentDot = true, axisColor, dotRingColor }) {
+  const { t: theme } = window.useApp() || { t: window.THEMES.light };
+  stroke = stroke || theme.accent;
+  grid = grid || theme.border;
+  axisColor = axisColor || theme.textMuted;
+  dotRingColor = dotRingColor || theme.bgCard;
   const [hover, setHover] = useState(null);
   const ref = useRef(null);
   const safeData = Array.isArray(data) ? data : [];
@@ -621,13 +649,13 @@ function AreaChart({ data, width = 600, height = 200, stroke = '#22C55E', fill =
       {hover != null && dots[hover] && (
         <g>
           <line x1={dots[hover].x} x2={dots[hover].x} y1="0" y2={height} stroke={stroke} strokeOpacity="0.4" strokeDasharray="2 2" />
-          <circle cx={dots[hover].x} cy={dots[hover].y} r="3.5" fill={stroke} stroke="#000" strokeWidth="1" />
+          <circle cx={dots[hover].x} cy={dots[hover].y} r="3.5" fill={stroke} stroke={dotRingColor} strokeWidth="1" />
         </g>
       )}
       {showAxis && (
         <>
-          <text x="4" y="14" fontSize="9" fill="#666" fontFamily="ui-monospace,monospace">{fmt(yMax)}</text>
-          <text x="4" y={height - 4} fontSize="9" fill="#666" fontFamily="ui-monospace,monospace">{fmt(yMin)}</text>
+          <text x="4" y="14" fontSize="9" fill={axisColor} fontFamily="ui-monospace,monospace">{fmt(yMax)}</text>
+          <text x="4" y={height - 4} fontSize="9" fill={axisColor} fontFamily="ui-monospace,monospace">{fmt(yMin)}</text>
         </>
       )}
     </svg>
@@ -635,7 +663,10 @@ function AreaChart({ data, width = 600, height = 200, stroke = '#22C55E', fill =
 }
 
 // ── Sparkline ────────────────────────────────────────────────────────
-function Sparkline({ data, width = 120, height = 32, stroke = '#22C55E', fill = 'rgba(34,197,94,0.12)' }) {
+function Sparkline({ data, width = 120, height = 32, stroke, fill }) {
+  const { t: theme } = window.useApp() || { t: window.THEMES.light };
+  stroke = stroke || theme.accent;
+  fill = fill || (theme.accent + '22');
   const safeData = Array.isArray(data) ? data : [];
   const points = safeData.map((v, i) => ({ x: i, y: typeof v === 'object' && v !== null ? v.v : v }));
   const { area, line } = buildPath(points, width, height, 2);
@@ -648,7 +679,10 @@ function Sparkline({ data, width = 120, height = 32, stroke = '#22C55E', fill = 
 }
 
 // ── BarChart ─────────────────────────────────────────────────────────
-function BarChart({ data, width = 360, height = 160, color = '#818CF8', labelColor = '#8B90A0', valueLabel = true, accent }) {
+function BarChart({ data, width = 360, height = 160, color, labelColor, valueLabel = true, accent }) {
+  const { t: theme } = window.useApp() || { t: window.THEMES.light };
+  color = color || theme.bgHover;
+  labelColor = labelColor || theme.textDim;
   const safeData = Array.isArray(data) && data.length ? data : [];
   if (!safeData.length) {
     return <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" style={{ width: '100%', height: '100%', display: 'block' }}/>;
@@ -683,7 +717,11 @@ function BarChart({ data, width = 360, height = 160, color = '#818CF8', labelCol
 }
 
 // ── Donut ────────────────────────────────────────────────────────────
-function Donut({ slices, size = 140, thickness = 18, label, sublabel, labelColor = '#E8EAF0', dimColor = '#8B90A0' }) {
+function Donut({ slices, size = 140, thickness = 18, label, sublabel, labelColor, dimColor, trackColor }) {
+  const { t: theme } = window.useApp() || { t: window.THEMES.light };
+  labelColor = labelColor || theme.text;
+  dimColor = dimColor || theme.textMuted;
+  trackColor = trackColor || theme.bgSubtle;
   const safeSlices = Array.isArray(slices) ? slices : [];
   const total = safeSlices.reduce((a, s) => a + (s.value || 0), 0);
   const r = (size - thickness) / 2;
@@ -692,7 +730,7 @@ function Donut({ slices, size = 140, thickness = 18, label, sublabel, labelColor
   let acc = 0;
   return (
     <svg viewBox={`0 0 ${size} ${size}`} style={{ width: '100%', height: '100%' }}>
-      <circle cx={c} cy={c} r={r} fill="none" stroke="rgba(255,255,255,0.05)" strokeWidth={thickness} />
+      <circle cx={c} cy={c} r={r} fill="none" stroke={trackColor} strokeWidth={thickness} />
       {total > 0 && safeSlices.map((s, i) => {
         const len = ((s.value || 0) / total) * circ;
         const dash = `${len} ${circ - len}`;
@@ -709,7 +747,9 @@ function Donut({ slices, size = 140, thickness = 18, label, sublabel, labelColor
 }
 
 // ── EdgeStrip — horizontal heatmap of recent edges ───────────────────
-function EdgeStrip({ history, width = 600, height = 48, scale = ['#1A1D28', '#312E81', '#3B82F6', '#22C55E'] }) {
+function EdgeStrip({ history, width = 600, height = 48, scale }) {
+  const { t: theme } = window.useApp() || { t: window.THEMES.light };
+  scale = scale || [theme.bgSubtle, theme.accentSoft, theme.accent + '90', theme.green];
   const safeHistory = Array.isArray(history) && history.length ? history : [];
   const cell = safeHistory.length ? width / safeHistory.length : 0;
   const colorFor = v => {
@@ -933,10 +973,13 @@ window.useApp = () => useContext(AppCtx);
 function useTheme() {
   const [name, setName] = useS(() => {
     const saved = localStorage.getItem('arbiter-theme');
-    if (saved) return saved;
+    if (saved === 'light' || saved === 'dark') return saved;
     return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   });
-  useE(() => { localStorage.setItem('arbiter-theme', name); }, [name]);
+  useE(() => {
+    localStorage.setItem('arbiter-theme', name);
+    document.documentElement.setAttribute('data-theme', name);
+  }, [name]);
   const t = window.THEMES[name];
   return { t, name, setName, toggle: () => setName(n => n === 'light' ? 'dark' : 'light') };
 }
