@@ -14,3 +14,11 @@ logs/
 .claude/
 data/
 .claude/
+data/
+output/
+src/
+docs/
+tests/
+scripts/
+*.log
+*.tgz
