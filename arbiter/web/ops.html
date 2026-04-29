@@ -2033,7 +2033,7 @@ function PlatformBalCard({ platform, color }) {
       <div style={{ fontSize: 12, color: pnl >= 0 ? t.green : t.red, marginBottom: 16 }}>{window.fmt$Sign(pnl)} ({window.fmtPct(pnl/start)}) since inception</div>
       <div style={{ display:'flex', gap: 8 }}>
         <window.Btn variant="secondary" size="sm" onClick={() => setModal({ kind: 'deposit', payload: platform })}>Deposit</window.Btn>
-        <window.Btn variant="ghost" size="sm">Withdraw</window.Btn>
+        <window.Btn variant="ghost" size="sm" onClick={() => setModal({ kind: 'withdraw', payload: platform })}>Withdraw</window.Btn>
       </div>
     </div>
   );
@@ -2115,14 +2115,12 @@ const { useState: mUseState } = React;
 function Modal() {
   const { modal } = window.useApp();
   if (!modal) return null;
+  // Kinds also handled by ExtraModal (withdraw, profile, editSetting, apiKey,
+  // notifPrefs) are intentionally NOT routed here — ExtraModal owns them so
+  // each modal renders exactly once.
   if (modal.kind === 'execute') return <ExecuteModal/>;
   if (modal.kind === 'trade') return <TradeDetailModal/>;
   if (modal.kind === 'deposit') return <DepositModal/>;
-  if (modal.kind === 'withdraw') return <WithdrawModal/>;
-  if (modal.kind === 'profile') return <ProfileModal/>;
-  if (modal.kind === 'editSetting') return <EditSettingModal/>;
-  if (modal.kind === 'apiKey') return <ApiKeyModal/>;
-  if (modal.kind === 'notifPrefs') return <NotifPrefsModal/>;
   if (modal.kind === 'reset2fa') return <Reset2faModal/>;
   return null;
 }
@@ -2813,23 +2811,33 @@ function Field({ label, value, onChange, placeholder, mono, type = 'text' }) {
 }
 
 // ── Edit setting (slider/value editor) ───────────────────────────
+// Accepts two payload shapes:
+//   desktop: { key, label, kind, min, max, step, unit, desc, options:[string] }
+//   mobile:  { key, label, kind, min, max, step, value, prefix, onSave, options:[{v,l}] }
+// Source of truth for the initial value is settings[cfg.key] when present,
+// otherwise cfg.value. On save, both setSettings and cfg.onSave are called.
 function EditSettingModal() {
   const { t, modal, setModal, settings, setSettings, toast } = window.useApp();
-  const cfg = modal.payload; // { key, label, kind, min, max, step, unit, options }
-  const [v, setV] = aUseS(settings[cfg.key]);
+  const cfg = modal.payload;
+  const initial = settings[cfg.key] !== undefined ? settings[cfg.key] : cfg.value;
+  const [v, setV] = aUseS(initial);
+  const unit = cfg.unit || '';
+  const prefix = cfg.prefix || '';
+  // Normalize options to {v, l} so both shapes render identically.
+  const normOptions = (cfg.options || []).map(o => (typeof o === 'object' && o !== null ? o : { v: o, l: o }));
   return (
     <Shell width={460}>
-      <Header kicker="Edit strategy parameter" title={cfg.label}/>
+      <Header kicker="Edit setting" title={cfg.label}/>
       <div style={{ padding: 24 }}>
-        <div style={{ fontSize: 11.5, color: t.textDim, marginBottom: 18, lineHeight: 1.5 }}>{cfg.desc}</div>
+        {cfg.desc && <div style={{ fontSize: 11.5, color: t.textDim, marginBottom: 18, lineHeight: 1.5 }}>{cfg.desc}</div>}
         {cfg.kind === 'slider' && (
           <>
             <div style={{ display:'flex', alignItems:'center', gap: 12, marginBottom: 12 }}>
-              <input type="range" min={cfg.min} max={cfg.max} step={cfg.step} value={v} onChange={e => setV(+e.target.value)} style={{ flex: 1, accentColor: t.accent }}/>
-              <div style={{ width: 110, padding: '8px 12px', background: t.bgSubtle, border: `1px solid ${t.border}`, borderRadius: 7, fontFamily: window.FONTS.mono, fontSize: 14, fontWeight: 600, color: t.text, textAlign:'center' }}>{v}{cfg.unit || ''}</div>
+              <input type="range" min={cfg.min} max={cfg.max} step={cfg.step} value={v ?? cfg.min} onChange={e => setV(+e.target.value)} style={{ flex: 1, accentColor: t.accent }}/>
+              <div style={{ width: 110, padding: '8px 12px', background: t.bgSubtle, border: `1px solid ${t.border}`, borderRadius: 7, fontFamily: window.FONTS.mono, fontSize: 14, fontWeight: 600, color: t.text, textAlign:'center' }}>{prefix}{v ?? cfg.min}{unit}</div>
             </div>
             <div style={{ display:'flex', justifyContent:'space-between', fontSize: 10.5, color: t.textMuted, fontFamily: window.FONTS.mono }}>
-              <span>{cfg.min}{cfg.unit}</span><span>{cfg.max}{cfg.unit}</span>
+              <span>{prefix}{cfg.min}{unit}</span><span>{prefix}{cfg.max}{unit}</span>
             </div>
           </>
         )}
@@ -2842,15 +2850,20 @@ function EditSettingModal() {
         )}
         {cfg.kind === 'options' && (
           <div style={{ display:'flex', flexDirection:'column', gap: 6 }}>
-            {cfg.options.map(opt => (
-              <button key={opt} onClick={() => setV(opt)} style={{ padding: '10px 14px', background: v === opt ? t.bgSubtle : t.bgCard, border: `1px solid ${v === opt ? t.text : t.border}`, borderRadius: 7, fontSize: 12.5, color: t.text, fontWeight: 500, cursor:'pointer', textAlign:'left' }}>{opt}</button>
+            {normOptions.map(opt => (
+              <button key={String(opt.v)} onClick={() => setV(opt.v)} style={{ padding: '10px 14px', background: v === opt.v ? t.bgSubtle : t.bgCard, border: `1px solid ${v === opt.v ? t.text : t.border}`, borderRadius: 7, fontSize: 12.5, color: t.text, fontWeight: 500, cursor:'pointer', textAlign:'left' }}>{opt.l}</button>
             ))}
           </div>
         )}
       </div>
       <Footer>
         <window.Btn variant="ghost" size="sm" onClick={() => setModal(null)}>Cancel</window.Btn>
-        <window.Btn variant="primary" size="sm" onClick={() => { setSettings(s => ({ ...s, [cfg.key]: v })); setModal(null); toast(`${cfg.label} updated`, { sub: String(v) + (cfg.unit||'') }); }}>Save</window.Btn>
+        <window.Btn variant="primary" size="sm" onClick={() => {
+          setSettings(s => ({ ...s, [cfg.key]: v }));
+          cfg.onSave?.(v);
+          setModal(null);
+          toast(`${cfg.label} updated`, { sub: `${prefix}${v}${unit}` });
+        }}>Save</window.Btn>
       </Footer>
     </Shell>
   );
@@ -3309,6 +3322,10 @@ function AgentSession({ candidate, onAccept, mobile }) {
   const [activeTab, setActiveTab] = aVUseState('terminal'); // mobile only: 'terminal' | 'metrics'
   const scrollRef = aVUseRef(null);
   const startedRef = aVUseRef(false);
+  // Mirror `paused` into a ref so the long-lived tick closure reads the
+  // current value without restarting the effect on every toggle.
+  const pausedRef = aVUseRef(false);
+  aVUseEffect(() => { pausedRef.current = paused; }, [paused]);
 
   aVUseEffect(() => {
     if (startedRef.current) return;
@@ -3316,17 +3333,24 @@ function AgentSession({ candidate, onAccept, mobile }) {
     const script = buildScript(candidate);
     let i = 0;
     let cancelled = false;
-    const tick = () => {
-      if (cancelled || i >= script.length) { setDone(true); return; }
+    const advance = () => {
+      if (cancelled) return;
+      if (i >= script.length) { setDone(true); return; }
       const step = script[i];
       setTimeout(() => {
-        if (cancelled) return;
-        setEvents(prev => [...prev, { ...step, ts: performance.now() }]);
-        i++;
-        tick();
+        // Re-check paused at delivery time. While paused, poll every 120ms
+        // until resumed or cancelled, then deliver the queued event.
+        const deliver = () => {
+          if (cancelled) return;
+          if (pausedRef.current) { setTimeout(deliver, 120); return; }
+          setEvents(prev => [...prev, { ...step, ts: performance.now() }]);
+          i++;
+          advance();
+        };
+        deliver();
       }, step.d);
     };
-    tick();
+    advance();
     return () => { cancelled = true; };
   }, []);
 
