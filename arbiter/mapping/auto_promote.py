@@ -197,17 +197,39 @@ async def maybe_promote(
     # textual overlap suggests the markets are related even if the LLM
     # can't be certain from question text alone — e.g. different phrasing
     # of the same underlying event).
-    kalshi_q = candidate.get("kalshi_title", "")
-    poly_q = candidate.get("poly_question", "")
-    llm_result = await llm_verifier(kalshi_q, poly_q)
-    if llm_result == "NO":
-        return _reject("llm_no")
-    maybe_min_score = float(_setting(
-        settings, "AUTO_PROMOTE_MAYBE_MIN_SCORE", "auto_promote_maybe_min_score",
-        default=_env_float("AUTO_PROMOTE_MAYBE_MIN_SCORE", 0.30),
+    #
+    # Fast-path: if structured-resolution is IDENTICAL (same source, same
+    # date, same outcome set) AND the textual score clears the
+    # AUTO_PROMOTE_FAST_PATH_SCORE bar, we skip the LLM entirely. The
+    # structured check is already a stricter signal than the LLM and the
+    # LLM verifier is the slowest and most expensive part of discovery.
+    fast_path_score = float(_setting(
+        settings, "AUTO_PROMOTE_FAST_PATH_SCORE", "auto_promote_fast_path_score",
+        default=_env_float("AUTO_PROMOTE_FAST_PATH_SCORE", 0.95),
     ))
-    if llm_result == "MAYBE" and score < maybe_min_score:
-        return _reject("llm_maybe_low_score")
+    if resolution_is_identical and score >= fast_path_score:
+        logger.info(
+            "auto_promote fast-path: skip LLM (resolution=IDENTICAL, score=%.3f >= %.3f) candidate=%s",
+            score, fast_path_score, candidate.get("kalshi_ticker"),
+        )
+        llm_result = "YES"  # treat fast-path as implicit YES for downstream gates
+    else:
+        kalshi_q = candidate.get("kalshi_title", "")
+        poly_q = candidate.get("poly_question", "")
+        category = candidate.get("category") or candidate.get("kalshi_category") or candidate.get("poly_category")
+        # Backwards-compat: older verifier signatures take 2 args, new takes 3.
+        try:
+            llm_result = await llm_verifier(kalshi_q, poly_q, category=category)
+        except TypeError:
+            llm_result = await llm_verifier(kalshi_q, poly_q)
+        if llm_result == "NO":
+            return _reject("llm_no")
+        maybe_min_score = float(_setting(
+            settings, "AUTO_PROMOTE_MAYBE_MIN_SCORE", "auto_promote_maybe_min_score",
+            default=_env_float("AUTO_PROMOTE_MAYBE_MIN_SCORE", 0.30),
+        ))
+        if llm_result == "MAYBE" and score < maybe_min_score:
+            return _reject("llm_maybe_low_score")
 
     # When resolution data is PENDING (not enough structured data to confirm),
     # the LLM is the primary validator.  We only need a modest score bump

@@ -450,6 +450,94 @@ async def test_all_gates_pass_returns_promoted():
 
 
 @pytest.mark.asyncio
+async def test_fast_path_skips_llm_when_resolution_identical_and_score_high():
+    """Fast-path: resolution=IDENTICAL + score >= AUTO_PROMOTE_FAST_PATH_SCORE
+    should skip the LLM call entirely, treating it as implicit YES."""
+    settings = _make_settings()
+    settings["AUTO_PROMOTE_FAST_PATH_SCORE"] = 0.95
+    candidate = _make_candidate(score=0.96, resolution_date=_days_from_now(30))
+    orderbooks = _make_orderbooks(200.0, 200.0)
+
+    llm_calls = []
+
+    async def _llm_should_not_be_called(*args, **kwargs):
+        llm_calls.append(args)
+        return "NO"
+
+    result = await maybe_promote(
+        candidate,
+        settings=settings,
+        orderbooks=orderbooks,
+        llm_verifier=_llm_should_not_be_called,
+        today_promoted_count=0,
+        cooling_state={},
+        resolution_checker=_resolution_check_identical,
+    )
+
+    assert result.promoted, result.reason
+    assert llm_calls == [], "Fast-path should bypass LLM verifier entirely"
+
+
+@pytest.mark.asyncio
+async def test_fast_path_does_not_apply_below_threshold():
+    """Score below AUTO_PROMOTE_FAST_PATH_SCORE → still calls the LLM."""
+    settings = _make_settings()
+    settings["AUTO_PROMOTE_FAST_PATH_SCORE"] = 0.95
+    candidate = _make_candidate(score=0.90, resolution_date=_days_from_now(30))
+    orderbooks = _make_orderbooks(200.0, 200.0)
+
+    llm_calls = []
+
+    async def _llm_yes(*args, **kwargs):
+        llm_calls.append(args)
+        return "YES"
+
+    result = await maybe_promote(
+        candidate,
+        settings=settings,
+        orderbooks=orderbooks,
+        llm_verifier=_llm_yes,
+        today_promoted_count=0,
+        cooling_state={},
+        resolution_checker=_resolution_check_identical,
+    )
+
+    assert result.promoted
+    assert len(llm_calls) == 1, "Sub-threshold score must still call the LLM"
+
+
+@pytest.mark.asyncio
+async def test_fast_path_does_not_apply_when_resolution_pending():
+    """resolution=PENDING (not IDENTICAL) → LLM still required even at high score."""
+    settings = _make_settings()
+    settings["AUTO_PROMOTE_FAST_PATH_SCORE"] = 0.95
+    candidate = _make_candidate(score=0.96, resolution_date=_days_from_now(30))
+    orderbooks = _make_orderbooks(200.0, 200.0)
+
+    llm_calls = []
+
+    async def _llm_yes(*args, **kwargs):
+        llm_calls.append(args)
+        return "YES"
+
+    def _resolution_pending(a, b):
+        return ResolutionMatch.PENDING
+
+    result = await maybe_promote(
+        candidate,
+        settings=settings,
+        orderbooks=orderbooks,
+        llm_verifier=_llm_yes,
+        today_promoted_count=0,
+        cooling_state={},
+        resolution_checker=_resolution_pending,
+    )
+
+    assert result.promoted
+    assert len(llm_calls) == 1, "Pending resolution must call LLM regardless of score"
+
+
+@pytest.mark.asyncio
 async def test_side_specific_resolution_fields_prevent_false_identical_match():
     settings = _make_settings()
     candidate = _make_candidate()
