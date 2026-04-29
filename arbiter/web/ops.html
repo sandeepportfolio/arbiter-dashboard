@@ -980,8 +980,8 @@ function PlatformChip({ name, side }) {
     ? { fg: t.green, bg: t.greenSoft, label: 'Kalshi' }
     : { fg: t.purple, bg: t.purpleSoft, label: 'Polymarket' };
   return (
-    <span style={{ display:'inline-flex', alignItems:'center', gap: 5, padding:'2px 8px', background: cfg.bg, color: cfg.fg, borderRadius: 5, fontSize: 11, fontWeight: 600 }}>
-      <span style={{ width: 5, height: 5, borderRadius: '50%', background: cfg.fg }}/>
+    <span style={{ display:'inline-flex', alignItems:'center', gap: 5, padding:'2px 8px', background: cfg.bg, color: cfg.fg, borderRadius: 5, fontSize: 11, fontWeight: 600, whiteSpace:'nowrap', flexShrink: 0 }}>
+      <span style={{ width: 5, height: 5, borderRadius: '50%', background: cfg.fg, flexShrink: 0 }}/>
       {cfg.label}{side && <span style={{ opacity: 0.7, marginLeft: 2 }}>· {side}</span>}
     </span>
   );
@@ -1481,10 +1481,10 @@ function PageOverview() {
                   <div style={{ fontSize: 12.5, color: t.text, fontWeight: 500, lineHeight: 1.35, flex: 1, minWidth: 0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{o.description}</div>
                   <div style={{ fontSize: 13, fontWeight: 600, color: o.net_edge_cents >= 2 ? t.green : t.amber, fontFamily: window.FONTS.mono, flexShrink: 0 }}>{window.fmtC(o.net_edge_cents)}</div>
                 </div>
-                <div style={{ display:'flex', alignItems:'center', gap: 8, fontSize: 10.5, color: t.textDim }}>
+                <div style={{ display:'flex', alignItems:'center', gap: 8, fontSize: 10.5, color: t.textDim, flexWrap: 'wrap', rowGap: 4 }}>
                   <window.PlatformChip name={o.yes_platform} side="YES"/>
                   <window.PlatformChip name={o.no_platform} side="NO"/>
-                  <span style={{ marginLeft:'auto', fontFamily: window.FONTS.mono }}>+{window.fmt$(o.expected_profit)}</span>
+                  <span style={{ marginLeft:'auto', fontFamily: window.FONTS.mono, flexShrink: 0 }}>+{window.fmt$(o.expected_profit)}</span>
                 </div>
               </div>
             ))}
@@ -1550,15 +1550,17 @@ function KpiCard({ label, value, sub, tone, sparkData, sparkColor }) {
   const { t } = window.useApp();
   const tones = { green: t.green, red: t.red, amber: t.amber, accent: t.accent };
   return (
-    <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 10, padding: 18, position:'relative', overflow:'hidden' }}>
-      <div style={{ fontSize: 11, color: t.textMuted, letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: 8 }}>{label}</div>
-      <div style={{ fontSize: 24, fontWeight: 600, color: tones[tone] || t.text, letterSpacing:'-0.018em', fontFamily: window.FONTS.mono }}>{value}</div>
-      <div style={{ fontSize: 11, color: t.textDim, marginTop: 4 }}>{sub}</div>
-      {sparkData && (
-        <div style={{ position:'absolute', right: 14, top: 14, width: 80, height: 30, opacity: 0.7 }}>
-          <window.Sparkline data={sparkData} width={80} height={30} stroke={sparkColor} fill={sparkColor + '22'}/>
-        </div>
-      )}
+    <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 10, padding: 18, overflow:'hidden' }}>
+      <div style={{ fontSize: 11, color: t.textMuted, letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: 8, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{label}</div>
+      <div style={{ fontSize: 24, fontWeight: 600, color: tones[tone] || t.text, letterSpacing:'-0.018em', fontFamily: window.FONTS.mono, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{value}</div>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap: 10, marginTop: 4 }}>
+        <div style={{ fontSize: 11, color: t.textDim, flex: 1, minWidth: 0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{sub}</div>
+        {sparkData && (
+          <div style={{ width: 64, height: 22, opacity: 0.85, flexShrink: 0 }}>
+            <window.Sparkline data={sparkData} width={64} height={22} stroke={sparkColor} fill={sparkColor + '22'}/>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
