@@ -224,6 +224,36 @@ class ExecutionStore:
 
     # ─── Top-level arb persistence ───────────────────────────────────────────
 
+    async def record_arb_stub(
+        self,
+        arb_id: str,
+        canonical_id: str,
+        opportunity: Any = None,
+        net_edge: Optional[float] = None,
+    ) -> None:
+        """Insert a placeholder ``execution_arbs`` row before any leg orders are
+        persisted, so the FK from ``execution_orders.arb_id`` is satisfied while
+        the legs are still in flight. Idempotent — uses ON CONFLICT DO NOTHING
+        so the later ``record_arb`` call still upserts the final state.
+        """
+        if self._pool is None:
+            await self.connect()
+        opp_json = _opp_to_jsonb(opportunity)
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO execution_arbs (
+                    arb_id, canonical_id, status, net_edge, realized_pnl,
+                    opportunity_json, is_simulation
+                ) VALUES ($1, $2, 'pending', $3, 0, $4::jsonb, FALSE)
+                ON CONFLICT (arb_id) DO NOTHING
+                """,
+                arb_id,
+                canonical_id,
+                Decimal(str(net_edge)) if net_edge is not None else None,
+                opp_json,
+            )
+
     async def record_arb(self, arb_execution: ArbExecution) -> None:
         if self._pool is None:
             await self.connect()

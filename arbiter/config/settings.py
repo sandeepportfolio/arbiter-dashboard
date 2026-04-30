@@ -589,7 +589,7 @@ class AlertConfig:
 
 @dataclass
 class ScannerConfig:
-    min_edge_cents: float = 1.5
+    min_edge_cents: float = 3.0
     max_position_usd: float = 100.0
     scan_interval: float = 1.0
     confidence_threshold: float = 0.8

@@ -872,6 +872,22 @@ class ExecutionEngine:
     async def _live_execution(self, arb_id: str, opp: ArbitrageOpportunity) -> ArbExecution:
         now = time.time()
 
+        # Insert a placeholder execution_arbs row so the FK from
+        # execution_orders.arb_id is satisfied while legs are still in flight.
+        # The later record_arb call will upsert the final status. Without
+        # this the per-leg upsert_order calls fired during execution fail
+        # with a FK violation and mid-flight order state is lost.
+        if self.store is not None:
+            try:
+                await self.store.record_arb_stub(
+                    arb_id,
+                    opp.canonical_id,
+                    opportunity=opp,
+                    net_edge=getattr(opp, "net_edge", None),
+                )
+            except Exception as exc:
+                logger.warning("ExecutionStore record_arb_stub failed: %s", exc)
+
         # ── Sequential leg execution (naked-position prevention) ─────
         # Execute legs SEQUENTIALLY instead of concurrently to prevent
         # naked positions:
@@ -1346,7 +1362,21 @@ class ExecutionEngine:
         # Recovery runs AFTER recording so Task 2's release_trade hook
         # can free the survivor's reservation if its cancel succeeds.
         if needs_recovery:
-            notes.extend(await self._recover_one_leg_risk(arb_id, opp, leg_yes, leg_no))
+            recovery_notes, unwind_pnl = await self._recover_one_leg_risk(
+                arb_id, opp, leg_yes, leg_no,
+            )
+            notes.extend(recovery_notes)
+            # Book the realized loss from the unwind into the arb's P&L so
+            # reconciliation drift no longer fires for the unrecorded
+            # auto-unwind cost. This is the only place ArbExecution.realized_pnl
+            # is mutated post-construction; do it BEFORE record_arb so the
+            # persisted row reflects the true realized P&L.
+            if unwind_pnl != 0.0:
+                execution.realized_pnl = float(execution.realized_pnl) + unwind_pnl
+                logger.info(
+                    "ARB %s realized_pnl updated by unwind: $%.4f (total now $%.4f)",
+                    arb_id, unwind_pnl, execution.realized_pnl,
+                )
 
         # EXEC-02 / D-16: persist the completed arb execution.
         if self.store is not None:
@@ -1496,7 +1526,7 @@ class ExecutionEngine:
                 return f"{parts[0]}-{parts[1]}"
         return None
 
-    async def _recover_one_leg_risk(self, arb_id: str, opp: ArbitrageOpportunity, leg_yes: Order, leg_no: Order) -> List[str]:
+    async def _recover_one_leg_risk(self, arb_id: str, opp: ArbitrageOpportunity, leg_yes: Order, leg_no: Order) -> Tuple[List[str], float]:
         """Handle one-leg exposure (SAFE-03, plan 03-03).
 
         Classifies the legs: if exactly one is FILLED and the other is not,
@@ -1511,9 +1541,21 @@ class ExecutionEngine:
 
         Cancel-still-open loop at the tail is unchanged — the still-open leg
         (if any) is best-effort cancelled after the incident fanout.
+
+        Returns
+        -------
+        (notes, unwind_pnl)
+            ``notes`` are the per-step outcome strings (cancel-yes:ok,
+            unwind-no:filled(10/10), …) attached to the ArbExecution.
+            ``unwind_pnl`` is the realized P&L from the auto-unwind
+            (negative when the unwind sells back at a worse price than the
+            original fill). Booked into ArbExecution.realized_pnl by the
+            caller so reconciliation drift accounts for the unwind cost
+            instead of leaving it as silent slippage.
         """
         self._recovery_count += 1
         notes: List[str] = []
+        unwind_pnl: float = 0.0
 
         yes_filled = leg_yes.status == OrderStatus.FILLED
         no_filled = leg_no.status == OrderStatus.FILLED
@@ -1575,7 +1617,7 @@ class ExecutionEngine:
                 # Task 1 _live_execution edit booked a per-platform
                 # reservation for it.
                 original_status = leg.status
-                cancelled = await self._cancel_order(leg)
+                cancelled = await self._cancel_order(leg, arb_id=arb_id)
                 notes.append(f"cancel-{leg.side}:{'ok' if cancelled else 'failed'}")
                 # Plan 03-08 (SAFE-02 gap closure): if a previously
                 # SUBMITTED or PARTIAL leg's cancel succeeded, release
@@ -1633,6 +1675,15 @@ class ExecutionEngine:
                             f"({unwound_qty:.0f}/{unwind_target})"
                         )
                         if unwound_qty > 0:
+                            # Book the realized loss from the unwind: bought
+                            # at filled_leg.fill_price, sold back at
+                            # unwind_order.fill_price. This number is what
+                            # was previously missing from realized_pnl —
+                            # reconciliation drift was correctly flagging it
+                            # as unexplained balance change.
+                            buy_cost_per = float(filled_leg.fill_price)
+                            sell_revenue_per = float(unwind_order.fill_price)
+                            unwind_pnl += unwound_qty * (sell_revenue_per - buy_cost_per)
                             self.risk.release_trade(
                                 opp.canonical_id,
                                 unwound_qty * float(filled_leg.fill_price),
@@ -1650,16 +1701,24 @@ class ExecutionEngine:
                                         "fill_qty": unwound_qty,
                                         "target_qty": unwind_target,
                                         "panic_price": float(unwind_order.price),
+                                        "buy_price": buy_cost_per,
+                                        "sell_price": sell_revenue_per,
+                                        "realized_pnl": unwound_qty * (sell_revenue_per - buy_cost_per),
                                     },
                                 )
                             except Exception as exc:
                                 logger.warning(
                                     "auto_unwind incident emit failed: %s", exc,
                                 )
-        return notes
+        return notes, unwind_pnl
 
-    async def _cancel_order(self, order: Order) -> bool:
-        """Dispatch cancel through self.adapters[order.platform]. Platform-agnostic."""
+    async def _cancel_order(self, order: Order, arb_id: Optional[str] = None) -> bool:
+        """Dispatch cancel through self.adapters[order.platform]. Platform-agnostic.
+
+        ``arb_id`` should be passed explicitly when the caller knows it, so the
+        cancel-state upsert succeeds even for venue-assigned order_ids
+        (e.g. Polymarket "9QHH..." IDs that don't carry the ARB-NNN prefix).
+        """
         adapter = self.adapters.get(order.platform)
         if adapter is None:
             logger.warning("No adapter for platform %s on cancel", order.platform)
@@ -1671,10 +1730,9 @@ class ExecutionEngine:
             return False
         if cancelled and self.store is not None:
             order.status = OrderStatus.CANCELLED
+            resolved_arb_id = arb_id or self._derive_arb_id_from_order(order)
             try:
-                await self.store.upsert_order(
-                    order, arb_id=self._derive_arb_id_from_order(order),
-                )
+                await self.store.upsert_order(order, arb_id=resolved_arb_id)
             except Exception as exc:
                 logger.warning("ExecutionStore cancel-upsert failed: %s", exc)
         return cancelled

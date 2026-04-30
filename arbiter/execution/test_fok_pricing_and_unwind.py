@@ -175,7 +175,7 @@ def test_recover_one_leg_risk_calls_unwind_on_filled_leg():
         leg_yes = _filled_order("yes", "kalshi", "K-YES")
         leg_no = _submitted_unfilled_order("no", "polymarket", "P-NO")
 
-        notes = await engine._recover_one_leg_risk("ARB-1", opp, leg_yes, leg_no)
+        notes, _unwind_pnl = await engine._recover_one_leg_risk("ARB-1", opp, leg_yes, leg_no)
 
         # Hedge cancelled
         poly_adapter.cancel_order.assert_awaited_once()
@@ -216,7 +216,7 @@ def test_recover_one_leg_risk_handles_unwind_exception_gracefully():
         leg_yes = _filled_order("yes", "kalshi", "K-YES")
         leg_no = _submitted_unfilled_order("no", "polymarket", "P-NO")
 
-        notes = await engine._recover_one_leg_risk("ARB-1", opp, leg_yes, leg_no)
+        notes, _unwind_pnl = await engine._recover_one_leg_risk("ARB-1", opp, leg_yes, leg_no)
 
         unwind_notes = [n for n in notes if n.startswith("unwind-")]
         assert len(unwind_notes) == 1
