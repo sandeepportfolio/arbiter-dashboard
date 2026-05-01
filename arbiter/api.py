@@ -378,6 +378,7 @@ class ArbiterAPI:
         app.router.add_get("/api/balances", self.handle_balances)
         app.router.add_get("/api/trades", self.handle_trades)
         app.router.add_get("/api/executions", self.handle_trades)
+        app.router.add_get("/api/executions/{arb_id}/analysis", self.handle_execution_analysis)
         app.router.add_get("/api/failed-trades", self.handle_failed_trades)
         app.router.add_post("/api/failed-trades/{arb_id}/retry", self.handle_failed_trade_retry)
         app.router.add_get("/api/live-prices/{canonical_id}", self.handle_live_prices_for_market)
@@ -635,7 +636,85 @@ class ArbiterAPI:
         payload["expected_cost"] = expected_cost
         payload["expected_vs_realized"] = round(realized_pnl - expected_profit, 4)
         payload["status_group"] = status_group
+        # Surface a small flag so the UI can decide whether to render the
+        # "view analysis" button without round-tripping the full markdown
+        # for every row in the list.
+        payload["analysis_available"] = bool(payload.get("analysis_md"))
         return payload
+
+    async def handle_execution_analysis(self, request):
+        """Return the full markdown post-mortem for a single arb attempt.
+
+        Read path: serve the persisted ``execution_arbs.analysis_md`` if present;
+        otherwise generate-on-the-fly from the live state so the UI never has
+        to display an empty drawer for arbs from before the feature shipped.
+        """
+        arb_id = (request.match_info.get("arb_id") or "").strip()
+        if not arb_id or len(arb_id) > 60:
+            return web.json_response({"error": "invalid arb_id"}, status=400)
+
+        store = getattr(self.engine, "store", None)
+        analysis_md = ""
+        version = 0
+        updated_at = None
+
+        if store is not None and getattr(store, "_pool", None) is not None:
+            try:
+                async with store._pool.acquire() as conn:
+                    row = await conn.fetchrow(
+                        "SELECT analysis_md, analysis_version, analysis_updated_at "
+                        "FROM execution_arbs WHERE arb_id = $1",
+                        arb_id,
+                    )
+                if row is None:
+                    return web.json_response({"error": "arb not found"}, status=404)
+                analysis_md = row["analysis_md"] or ""
+                version = int(row["analysis_version"] or 0)
+                updated_at = row["analysis_updated_at"]
+            except Exception as exc:
+                logger.warning("execution_analysis: DB read failed: %s", exc)
+
+        if not analysis_md:
+            from .analysis.trade_analyzer import (
+                ANALYZER_VERSION,
+                analyze_arb_from_db,
+            )
+            execution = next(
+                (
+                    e for e in getattr(self.engine, "_executions", [])
+                    if e.arb_id == arb_id
+                ),
+                None,
+            )
+            if execution is not None and getattr(execution, "analysis_md", ""):
+                analysis_md = execution.analysis_md
+                version = ANALYZER_VERSION
+            elif store is not None and getattr(store, "_pool", None) is not None:
+                try:
+                    async with store._pool.acquire() as conn:
+                        analysis_md = await analyze_arb_from_db(conn, arb_id)
+                    version = ANALYZER_VERSION
+                except LookupError:
+                    return web.json_response({"error": "arb not found"}, status=404)
+                except Exception as exc:
+                    logger.warning(
+                        "execution_analysis: on-the-fly generation failed: %s", exc
+                    )
+                    return web.json_response(
+                        {"error": "analysis generation failed"}, status=500
+                    )
+
+        if not analysis_md:
+            return web.json_response({"error": "no analysis available"}, status=404)
+
+        return web.json_response({
+            "arb_id": arb_id,
+            "analysis_md": analysis_md,
+            "analysis_version": version,
+            "analysis_updated_at": (
+                updated_at.isoformat() if updated_at is not None else None
+            ),
+        })
 
     async def handle_failed_trades(self, request):
         """Return failed executions enriched with retry-scheduler context.

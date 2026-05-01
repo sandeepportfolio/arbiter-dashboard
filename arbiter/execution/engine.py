@@ -49,6 +49,54 @@ def _trim_executions(executions: List["ArbExecution"]) -> None:
         del executions[:overflow]
 
 
+def _build_inline_analysis(execution: "ArbExecution") -> str:
+    """Run the trade analyzer against an in-memory ArbExecution.
+
+    The analyzer normally reads DB rows; here we synthesize the same dict
+    shape from the in-process objects so a fresh terminal arb can be analyzed
+    before its audit row is committed.
+    """
+    from ..analysis.trade_analyzer import TradeAnalyzerInput, analyze_trade
+
+    def _order_to_row(order: "Order") -> Dict[str, Any]:
+        return {
+            "order_id": order.order_id,
+            "platform": order.platform,
+            "side": order.side,
+            "price": float(order.price),
+            "quantity": float(order.quantity),
+            "status": order.status.value,
+            "fill_price": float(order.fill_price),
+            "fill_qty": float(order.fill_qty),
+            "error": order.error or "",
+            "submitted_at": order.timestamp or None,
+            "terminal_at": None,
+        }
+
+    opp_dict: Dict[str, Any] = {}
+    if execution.opportunity is not None and hasattr(execution.opportunity, "to_dict"):
+        try:
+            opp_dict = execution.opportunity.to_dict()
+        except Exception:  # noqa: BLE001 - opportunistic, fall back to empty
+            opp_dict = {}
+
+    data = TradeAnalyzerInput(
+        arb_id=execution.arb_id,
+        canonical_id=getattr(execution.opportunity, "canonical_id", "") or "",
+        status=execution.status,
+        realized_pnl=float(execution.realized_pnl or 0),
+        net_edge=getattr(execution.opportunity, "net_edge", None),
+        is_simulation=execution.status == "simulated",
+        created_at=None,
+        closed_at=None,
+        opportunity=opp_dict,
+        orders=[_order_to_row(execution.leg_yes), _order_to_row(execution.leg_no)],
+        fills=[],
+        incidents=[],
+    )
+    return analyze_trade(data)
+
+
 class OrderStatus(Enum):
     PENDING = "pending"
     SUBMITTED = "submitted"
@@ -191,6 +239,9 @@ class ArbExecution:
     realized_pnl: float = 0.0
     timestamp: float = 0.0
     notes: List[str] = field(default_factory=list)
+    # Markdown post-mortem populated by ``_build_inline_analysis`` right before
+    # the audit write. Empty until the trade reaches a recordable state.
+    analysis_md: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -202,6 +253,7 @@ class ArbExecution:
             "realized_pnl": round(self.realized_pnl, 4),
             "timestamp": self.timestamp,
             "notes": self.notes,
+            "analysis_md": self.analysis_md,
             # RetryScheduler attaches this attribute dynamically when a failed
             # arb finishes its retry chain (see retry_scheduler.py:387).
             "failure_details": getattr(self, "failure_details", None),
@@ -1377,6 +1429,16 @@ class ExecutionEngine:
                     "ARB %s realized_pnl updated by unwind: $%.4f (total now $%.4f)",
                     arb_id, unwind_pnl, execution.realized_pnl,
                 )
+
+        # Generate a deterministic markdown post-mortem so every arb — win,
+        # loss, naked recovery, or gate-blocked — has a human-readable
+        # explanation the moment it's persisted. Best-effort; failures must
+        # not block the audit write below.
+        try:
+            execution.analysis_md = _build_inline_analysis(execution)
+        except Exception as exc:  # noqa: BLE001 - never block on analysis
+            logger.warning("trade_analyzer inline build failed for %s: %s", arb_id, exc)
+            execution.analysis_md = ""
 
         # EXEC-02 / D-16: persist the completed arb execution.
         if self.store is not None:

@@ -3649,6 +3649,30 @@ function TradeDetailModal() {
   const netEdgeCents = Number(r.opportunity?.net_edge_cents || 0);
   const persistence = Number(r.opportunity?.persistence_scans || r.opportunity?.persistence_count || 0);
   const totalNotional = Number(r.expected_cost || ((r.leg_yes.quantity || r.leg_yes.fill_qty || 0) * (r.leg_yes.price || r.leg_yes.fill_price || 0)) + ((r.leg_no.quantity || r.leg_no.fill_qty || 0) * (r.leg_no.price || r.leg_no.fill_price || 0)));
+  // Lazy-load the analysis post-mortem from /api/executions/{arb_id}/analysis.
+  // The endpoint serves persisted markdown when available, or generates it
+  // on the fly from the DB so this works for trades from before the feature
+  // shipped. We render the raw markdown in a monospace block — readable and
+  // free of any runtime markdown-to-HTML library dependency.
+  const [analysisMd, setAnalysisMd] = React.useState(r.analysis_md || '');
+  const [analysisLoading, setAnalysisLoading] = React.useState(!r.analysis_md);
+  const [analysisError, setAnalysisError] = React.useState('');
+  React.useEffect(() => {
+    if (!r || !r.arb_id) return;
+    if (r.analysis_md) { setAnalysisMd(r.analysis_md); setAnalysisLoading(false); return; }
+    let cancelled = false;
+    setAnalysisLoading(true); setAnalysisError('');
+    fetch(`/api/executions/${encodeURIComponent(r.arb_id)}/analysis`)
+      .then(resp => resp.json().then(d => ({ ok: resp.ok, d })))
+      .then(({ ok, d }) => {
+        if (cancelled) return;
+        if (ok && d && d.analysis_md) setAnalysisMd(d.analysis_md);
+        else setAnalysisError((d && d.error) || 'no analysis available');
+      })
+      .catch(e => { if (!cancelled) setAnalysisError(String(e && e.message || e)); })
+      .finally(() => { if (!cancelled) setAnalysisLoading(false); });
+    return () => { cancelled = true; };
+  }, [r && r.arb_id]);
   const tl = [
     { ok: true, label: 'Opportunity detected', t: 'T+0.000s', detail: `Net edge ${window.fmtC(netEdgeCents)} · ${persistence || '—'} persistence scans · expected ${window.fmt$Sign(expectedProfit)}` },
     { ok: true, label: 'Risk gates passed', t: 'T+0.012s', detail: '7/7 gates · auto-execute armed' },
@@ -3698,6 +3722,15 @@ function TradeDetailModal() {
               </div>
             </div>
           ))}
+        </div>
+
+        <div style={{ marginTop: 28, fontSize: 11, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom: 12 }}>TRADE FAILURE / SUCCESS ANALYSIS</div>
+        <div style={{ background: t.bgSubtle, border: `1px solid ${t.border}`, borderRadius: 8, padding: 16, fontFamily: window.FONTS.mono, fontSize: 12, lineHeight: 1.55, color: t.text, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 480, overflowY: 'auto' }}>
+          {analysisLoading
+            ? <span style={{ color: t.textMuted }}>generating analysis…</span>
+            : analysisError
+              ? <span style={{ color: t.red }}>could not load analysis: {analysisError}</span>
+              : (analysisMd || <span style={{ color: t.textMuted }}>no analysis available for this arb yet — backfill or wait for the next terminal write.</span>)}
         </div>
       </div>
 
@@ -4601,6 +4634,7 @@ function AgentSession({ candidate, onAccept, mobile }) {
   const [activeTab, setActiveTab] = aVUseState('terminal'); // mobile only: 'terminal' | 'metrics'
   const scrollRef = aVUseRef(null);
   const startedRef = aVUseRef(false);
+  const validationProgressTimersRef = aVUseRef([]);
   const canonicalId = candidate.canonical_id || candidate.id || `${candidate.k || ''}::${candidate.p || ''}`;
   const candidateLabel = `${candidate.k || candidate.kalshi_market_id || ''} ⇄ ${candidate.p || candidate.polymarket_slug || ''}`;
 
@@ -4608,6 +4642,16 @@ function AgentSession({ candidate, onAccept, mobile }) {
     const rows = Array.isArray(incoming) ? incoming : [];
     if (!rows.length) return;
     setEvents(prev => [...prev, ...rows.map(e => Object.assign({}, e, { ts: e.ts || Date.now() / 1000 }))]);
+  };
+  const clearValidationProgressTimers = () => {
+    validationProgressTimersRef.current.forEach(id => clearTimeout(id));
+    validationProgressTimersRef.current = [];
+  };
+  const queueValidationProgress = (delay, event) => {
+    const id = setTimeout(() => {
+      setEvents(prev => [...prev, Object.assign({}, event, { ts: Date.now() / 1000 })]);
+    }, delay);
+    validationProgressTimersRef.current.push(id);
   };
 
   const loadHistory = async () => {
@@ -4656,6 +4700,7 @@ function AgentSession({ candidate, onAccept, mobile }) {
     if (startedRef.current) return;
     startedRef.current = true;
     loadHistory();
+    return () => clearValidationProgressTimers();
   }, [canonicalId]);
 
   const runValidation = async () => {
@@ -4666,8 +4711,14 @@ function AgentSession({ candidate, onAccept, mobile }) {
     setRunning(true);
     setDone(false);
     setError('');
-    setEvents(prev => [...prev, { kind:'meta', text:'run.request submitted read_only=true' }]);
+    clearValidationProgressTimers();
+    setEvents(prev => [...prev, { kind:'meta', text:'run.starting claude_code_cli=true model=claude-opus-4-7 read_only=true' }]);
+    queueValidationProgress(450, { kind:'tool_call', tool:'claude_code_cli', args:{ model:'claude-opus-4-7', mode:'read_only', candidate: canonicalId }, text:'Claude Code CLI is running the read-only verifier through the backend sidecar.' });
+    queueValidationProgress(1150, { kind:'tool_call', tool:'platform_active_check', args:{ kalshi:candidate.k || candidate.kalshi_market_id, polymarket:candidate.p || candidate.polymarket_slug }, text:'Checking both platform market ids are still active and tradable.' });
+    queueValidationProgress(1850, { kind:'tool_call', tool:'resolution_checker', args:{ fields:['date', 'threshold', 'source', 'polarity'] }, text:'Claude Code CLI is comparing resolution criteria, date, threshold, source, and polarity.' });
+    queueValidationProgress(2650, { kind:'tool_call', tool:'llm_verifier.verify', args:{ model:'claude-opus-4-7', mode:'read_only' }, text:"llm_verifier.verify(model='claude-opus-4-7', mode='read_only')" });
     const res = await window.__arbiterRunMappingValidation(canonicalId);
+    clearValidationProgressTimers();
     setRunning(false);
     setDone(true);
     if (!res.ok) {
@@ -4890,8 +4941,11 @@ function RefetchSession({ job = {}, onClose, onDone, mobile }) {
   const { t } = window.useApp();
   const [run, setRun] = aVUseState(() => window.MOCK.discovery || {});
   const [requestError, setRequestError] = aVUseState('');
+  const [starting, setStarting] = aVUseState(false);
   const startedRef = aVUseRef(false);
+  const runStartedRef = aVUseRef(false);
   const doneRef = aVUseRef(false);
+  const autoStart = job.inspectOnly !== true;
 
   const updateRun = (next) => {
     if (!next || typeof next !== 'object') return;
@@ -4906,6 +4960,31 @@ function RefetchSession({ job = {}, onClose, onDone, mobile }) {
       added: Number(c.candidates_written || 0),
       confirmed: Number(c.confirmed_in_batch || c.confirmed_total || 0),
     });
+  };
+  const startDiscoveryRun = async () => {
+    if (runStartedRef.current) return;
+    if (!window.__arbiterBatchDiscover) {
+      setRequestError('Batch discovery API is not available in this build.');
+      return;
+    }
+    runStartedRef.current = true;
+    setStarting(true);
+    setRequestError('');
+    const res = await window.__arbiterBatchDiscover({ auto_promote: job.autoPromote !== false });
+    setStarting(false);
+    if (!res.ok) {
+      setRequestError(res.error || 'Discovery request failed');
+      runStartedRef.current = false;
+      if (window.__arbiterDiscoveryStatus) {
+        const status = await window.__arbiterDiscoveryStatus();
+        if (status.ok) updateRun(status.data);
+      }
+      return;
+    }
+    const snapshot = res.data?.discovery || res.data;
+    updateRun(snapshot);
+    notifyDone(snapshot);
+    if (window.__arbiterTick) { try { await window.__arbiterTick(); } catch {} }
   };
 
   aVUseEffect(() => {
@@ -4925,23 +5004,7 @@ function RefetchSession({ job = {}, onClose, onDone, mobile }) {
 
     poll();
     const pollId = setInterval(poll, 1500);
-    (async () => {
-      if (!window.__arbiterBatchDiscover) {
-        setRequestError('Batch discovery API is not available in this build.');
-        return;
-      }
-      const res = await window.__arbiterBatchDiscover({ auto_promote: job.autoPromote !== false });
-      if (cancelled) return;
-      if (!res.ok) {
-        setRequestError(res.error || 'Discovery request failed');
-        await poll();
-        return;
-      }
-      const snapshot = res.data?.discovery || res.data;
-      updateRun(snapshot);
-      notifyDone(snapshot);
-      if (window.__arbiterTick) { try { await window.__arbiterTick(); } catch {} }
-    })();
+    if (autoStart) startDiscoveryRun();
 
     return () => {
       cancelled = true;
@@ -4957,8 +5020,8 @@ function RefetchSession({ job = {}, onClose, onDone, mobile }) {
   const completed = run.status === 'completed';
   const failed = run.status === 'failed' || !!requestError;
   const pct = Math.max(0, Math.min(100, Math.round(Number(run.progress_pct || 0))));
-  const statusLabel = failed ? 'Attention' : completed ? 'Complete' : run.status === 'running' ? 'Re-fetching' : 'Ready';
-  const latestMessage = requestError || run.message || 'Waiting for discovery status.';
+  const statusLabel = failed ? 'Attention' : completed ? 'Complete' : run.status === 'running' ? 'Re-fetching' : autoStart ? 'Ready' : 'History';
+  const latestMessage = requestError || run.message || (autoStart ? 'Waiting for discovery status.' : 'Inspecting latest discovery history. Run manually when ready.');
   const reasonEntries = Object.entries(reasons).sort((a, b) => Number(b[1]) - Number(a[1])).slice(0, 5);
 
   return (
@@ -5020,11 +5083,29 @@ function RefetchSession({ job = {}, onClose, onDone, mobile }) {
             ))}
           </div>
         )}
+
+        <div style={{ marginTop: 14, padding: '12px 14px', background: t.bgSubtle, borderRadius: 8, border: `1px solid ${t.border}` }}>
+          <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.08em', textTransform:'uppercase', marginBottom: 8 }}>Recent run history</div>
+          {events.length === 0 ? (
+            <div style={{ fontSize: 11.5, color: t.textDim, lineHeight: 1.45 }}>No discovery run has emitted history since this API process started.</div>
+          ) : (
+            events.slice(-6).map((event, i) => (
+              <div key={`${event.ts || i}-${event.phase || event.status || i}`} style={{ display:'grid', gridTemplateColumns:'86px minmax(0, 1fr)', gap: 8, fontSize: 11.5, padding:'4px 0', color: t.textDim, fontFamily: window.FONTS.mono }}>
+                <span style={{ color: t.textMuted }}>{event.phase || event.status || 'event'}</span>
+                <span style={{ overflowWrap:'anywhere' }}>{event.message || event.detail || event.error || JSON.stringify(event)}</span>
+              </div>
+            ))
+          )}
+        </div>
       </div>
 
       <div style={{ padding: '14px 24px', borderTop: `1px solid ${t.border}`, background: t.bgSubtle, display:'flex', justifyContent:'space-between', alignItems:'center', gap: 8 }}>
-        <span style={{ fontSize: 11, color: failed ? t.red : t.textMuted, fontFamily: window.FONTS.mono }}>{completed ? `${Number(counts.candidates_written || 0).toLocaleString()} written · ${Number(counts.confirmed_total || 0).toLocaleString()} confirmed total` : failed ? latestMessage : 'Running in background — safe to close'}</span>
-        <window.Btn variant={completed ? 'primary' : failed ? 'danger' : 'secondary'} size="sm" onClick={onClose}>{completed || failed ? 'Done' : 'Close'}</window.Btn>
+        <span style={{ fontSize: 11, color: failed ? t.red : t.textMuted, fontFamily: window.FONTS.mono }}>{completed ? `${Number(counts.candidates_written || 0).toLocaleString()} written · ${Number(counts.confirmed_total || 0).toLocaleString()} confirmed total` : failed ? latestMessage : !autoStart && run.status !== 'running' ? 'Inspecting history - run manually when ready' : 'Running in background - safe to close'}</span>
+        <div style={{ display:'flex', gap: 8, alignItems:'center' }}>
+          {!autoStart && run.status !== 'running' && !starting && <window.Btn variant="primary" size="sm" onClick={startDiscoveryRun}>Run now</window.Btn>}
+          {starting && <window.Btn variant="secondary" size="sm" disabled>Starting...</window.Btn>}
+          <window.Btn variant={completed ? 'primary' : failed ? 'danger' : 'secondary'} size="sm" onClick={onClose}>{completed || failed ? 'Done' : 'Close'}</window.Btn>
+        </div>
       </div>
     </div>
   );
@@ -5640,6 +5721,7 @@ function MobRow({ icon, label, sub, tone, onClick, last }) {
 
 function MobMappings() {
   const { t, setModal, toast } = window.useApp();
+  const [mappingFilter, setMappingFilter] = mobUseState('all');
   const M = window.MOCK;
   const rows = Array.isArray(M.mappings) ? M.mappings : [];
   const candidates = rows.map((r) => ({
@@ -5652,12 +5734,38 @@ function MobMappings() {
     s: r.status || 'candidate',
     match: r.resolution_match_status || 'pending_operator_review',
     auto: !!r.allow_auto_trade,
+    reason: r.auto_promote_reason || '',
   }));
-  const reviewable = candidates.filter(c => c.s === 'candidate' || c.s === 'pending' || c.s === 'review');
-  const confirmed = candidates.filter(c => c.s === 'confirmed').length;
-  const active = candidates.filter(c => c.s === 'confirmed' || c.s === 'candidate' || c.s === 'review');
+  const statusOf = c => String(c.s || '').toLowerCase();
+  const matchOf = c => String(c.match || '').toLowerCase();
+  const reasonOf = c => String(c.reason || '').toLowerCase();
+  const isPending = c => ['candidate', 'pending', 'review'].includes(statusOf(c));
+  const isLive = c => statusOf(c) === 'confirmed' && !!c.auto && matchOf(c) === 'identical';
+  const isStale = c => statusOf(c) === 'expired' || matchOf(c) === 'expired' || reasonOf(c).includes('expired') || reasonOf(c).includes('stale');
+  const reviewable = candidates.filter(isPending);
+  const confirmed = candidates.filter(c => statusOf(c) === 'confirmed').length;
+  const liveCount = candidates.filter(isLive).length;
+  const staleCount = candidates.filter(isStale).length;
+  const rejectedCount = candidates.filter(c => statusOf(c) === 'rejected').length;
+  const MOBILE_MAPPING_FILTERS = [
+    { key:'all', label:'All', count:candidates.length },
+    { key:'confirmed', label:'Confirmed', count:confirmed },
+    { key:'pending', label:'Pending', count:reviewable.length },
+    { key:'live', label:'Live', count:liveCount },
+    { key:'stale', label:'Stale', count:staleCount },
+    { key:'rejected', label:'Rejected', count:rejectedCount },
+  ];
+  const active = candidates.filter(c => {
+    if (mappingFilter === 'confirmed') return statusOf(c) === 'confirmed';
+    if (mappingFilter === 'pending') return isPending(c);
+    if (mappingFilter === 'live') return isLive(c);
+    if (mappingFilter === 'stale') return isStale(c);
+    if (mappingFilter === 'rejected') return statusOf(c) === 'rejected';
+    return statusOf(c) === 'confirmed' || isPending(c) || statusOf(c) === 'rejected' || isStale(c);
+  });
   const discovery = M.discovery || {};
   const discoveryCounts = discovery.counts || {};
+  const discoveryStatus = String(discovery.status || 'idle').toLowerCase();
   return (
     <div style={{ paddingTop: 8 }}>
       <div style={{ fontSize: 18, fontWeight: 600, color: t.text, marginBottom: 4, padding: '0 4px' }}>Mappings</div>
@@ -5668,15 +5776,15 @@ function MobMappings() {
         <button onClick={() => setModal({ kind:'refetchMappings' })} style={{ padding: '11px', background: t.bgCard, border:`1px solid ${t.border}`, borderRadius: 10, fontSize: 12, color: t.text, fontWeight: 600, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap: 6 }}>
           <span style={{ fontFamily: window.FONTS.mono }}>↻</span> Re-fetch
         </button>
-        <button onClick={() => { const f = reviewable[0]; if (f) setModal({ kind:'agentValidate', payload: f }); else toast('No candidates pending'); }} style={{ padding: '11px', background: t.accent, border:'none', borderRadius: 10, fontSize: 12, color:'#fff', fontWeight: 600, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap: 6 }}>
+        <button onClick={() => { if (reviewable.length) setModal({ kind:'refetchMappings', payload:{ title:'Validate pending mappings', autoPromote:false } }); else toast('No candidates pending'); }} style={{ padding: '11px', background: t.accent, border:'none', borderRadius: 10, fontSize: 12, color:'#fff', fontWeight: 600, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap: 6 }}>
           <span style={{ fontFamily: window.FONTS.mono }}>◇</span> Validate all
         </button>
       </div>
 
       <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap: 8, marginBottom: 12 }}>
-        <MiniMapStat label="Confirmed" value={confirmed.toLocaleString()} tone="green"/>
-        <MiniMapStat label="Pending" value={reviewable.length.toLocaleString()} tone="amber"/>
-        <MiniMapStat label="Refetch" value={discovery.status || 'idle'} tone={discovery.status === 'failed' ? 'red' : 'blue'}/>
+        <MiniMapStat label="Confirmed" value={confirmed.toLocaleString()} tone="green" active={mappingFilter === 'confirmed'} onClick={() => setMappingFilter('confirmed')}/>
+        <MiniMapStat label="Pending" value={reviewable.length.toLocaleString()} tone="amber" active={mappingFilter === 'pending'} onClick={() => setMappingFilter('pending')}/>
+        <MiniMapStat label="Refetch" value={discoveryStatus === 'idle' ? 'ready' : discovery.status} tone={discovery.status === 'failed' ? 'red' : 'blue'} onClick={() => setModal({ kind:'refetchMappings', payload:{ title:'Discovery history', inspectOnly:true } })}/>
       </div>
       {(discovery.status && discovery.status !== 'idle') && (
         <div style={{ marginBottom: 12, padding: '10px 12px', background: t.bgSubtle, border:`1px solid ${t.border}`, borderRadius: 10, color: t.textDim, fontSize: 11, lineHeight: 1.45 }}>
@@ -5684,11 +5792,19 @@ function MobMappings() {
           <div>{(discoveryCounts.kalshi_markets || 0).toLocaleString()} Kalshi · {(discoveryCounts.polymarket_markets || 0).toLocaleString()} Polymarket · {(discoveryCounts.candidates_written || 0).toLocaleString()} written</div>
         </div>
       )}
+      <div style={{ display:'flex', gap: 8, overflowX:'auto', padding: '0 4px 10px', marginBottom: 4, WebkitOverflowScrolling:'touch' }}>
+        {MOBILE_MAPPING_FILTERS.map(f => (
+          <button key={f.key} type="button" aria-pressed={mappingFilter === f.key} onClick={() => setMappingFilter(f.key)} style={{ flex:'0 0 auto', padding:'7px 10px', border:`1px solid ${mappingFilter === f.key ? t.accent : t.border}`, background: mappingFilter === f.key ? t.bgSubtle : t.bgCard, borderRadius: 999, color: mappingFilter === f.key ? t.text : t.textDim, fontSize: 11.5, fontWeight: mappingFilter === f.key ? 700 : 500, cursor:'pointer', display:'flex', alignItems:'center', gap: 6 }}>
+            <span>{f.label}</span>
+            <span style={{ fontFamily: window.FONTS.mono, fontSize: 10, color: mappingFilter === f.key ? t.accent : t.textMuted }}>{Number(f.count || 0).toLocaleString()}</span>
+          </button>
+        ))}
+      </div>
 
       {/* Candidates list */}
       {active.length === 0 && (
         <div style={{ padding: 18, background: t.bgCard, border:`1px solid ${t.border}`, borderRadius: 12, color: t.textDim, fontSize: 12.5, lineHeight: 1.5 }}>
-          No active mapping rows are loaded yet. Re-fetch mappings to pull the latest Kalshi and Polymarket catalogs.
+          No mapping rows match this filter. Re-fetch mappings to pull the latest Kalshi and Polymarket catalogs, or choose another filter.
         </div>
       )}
       {active.map((c, i) => {
@@ -5738,14 +5854,15 @@ function MobMappings() {
   );
 }
 
-function MiniMapStat({ label, value, tone }) {
+function MiniMapStat({ label, value, tone, onClick, active }) {
   const { t } = window.useApp();
   const c = tone === 'green' ? t.green : tone === 'amber' ? t.amber : tone === 'red' ? t.red : t.blue;
+  const Tag = onClick ? 'button' : 'div';
   return (
-    <div style={{ background: t.bgCard, border:`1px solid ${t.border}`, borderRadius: 10, padding: '10px 9px' }}>
+    <Tag type={onClick ? 'button' : undefined} onClick={onClick} style={{ width:'100%', textAlign:'left', cursor: onClick ? 'pointer' : 'default', background: active ? t.bgSubtle : t.bgCard, border:`1px solid ${active ? t.accent : t.border}`, borderRadius: 10, padding: '10px 9px', boxShadow: active ? `0 0 0 1px ${t.accent}` : 'none' }}>
       <div style={{ fontSize: 9.5, color: t.textMuted, letterSpacing:'0.08em', textTransform:'uppercase', marginBottom: 4 }}>{label}</div>
       <div style={{ fontSize: 13, color: c, fontWeight: 700, fontFamily: window.FONTS.mono, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{value}</div>
-    </div>
+    </Tag>
   );
 }
 

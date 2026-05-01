@@ -286,6 +286,43 @@ class ExecutionStore:
         await self.upsert_order(arb_execution.leg_yes, arb_id=arb_execution.arb_id)
         await self.upsert_order(arb_execution.leg_no, arb_id=arb_execution.arb_id)
 
+        # Persist a trade analysis if the engine attached one. Best-effort:
+        # a generation failure must never block the lifecycle write above.
+        analysis_md = getattr(arb_execution, "analysis_md", None)
+        if analysis_md:
+            try:
+                await self.update_arb_analysis(arb_execution.arb_id, analysis_md)
+            except Exception as exc:
+                logger.warning(
+                    "ExecutionStore: persisting analysis_md for %s failed: %s",
+                    arb_execution.arb_id,
+                    exc,
+                )
+
+    async def update_arb_analysis(
+        self, arb_id: str, analysis_md: str, version: int = 1
+    ) -> None:
+        """Write the markdown post-mortem produced by ``trade_analyzer``.
+
+        Safe to call after every state transition: the upsert keeps the most
+        recent analysis. ``version`` lets the backfill detect stale formats.
+        """
+        if self._pool is None:
+            await self.connect()
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE execution_arbs
+                   SET analysis_md = $2,
+                       analysis_version = $3,
+                       analysis_updated_at = NOW()
+                 WHERE arb_id = $1
+                """,
+                arb_id,
+                analysis_md or "",
+                int(version),
+            )
+
     # ─── Rehydration (load past trades on restart) ────────────────────────────
 
     async def load_execution_history(self, limit: int = 200) -> List[ArbExecution]:
