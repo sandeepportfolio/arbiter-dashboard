@@ -431,6 +431,8 @@ def test_ops_charts_and_markets_use_live_data_sources():
     assert "const startingCapital = Math.max(1, totalBal - totalPnl)" in html
     assert "Array.isArray(readiness.checks)" in html
     assert "c && c.status === 'pass'" in html
+    assert "7/7 readiness gates" not in html
+    assert "these 7 health checks" not in html
 
 
 def test_rate_limit_ws_event_shape():

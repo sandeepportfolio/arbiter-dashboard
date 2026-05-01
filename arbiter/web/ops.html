@@ -1647,11 +1647,14 @@ function Sidebar() {
 
 function ReadinessMini() {
   const { t, setPage, tradingMode } = window.useApp();
+  const M = window.MOCK;
   const ok = tradingMode === 'live';
   const c = ok ? t.green : tradingMode === 'standby' ? t.amber : t.red;
   const cs = ok ? t.greenSoft : tradingMode === 'standby' ? t.amberSoft : t.redSoft;
   const txt = ok ? 'Live trading' : tradingMode === 'standby' ? 'Standby' : 'KILLED';
-  const sub = ok ? '7/7 readiness gates' : tradingMode === 'standby' ? 'Auto-exec disabled' : 'Manual restart required';
+  const gates = M.health.readiness.gates || 7;
+  const passing = M.health.readiness.passing || (M.health.readiness.ready ? gates : 0);
+  const sub = ok ? `${passing}/${gates} readiness gates` : tradingMode === 'standby' ? 'Auto-exec disabled' : 'Manual restart required';
   return (
     <div onClick={() => setPage('audit')} style={{ padding: 12, background: cs, border: `1px solid ${c}30`, borderRadius: 8, cursor:'pointer' }}>
       <div style={{ display:'flex', alignItems:'center', gap: 6, fontSize: 11, color: c, fontWeight: 600, marginBottom: 4 }}>
@@ -2831,10 +2834,12 @@ function PageAudit() {
     { name: 'Audit score', ok: true, detail: `${(M.health.audit.audit_score * 100).toFixed(2)}% above 99% threshold.` },
     { name: 'Kill switch armed', ok: true, detail: 'Manual override available · automatic halt on flag count > 5.' },
   ];
+  const readinessGates = M.health.readiness.gates || gates.length;
+  const readinessPassing = M.health.readiness.passing || (M.health.readiness.ready ? readinessGates : gates.filter(g => g.ok).length);
 
   return (
     <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto' }}>
-      <window.PageHeader kicker="System integrity" title="Audit & Readiness" sub="Live trading is gated behind these 7 health checks. Failure of any gate forces standby mode."/>
+      <window.PageHeader kicker="System integrity" title="Audit & Readiness" sub={`Live trading is gated behind ${readinessGates} health checks. Failure of any blocking gate forces standby mode.`}/>
 
       <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 28, marginBottom: 18, display:'flex', alignItems:'center', gap: 24 }}>
         <div style={{ width: 96, height: 96, borderRadius: '50%', background: t.greenSoft, border: `3px solid ${t.green}`, display:'flex', alignItems:'center', justifyContent:'center', flexShrink: 0 }}>
@@ -2843,7 +2848,7 @@ function PageAudit() {
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom: 4 }}>Status</div>
           <div style={{ fontSize: 24, fontWeight: 600, color: t.text, marginBottom: 4 }}>Live trading authorized</div>
-          <div style={{ fontSize: 13, color: t.textDim }}>All 7 readiness gates passing · audit score {(M.health.audit.audit_score * 100).toFixed(2)}% · uptime {(M.health.uptime_seconds/3600).toFixed(1)}h</div>
+          <div style={{ fontSize: 13, color: t.textDim }}>{readinessPassing}/{readinessGates} readiness gates passing · audit score {(M.health.audit.audit_score * 100).toFixed(2)}% · uptime {(M.health.uptime_seconds/3600).toFixed(1)}h</div>
         </div>
         <window.Btn variant="danger" size="md" hint="Emergency halt — stops scanner, cancels open orders, locks trading. Requires manual re-arm." onClick={() => setConfirm({
           title: 'Engage kill switch?',
@@ -5090,6 +5095,8 @@ function PnLStat({ label, value, t, neutral }) {
 function MobHealth() {
   const { t, scanner, setScanner, setTradingMode, setConfirm, toast } = window.useApp();
   const M = window.MOCK;
+  const readinessGates = M.health.readiness.gates || 7;
+  const readinessPassing = M.health.readiness.passing || (M.health.readiness.ready ? readinessGates : 0);
   const gates = [
     { l: 'Scanner heartbeat', v: 'Live · 1s ago', ok: scanner },
     { l: 'Kalshi auth', v: 'Connected · 8h', ok: true },
@@ -5105,7 +5112,7 @@ function MobHealth() {
         <div style={{ width: 40, height: 40, borderRadius:'50%', background: t.green, color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', fontSize: 18 }}>✓</div>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: t.green }}>All systems operational</div>
-          <div style={{ fontSize: 11.5, color: t.green, opacity: 0.8 }}>{gates.filter(g => g.ok).length}/{gates.length} readiness gates passing</div>
+          <div style={{ fontSize: 11.5, color: t.green, opacity: 0.8 }}>{readinessPassing}/{readinessGates} readiness gates passing</div>
         </div>
       </div>
 
