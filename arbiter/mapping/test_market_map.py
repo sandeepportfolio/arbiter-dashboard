@@ -89,13 +89,20 @@ class MockConn:
             return MockRecord(self._mappings[cid]) if cid in self._mappings else None
         if "SELECT * FROM market_mappings" in query and "kalshi_market_id = $1 AND polymarket_slug = $2" in query:
             kalshi_id, poly_slug = args
-            for mapping in self._mappings.values():
-                if (
-                    mapping.get("kalshi_market_id") == kalshi_id
-                    and mapping.get("polymarket_slug") == poly_slug
-                ):
-                    return MockRecord(mapping)
-            return None
+            matches = [
+                mapping for mapping in self._mappings.values()
+                if mapping.get("kalshi_market_id") == kalshi_id
+                and mapping.get("polymarket_slug") == poly_slug
+            ]
+            if not matches:
+                return None
+            status_rank = {"confirmed": 0, "review": 1, "candidate": 2}
+            matches.sort(key=lambda m: (
+                status_rank.get(m.get("status"), 3),
+                1 if str(m.get("canonical_id", "")).startswith("AUTO_") else 0,
+                str(m.get("updated_at", "")),
+            ))
+            return MockRecord(matches[0])
         if "SELECT 1 FROM market_mappings WHERE canonical_id" in query:
             cid = args[0]
             return MockRecord({"exists": True}) if cid in self._mappings else None
@@ -172,6 +179,22 @@ class MockConn:
                 if q in m.get("description", "").lower()
                 and m.get("confidence", 0) >= min_conf
             ][:limit]
+        if "UPDATE market_mappings" in query and "RETURNING canonical_id" in query:
+            canonical_id, kalshi_id, poly_slug = args
+            expired = []
+            for cid, m in list(self._mappings.items()):
+                if (
+                    cid != canonical_id
+                    and m.get("kalshi_market_id") == kalshi_id
+                    and m.get("polymarket_slug") == poly_slug
+                    and m.get("status") in {"confirmed", "candidate", "review"}
+                ):
+                    m["status"] = "expired"
+                    m["allow_auto_trade"] = False
+                    m["review_note"] = m.get("review_note") or "Expired duplicate exact venue pair by latest discovery sync."
+                    m["updated_at"] = utc_now()
+                    expired.append(MockRecord({"canonical_id": cid}))
+            return expired
         if "SELECT * FROM market_mappings WHERE kalshi_market_id" in query:
             kid = args[0]
             return [
@@ -548,6 +571,51 @@ async def test_sync_candidates_expires_stale_auto_discovered_pairs(mock_pool, mo
     assert old_mapping.status == MappingStatus.EXPIRED
     assert new_mapping is not None
     assert new_mapping.status == MappingStatus.CANDIDATE
+
+    await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_upsert_confirmed_expires_duplicate_exact_pair(mock_pool, monkeypatch):
+    store = MarketMappingStore("postgres://mock/mock")
+    await store.connect()
+
+    old = MarketMapping(
+        canonical_id="AUTO_OLD_PAIR",
+        description="Old auto mapping",
+        status=MappingStatus.CONFIRMED,
+        allow_auto_trade=True,
+        kalshi_market_id="KXMLBGAME-PAIR-A",
+        polymarket_slug="aec-mlb-a-b-2026-05-02",
+        resolution_match_status="identical",
+    )
+    await store.upsert(old)
+
+    new = MarketMapping(
+        canonical_id="GAME_MLB_20260502_A",
+        description="Canonical structured mapping",
+        status=MappingStatus.CONFIRMED,
+        allow_auto_trade=True,
+        kalshi_market_id="KXMLBGAME-PAIR-A",
+        polymarket_slug="aec-mlb-a-b-2026-05-02",
+        resolution_match_status="identical",
+    )
+    await store.upsert(new)
+
+    old_mapping = await store.get("AUTO_OLD_PAIR")
+    new_mapping = await store.get("GAME_MLB_20260502_A")
+    pair_mapping = await store.get_by_exact_pair(
+        kalshi_market_id="KXMLBGAME-PAIR-A",
+        polymarket_slug="aec-mlb-a-b-2026-05-02",
+    )
+
+    assert old_mapping is not None
+    assert old_mapping.status == MappingStatus.EXPIRED
+    assert old_mapping.allow_auto_trade is False
+    assert new_mapping is not None
+    assert new_mapping.status == MappingStatus.CONFIRMED
+    assert pair_mapping is not None
+    assert pair_mapping.canonical_id == "GAME_MLB_20260502_A"
 
     await store.disconnect()
 

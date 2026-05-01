@@ -17,6 +17,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import asyncpg
 from ..config.settings import (
+    MARKET_MAP,
     MARKET_SEEDS,
     MarketMappingRecord,
     normalize_market_text,
@@ -474,6 +475,9 @@ class MarketMappingStore:
                 mapping.resolution_match_status or "pending_operator_review",
             )
             mapping.updated_at = now
+            expired_duplicate_ids = await self._expire_duplicate_exact_pair_mappings(conn, mapping)
+            for duplicate_id in expired_duplicate_ids:
+                MARKET_MAP.pop(duplicate_id, None)
             upsert_runtime_market_mapping(mapping.canonical_id, mapping.to_dict())
             return mapping
 
@@ -579,6 +583,16 @@ class MarketMappingStore:
                 """
                 SELECT * FROM market_mappings
                 WHERE kalshi_market_id = $1 AND polymarket_slug = $2
+                ORDER BY
+                    CASE status
+                        WHEN 'confirmed' THEN 0
+                        WHEN 'review' THEN 1
+                        WHEN 'candidate' THEN 2
+                        ELSE 3
+                    END,
+                    CASE WHEN canonical_id LIKE 'AUTO_%' THEN 1 ELSE 0 END,
+                    updated_at DESC NULLS LAST
+                LIMIT 1
                 """,
                 kalshi_market_id,
                 polymarket_slug,
@@ -852,6 +866,57 @@ class MarketMappingStore:
             sum(1 for mapping in merged if mapping.status == MappingStatus.CONFIRMED),
         )
         return len(merged)
+
+    async def _expire_duplicate_exact_pair_mappings(
+        self,
+        conn: asyncpg.Connection,
+        mapping: MarketMapping,
+    ) -> list[str]:
+        """Expire duplicate active rows that bind the exact same venue pair.
+
+        Canonical IDs can evolve as structured parsers improve (for example
+        AUTO_* fuzzy IDs becoming deterministic GAME_* IDs).  Keeping both rows
+        active makes the scanner monitor the same Kalshi/Polymarket contract
+        pair twice.  Once a row is confirmed, the venue pair itself is unique;
+        older active rows for that pair must be retired.
+        """
+        if mapping.status != MappingStatus.CONFIRMED:
+            return []
+        kalshi_market_id = str(mapping.kalshi_market_id or "").strip()
+        polymarket_slug = str(mapping.polymarket_slug or "").strip()
+        if not kalshi_market_id or not polymarket_slug:
+            return []
+        rows = await conn.fetch(
+            """
+            UPDATE market_mappings
+            SET status = 'expired',
+                allow_auto_trade = FALSE,
+                review_note = CASE
+                    WHEN review_note IS NULL OR review_note = ''
+                    THEN 'Expired duplicate exact venue pair by latest discovery sync.'
+                    ELSE review_note
+                END,
+                updated_at = NOW()
+            WHERE canonical_id <> $1
+              AND kalshi_market_id = $2
+              AND polymarket_slug = $3
+              AND status IN ('confirmed', 'candidate', 'review')
+            RETURNING canonical_id
+            """,
+            mapping.canonical_id,
+            kalshi_market_id,
+            polymarket_slug,
+        )
+        expired = [str(row["canonical_id"]) for row in rows]
+        if expired:
+            logger.warning(
+                "Expired %d duplicate exact-pair mapping(s) for %s/%s: %s",
+                len(expired),
+                kalshi_market_id,
+                polymarket_slug,
+                ", ".join(expired),
+            )
+        return expired
 
     # ─── Helpers ─────────────────────────────────────────────────────────────
 
