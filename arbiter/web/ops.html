@@ -998,10 +998,10 @@ window.MOCK = (() => {
   async function authMe() {
     try {
       const r = await authFetch('/api/auth/me', { method: 'GET' });
-      if (!r.ok) return { ok: false, error: await readError(r) };
+      if (!r.ok) return { ok: false, status: r.status, error: await readError(r) };
       return { ok: true, data: await r.json() };
     } catch (e) {
-      return { ok: false, error: String((e && e.message) || e) };
+      return { ok: false, status: 0, error: String((e && e.message) || e) };
     }
   }
 
@@ -1649,6 +1649,30 @@ const { useState: useS, useEffect: useE, useMemo: useM, createContext, useContex
 const AppCtx = createContext(null);
 window.useApp = () => useContext(AppCtx);
 
+const ARB_PAGE_KEY = 'arbiter-current-page';
+const ARB_PAGE_IDS = ['overview', 'opportunities', 'trades', 'pnl', 'markets', 'mappings', 'scanner', 'audit', 'deposits', 'settings'];
+
+function normalizePageId(value) {
+  const raw = String(value || '').replace(/^#\/?/, '').trim();
+  return ARB_PAGE_IDS.includes(raw) ? raw : 'overview';
+}
+
+function readStoredPage() {
+  const hashPage = normalizePageId(window.location.hash);
+  if (hashPage !== 'overview' || window.location.hash) return hashPage;
+  try { return normalizePageId(localStorage.getItem(ARB_PAGE_KEY)); } catch { return 'overview'; }
+}
+
+function persistPage(page) {
+  const next = normalizePageId(page);
+  try { localStorage.setItem(ARB_PAGE_KEY, next); } catch {}
+  try {
+    const desired = next === 'overview' ? window.location.pathname + window.location.search : '#' + next;
+    const current = window.location.hash ? window.location.hash : window.location.pathname + window.location.search;
+    if (current !== desired) window.history.replaceState(null, '', desired);
+  } catch {}
+}
+
 function useTheme() {
   const [name, setName] = useS(() => {
     const saved = localStorage.getItem('arbiter-theme');
@@ -1665,7 +1689,7 @@ function useTheme() {
 
 function AppProvider({ children, onSignOut }) {
   const theme = useTheme();
-  const [page, setPage] = useS('overview');
+  const [page, setPageState] = useS(readStoredPage);
   const [drawer, setDrawer] = useS(null);   // { kind, payload }
   const [modal, setModal] = useS(null);
   const [palette, setPalette] = useS(false);
@@ -1697,6 +1721,11 @@ function AppProvider({ children, onSignOut }) {
     if (window.__arbiterLogout) { try { await window.__arbiterLogout(); } catch {} }
     onSignOut?.();
   };
+  const setPage = (next) => {
+    const pageId = normalizePageId(next);
+    persistPage(pageId);
+    setPageState(pageId);
+  };
 
   useE(() => {
     const onKey = (e) => {
@@ -1705,6 +1734,16 @@ function AppProvider({ children, onSignOut }) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  useE(() => {
+    const onHash = () => {
+      const next = readStoredPage();
+      try { localStorage.setItem(ARB_PAGE_KEY, next); } catch {}
+      setPageState(next);
+    };
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
   }, []);
 
   const value = { ...theme, page, setPage, drawer, setDrawer, modal, setModal,
@@ -4961,10 +5000,26 @@ window.RefetchMappingsModal = RefetchMappingsModal;
 <script type="text/babel" data-presets="env,react" data-filename="mobile.jsx">
 // Mobile dashboard — single-screen tab bar + key views.
 const { useState: mobUseState } = React;
+const ARB_MOBILE_TAB_KEY = 'arbiter-mobile-tab';
+const ARB_MOBILE_TABS = ['home', 'opps', 'trades', 'maps', 'me'];
+
+function readStoredMobileTab() {
+  try {
+    const stored = localStorage.getItem(ARB_MOBILE_TAB_KEY);
+    return ARB_MOBILE_TABS.includes(stored) ? stored : 'home';
+  } catch {
+    return 'home';
+  }
+}
+
+function persistMobileTab(tab) {
+  if (!ARB_MOBILE_TABS.includes(tab)) return;
+  try { localStorage.setItem(ARB_MOBILE_TAB_KEY, tab); } catch {}
+}
 
 function MobileDashboard() {
   const { t, scanner, setScanner, tradingMode } = window.useApp();
-  const [tab, setTab] = mobUseState('home');
+  const [tab, setTab] = mobUseState(readStoredMobileTab);
   const [meSub, setMeSub] = mobUseState(null); // 'funds' | 'pnl' | 'health' | 'settings' | null
   const M = window.MOCK;
   const totalBal = M.balances.kalshi.balance + M.balances.polymarket.balance;
@@ -4972,6 +5027,7 @@ function MobileDashboard() {
 
   // When switching primary tabs, clear sub-page
   const switchTab = (k) => {
+    persistMobileTab(k);
     setTab(k);
     setMeSub(null);
     setTimeout(() => {
@@ -6029,11 +6085,14 @@ window.LoginScreen = LoginScreen;
         }
         const res = await window.__arbiterAuthMe();
         if (cancelled) return;
-        if (!res.ok || !res.data || res.data.authenticated !== true) {
+        const explicitAuthFailure = res.status === 401 || res.status === 403;
+        if (explicitAuthFailure || (res.ok && (!res.data || res.data.authenticated !== true))) {
           try { localStorage.removeItem('arbiter-signed-in'); } catch {}
           if (window.__arbiterClearAuthToken) window.__arbiterClearAuthToken();
           window.MOCK.loaded = false;
           setSignedIn(false);
+        } else if (!res.ok) {
+          console.warn('Session check deferred; keeping local sign-in state during transient auth check failure.', res.error || res.status);
         }
         setCheckingSession(false);
       };

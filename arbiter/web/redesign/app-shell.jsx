@@ -4,6 +4,30 @@ const { useState: useS, useEffect: useE, useMemo: useM, createContext, useContex
 const AppCtx = createContext(null);
 window.useApp = () => useContext(AppCtx);
 
+const ARB_PAGE_KEY = 'arbiter-current-page';
+const ARB_PAGE_IDS = ['overview', 'opportunities', 'trades', 'pnl', 'markets', 'mappings', 'scanner', 'audit', 'deposits', 'settings'];
+
+function normalizePageId(value) {
+  const raw = String(value || '').replace(/^#\/?/, '').trim();
+  return ARB_PAGE_IDS.includes(raw) ? raw : 'overview';
+}
+
+function readStoredPage() {
+  const hashPage = normalizePageId(window.location.hash);
+  if (hashPage !== 'overview' || window.location.hash) return hashPage;
+  try { return normalizePageId(localStorage.getItem(ARB_PAGE_KEY)); } catch { return 'overview'; }
+}
+
+function persistPage(page) {
+  const next = normalizePageId(page);
+  try { localStorage.setItem(ARB_PAGE_KEY, next); } catch {}
+  try {
+    const desired = next === 'overview' ? window.location.pathname + window.location.search : '#' + next;
+    const current = window.location.hash ? window.location.hash : window.location.pathname + window.location.search;
+    if (current !== desired) window.history.replaceState(null, '', desired);
+  } catch {}
+}
+
 function useTheme() {
   const [name, setName] = useS(() => {
     const saved = localStorage.getItem('arbiter-theme');
@@ -17,7 +41,7 @@ function useTheme() {
 
 function AppProvider({ children, onSignOut }) {
   const theme = useTheme();
-  const [page, setPage] = useS('overview');
+  const [page, setPageState] = useS(readStoredPage);
   const [drawer, setDrawer] = useS(null);   // { kind, payload }
   const [modal, setModal] = useS(null);
   const [palette, setPalette] = useS(false);
@@ -46,6 +70,11 @@ function AppProvider({ children, onSignOut }) {
     setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), opts.duration || 2800);
   };
   const signOut = () => { onSignOut?.(); };
+  const setPage = (next) => {
+    const pageId = normalizePageId(next);
+    persistPage(pageId);
+    setPageState(pageId);
+  };
 
   useE(() => {
     const onKey = (e) => {
@@ -54,6 +83,16 @@ function AppProvider({ children, onSignOut }) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  useE(() => {
+    const onHash = () => {
+      const next = readStoredPage();
+      try { localStorage.setItem(ARB_PAGE_KEY, next); } catch {}
+      setPageState(next);
+    };
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
   }, []);
 
   const value = { ...theme, page, setPage, drawer, setDrawer, modal, setModal,

@@ -41,3 +41,28 @@ describe("ops desktop balance cards", () => {
     expect(kpiCard).toContain("lineHeight: 1.35");
   });
 });
+
+describe("ops refresh persistence", () => {
+  it("restores the selected desktop page after a browser refresh", () => {
+    const provider = functionBody("AppProvider");
+
+    expect(opsHtml).toContain("const ARB_PAGE_KEY");
+    expect(provider).toContain("readStoredPage");
+    expect(provider).toContain("persistPage(pageId)");
+    expect(provider).toContain("hashchange");
+  });
+
+  it("restores the selected mobile tab after a browser refresh", () => {
+    const mobile = functionBody("MobileDashboard");
+
+    expect(opsHtml).toContain("const ARB_MOBILE_TAB_KEY");
+    expect(mobile).toContain("readStoredMobileTab");
+    expect(mobile).toContain("persistMobileTab(k)");
+  });
+
+  it("does not clear a signed-in session for transient auth checks", () => {
+    expect(opsHtml).toContain("const explicitAuthFailure = res.status === 401 || res.status === 403");
+    expect(opsHtml).toContain("return { ok: false, status: r.status, error: await readError(r) }");
+    expect(opsHtml).toContain("status: 0");
+  });
+});

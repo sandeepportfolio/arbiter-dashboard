@@ -1,16 +1,32 @@
 // Mobile dashboard — single-screen tab bar + key views.
 const { useState: mobUseState } = React;
+const ARB_MOBILE_TAB_KEY = 'arbiter-mobile-tab';
+const ARB_MOBILE_TABS = ['home', 'opps', 'trades', 'maps', 'me'];
+
+function readStoredMobileTab() {
+  try {
+    const stored = localStorage.getItem(ARB_MOBILE_TAB_KEY);
+    return ARB_MOBILE_TABS.includes(stored) ? stored : 'home';
+  } catch {
+    return 'home';
+  }
+}
+
+function persistMobileTab(tab) {
+  if (!ARB_MOBILE_TABS.includes(tab)) return;
+  try { localStorage.setItem(ARB_MOBILE_TAB_KEY, tab); } catch {}
+}
 
 function MobileDashboard() {
   const { t, scanner, setScanner, tradingMode } = window.useApp();
-  const [tab, setTab] = mobUseState('home');
+  const [tab, setTab] = mobUseState(readStoredMobileTab);
   const [meSub, setMeSub] = mobUseState(null); // 'funds' | 'pnl' | 'health' | 'settings' | null
   const M = window.MOCK;
   const totalBal = M.balances.kalshi.balance + M.balances.polymarket.balance;
   const totalPnl = M.pnl.recorded_trading_pnl.kalshi + M.pnl.recorded_trading_pnl.polymarket;
 
   // When switching primary tabs, clear sub-page
-  const switchTab = (k) => { setTab(k); setMeSub(null); };
+  const switchTab = (k) => { persistMobileTab(k); setTab(k); setMeSub(null); };
 
   return (
     <div style={{ width: '100%', height: '100%', background: t.bg, color: t.text, fontFamily: window.FONTS.sans, display:'flex', flexDirection:'column', overflow:'hidden' }}>
