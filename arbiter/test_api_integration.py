@@ -450,6 +450,24 @@ def test_ops_refetch_modal_uses_live_discovery_api():
     assert "The `phases` array below is a scripted simulation" not in html
 
 
+def test_ops_mapping_validation_modal_uses_live_backend():
+    html = open(os.path.join(os.getcwd(), "arbiter", "web", "ops.html"), encoding="utf-8").read()
+
+    assert "/api/market-mappings/' + encodeURIComponent(id) + '/validation" in html
+    assert "/api/market-mappings/' + encodeURIComponent(id) + '/validate" in html
+    assert "window.__arbiterMappingValidationHistory" in html
+    assert "window.__arbiterRunMappingValidation" in html
+    assert "Claude Opus 4.7" in html
+    assert "Run validation" in html
+    assert "arbiter agents validate --model claude-opus-4-7" in html
+    assert "Apply confirm" not in html
+    assert "Apply reject" not in html
+    assert "Mapping ${v.verdict" not in html
+    assert "buildScript(candidate)" not in html
+    assert "model=claude-sonnet-4" not in html
+    assert "Will the GOP nominate Donald Trump" not in html
+
+
 def test_mobile_mappings_render_api_field_names():
     html = open(os.path.join(os.getcwd(), "arbiter", "web", "ops.html"), encoding="utf-8").read()
 
@@ -749,6 +767,98 @@ def test_market_mappings_prefers_live_mapping_store():
     asyncio.run(_run())
 
 
+def test_market_mapping_validation_history_and_run_are_read_only(monkeypatch):
+    """Row-click validation must show real replayable events without changing status."""
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from arbiter import api as api_mod
+    from arbiter.config.settings import MARKET_MAP
+    from arbiter.mapping import llm_verifier
+
+    free_port()
+
+    test_email = "test-op@arbiter.local"
+    test_password_hash = api_mod._hash_password("letmein")
+    monkeypatch.setattr(api_mod, "UI_ALLOWED_USERS", {test_email: test_password_hash})
+    monkeypatch.setenv("LLM_VERIFIER_BACKEND", "cli")
+
+    async def fake_verify(kalshi_question, poly_question):
+        assert "House" in kalshi_question or "Democratic" in kalshi_question
+        assert "House" in poly_question or "Democratic" in poly_question
+        return "YES"
+
+    monkeypatch.setattr(llm_verifier, "verify", fake_verify)
+    monkeypatch.setattr(llm_verifier, "_BACKEND", "cli")
+
+    original = dict(MARKET_MAP["DEM_HOUSE_2026"])
+
+    async def _run():
+        api = await _make_mapping_api()
+        api._record_discovery_event({
+            "phase": "llm_batch",
+            "message": "Validated DEM_HOUSE_2026 in batch cache",
+            "counts": {"verdicts": 1},
+        })
+        app = web.Application()
+        app.router.add_get(
+            "/api/market-mappings/{canonical_id}/validation",
+            api.handle_market_mapping_validation,
+        )
+        app.router.add_post(
+            "/api/market-mappings/{canonical_id}/validate",
+            api.handle_market_mapping_validate,
+        )
+        app.router.add_post("/api/auth/login", api.handle_login)
+
+        async with TestClient(TestServer(app)) as client:
+            unauth_history = await client.get(
+                "/api/market-mappings/DEM_HOUSE_2026/validation"
+            )
+            assert unauth_history.status == 401
+            unauth_run = await client.post(
+                "/api/market-mappings/DEM_HOUSE_2026/validate"
+            )
+            assert unauth_run.status == 401
+
+            login_resp = await client.post(
+                "/api/auth/login",
+                json={"email": test_email, "password": "letmein"},
+            )
+            assert login_resp.status == 200
+
+            history_resp = await client.get(
+                "/api/market-mappings/DEM_HOUSE_2026/validation"
+            )
+            assert history_resp.status == 200, (await history_resp.text())
+            history = await history_resp.json()
+            assert history["mapping"]["canonical_id"] == "DEM_HOUSE_2026"
+            assert history["verifier"]["model"] == "claude-opus-4-7"
+            assert any(e["phase"] == "llm_batch" for e in history["discovery_events"])
+
+            run_resp = await client.post(
+                "/api/market-mappings/DEM_HOUSE_2026/validate"
+            )
+            assert run_resp.status == 200, (await run_resp.text())
+            run = await run_resp.json()
+            assert run["read_only"] is True
+            assert run["verifier"]["backend"] == "cli"
+            assert any(e["kind"] == "tool_call" and e["tool"] == "llm_verifier.verify" for e in run["events"])
+            assert any(e["kind"] == "verdict" for e in run["events"])
+            assert MARKET_MAP["DEM_HOUSE_2026"]["status"] == original["status"]
+
+            updated_history = await (
+                await client.get("/api/market-mappings/DEM_HOUSE_2026/validation")
+            ).json()
+            assert len(updated_history["validation_runs"]) == 1
+            assert updated_history["validation_runs"][0]["events"][-1]["kind"] == "verdict"
+
+    try:
+        asyncio.run(_run())
+    finally:
+        MARKET_MAP["DEM_HOUSE_2026"] = original
+
+
 def test_market_mapping_update_accepts_criteria(monkeypatch):
     """SAFE-06 truth: POST /api/market-mappings/{id} accepts a
     resolution_criteria body and persists it, returning the stored payload.
@@ -839,6 +949,51 @@ def test_market_mapping_update_rejects_invalid_criteria_match(monkeypatch):
             assert resp.status == 400
 
     asyncio.run(_run())
+
+
+def test_market_mapping_reject_action_is_supported(monkeypatch):
+    """The operator UI's Reject button must map to a real API action."""
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from arbiter import api as api_mod
+    from arbiter.config.settings import MARKET_MAP
+
+    free_port()
+
+    test_email = "test-op@arbiter.local"
+    test_password_hash = api_mod._hash_password("letmein")
+    monkeypatch.setattr(api_mod, "UI_ALLOWED_USERS", {test_email: test_password_hash})
+    original = dict(MARKET_MAP["DEM_HOUSE_2026"])
+
+    async def _run():
+        api = await _make_mapping_api()
+        app = web.Application()
+        app.router.add_post(
+            "/api/market-mappings/{canonical_id}", api.handle_market_mapping_action,
+        )
+        app.router.add_post("/api/auth/login", api.handle_login)
+
+        async with TestClient(TestServer(app)) as client:
+            login_resp = await client.post(
+                "/api/auth/login",
+                json={"email": test_email, "password": "letmein"},
+            )
+            assert login_resp.status == 200
+
+            resp = await client.post(
+                "/api/market-mappings/DEM_HOUSE_2026",
+                json={"action": "reject", "note": "not equivalent"},
+            )
+            assert resp.status == 200, (await resp.text())
+            body = await resp.json()
+            assert body["status"] == "rejected"
+            assert body["allow_auto_trade"] is False
+
+    try:
+        asyncio.run(_run())
+    finally:
+        MARKET_MAP["DEM_HOUSE_2026"] = original
 
 
 def test_enable_auto_trade_requires_confirmed_identical_mapping(monkeypatch):

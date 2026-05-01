@@ -230,6 +230,7 @@ class ArbiterAPI:
         self._discovery_run_seq = 0
         self._discovery_status: dict[str, Any] = self._empty_discovery_status()
         self._discovery_task: Optional[asyncio.Task] = None
+        self._mapping_validation_history: dict[str, list[dict[str, Any]]] = {}
         # SAFE-04: periodic broadcaster task for rate_limit_state events.
         # Started in serve(); cancelled on shutdown.
         self._rate_limit_task: Optional[asyncio.Task] = None
@@ -386,6 +387,8 @@ class ArbiterAPI:
         app.router.add_get("/api/market-mappings", self.handle_market_mappings)
         app.router.add_post("/api/market-mappings/{canonical_id}", self.handle_market_mapping_action)
         app.router.add_get("/api/market-mappings/{canonical_id}/audit", self.handle_market_mapping_audit)
+        app.router.add_get("/api/market-mappings/{canonical_id}/validation", self.handle_market_mapping_validation)
+        app.router.add_post("/api/market-mappings/{canonical_id}/validate", self.handle_market_mapping_validate)
         app.router.add_get("/api/settings", self.handle_settings)
         app.router.add_post("/api/settings", self.handle_settings_update)
         app.router.add_get("/api/errors", self.handle_errors)
@@ -915,6 +918,439 @@ class ArbiterAPI:
 
         return web.json_response(payload)
 
+    @staticmethod
+    def _clamp_unit(value, default: float = 0.0) -> float:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            number = default
+        return max(0.0, min(1.0, number))
+
+    @staticmethod
+    def _normalize_mapping_payload(payload: dict[str, Any]) -> dict[str, Any]:
+        row = dict(payload)
+        row.setdefault("canonical_id", "")
+        kalshi_id = (
+            row.get("kalshi_market_id")
+            or row.get("kalshi_ticker")
+            or row.get("kalshi")
+            or ""
+        )
+        poly_slug = (
+            row.get("polymarket_slug")
+            or row.get("poly_slug")
+            or row.get("polymarket")
+            or ""
+        )
+        row.setdefault("kalshi_market_id", kalshi_id)
+        row.setdefault("kalshi", kalshi_id)
+        row.setdefault("polymarket_slug", poly_slug)
+        row.setdefault("polymarket", poly_slug)
+        row.setdefault("description", row.get("polymarket_question") or row.get("notes") or "")
+        row.setdefault("status", "candidate")
+        row.setdefault("allow_auto_trade", False)
+        row.setdefault("resolution_criteria", None)
+        row.setdefault("resolution_match_status", "pending_operator_review")
+        row.setdefault("mapping_score", row.get("confidence", 0.0) or 0.0)
+        row.setdefault("confidence", row.get("mapping_score", 0.0) or 0.0)
+        return row
+
+    async def _load_mapping_payload(self, canonical_id: str) -> dict[str, Any] | None:
+        """Load one mapping from the durable store first, then runtime cache."""
+        if self.mapping_store is not None:
+            try:
+                getter = getattr(self.mapping_store, "get", None)
+                if callable(getter):
+                    mapping = await getter(canonical_id)
+                    if mapping is not None:
+                        return self._normalize_mapping_payload(mapping.to_dict())
+                for mapping in await self.mapping_store.all(limit=5000):
+                    row = mapping.to_dict()
+                    if str(row.get("canonical_id") or "") == canonical_id:
+                        return self._normalize_mapping_payload(row)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to load mapping %s from store for validation: %s",
+                    canonical_id,
+                    exc,
+                )
+
+        if canonical_id in MARKET_MAP:
+            row = {"canonical_id": canonical_id}
+            row.update(MARKET_MAP[canonical_id])
+            return self._normalize_mapping_payload(row)
+
+        return None
+
+    def _mapping_discovery_events(self, mapping: dict[str, Any]) -> list[dict[str, Any]]:
+        events = list((self._discovery_status or {}).get("events") or [])
+        if not events:
+            return []
+        needles = {
+            str(mapping.get("canonical_id") or ""),
+            str(mapping.get("kalshi_market_id") or mapping.get("kalshi") or ""),
+            str(mapping.get("polymarket_slug") or mapping.get("polymarket") or ""),
+        }
+        needles.discard("")
+        matched: list[dict[str, Any]] = []
+        for event in events:
+            body = json.dumps(event, default=str)
+            if any(needle in body for needle in needles):
+                matched.append(event)
+        return (matched or events[-10:])[-25:]
+
+    @staticmethod
+    def _mapping_questions(mapping: dict[str, Any]) -> tuple[str, str]:
+        criteria = mapping.get("resolution_criteria")
+        if not isinstance(criteria, dict):
+            criteria = {}
+        kalshi_criteria = criteria.get("kalshi") if isinstance(criteria.get("kalshi"), dict) else {}
+        poly_criteria = (
+            criteria.get("polymarket")
+            if isinstance(criteria.get("polymarket"), dict)
+            else {}
+        )
+        kalshi_question = (
+            kalshi_criteria.get("rule")
+            or mapping.get("kalshi_question")
+            or mapping.get("description")
+            or mapping.get("kalshi_market_id")
+            or mapping.get("kalshi")
+            or ""
+        )
+        poly_question = (
+            poly_criteria.get("rule")
+            or mapping.get("polymarket_question")
+            or mapping.get("description")
+            or mapping.get("polymarket_slug")
+            or mapping.get("polymarket")
+            or ""
+        )
+        return str(kalshi_question), str(poly_question)
+
+    def _llm_verifier_metadata(self) -> dict[str, Any]:
+        from .mapping import llm_verifier
+
+        backend = str(
+            getattr(llm_verifier, "_BACKEND", None)
+            or os.environ.get("LLM_VERIFIER_BACKEND", "")
+            or "api"
+        ).strip().lower()
+        if backend == "api":
+            model = getattr(llm_verifier, "_API_MODEL", "claude-sonnet-4-6")
+            label = "Anthropic API verifier"
+        elif backend == "http":
+            model = getattr(llm_verifier, "_CLI_MODEL", "claude-opus-4-7")
+            label = "HTTP verifier sidecar"
+        else:
+            model = getattr(llm_verifier, "_CLI_MODEL", "claude-opus-4-7")
+            label = "Claude Code CLI verifier"
+        return {
+            "backend": backend,
+            "model": model,
+            "label": label,
+            "batch_supported": True,
+            "read_only": True,
+        }
+
+    async def _validate_live_market_presence(self, mapping: dict[str, Any]) -> dict[str, Any]:
+        """Best-effort live existence check. Fail closed into unknown, not true."""
+        kalshi_id = str(mapping.get("kalshi_market_id") or mapping.get("kalshi") or "")
+        poly_slug = str(mapping.get("polymarket_slug") or mapping.get("polymarket") or "")
+        result: dict[str, Any] = {
+            "kalshi": {"id": kalshi_id, "checked": False, "exists": None, "active": None},
+            "polymarket": {"slug": poly_slug, "checked": False, "exists": None, "active": None},
+        }
+
+        kalshi_collector = self.collectors.get("kalshi") if hasattr(self, "collectors") else None
+        if kalshi_id and kalshi_collector is not None and hasattr(kalshi_collector, "_get_with_429_retry"):
+            try:
+                base_url = getattr(getattr(kalshi_collector, "config", None), "base_url", "")
+                data = await asyncio.wait_for(
+                    kalshi_collector._get_with_429_retry(
+                        f"{base_url}/markets/{kalshi_id}",
+                        params={},
+                        path=f"/trade-api/v2/markets/{kalshi_id}",
+                        max_retries=2,
+                        fallback_delay=1.0,
+                    ),
+                    timeout=12.0,
+                )
+                market = data.get("market") if isinstance(data, dict) else None
+                if not isinstance(market, dict):
+                    market = data if isinstance(data, dict) else {}
+                status = str(market.get("status") or market.get("state") or "").lower()
+                closed_values = {"closed", "settled", "resolved", "expired", "finalized"}
+                open_values = {"open", "active", "trading", "initialized"}
+                active = status in open_values or (bool(market) and status not in closed_values)
+                result["kalshi"].update({
+                    "checked": True,
+                    "exists": bool(market),
+                    "active": bool(active),
+                    "status": status or "unknown",
+                    "title": market.get("title") or market.get("subtitle") or market.get("ticker"),
+                    "close_time": market.get("close_time") or market.get("expiration_time"),
+                })
+            except Exception as exc:
+                result["kalshi"].update({
+                    "checked": True,
+                    "exists": None,
+                    "active": None,
+                    "error": str(exc)[:240],
+                })
+
+        poly_collector = self.collectors.get("polymarket") if hasattr(self, "collectors") else None
+        if poly_slug and poly_collector is not None and hasattr(poly_collector, "_get_session"):
+            try:
+                async def fetch_polymarket_event() -> list[dict[str, Any]]:
+                    session = await poly_collector._get_session()
+                    gamma_url = getattr(getattr(poly_collector, "config", None), "gamma_url", "")
+                    async with session.get(f"{gamma_url}/events", params={"slug": poly_slug}) as response:
+                        if response.status != 200:
+                            raise RuntimeError(f"gamma status {response.status}")
+                        payload = await response.json()
+                    return payload if isinstance(payload, list) else []
+
+                events = await asyncio.wait_for(fetch_polymarket_event(), timeout=12.0)
+                event = events[0] if isinstance(events, list) and events else {}
+                markets = event.get("markets", []) if isinstance(event, dict) else []
+                market = markets[0] if markets else event
+                if not isinstance(market, dict):
+                    market = {}
+                closed = bool(market.get("closed") or market.get("archived") or event.get("closed"))
+                active_flag = market.get("active")
+                active = (not closed) if active_flag is None else bool(active_flag) and not closed
+                result["polymarket"].update({
+                    "checked": True,
+                    "exists": bool(event),
+                    "active": bool(active) if event else False,
+                    "question": market.get("question") or event.get("title"),
+                    "closed": closed,
+                    "end_date": market.get("endDate") or event.get("endDate"),
+                })
+            except Exception as exc:
+                result["polymarket"].update({
+                    "checked": True,
+                    "exists": None,
+                    "active": None,
+                    "error": str(exc)[:240],
+                })
+
+        return result
+
+    async def _build_mapping_validation_session(
+        self,
+        *,
+        canonical_id: str,
+        mapping: dict[str, Any],
+        actor: str,
+    ) -> dict[str, Any]:
+        from .mapping import llm_verifier
+
+        started_at = time.time()
+        session_id = f"validation-{int(started_at)}-{hashlib.sha1(canonical_id.encode()).hexdigest()[:8]}"
+        verifier = self._llm_verifier_metadata()
+        events: list[dict[str, Any]] = []
+
+        def push(kind: str, **payload: Any) -> None:
+            events.append({"kind": kind, "ts": time.time(), **payload})
+
+        kalshi_id = str(mapping.get("kalshi_market_id") or mapping.get("kalshi") or "")
+        poly_slug = str(mapping.get("polymarket_slug") or mapping.get("polymarket") or "")
+        criteria = mapping.get("resolution_criteria") if isinstance(mapping.get("resolution_criteria"), dict) else {}
+        criteria_status = str(
+            mapping.get("resolution_match_status")
+            or criteria.get("criteria_match")
+            or "pending_operator_review"
+        ).lower()
+        score = self._clamp_unit(mapping.get("mapping_score") or mapping.get("confidence") or 0.0)
+        confidence_hint = self._clamp_unit(mapping.get("confidence") or score)
+
+        push("meta", text=f"session.start id={session_id} actor={actor} candidate={canonical_id}")
+        push(
+            "meta",
+            text=(
+                f"model={verifier['model']} backend={verifier['backend']} "
+                "mode=read_only mutate=false"
+            ),
+        )
+        push("tool_call", tool="market_mapping_store.get", args={"canonical_id": canonical_id})
+        push(
+            "tool_result",
+            tool="market_mapping_store.get",
+            result={
+                "canonical_id": canonical_id,
+                "status": mapping.get("status"),
+                "kalshi_market_id": kalshi_id,
+                "polymarket_slug": poly_slug,
+                "mapping_score": score,
+                "confidence": confidence_hint,
+                "resolution_match_status": criteria_status,
+                "polarity_flipped": bool(mapping.get("polarity_flipped")),
+                "allow_auto_trade": bool(mapping.get("allow_auto_trade")),
+            },
+        )
+
+        push("step", text="Checking both venues for live market existence and active status.")
+        push(
+            "tool_call",
+            tool="platform_active_check",
+            args={"kalshi_market_id": kalshi_id, "polymarket_slug": poly_slug},
+        )
+        live_presence = await self._validate_live_market_presence(mapping)
+        push("tool_result", tool="platform_active_check", result=live_presence)
+
+        push("step", text="Comparing stored structured resolution criteria: source, date, threshold, and polarity.")
+        push(
+            "tool_call",
+            tool="resolution_checker.compare_structured_fields",
+            args={"canonical_id": canonical_id},
+        )
+        push(
+            "tool_result",
+            tool="resolution_checker.compare_structured_fields",
+            result={
+                "resolution_match_status": criteria_status,
+                "criteria": criteria or None,
+                "polarity_flipped": bool(mapping.get("polarity_flipped")),
+            },
+        )
+
+        kalshi_question, poly_question = self._mapping_questions(mapping)
+        push("step", text="Running the configured LLM verifier on the exact market-resolution text.")
+        push(
+            "tool_call",
+            tool="llm_verifier.verify",
+            args={
+                "kalshi_question": kalshi_question[:700],
+                "polymarket_question": poly_question[:700],
+                "model": verifier["model"],
+                "backend": verifier["backend"],
+            },
+        )
+        try:
+            llm_answer = await llm_verifier.verify(kalshi_question, poly_question)
+        except Exception as exc:
+            logger.warning("Mapping validation verifier failed for %s: %s", canonical_id, exc)
+            llm_answer = "MAYBE"
+        push(
+            "tool_result",
+            tool="llm_verifier.verify",
+            result={"answer": llm_answer, "fail_closed": llm_answer != "YES"},
+        )
+
+        resolution_metric = {
+            "identical": 1.0,
+            "similar": 0.65,
+            "pending_operator_review": 0.35,
+            "pending": 0.35,
+            "divergent": 0.0,
+        }.get(criteria_status, 0.35)
+        llm_metric = {"YES": 1.0, "MAYBE": 0.5, "NO": 0.0}.get(str(llm_answer).upper(), 0.5)
+        active_values = [
+            live_presence.get("kalshi", {}).get("active"),
+            live_presence.get("polymarket", {}).get("active"),
+        ]
+        live_blocked = any(value is False for value in active_values)
+        live_verified = all(value is True for value in active_values)
+        active_metric = 1.0 if live_verified else 0.0 if live_blocked else 0.5
+        structural_metric = round((score + active_metric) / 2.0, 3)
+        final_confidence = round(
+            (0.40 * structural_metric)
+            + (0.30 * resolution_metric)
+            + (0.20 * llm_metric)
+            + (0.10 * confidence_hint),
+            3,
+        )
+
+        push("metric", label="structural_match", value=structural_metric)
+        push("metric", label="resolution_match", value=round(resolution_metric, 3))
+        push("metric", label="llm_semantic_match", value=round(llm_metric, 3))
+        push("metric", label="category_history_confidence", value=round(confidence_hint, 3))
+
+        polarity_flipped = bool(mapping.get("polarity_flipped"))
+        if live_blocked:
+            verdict = "reject"
+            summary = "At least one venue reports this market inactive, closed, or missing."
+        elif criteria_status == "divergent":
+            verdict = "reject"
+            summary = "Structured resolution criteria diverge; do not confirm or auto-trade."
+        elif str(llm_answer).upper() == "NO":
+            verdict = "reject"
+            summary = "LLM verifier says the markets do not resolve to the same outcome."
+        elif polarity_flipped:
+            verdict = "manual_review"
+            summary = "Polarity is flipped; keep this in review unless the scanner explicitly handles inversion."
+        elif criteria_status == "identical" and str(llm_answer).upper() == "YES" and live_verified:
+            verdict = "confirm"
+            summary = "Live venues, structured criteria, and LLM verifier all agree. Operator may confirm."
+        else:
+            verdict = "manual_review"
+            summary = "Validation did not fail, but one or more required confirm gates remain unverified."
+
+        push(
+            "verdict",
+            verdict=verdict,
+            confidence=final_confidence,
+            summary=summary,
+            gates={
+                "live_markets_verified": live_verified,
+                "resolution_identical": criteria_status == "identical",
+                "llm_yes": str(llm_answer).upper() == "YES",
+                "polarity_safe": not polarity_flipped,
+                "read_only": True,
+            },
+        )
+
+        session = {
+            "session_id": session_id,
+            "canonical_id": canonical_id,
+            "actor": actor,
+            "started_at": started_at,
+            "completed_at": time.time(),
+            "read_only": True,
+            "verifier": verifier,
+            "recommendation": verdict,
+            "confidence": final_confidence,
+            "events": events,
+        }
+        history = self._mapping_validation_history.setdefault(canonical_id, [])
+        history.append(session)
+        del history[:-25]
+        return session
+
+    async def handle_market_mapping_validation(self, request):
+        """GET validation history and current verifier metadata for one mapping."""
+        await require_auth(request)
+        canonical_id = request.match_info["canonical_id"]
+        mapping = await self._load_mapping_payload(canonical_id)
+        if mapping is None:
+            return web.json_response({"error": f"Unknown mapping: {canonical_id}"}, status=404)
+        return web.json_response({
+            "canonical_id": canonical_id,
+            "mapping": mapping,
+            "verifier": self._llm_verifier_metadata(),
+            "audit_log": list(mapping.get("audit_log") or []),
+            "discovery_events": self._mapping_discovery_events(mapping),
+            "validation_runs": list(self._mapping_validation_history.get(canonical_id) or []),
+            "read_only": True,
+        })
+
+    async def handle_market_mapping_validate(self, request):
+        """POST run a read-only row-level validation and return replayable events."""
+        actor = await require_auth(request)
+        canonical_id = request.match_info["canonical_id"]
+        mapping = await self._load_mapping_payload(canonical_id)
+        if mapping is None:
+            return web.json_response({"error": f"Unknown mapping: {canonical_id}"}, status=404)
+        session = await self._build_mapping_validation_session(
+            canonical_id=canonical_id,
+            mapping=mapping,
+            actor=actor,
+        )
+        await self._broadcast_json({"type": "mapping_validation", "payload": session})
+        return web.json_response(session)
+
     async def handle_errors(self, request):
         return web.json_response([incident.to_dict() for incident in self.engine.incidents])
 
@@ -1140,6 +1576,14 @@ class ArbiterAPI:
     async def handle_market_mapping_action(self, request):
         actor = await require_auth(request)
         canonical_id = request.match_info["canonical_id"]
+        if canonical_id not in MARKET_MAP and self.mapping_store is not None:
+            try:
+                getter = getattr(self.mapping_store, "get", None)
+                stored = await getter(canonical_id) if callable(getter) else None
+                if stored is not None:
+                    MARKET_MAP[canonical_id] = self._normalize_mapping_payload(stored.to_dict())
+            except Exception as exc:
+                logger.warning("Failed to hydrate mapping %s for action: %s", canonical_id, exc)
         if canonical_id not in MARKET_MAP:
             return web.json_response({"error": f"Unknown mapping: {canonical_id}"}, status=404)
 
@@ -1210,6 +1654,15 @@ class ArbiterAPI:
                 status="review",
                 allow_auto_trade=False,
                 note=note or "Returned to review from the operator desk.",
+                actor=actor,
+                **update_kwargs,
+            )
+        elif action == "reject":
+            mapping = update_market_mapping(
+                canonical_id,
+                status="rejected",
+                allow_auto_trade=False,
+                note=note or "Rejected from the operator desk.",
                 actor=actor,
                 **update_kwargs,
             )

@@ -945,6 +945,34 @@ window.MOCK = (() => {
     }
   }
 
+  async function mappingValidationHistory(canonicalId) {
+    const id = String(canonicalId || '').trim();
+    if (!id) return { ok: false, error: 'canonical_id required' };
+    try {
+      const r = await authFetch('/api/market-mappings/' + encodeURIComponent(id) + '/validation', {
+        method: 'GET',
+      });
+      if (!r.ok) return { ok: false, error: await readError(r) };
+      return { ok: true, data: await r.json() };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  }
+
+  async function runMappingValidation(canonicalId) {
+    const id = String(canonicalId || '').trim();
+    if (!id) return { ok: false, error: 'canonical_id required' };
+    try {
+      const r = await authFetch('/api/market-mappings/' + encodeURIComponent(id) + '/validate', {
+        method: 'POST',
+      });
+      if (!r.ok) return { ok: false, error: await readError(r) };
+      return { ok: true, data: await r.json() };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  }
+
   // POST /api/auth/login — returns {status, email, token}; backend also sets
   // the arbiter_session cookie. Body: {email, password}.
   async function login(email, password) {
@@ -1001,6 +1029,8 @@ window.MOCK = (() => {
   window.__arbiterDiscoveryStatus = discoveryStatus;
   window.__arbiterBatchDiscover = batchDiscover;
   window.__arbiterMappingAction = mappingAction;
+  window.__arbiterMappingValidationHistory = mappingValidationHistory;
+  window.__arbiterRunMappingValidation = runMappingValidation;
   window.__arbiterLogin = login;
   window.__arbiterLogout = logout;
   window.__arbiterAuthMe = authMe;
@@ -2832,12 +2862,8 @@ function PageMappings() {
     <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto' }}>
       <window.PageHeader kicker="Cross-platform" title="Mappings" sub="Semantic matches between Kalshi and Polymarket markets, scored by description similarity, dates, and resolution criteria.">
         <window.Btn variant="secondary" size="sm" icon="↻" hint="Pull latest mapping data from the discovery pipeline" onClick={() => setModal({ kind:'refetchMappings' })}>Re-fetch mappings</window.Btn>
-        <window.Btn variant="primary" size="sm" icon="◇" hint="Run a Claude agent against every pending candidate — produces a confirm/reject verdict for each" onClick={() => {
-          // ⚠ BACKEND NOTE: this validates each pending candidate with an agent in
-          // sequence. Real impl should fan out concurrent agents (cap=4) and stream
-          // a multi-pane progress view. For now we open the first reviewable.
-          const first = reviewable[0];
-          if (first) setModal({ kind:'agentValidate', payload: first });
+        <window.Btn variant="primary" size="sm" icon="◇" hint="Run the backend batch validation/discovery job without auto-promoting new rows" onClick={() => {
+          if (reviewable.length) setModal({ kind:'refetchMappings', payload:{ title:'Validate pending mappings', autoPromote:false } });
           else toast('No candidates pending review');
         }}>Validate all pending</window.Btn>
       </window.PageHeader>
@@ -2894,7 +2920,7 @@ function PageMappings() {
 
       <div style={{ marginTop: 12, padding: '12px 14px', background: t.bgSubtle, border:`1px dashed ${t.border}`, borderRadius: 8, fontSize: 11, color: t.textDim, display:'flex', alignItems:'center', gap: 10 }}>
         <span style={{ width: 6, height: 6, borderRadius:'50%', background: t.accent }}/>
-        Click any pending or review candidate to spin up a Claude agent that reads both markets, compares resolution criteria, and produces a confidence verdict. Live CLI session is shown.
+        Click any pending or review candidate to inspect validation history and run a read-only Claude Opus 4.7 verifier pass with every backend step, tool result, metric, and verdict shown.
       </div>
     </div>
   );
@@ -4360,46 +4386,9 @@ window.UserMenu = UserMenu;
 </script>
 <script type="text/babel" data-presets="env,react" data-filename="agent-validate.jsx">
 // ─────────────────────────────────────────────────────────────────────
-// AgentValidateModal — live CLI session showing AI agent validating
-// a mapping candidate by reading market data, comparing resolution
-// criteria, dates, and producing a confidence score.
-//
-// ⚠ BACKEND NOTE FOR IMPLEMENTING AGENT:
-//
-// The CLI streaming below is currently a scripted simulation using
-// setTimeout. To make this real:
-//
-//   1. Replace the `simulateStream` function with a server-sent-events
-//      (SSE) connection to /api/mappings/validate/{candidate_id}.
-//      The endpoint should spawn a Claude Sonnet agent with these
-//      tools:
-//          - kalshi_get_market(ticker) → returns description, rules,
-//            close_time, settlement_source
-//          - polymarket_get_market(slug) → same shape
-//          - web_search(query) → for resolving ambiguous claims
-//          - publish_validation(candidate_id, verdict, confidence,
-//            reasoning) → writes back to mappings table
-//
-//   2. Stream every tool call + its result + every "thinking" block
-//      back as SSE events with shape:
-//          { kind: 'thinking' | 'tool_call' | 'tool_result' | 'verdict',
-//            ts: <ms>, payload: {...} }
-//      The component already handles each of these `kind`s in render.
-//
-//   3. The "Re-fetch mappings" button on PageMappings should POST to
-//      /api/mappings/refetch and trigger:
-//          - Pull all open Kalshi markets (paginated)
-//          - Pull all open Polymarket markets (paginated)
-//          - Run embeddings similarity on (description + rules) pairs
-//          - Insert any new pair >0.6 score as candidate
-//          - Auto-promote >0.95 to confirmed; queue 0.7-0.95 for agent
-//      This is a long-running job — return a job_id and stream
-//      progress via SSE. The UI already opens a progress modal.
-//
-//   4. For the "Validate all pending" bulk action, fan out one agent
-//      per candidate with a concurrency cap (default 4). Show a
-//      multi-pane CLI grid (already supported by AgentBulkModal below).
-//
+// AgentValidateModal — row-level mapping validation telemetry.
+// Loads real audit/discovery/session history from the backend and can run a
+// read-only Claude Opus 4.7 verifier pass for the selected candidate.
 // ─────────────────────────────────────────────────────────────────────
 
 const { useState: aVUseState, useEffect: aVUseEffect, useRef: aVUseRef } = React;
@@ -4423,7 +4412,7 @@ function useIsMobile(breakpoint = 560) {
 // viewport — so a desktop-sized canvas with multiple artboards still picks
 // the right layout per artboard.
 function AgentValidateModal() {
-  const { t, modal, setModal, toast } = window.useApp();
+  const { t, modal, setModal, toast, setConfirm } = window.useApp();
   const overlayRef = aVUseRef(null);
   const [isMobile, setIsMobile] = aVUseState(false);
   aVUseEffect(() => {
@@ -4439,11 +4428,36 @@ function AgentValidateModal() {
   }, [modal]);
   if (!modal || modal.kind !== 'agentValidate') return null;
   const candidate = modal.payload;
+  const applyVerdict = (v) => {
+    const id = candidate.canonical_id || candidate.id || candidate.k;
+    const verdict = String((v && v.verdict) || 'review');
+    const action = verdict === 'confirm' ? 'confirm' : verdict === 'reject' ? 'reject' : 'review';
+    setConfirm({
+      title: action === 'confirm' ? 'Confirm mapping?' : action === 'reject' ? 'Reject mapping?' : 'Keep for review?',
+      body: 'This applies the validation verdict to the mapping row. Auto-trade still requires a separate identical-resolution gate.',
+      tone: action === 'reject' ? 'danger' : 'primary',
+      confirmLabel: action === 'confirm' ? 'Confirm mapping' : action === 'reject' ? 'Reject mapping' : 'Keep review',
+      onConfirm: async () => {
+        if (!window.__arbiterMappingAction) {
+          toast('Mapping action API unavailable', { tone:'error' });
+          return;
+        }
+        const res = await window.__arbiterMappingAction(id, action, { note: `Applied ${verdict} from validation pane` });
+        if (!res.ok) {
+          toast('Mapping update failed', { sub: res.error, tone:'error' });
+          return;
+        }
+        if (window.__arbiterTick) { try { await window.__arbiterTick(); } catch {} }
+        setModal(null);
+        toast(`Mapping ${action === 'review' ? 'kept for review' : action + 'ed'}`, { sub: `${candidate.k} ⇄ ${candidate.p}` });
+      },
+    });
+  };
   return (
     <div ref={overlayRef} onClick={() => setModal(null)} style={{ position:'fixed', inset: 0, background: t.overlay, zIndex: 96, display:'flex', justifyContent:'center', alignItems: isMobile ? 'stretch' : 'center', padding: isMobile ? 0 : 24 }}>
       <div onClick={e => e.stopPropagation()} style={{ width: isMobile ? '100%' : 820, maxWidth: '100%', height: isMobile ? '100%' : 'auto', maxHeight: isMobile ? '100%' : '88vh', background: t.bgCard, border: isMobile ? 'none' : `1px solid ${t.border}`, borderRadius: isMobile ? 0 : 14, boxShadow: isMobile ? 'none' : t.shadowLg, display:'flex', flexDirection:'column', overflow:'hidden' }}>
         <AgentValidateHeader candidate={candidate} onClose={() => setModal(null)} mobile={isMobile}/>
-        <AgentSession candidate={candidate} mobile={isMobile} onAccept={(v) => { setModal(null); toast(`Mapping ${v.verdict === 'confirm' ? 'confirmed' : 'rejected'}`, { sub: `${candidate.k} ⇄ ${candidate.p}` }); }}/>
+        <AgentSession candidate={candidate} mobile={isMobile} onAccept={applyVerdict}/>
       </div>
     </div>
   );
@@ -4456,7 +4470,7 @@ function AgentValidateHeader({ candidate, onClose, mobile }) {
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display:'flex', alignItems:'center', gap: 6, marginBottom: 4 }}>
           <span style={{ width: 7, height: 7, borderRadius:'50%', background: t.green, animation:'pulse 1.4s infinite', flexShrink: 0 }}/>
-          <span style={{ fontSize: mobile ? 9.5 : 11, color: t.textMuted, letterSpacing:'0.08em', textTransform:'uppercase', fontWeight: 600 }}>Live agent · Claude sonnet</span>
+          <span style={{ fontSize: mobile ? 9.5 : 11, color: t.textMuted, letterSpacing:'0.08em', textTransform:'uppercase', fontWeight: 600 }}>Live verifier · Claude Opus 4.7</span>
         </div>
         <div style={{ fontSize: mobile ? 14 : 16, fontWeight: 600, color: t.text, letterSpacing:'-0.01em' }}>Validating mapping</div>
         <div style={{ fontSize: mobile ? 10 : 11.5, color: t.textDim, marginTop: 3, fontFamily: window.FONTS.mono, lineHeight: 1.4, wordBreak:'break-all' }}>{mobile ? <><div>{candidate.k}</div><div style={{ color: t.textMuted, fontSize: 9 }}>⇅</div><div>{candidate.p}</div></> : <>{candidate.k} ⇄ {candidate.p}</>}</div>
@@ -4466,82 +4480,102 @@ function AgentValidateHeader({ candidate, onClose, mobile }) {
   );
 }
 
-// Scripted stream of agent steps that mimic a real Claude session.
-// Each step has a delay (ms after previous) and a payload shape that
-// matches what the SSE backend should emit.
-function buildScript(candidate) {
-  return [
-    { d: 200, kind: 'meta', text: `agent.start mapping_id=${candidate.k.toLowerCase()}_x_${candidate.p.split('-').slice(0, 4).join('_')}` },
-    { d: 350, kind: 'meta', text: `model=claude-sonnet-4 budget=8192tok timeout=45s` },
-    { d: 600, kind: 'thinking', text: `Fetching both market definitions to compare resolution criteria, close dates, and event scope.` },
-    { d: 900, kind: 'tool_call', tool: 'kalshi_get_market', args: { ticker: candidate.k } },
-    { d: 1400, kind: 'tool_result', tool: 'kalshi_get_market', result: candidate.kalshiPayload || {
-      ticker: candidate.k,
-      title: candidate.kalshiTitle || 'Will the GOP nominate Donald Trump for the 2028 presidential election?',
-      close_ts: '2028-07-15T23:59:00Z',
-      settlement_source: 'AP / Reuters official RNC announcement',
-      resolution: 'YES if Trump is the official RNC nominee at the 2028 convention; NO otherwise.',
-    } },
-    { d: 600, kind: 'tool_call', tool: 'polymarket_get_market', args: { slug: candidate.p } },
-    { d: 1200, kind: 'tool_result', tool: 'polymarket_get_market', result: candidate.polyPayload || {
-      slug: candidate.p,
-      title: candidate.polyTitle || 'Trump wins 2028 GOP nomination',
-      close_ts: '2028-08-20T20:00:00Z',
-      settlement_source: 'Major outlets (3+ of NYT/AP/WSJ/Reuters)',
-      resolution: 'YES iff Donald J. Trump becomes the Republican nominee for the 2028 US presidential race.',
-    } },
-    { d: 700, kind: 'thinking', text: `Both markets reference the same person and same event (2028 GOP nomination). Resolution sources differ but converge: AP/Reuters vs major-outlet consensus — both report the same factual outcome simultaneously.` },
-    { d: 600, kind: 'thinking', text: `Close-time gap: Kalshi closes 2028-07-15, Polymarket 2028-08-20. The convention typically falls between these dates → both should resolve to the same value at the same real-world event.` },
-    { d: 500, kind: 'tool_call', tool: 'web_search', args: { q: '2028 Republican National Convention date' } },
-    { d: 1100, kind: 'tool_result', tool: 'web_search', result: { top: '2028 RNC scheduled mid-July 2028; nominee announced before Aug 1.' } },
-    { d: 600, kind: 'thinking', text: `Confirmed: convention is mid-July, well within both close windows. Edge case: if Trump wins primary but withdraws before RNC, Kalshi might resolve YES (presumptive nominee) while Polymarket waits for formal nomination. Score adjustment: −0.02.` },
-    { d: 400, kind: 'metric', label: 'description_similarity', value: 0.96 },
-    { d: 250, kind: 'metric', label: 'date_alignment', value: 0.91 },
-    { d: 250, kind: 'metric', label: 'resolution_match', value: 0.94 },
-    { d: 250, kind: 'metric', label: 'edge_case_risk', value: 0.08 },
-    { d: 600, kind: 'verdict', verdict: candidate.score >= 0.85 ? 'confirm' : candidate.score >= 0.65 ? 'manual_review' : 'reject', confidence: candidate.score, summary: candidate.score >= 0.85 ? 'Strong semantic + temporal alignment. Recommend auto-confirm; small withdrawal-edge-case risk noted.' : candidate.score >= 0.65 ? 'Plausible match but resolution-criteria divergence on one term ("nominee" vs "presumptive nominee"). Operator should review.' : 'Resolution criteria diverge on key event scope. Recommend reject.' },
-  ];
-}
-
 function AgentSession({ candidate, onAccept, mobile }) {
-  const { t } = window.useApp();
+  const { t, toast } = window.useApp();
   const [events, setEvents] = aVUseState([]);
+  const [history, setHistory] = aVUseState(null);
   const [done, setDone] = aVUseState(false);
-  const [paused, setPaused] = aVUseState(false);
+  const [loading, setLoading] = aVUseState(true);
+  const [running, setRunning] = aVUseState(false);
+  const [error, setError] = aVUseState('');
   const [activeTab, setActiveTab] = aVUseState('terminal'); // mobile only: 'terminal' | 'metrics'
   const scrollRef = aVUseRef(null);
   const startedRef = aVUseRef(false);
-  // Mirror `paused` into a ref so the long-lived tick closure reads the
-  // current value without restarting the effect on every toggle.
-  const pausedRef = aVUseRef(false);
-  aVUseEffect(() => { pausedRef.current = paused; }, [paused]);
+  const canonicalId = candidate.canonical_id || candidate.id || `${candidate.k || ''}::${candidate.p || ''}`;
+  const candidateLabel = `${candidate.k || candidate.kalshi_market_id || ''} ⇄ ${candidate.p || candidate.polymarket_slug || ''}`;
+
+  const appendEvents = (incoming) => {
+    const rows = Array.isArray(incoming) ? incoming : [];
+    if (!rows.length) return;
+    setEvents(prev => [...prev, ...rows.map(e => Object.assign({}, e, { ts: e.ts || Date.now() / 1000 }))]);
+  };
+
+  const loadHistory = async () => {
+    if (!window.__arbiterMappingValidationHistory) {
+      setError('Validation history API is not available in this build.');
+      setLoading(false);
+      setDone(true);
+      return;
+    }
+    setLoading(true);
+    setError('');
+    const res = await window.__arbiterMappingValidationHistory(canonicalId);
+    setLoading(false);
+    if (!res.ok) {
+      setError(res.error || 'Could not load validation history.');
+      setDone(true);
+      return;
+    }
+    const payload = res.data || {};
+    setHistory(payload);
+    const auditN = Array.isArray(payload.audit_log) ? payload.audit_log.length : 0;
+    const discoveryN = Array.isArray(payload.discovery_events) ? payload.discovery_events.length : 0;
+    const runs = Array.isArray(payload.validation_runs) ? payload.validation_runs : [];
+    const firstEvents = [
+      { kind:'meta', text:`history.loaded audit=${auditN} discovery_events=${discoveryN} validation_runs=${runs.length}` },
+    ];
+    if (payload.verifier) {
+      firstEvents.push({ kind:'meta', text:`model=${payload.verifier.model || 'unknown'} backend=${payload.verifier.backend || 'unknown'} mode=read_only` });
+    }
+    if (discoveryN) {
+      firstEvents.push({ kind:'tool_result', tool:'discovery.history', result: payload.discovery_events.slice(-5) });
+    }
+    if (auditN) {
+      firstEvents.push({ kind:'tool_result', tool:'mapping.audit_log', result: payload.audit_log.slice(-10) });
+    }
+    setEvents(firstEvents);
+    if (runs.length) {
+      appendEvents(runs[runs.length - 1].events || []);
+      setDone(true);
+    } else {
+      setDone(true);
+    }
+  };
 
   aVUseEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
-    const script = buildScript(candidate);
-    let i = 0;
-    let cancelled = false;
-    const advance = () => {
-      if (cancelled) return;
-      if (i >= script.length) { setDone(true); return; }
-      const step = script[i];
-      setTimeout(() => {
-        // Re-check paused at delivery time. While paused, poll every 120ms
-        // until resumed or cancelled, then deliver the queued event.
-        const deliver = () => {
-          if (cancelled) return;
-          if (pausedRef.current) { setTimeout(deliver, 120); return; }
-          setEvents(prev => [...prev, { ...step, ts: performance.now() }]);
-          i++;
-          advance();
-        };
-        deliver();
-      }, step.d);
-    };
-    advance();
-    return () => { cancelled = true; };
-  }, []);
+    loadHistory();
+  }, [canonicalId]);
+
+  const runValidation = async () => {
+    if (!window.__arbiterRunMappingValidation) {
+      setError('Run validation API is not available in this build.');
+      return;
+    }
+    setRunning(true);
+    setDone(false);
+    setError('');
+    setEvents(prev => [...prev, { kind:'meta', text:'run.request submitted read_only=true' }]);
+    const res = await window.__arbiterRunMappingValidation(canonicalId);
+    setRunning(false);
+    setDone(true);
+    if (!res.ok) {
+      const msg = res.error || 'Validation run failed.';
+      setError(msg);
+      setEvents(prev => [...prev, { kind:'error', text: msg }]);
+      return;
+    }
+    const session = res.data || {};
+    appendEvents(session.events || []);
+    setHistory(prev => {
+      const base = prev || {};
+      const runs = Array.isArray(base.validation_runs) ? base.validation_runs.slice() : [];
+      runs.push(session);
+      return Object.assign({}, base, { validation_runs: runs });
+    });
+    if (window.__arbiterTick) { try { await window.__arbiterTick(); } catch {} }
+  };
 
   aVUseEffect(() => {
     if (scrollRef.current) {
@@ -4549,20 +4583,23 @@ function AgentSession({ candidate, onAccept, mobile }) {
     }
   }, [events.length]);
 
-  const verdict = events.find(e => e.kind === 'verdict');
+  const verdict = [...events].reverse().find(e => e.kind === 'verdict');
   const metrics = events.filter(e => e.kind === 'metric');
+  const runCount = history && Array.isArray(history.validation_runs) ? history.validation_runs.length : 0;
 
   // Terminal pane
   const terminal = (
     <div ref={scrollRef} style={{ flex: 1, overflow:'auto', padding: mobile ? '12px 14px' : '16px 20px', fontFamily: window.FONTS.mono, fontSize: mobile ? 11 : 12, lineHeight: 1.6, color: '#d4d8de', WebkitOverflowScrolling:'touch' }}>
-      <CliLine prefix="$" prefixColor="#6c7280" mobile={mobile}><span style={{ color:'#a3a8af' }}>arbiter agents validate</span>{!mobile && <> --candidate <span style={{ color:'#74d2bd' }}>{candidate.k}_x_{candidate.p.split('-').slice(0,3).join('-')}</span></>}</CliLine>
-      {mobile && <CliLine prefix=" " prefixColor="transparent"><span style={{ color:'#a3a8af' }}>--candidate</span> <span style={{ color:'#74d2bd' }}>{candidate.k}</span></CliLine>}
+      <CliLine prefix="$" prefixColor="#6c7280" mobile={mobile}><span style={{ color:'#a3a8af' }}>arbiter agents validate --model claude-opus-4-7</span>{!mobile && <> --candidate <span style={{ color:'#74d2bd' }}>{canonicalId}</span> --read-only</>}</CliLine>
+      {mobile && <CliLine prefix=" " prefixColor="transparent"><span style={{ color:'#a3a8af' }}>--candidate</span> <span style={{ color:'#74d2bd' }}>{canonicalId}</span></CliLine>}
+      <CliLine prefix=" " prefixColor="transparent"><span style={{ color:'#6c7280' }}>{candidateLabel}</span></CliLine>
       {events.map((e, i) => <CliEvent key={i} e={e} mobile={mobile}/>)}
-      {!done && <CliCursor/>}
+      {(loading || running) && <CliCursor/>}
+      {error && <CliEvent e={{ kind:'error', text:error }} mobile={mobile}/>}
       {done && verdict && (
         <div style={{ marginTop: 14, padding: mobile ? '10px 12px' : '12px 14px', borderRadius: 8, background: verdict.verdict === 'confirm' ? 'rgba(56, 189, 137, 0.10)' : verdict.verdict === 'reject' ? 'rgba(241, 92, 92, 0.10)' : 'rgba(245, 168, 71, 0.10)', border: `1px solid ${verdict.verdict === 'confirm' ? 'rgba(56, 189, 137, 0.35)' : verdict.verdict === 'reject' ? 'rgba(241, 92, 92, 0.35)' : 'rgba(245, 168, 71, 0.35)'}` }}>
           <div style={{ fontSize: 10, color:'#9ca0a6', letterSpacing:'0.08em', textTransform:'uppercase', marginBottom: 4 }}>Verdict</div>
-          <div style={{ fontSize: mobile ? 12.5 : 14, color: verdict.verdict === 'confirm' ? '#5ddfae' : verdict.verdict === 'reject' ? '#f88a8a' : '#f5b766', fontWeight: 600, textTransform:'uppercase', letterSpacing:'0.04em' }}>{verdict.verdict.replace('_', ' ')} · {verdict.confidence.toFixed(2)}</div>
+          <div style={{ fontSize: mobile ? 12.5 : 14, color: verdict.verdict === 'confirm' ? '#5ddfae' : verdict.verdict === 'reject' ? '#f88a8a' : '#f5b766', fontWeight: 600, textTransform:'uppercase', letterSpacing:'0.04em' }}>{String(verdict.verdict || 'manual_review').replace('_', ' ')} · {Number(verdict.confidence || 0).toFixed(2)}</div>
           <div style={{ fontSize: mobile ? 11.5 : 12, color:'#c9cdd2', marginTop: 6, fontFamily: window.FONTS.sans, lineHeight: 1.5 }}>{verdict.summary}</div>
         </div>
       )}
@@ -4593,7 +4630,7 @@ function AgentSession({ candidate, onAccept, mobile }) {
       {done && verdict && (
         <div style={{ marginTop: 14, padding: 12, borderRadius: 10, background: verdict.verdict === 'confirm' ? t.greenSoft : verdict.verdict === 'reject' ? t.redSoft : t.amberSoft, border:`1px solid ${(verdict.verdict === 'confirm' ? t.green : verdict.verdict === 'reject' ? t.red : t.amber)}40` }}>
           <div style={{ fontSize: 9.5, color: t.textMuted, letterSpacing:'0.08em', textTransform:'uppercase', marginBottom: 3 }}>Verdict</div>
-          <div style={{ fontSize: 12.5, fontWeight: 700, color: verdict.verdict === 'confirm' ? t.green : verdict.verdict === 'reject' ? t.red : t.amber, textTransform:'uppercase', letterSpacing:'0.04em' }}>{verdict.verdict.replace('_',' ')} · {verdict.confidence.toFixed(2)}</div>
+          <div style={{ fontSize: 12.5, fontWeight: 700, color: verdict.verdict === 'confirm' ? t.green : verdict.verdict === 'reject' ? t.red : t.amber, textTransform:'uppercase', letterSpacing:'0.04em' }}>{String(verdict.verdict || 'manual_review').replace('_',' ')} · {Number(verdict.confidence || 0).toFixed(2)}</div>
           <div style={{ fontSize: 11.5, color: t.text, marginTop: 5, lineHeight: 1.5 }}>{verdict.summary}</div>
         </div>
       )}
@@ -4627,16 +4664,13 @@ function AgentSession({ candidate, onAccept, mobile }) {
           </div>
         )}
         {mobile && (
-          <div style={{ flex: 1, minWidth: 0, fontSize: 11, color: t.textMuted, fontFamily: window.FONTS.mono, display:'flex', alignItems:'center', gap: 6 }}>
-            <span style={{ width: 6, height: 6, borderRadius:'50%', background: done ? t.green : t.accent, animation: done ? 'none' : 'pulse 1.4s infinite' }}/>
-            {done ? `${events.length} events · ${metrics.length} metrics` : `${events.length} events…`}
+        <div style={{ flex: 1, minWidth: 0, fontSize: 11, color: t.textMuted, fontFamily: window.FONTS.mono, display:'flex', alignItems:'center', gap: 6 }}>
+            <span style={{ width: 6, height: 6, borderRadius:'50%', background: running ? t.accent : done ? t.green : t.amber, animation: running ? 'pulse 1.4s infinite' : 'none' }}/>
+            {running ? `${events.length} events…` : `${events.length} events · ${metrics.length} metrics`}
           </div>
         )}
         <div style={{ display:'flex', gap: 6, flexShrink: 0 }}>
-          {!done && <window.Btn variant="ghost" size={mobile ? 'sm' : 'sm'} hint={paused ? 'Resume the agent — continue running validation steps' : 'Pause the agent mid-step — useful if you want to inspect intermediate output'} onClick={() => setPaused(p => !p)}>{paused ? 'Resume' : 'Pause'}</window.Btn>}
-          {done && verdict?.verdict === 'confirm' && <window.Btn variant="primary" size="sm" hint="Mark this mapping as confirmed — enables it for live scanning" onClick={() => onAccept(verdict)}>{mobile ? 'Confirm' : 'Apply confirm'}</window.Btn>}
-          {done && verdict?.verdict === 'reject' && <window.Btn variant="danger" size="sm" hint="Mark this mapping as not-a-match — removes it from the scanner" onClick={() => onAccept(verdict)}>{mobile ? 'Reject' : 'Apply reject'}</window.Btn>}
-          {done && verdict?.verdict === 'manual_review' && <window.Btn variant="secondary" size="sm" hint="Keep this pair in the review queue for a human decision" onClick={() => onAccept({ verdict:'review' })}>{mobile ? 'Review' : 'Keep for review'}</window.Btn>}
+          <window.Btn variant="secondary" size="sm" disabled={loading || running} hint="Run a read-only backend validation pass using the configured verifier" onClick={runValidation}>{running ? 'Running…' : runCount ? 'Run again' : 'Run validation'}</window.Btn>
         </div>
       </div>
     </div>
@@ -4645,9 +4679,9 @@ function AgentSession({ candidate, onAccept, mobile }) {
 
 function CliEvent({ e, mobile }) {
   if (e.kind === 'meta') return <CliLine prefix="◦" prefixColor="#6c7280">{e.text}</CliLine>;
-  if (e.kind === 'thinking') return (
+  if (e.kind === 'step' || e.kind === 'thinking') return (
     <div style={{ margin: '8px 0', padding: mobile ? '7px 10px' : '8px 12px', borderLeft: '2px solid #5b8def', background: 'rgba(91, 141, 239, 0.06)', borderRadius: '0 4px 4px 0', whiteSpace:'pre-wrap' }}>
-      <div style={{ fontSize: 9.5, color:'#7da3f5', letterSpacing:'0.08em', textTransform:'uppercase', marginBottom: 3 }}>Thinking</div>
+      <div style={{ fontSize: 9.5, color:'#7da3f5', letterSpacing:'0.08em', textTransform:'uppercase', marginBottom: 3 }}>Step</div>
       <div style={{ fontFamily: window.FONTS.sans, fontSize: mobile ? 11.5 : 12.5, color:'#c9cdd2', lineHeight: 1.5 }}>{e.text}</div>
     </div>
   );
@@ -4656,7 +4690,7 @@ function CliEvent({ e, mobile }) {
       <CliLine prefix="→" prefixColor="#5ddfae">
         <span style={{ color:'#5ddfae' }}>{e.tool}</span>
         <span style={{ color:'#6c7280' }}>(</span>
-        <span style={{ color:'#d4d8de', wordBreak:'break-all' }}>{Object.entries(e.args).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(', ')}</span>
+        <span style={{ color:'#d4d8de', wordBreak:'break-all' }}>{Object.entries(e.args || {}).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(', ')}</span>
         <span style={{ color:'#6c7280' }}>)</span>
       </CliLine>
     </div>
@@ -4667,8 +4701,15 @@ function CliEvent({ e, mobile }) {
       <pre style={{ margin: 0, fontFamily: window.FONTS.mono, fontSize: mobile ? 10 : 11, color:'#a3a8af', whiteSpace:'pre-wrap', wordBreak:'break-all' }}>{JSON.stringify(e.result, null, 2)}</pre>
     </div>
   );
-  if (e.kind === 'metric') return <CliLine prefix="·" prefixColor="#6c7280"><span style={{ color:'#9ca0a6' }}>metric</span> {e.label} <span style={{ color:'#f5b766' }}>{e.value.toFixed(3)}</span></CliLine>;
-  if (e.kind === 'verdict') return <CliLine prefix="✓" prefixColor="#5ddfae"><span style={{ color:'#5ddfae', fontWeight: 700 }}>{e.verdict.toUpperCase()}</span> confidence={e.confidence.toFixed(2)}</CliLine>;
+  if (e.kind === 'metric') {
+    const value = Number(e.value || 0);
+    return <CliLine prefix="·" prefixColor="#6c7280"><span style={{ color:'#9ca0a6' }}>metric</span> {e.label} <span style={{ color:'#f5b766' }}>{value.toFixed(3)}</span></CliLine>;
+  }
+  if (e.kind === 'verdict') {
+    const confidence = Number(e.confidence || 0);
+    return <CliLine prefix="✓" prefixColor="#5ddfae"><span style={{ color:'#5ddfae', fontWeight: 700 }}>{String(e.verdict || 'manual_review').toUpperCase()}</span> confidence={confidence.toFixed(2)}</CliLine>;
+  }
+  if (e.kind === 'error') return <CliLine prefix="!" prefixColor="#f88a8a"><span style={{ color:'#f88a8a' }}>{e.text}</span></CliLine>;
   return null;
 }
 
@@ -4714,10 +4755,11 @@ function RefetchMappingsModal() {
     return () => ro.disconnect();
   }, [modal]);
   if (!modal || modal.kind !== 'refetchMappings') return null;
+  const job = modal.payload || {};
   return (
     <div ref={overlayRef} onClick={() => {}} style={{ position:'fixed', inset: 0, background: t.overlay, zIndex: 96, display:'flex', justifyContent:'center', alignItems: isMobile ? 'stretch' : 'center', padding: isMobile ? 0 : 24 }}>
       <div style={{ width: isMobile ? '100%' : 540, height: isMobile ? '100%' : 'auto', maxHeight: isMobile ? '100%' : '92vh', background: t.bgCard, border: isMobile ? 'none' : `1px solid ${t.border}`, borderRadius: isMobile ? 0 : 14, boxShadow: isMobile ? 'none' : t.shadowLg, overflow:'hidden', display:'flex', flexDirection:'column' }}>
-        <RefetchSession onClose={() => setModal(null)} mobile={isMobile} onDone={(r) => { toast('Re-fetch complete', { sub: `${r.added} new candidates · ${r.confirmed} auto-confirmed` }); }}/>
+        <RefetchSession job={job} onClose={() => setModal(null)} mobile={isMobile} onDone={(r) => { toast(job.autoPromote === false ? 'Validation pass complete' : 'Re-fetch complete', { sub: `${r.added} new candidates · ${r.confirmed} auto-confirmed` }); }}/>
       </div>
     </div>
   );
@@ -4734,7 +4776,7 @@ const DISCOVERY_PHASES = [
   { key: 'persist_candidates', label: 'Persisting mappings', sub: 'Upsert candidates and confirmed rows', count: 'candidates_written' },
 ];
 
-function RefetchSession({ onClose, onDone, mobile }) {
+function RefetchSession({ job = {}, onClose, onDone, mobile }) {
   const { t } = window.useApp();
   const [run, setRun] = aVUseState(() => window.MOCK.discovery || {});
   const [requestError, setRequestError] = aVUseState('');
@@ -4778,7 +4820,7 @@ function RefetchSession({ onClose, onDone, mobile }) {
         setRequestError('Batch discovery API is not available in this build.');
         return;
       }
-      const res = await window.__arbiterBatchDiscover({ auto_promote: true });
+      const res = await window.__arbiterBatchDiscover({ auto_promote: job.autoPromote !== false });
       if (cancelled) return;
       if (!res.ok) {
         setRequestError(res.error || 'Discovery request failed');
@@ -4816,7 +4858,7 @@ function RefetchSession({ onClose, onDone, mobile }) {
           <span style={{ width: 8, height: 8, borderRadius:'50%', background: failed ? t.red : completed ? t.green : t.accent, animation: completed || failed ? 'none' : 'pulse 1.4s infinite' }}/>
           <span style={{ fontSize: 11, color: failed ? t.red : t.textMuted, letterSpacing:'0.08em', textTransform:'uppercase', fontWeight: 600 }}>{statusLabel}</span>
         </div>
-        <div style={{ fontSize: 17, fontWeight: 600, color: t.text, letterSpacing:'-0.01em' }}>Re-fetch market mappings</div>
+        <div style={{ fontSize: 17, fontWeight: 600, color: t.text, letterSpacing:'-0.01em' }}>{job.title || 'Re-fetch market mappings'}</div>
         <div style={{ fontSize: 12, color: t.textDim, marginTop: 4 }}>{latestMessage}</div>
       </div>
 
