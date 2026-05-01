@@ -278,12 +278,12 @@ function PageMappings() {
               </div>
             );
           }},
-        ]} rows={candidates} onRowClick={(r) => { if (r.s === 'pending' || r.s === 'review') setModal({ kind:'agentValidate', payload: r }); }}/>
+        ]} rows={candidates} onRowClick={(r) => setModal({ kind:'agentValidate', payload: r })}/>
       </window.Card>
 
       <div style={{ marginTop: 12, padding: '12px 14px', background: t.bgSubtle, border:`1px dashed ${t.border}`, borderRadius: 8, fontSize: 11, color: t.textDim, display:'flex', alignItems:'center', gap: 10 }}>
         <span style={{ width: 6, height: 6, borderRadius:'50%', background: t.accent }}/>
-        Click any pending or review candidate to spin up a Claude agent that reads both markets, compares resolution criteria, and produces a confidence verdict. Live CLI session is shown.
+        Click any mapping row to inspect validation history and run a read-only Claude Opus 4.7 verifier pass with every backend step, tool result, metric, and verdict shown.
       </div>
     </div>
   );

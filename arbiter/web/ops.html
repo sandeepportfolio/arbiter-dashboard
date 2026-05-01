@@ -2915,12 +2915,12 @@ function PageMappings() {
               </div>
             );
           }},
-        ]} rows={candidates} onRowClick={(r) => { if (r.s === 'candidate' || r.s === 'pending' || r.s === 'review') setModal({ kind:'agentValidate', payload: r }); }} emptyTitle="No mapping candidates" emptyHint="The mapping pipeline will surface candidate cross-platform pairs here for review." emptyIcon="⇄"/>
+        ]} rows={candidates} onRowClick={(r) => setModal({ kind:'agentValidate', payload: r })} emptyTitle="No mapping candidates" emptyHint="The mapping pipeline will surface candidate cross-platform pairs here for review." emptyIcon="⇄"/>
       </window.Card>
 
       <div style={{ marginTop: 12, padding: '12px 14px', background: t.bgSubtle, border:`1px dashed ${t.border}`, borderRadius: 8, fontSize: 11, color: t.textDim, display:'flex', alignItems:'center', gap: 10 }}>
         <span style={{ width: 6, height: 6, borderRadius:'50%', background: t.accent }}/>
-        Click any pending or review candidate to inspect validation history and run a read-only Claude Opus 4.7 verifier pass with every backend step, tool result, metric, and verdict shown.
+        Click any mapping row to inspect validation history and run a read-only Claude Opus 4.7 verifier pass with every backend step, tool result, metric, and verdict shown.
       </div>
     </div>
   );
@@ -5153,7 +5153,7 @@ function MobOpps() {
 }
 
 function MobTrades() {
-  const { t } = window.useApp();
+  const { t, setModal } = window.useApp();
   const M = window.MOCK;
   const rows = Array.isArray(M.executions) ? [...M.executions].sort((a,b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0)) : [];
   const realized = rows.reduce((s, r) => s + Number(r.realized_pnl || 0), 0);
@@ -5169,7 +5169,7 @@ function MobTrades() {
       </div>
       <div style={{ fontSize: 10.5, color: t.textMuted, margin: '0 4px 10px' }}>Expected {window.fmt$Sign(expected)} · delta {window.fmt$Sign(realized - expected)}</div>
       {rows.map((r, i) => (
-        <div key={i} style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 14, marginBottom: 8 }}>
+        <button type="button" key={i} onClick={() => setModal({ kind:'trade', payload: r })} aria-label={`Open trade ${r.arb_id || i}`} style={{ width:'100%', textAlign:'left', background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 14, marginBottom: 8, color: t.text, cursor:'pointer', display:'block' }}>
           <div style={{ display:'flex', alignItems:'center', gap: 8, marginBottom: 6 }}>
             <span style={{ fontSize: 11, fontFamily: window.FONTS.mono, fontWeight: 700, color: t.text }}>{r.arb_id}</span>
             <window.StatusBadge status={r.status} size="sm"/>
@@ -5181,7 +5181,7 @@ function MobTrades() {
             <span style={{ fontSize: 11, color: Number(r.expected_vs_realized || 0) >= 0 ? t.green : t.red, fontFamily: window.FONTS.mono }}>Δ {window.fmt$Sign(Number(r.expected_vs_realized || 0))}</span>
             <span style={{ fontSize: 13, fontWeight: 700, color: r.realized_pnl >= 0 ? t.green : t.red, fontFamily: window.FONTS.mono }}>{window.fmt$Sign(r.realized_pnl)}</span>
           </div>
-        </div>
+        </button>
       ))}
     </div>
   );
@@ -5568,27 +5568,9 @@ function MobMappings() {
         const actionable = c.s === 'candidate' || c.s === 'pending' || c.s === 'review';
         const kalshiLabel = c.k || c.description || c.canonical_id || 'Kalshi market unavailable';
         const polyLabel = c.p || c.description || 'Polymarket market unavailable';
-        const marketPayload = {
-          raw: c.raw,
-          kind: 'mapping',
-          canonical_id: c.canonical_id,
-          description: c.description || c.canonical_id,
-          kalshi_market_id: c.k,
-          polymarket_slug: c.p,
-          status: c.s,
-          category: mappingCategory(c.raw || {}),
-          confidence: c.score,
-          mapping_score: c.score,
-          resolution_match_status: c.match,
-          resolution_criteria: c.raw?.resolution_criteria || null,
-          allow_auto_trade: c.auto,
-          polarity_flipped: !!c.raw?.polarity_flipped,
-        };
-        const openCard = () => actionable
-          ? setModal({ kind:'agentValidate', payload: c })
-          : setModal({ kind:'market', payload: marketPayload });
+        const openCard = () => setModal({ kind:'agentValidate', payload: c });
         return (
-          <div key={c.canonical_id || `${c.k}:${c.p}:${i}`} onClick={openCard} style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 14, marginBottom: 8, cursor: 'pointer', minHeight: 118 }}>
+          <div key={c.canonical_id || `${c.k}:${c.p}:${i}`} role="button" tabIndex={0} aria-label={`Open mapping validation ${c.canonical_id || c.k || i}`} onClick={openCard} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openCard(); } }} style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 14, marginBottom: 8, cursor: 'pointer', minHeight: 118 }}>
             <div style={{ display:'grid', gridTemplateColumns:'42px minmax(0, 1fr)', columnGap: 10, rowGap: 8, alignItems:'start' }}>
               <div style={{ width: 36, height: 36, borderRadius:'50%', background: c.score >= 0.9 ? t.greenSoft : c.score >= 0.7 ? t.amberSoft : t.redSoft, display:'flex', alignItems:'center', justifyContent:'center', fontSize: 11.5, fontWeight: 700, color: c.score >= 0.9 ? t.green : c.score >= 0.7 ? t.amber : t.red, fontFamily: window.FONTS.mono, flexShrink: 0 }}>{c.score.toFixed(2)}</div>
               <div style={{ flex: 1, minWidth: 0 }}>
@@ -5623,7 +5605,7 @@ function MobMappings() {
       })}
 
       <div style={{ marginTop: 12, padding: '10px 12px', background: t.bgSubtle, border:`1px dashed ${t.border}`, borderRadius: 8, fontSize: 10.5, color: t.textDim, lineHeight: 1.5 }}>
-        Tap any confirmed mapping to inspect live prices and resolution status. Pending or review candidates open the validation agent with every tool call and verdict.
+        Tap any mapping to inspect validation history and run a read-only Claude Opus 4.7 verifier pass with every tool call and verdict.
       </div>
     </div>
   );

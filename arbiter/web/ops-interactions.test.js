@@ -1,0 +1,29 @@
+import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+
+const opsHtml = readFileSync(new URL("./ops.html", import.meta.url), "utf8");
+
+function functionBody(name) {
+  const start = opsHtml.indexOf(`function ${name}(`);
+  expect(start, `${name} should exist`).toBeGreaterThanOrEqual(0);
+  const nextFunction = opsHtml.indexOf("\nfunction ", start + 1);
+  return opsHtml.slice(start, nextFunction > start ? nextFunction : undefined);
+}
+
+describe("ops mobile row interactions", () => {
+  it("opens the trade detail modal when a mobile trade card is tapped", () => {
+    const body = functionBody("MobTrades");
+
+    expect(body).toContain("setModal({ kind:'trade'");
+    expect(body).toContain("onClick={() => setModal({ kind:'trade'");
+  });
+
+  it("opens validation history for every mapping row on desktop and mobile", () => {
+    const desktop = functionBody("PageMappings");
+    const mobile = functionBody("MobMappings");
+
+    expect(desktop).toContain("onRowClick={(r) => setModal({ kind:'agentValidate', payload: r })}");
+    expect(mobile).toContain("const openCard = () => setModal({ kind:'agentValidate', payload: c })");
+    expect(mobile).not.toContain(": setModal({ kind:'market'");
+  });
+});

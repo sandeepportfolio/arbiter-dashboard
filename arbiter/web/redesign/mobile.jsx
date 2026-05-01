@@ -150,13 +150,13 @@ function MobOpps() {
 }
 
 function MobTrades() {
-  const { t } = window.useApp();
+  const { t, setModal } = window.useApp();
   const M = window.MOCK;
   return (
     <div style={{ paddingTop: 8 }}>
       <div style={{ fontSize: 18, fontWeight: 600, color: t.text, marginBottom: 12, padding: '0 4px' }}>Trades</div>
       {M.executions.slice(0, 8).map((r, i) => (
-        <div key={i} style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 14, marginBottom: 8 }}>
+        <button type="button" key={i} onClick={() => setModal({ kind:'trade', payload: r })} aria-label={`Open trade ${r.arb_id || i}`} style={{ width:'100%', textAlign:'left', background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 14, marginBottom: 8, color: t.text, cursor:'pointer', display:'block' }}>
           <div style={{ display:'flex', alignItems:'center', gap: 8, marginBottom: 6 }}>
             <span style={{ fontSize: 11, fontFamily: window.FONTS.mono, fontWeight: 700, color: t.text }}>{r.arb_id}</span>
             <window.Pill tone={r.status === 'filled' ? 'green' : r.status === 'recovering' ? 'amber' : 'red'} size="sm">{r.status}</window.Pill>
@@ -167,7 +167,7 @@ function MobTrades() {
             <span style={{ fontSize: 10.5, color: t.textMuted, fontFamily: window.FONTS.mono }}>{r.leg_yes.fill_qty} pairs</span>
             <span style={{ fontSize: 13, fontWeight: 700, color: r.realized_pnl >= 0 ? t.green : t.red, fontFamily: window.FONTS.mono }}>{window.fmt$Sign(r.realized_pnl)}</span>
           </div>
-        </div>
+        </button>
       ))}
     </div>
   );
@@ -479,8 +479,9 @@ function MobMappings() {
       {candidates.map((c, i) => {
         const tone = c.s === 'confirmed' ? 'green' : c.s === 'pending' ? 'amber' : c.s === 'review' ? 'blue' : 'red';
         const actionable = c.s === 'pending' || c.s === 'review';
+        const openCard = () => setModal({ kind:'agentValidate', payload: c });
         return (
-          <div key={i} onClick={() => actionable && setModal({ kind:'agentValidate', payload: c })} style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 14, marginBottom: 8, cursor: actionable ? 'pointer' : 'default' }}>
+          <div key={i} role="button" tabIndex={0} aria-label={`Open mapping validation ${c.k || i}`} onClick={openCard} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openCard(); } }} style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 14, marginBottom: 8, cursor: 'pointer' }}>
             <div style={{ display:'flex', alignItems:'center', gap: 10, marginBottom: 8 }}>
               <div style={{ width: 36, height: 36, borderRadius:'50%', background: c.score >= 0.9 ? t.greenSoft : c.score >= 0.7 ? t.amberSoft : t.redSoft, display:'flex', alignItems:'center', justifyContent:'center', fontSize: 11.5, fontWeight: 700, color: c.score >= 0.9 ? t.green : c.score >= 0.7 ? t.amber : t.red, fontFamily: window.FONTS.mono, flexShrink: 0 }}>{c.score.toFixed(2)}</div>
               <div style={{ flex: 1, minWidth: 0 }}>
@@ -500,7 +501,7 @@ function MobMappings() {
       })}
 
       <div style={{ marginTop: 12, padding: '10px 12px', background: t.bgSubtle, border:`1px dashed ${t.border}`, borderRadius: 8, fontSize: 10.5, color: t.textDim, lineHeight: 1.5 }}>
-        Tap any pending or review candidate to spin up an agent that validates the match live. The CLI session shows every tool call and verdict.
+        Tap any mapping to inspect validation history and run a read-only Claude Opus 4.7 verifier pass with every tool call and verdict.
       </div>
     </div>
   );

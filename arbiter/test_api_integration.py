@@ -475,7 +475,8 @@ def test_mobile_mappings_render_api_field_names():
     assert "r.kalshi_market_id || r.kalshi_ticker || r.kalshi || r.ticker" in html
     assert "r.polymarket_slug || r.poly_slug || r.polymarket" in html
     assert "function MapLine" in html
-    assert "setModal({ kind:'market', payload: marketPayload })" in html
+    assert "const openCard = () => setModal({ kind:'agentValidate', payload: c })" in html
+    assert "Tap any mapping to inspect validation history" in html
 
 
 def test_ops_execution_ledger_preserves_context_and_filters_realized_losses():
