@@ -868,15 +868,29 @@ def test_mapping_validation_checks_polymarket_us_client():
 
         class FakePolyClient:
             async def get_market_by_slug(self, slug):
-                assert slug == "pm-live-slug"
-                return {
-                    "slug": slug,
-                    "question": "Will the live event happen?",
-                    "state": "open",
-                    "active": True,
-                    "closed": False,
-                    "endDate": "2026-06-01T00:00:00Z",
-                }
+                if slug == "pm-live-slug":
+                    return {
+                        "market": {
+                            "slug": slug,
+                            "question": "Will the live event happen?",
+                            "state": "open",
+                            "active": True,
+                            "closed": False,
+                            "endDate": "2026-06-01T00:00:00Z",
+                        }
+                    }
+                if slug == "pm-closed-slug":
+                    return {
+                        "market": {
+                            "slug": slug,
+                            "question": "Did the closed event happen?",
+                            "state": "closed",
+                            "active": False,
+                            "closed": True,
+                            "endDate": "2026-01-01T00:00:00Z",
+                        }
+                    }
+                raise AssertionError(slug)
 
         api.collectors = {
             "polymarket": SimpleNamespace(client=FakePolyClient()),
@@ -888,6 +902,14 @@ def test_mapping_validation_checks_polymarket_us_client():
         assert result["polymarket"]["exists"] is True
         assert result["polymarket"]["active"] is True
         assert result["polymarket"]["question"] == "Will the live event happen?"
+
+        closed = await api._validate_live_market_presence({
+            "polymarket": "pm-closed-slug",
+        })
+        assert closed["polymarket"]["checked"] is True
+        assert closed["polymarket"]["exists"] is True
+        assert closed["polymarket"]["active"] is False
+        assert closed["polymarket"]["closed"] is True
 
     asyncio.run(_run())
 
