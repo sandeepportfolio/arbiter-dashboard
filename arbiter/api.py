@@ -13,7 +13,7 @@ import secrets
 import socket
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from aiohttp import WSMsgType, web
 from aiohttp.web_exceptions import HTTPUnauthorized
@@ -30,6 +30,20 @@ from .scanner.arbitrage import ArbitrageOpportunity, ArbitrageScanner
 from .utils.price_store import PricePoint, PriceStore
 
 logger = logging.getLogger("arbiter.api")
+_DISCOVERY_PHASE_PROGRESS = {
+    "idle": 0,
+    "starting": 2,
+    "fetch_kalshi_markets": 15,
+    "fetch_kalshi_events": 30,
+    "fetch_polymarket_markets": 45,
+    "index_polymarket": 58,
+    "score_candidates": 72,
+    "llm_batch": 82,
+    "validate_candidates": 88,
+    "persist_candidates": 96,
+    "completed": 100,
+    "failed": 100,
+}
 
 # ─── Session auth helpers ──────────────────────────────────────────────────────
 
@@ -207,12 +221,129 @@ class ArbiterAPI:
             "updated_at": None,
             "updated_by": None,
         }
+        self._discovery_run_seq = 0
+        self._discovery_status: dict[str, Any] = self._empty_discovery_status()
+        self._discovery_task: Optional[asyncio.Task] = None
         # SAFE-04: periodic broadcaster task for rate_limit_state events.
         # Started in serve(); cancelled on shutdown.
         self._rate_limit_task: Optional[asyncio.Task] = None
         self._startup_event = asyncio.Event()
         self._startup_error: Optional[BaseException] = None
         self._restore_operator_settings()
+
+    def _empty_discovery_status(self) -> dict[str, Any]:
+        now = time.time()
+        return {
+            "status": "idle",
+            "run_id": None,
+            "triggered_by": None,
+            "phase": "idle",
+            "message": "No discovery run has started.",
+            "progress_pct": 0,
+            "started_at": None,
+            "updated_at": now,
+            "completed_at": None,
+            "counts": {},
+            "rejection_reasons": {},
+            "settings_used": {},
+            "events": [],
+            "error": None,
+        }
+
+    def _discovery_snapshot(self) -> dict[str, Any]:
+        return json.loads(json.dumps(self._discovery_status, default=str))
+
+    def _record_discovery_event(self, event: dict[str, Any]) -> None:
+        phase = str(event.get("phase") or "running")
+        message = str(event.get("message") or phase)
+        now = float(event.get("timestamp") or time.time())
+        counts = event.get("counts")
+        rejection_reasons = event.get("rejection_reasons")
+
+        self._discovery_status["phase"] = phase
+        self._discovery_status["message"] = message
+        self._discovery_status["updated_at"] = now
+        self._discovery_status["progress_pct"] = max(
+            int(self._discovery_status.get("progress_pct") or 0),
+            int(_DISCOVERY_PHASE_PROGRESS.get(phase, 50)),
+        )
+        if isinstance(counts, dict):
+            self._discovery_status.setdefault("counts", {}).update(counts)
+        if isinstance(rejection_reasons, dict):
+            self._discovery_status["rejection_reasons"] = {
+                str(reason): int(count)
+                for reason, count in rejection_reasons.items()
+            }
+        if event.get("error"):
+            self._discovery_status["error"] = str(event.get("error"))
+
+        log_entry = {
+            "phase": phase,
+            "message": message,
+            "timestamp": now,
+            "counts": counts if isinstance(counts, dict) else {},
+        }
+        if isinstance(rejection_reasons, dict):
+            log_entry["rejection_reasons"] = self._discovery_status["rejection_reasons"]
+        if event.get("error"):
+            log_entry["error"] = str(event.get("error"))
+        events = self._discovery_status.setdefault("events", [])
+        events.append(log_entry)
+        del events[:-80]
+
+    def _start_discovery_run(self, *, actor: str, settings_used: dict[str, Any]) -> str:
+        self._discovery_run_seq += 1
+        now = time.time()
+        run_id = f"discovery-{int(now)}-{self._discovery_run_seq}"
+        self._discovery_status = {
+            "status": "running",
+            "run_id": run_id,
+            "triggered_by": actor,
+            "phase": "starting",
+            "message": "Discovery run started.",
+            "progress_pct": _DISCOVERY_PHASE_PROGRESS["starting"],
+            "started_at": now,
+            "updated_at": now,
+            "completed_at": None,
+            "counts": {},
+            "rejection_reasons": {},
+            "settings_used": dict(settings_used),
+            "events": [],
+            "error": None,
+        }
+        self._record_discovery_event({
+            "phase": "starting",
+            "message": "Discovery run started.",
+            "timestamp": now,
+            "counts": {},
+        })
+        return run_id
+
+    def _finish_discovery_run(
+        self,
+        *,
+        status: str,
+        message: str,
+        counts: dict[str, Any] | None = None,
+        error: str | None = None,
+    ) -> None:
+        now = time.time()
+        phase = "completed" if status == "completed" else "failed"
+        self._discovery_status["status"] = status
+        self._discovery_status["phase"] = phase
+        self._discovery_status["message"] = message
+        self._discovery_status["updated_at"] = now
+        self._discovery_status["completed_at"] = now
+        self._discovery_status["progress_pct"] = 100
+        if error:
+            self._discovery_status["error"] = error
+        self._record_discovery_event({
+            "phase": phase,
+            "message": message,
+            "timestamp": now,
+            "counts": counts or {},
+            "error": error,
+        })
 
     def attach_auto_executor(self, auto_executor) -> None:
         self.auto_executor = auto_executor
@@ -233,6 +364,7 @@ class ArbiterAPI:
         if self._dashboard_dir.exists():
             app.router.add_static("/static", str(self._dashboard_dir), show_index=False)
         app.router.add_get("/api/health", self.handle_health)
+        app.router.add_get("/api/status", self.handle_health)
         app.router.add_get("/api/system", self.handle_system)
         app.router.add_get("/api/prices", self.handle_prices)
         app.router.add_get("/api/opportunities", self.handle_opportunities)
@@ -272,6 +404,7 @@ class ArbiterAPI:
         app.router.add_post("/api/kill-switch", self.handle_kill_switch)
         app.router.add_post("/api/scanner/control", self.handle_scanner_control)
         app.router.add_post("/api/batch-discover", self.handle_batch_discover)
+        app.router.add_get("/api/discovery/status", self.handle_discovery_status)
         app.router.add_get("/api/safety/status", self.handle_safety_status)
         app.router.add_get("/api/safety/events", self.handle_safety_events)
         app.router.add_get("/api/metrics", self.handle_metrics)
@@ -755,14 +888,20 @@ class ArbiterAPI:
             p: s.balance
             for p, s in self.monitor.current_balances.items()
         }
-        await self.reconciler.rebaseline(current)
+        await self.reconciler.rebaseline(current, getattr(self.engine, "execution_history", []))
+        report = self.reconciler.reconcile(current)
         # Force a fresh readiness check
         if self.readiness:
             self.readiness.refresh()
         return web.json_response({
             "status": "ok",
             "message": "Reconciliation re-baselined",
-            "new_starting_balances": {k: round(v, 2) for k, v in current.items()},
+            "current_balances": {k: round(v, 2) for k, v in current.items()},
+            "new_starting_balances": {
+                k: round(v, 2)
+                for k, v in self.reconciler.stats.get("starting_balances", {}).items()
+            },
+            "latest_report": report.to_dict(),
         })
 
     async def handle_pnl_summary(self, request):
@@ -1247,11 +1386,77 @@ class ArbiterAPI:
                 status=400,
             )
 
+    async def handle_discovery_status(self, request):
+        """GET /api/discovery/status — latest batch discovery progress."""
+        return web.json_response(self._discovery_snapshot())
+
+    async def _run_batch_discovery(
+        self,
+        *,
+        kalshi_collector,
+        poly_client,
+        min_score: float,
+        max_candidates: int,
+        promotion_settings: dict | None,
+        runtime: dict,
+    ) -> None:
+        from .mapping.auto_discovery import discover as discover_market_mappings
+
+        try:
+            written = await discover_market_mappings(
+                kalshi_collector,
+                poly_client,
+                self.mapping_store,
+                budget_rps=float(runtime["auto_discovery_budget_rps"]),
+                min_score=min_score,
+                max_candidates=max_candidates,
+                promotion_settings=promotion_settings,
+                progress=self._record_discovery_event,
+            )
+
+            # Refresh the runtime cache so new mappings take effect immediately
+            await self.mapping_store.refresh_runtime_cache()
+
+            # Get updated counts
+            pending = await self.mapping_store.count_candidates()
+            confirmed_count = 0
+            try:
+                all_mappings = await self.mapping_store.all(status="confirmed", limit=10000)
+                confirmed_count = len(all_mappings)
+            except Exception:
+                pass
+
+            completion_counts = {
+                "candidates_written": written,
+                "candidates_pending": pending,
+                "confirmed_total": confirmed_count,
+            }
+            self._finish_discovery_run(
+                status="completed",
+                message="Discovery run completed.",
+                counts=completion_counts,
+            )
+        except asyncio.CancelledError:
+            self._finish_discovery_run(
+                status="failed",
+                message="Discovery run was cancelled.",
+                error="cancelled",
+            )
+            raise
+        except Exception as exc:
+            logger.error("Batch discover failed: %s", exc)
+            self._finish_discovery_run(
+                status="failed",
+                message="Discovery run failed.",
+                error=str(exc),
+            )
+
     async def handle_batch_discover(self, request):
         """POST /api/batch-discover — trigger one-shot discovery + auto-promote.
 
-        Runs the full auto_discovery pipeline synchronously (in background),
-        then returns a summary of new candidates and promotions.
+        Starts the full auto_discovery pipeline as a background run and returns
+        the current run snapshot. Operators should poll /api/discovery/status
+        for validation progress and the final candidate/promotion summary.
 
         Body (all optional):
             min_score:       float  (default from env/operator settings)
@@ -1264,6 +1469,15 @@ class ArbiterAPI:
         if self.mapping_store is None:
             return web.json_response(
                 {"error": "Mapping store not available (no DATABASE_URL)"}, status=503,
+            )
+        if self._discovery_task is not None and not self._discovery_task.done():
+            return web.json_response(
+                {
+                    "status": "running",
+                    "message": "Discovery run already in progress.",
+                    "discovery": self._discovery_snapshot(),
+                },
+                status=202,
             )
 
         # Get the Kalshi and Polymarket collectors
@@ -1283,55 +1497,40 @@ class ArbiterAPI:
         do_promote = payload.get("auto_promote", True)
 
         promotion_settings = runtime if do_promote else None
+        settings_used = {
+            "min_score": min_score,
+            "max_candidates": max_candidates,
+            "auto_promote": bool(do_promote),
+            "auto_promote_min_score": runtime.get("auto_promote_min_score"),
+            "auto_promote_daily_cap": runtime.get("auto_promote_daily_cap"),
+            "auto_promote_advisory_scans": runtime.get("auto_promote_advisory_scans"),
+            "auto_promote_max_days": runtime.get("auto_promote_max_days"),
+        }
+        self._start_discovery_run(actor=actor, settings_used=settings_used)
 
         # Get the client from the collector (polymarket collector wraps a client)
         poly_client = getattr(poly_collector, "client", poly_collector)
-
-        from .mapping.auto_discovery import discover as discover_market_mappings
-
-        try:
-            written = await discover_market_mappings(
-                kalshi_collector,
-                poly_client,
-                self.mapping_store,
-                budget_rps=float(runtime["auto_discovery_budget_rps"]),
+        self._discovery_task = asyncio.create_task(
+            self._run_batch_discovery(
+                kalshi_collector=kalshi_collector,
+                poly_client=poly_client,
                 min_score=min_score,
                 max_candidates=max_candidates,
                 promotion_settings=promotion_settings,
-            )
-
-            # Refresh the runtime cache so new mappings take effect immediately
-            from .mapping.market_map import MarketMappingStore
-            await self.mapping_store.refresh_runtime_cache()
-
-            # Get updated counts
-            pending = await self.mapping_store.count_candidates()
-            confirmed_count = 0
-            try:
-                all_mappings = await self.mapping_store.all(status="confirmed", limit=10000)
-                confirmed_count = len(all_mappings)
-            except Exception:
-                pass
-
-            return web.json_response({
-                "status": "completed",
-                "candidates_written": written,
-                "candidates_pending": pending,
-                "confirmed_total": confirmed_count,
-                "settings_used": {
-                    "min_score": min_score,
-                    "max_candidates": max_candidates,
-                    "auto_promote": do_promote,
-                    "auto_promote_min_score": runtime.get("auto_promote_min_score"),
-                    "auto_promote_daily_cap": runtime.get("auto_promote_daily_cap"),
-                },
+                runtime=runtime,
+            ),
+            name="batch-discovery",
+        )
+        return web.json_response(
+            {
+                "status": "running",
+                "message": "Discovery run started.",
+                "settings_used": settings_used,
                 "triggered_by": actor,
-            })
-        except Exception as exc:
-            logger.error("Batch discover failed: %s", exc)
-            return web.json_response(
-                {"error": f"Discovery failed: {str(exc)}"}, status=500,
-            )
+                "discovery": self._discovery_snapshot(),
+            },
+            status=202,
+        )
 
     async def handle_kill_switch(self, request):
         """POST /api/kill-switch — arm or reset the kill switch.

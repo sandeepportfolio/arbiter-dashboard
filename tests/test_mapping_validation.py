@@ -7,6 +7,7 @@ The #1 risk in prediction market arbitrage is pairing different events together
 import sys
 import os
 import json
+from pathlib import Path
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -58,6 +59,20 @@ class TestMappingIntegrity:
         ids = [s.canonical_id if hasattr(s, 'canonical_id') else s.get("canonical_id") for s in MARKET_SEEDS]
         assert len(ids) == len(set(ids)), f"Duplicate canonical_ids: {[x for x in ids if ids.count(x) > 1]}"
 
+    def test_confirmed_sports_auto_trade_have_confirmed_same_polarity(self):
+        """Sports mappings cannot auto-trade unless polarity is explicitly confirmed same."""
+        for cid, mapping in MARKET_MAP.items():
+            tags = mapping.get("tags") or []
+            is_sports = mapping.get("category") == "sports" or "sports" in tags
+            if not is_sports:
+                continue
+            if mapping.get("status") == "confirmed" and mapping.get("allow_auto_trade"):
+                criteria = mapping.get("resolution_criteria") or {}
+                assert criteria.get("polarity") == "same", (
+                    f"Sports mapping {cid} is confirmed+auto_trade without "
+                    "resolution_criteria.polarity='same'"
+                )
+
 
 class TestAutoSeedSafety:
     """Verify auto-loaded seeds can't bypass safety gates."""
@@ -78,6 +93,27 @@ class TestAutoSeedSafety:
                 assert not mapping.get("allow_auto_trade", False), (
                     f"Auto-seed {cid} has allow_auto_trade=True without being promoted!"
                 )
+
+
+class TestOperationalScriptSafety:
+    """Ad hoc scripts must not encode production-risking shortcuts."""
+
+    def test_discovery_scripts_show_safe_no_deps_deploy_command(self):
+        for rel in ("scripts/continuous_discovery.py", "scripts/expanded_discovery.py"):
+            text = Path(rel).read_text()
+            assert "up -d --no-deps arbiter-api-prod" in text, (
+                f"{rel} must include the production-safe --no-deps deploy command"
+            )
+            assert "up -d arbiter-api-prod" not in text, (
+                f"{rel} still contains an unsafe deploy command without --no-deps"
+            )
+
+    def test_sports_scripts_do_not_alias_montreal_to_inter_miami(self):
+        for rel in ("scripts/comprehensive_matcher.py", "scripts/validate_pairs.py"):
+            text = Path(rel).read_text().replace(" ", "")
+            assert '"mtl":"mim"' not in text, (
+                f"{rel} aliases MTL to MIM; Montreal and Inter Miami are different teams"
+            )
 
 
 if __name__ == "__main__":

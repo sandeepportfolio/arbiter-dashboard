@@ -16,11 +16,46 @@ import time
 from collections import defaultdict
 from datetime import date, datetime
 from difflib import SequenceMatcher
-from typing import Any
+from typing import Any, Callable
 
 from arbiter.config.settings import normalize_market_text, similarity_score
+from arbiter.mapping.event_fingerprint import (
+    fingerprint_kalshi_event,
+    fingerprint_kalshi_market,
+    fingerprint_polymarket_market,
+    structural_match,
+)
+from arbiter.mapping.sports_safety import evaluate_sports_pair
 
 logger = logging.getLogger("arbiter.mapping.auto_discovery")
+ProgressCallback = Callable[[dict[str, Any]], None]
+
+
+def _emit_progress(
+    progress: ProgressCallback | None,
+    phase: str,
+    message: str,
+    *,
+    counts: dict[str, Any] | None = None,
+    rejection_reasons: dict[str, int] | None = None,
+    **extra: Any,
+) -> None:
+    if progress is None:
+        return
+    event: dict[str, Any] = {
+        "phase": phase,
+        "message": message,
+        "timestamp": time.time(),
+    }
+    if counts is not None:
+        event["counts"] = counts
+    if rejection_reasons is not None:
+        event["rejection_reasons"] = rejection_reasons
+    event.update(extra)
+    try:
+        progress(event)
+    except Exception:
+        logger.debug("auto_discovery: progress callback failed", exc_info=True)
 
 
 def _env_float(name: str, default: float) -> float:
@@ -92,6 +127,37 @@ def _market_tokens(text: str) -> set[str]:
     return tokens
 
 
+def _candidate_indexes_from_tokens(
+    tokens: set[str],
+    poly_index: dict[str, set[int]],
+    *,
+    max_postings: int = 100,
+    max_total: int = 75,
+) -> set[int]:
+    """Return Polymarket indexes for selective tokens only.
+
+    Full-catalog discovery contains very broad tokens such as years, leagues,
+    and generic market nouns. Expanding those postings creates a near-cartesian
+    fuzzy match over tens of thousands of markets. Structural fingerprints carry
+    exact matches; fuzzy fallback should only use reasonably selective tokens.
+    """
+    candidate_indexes: set[int] = set()
+    token_postings = []
+    for token in tokens:
+        if len(token) == 4 and token.isdigit() and token.startswith("20"):
+            continue
+        postings = poly_index.get(token, ())
+        if len(postings) > max_postings:
+            continue
+        token_postings.append((len(postings), token, postings))
+
+    for _, _, postings in sorted(token_postings):
+        candidate_indexes.update(postings)
+        if len(candidate_indexes) >= max_total:
+            return set(sorted(candidate_indexes)[:max_total])
+    return candidate_indexes
+
+
 def _coerce_date(value: Any) -> date | None:
     if not value:
         return None
@@ -115,6 +181,49 @@ def _coerce_date(value: Any) -> date | None:
         return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
     except ValueError:
         return None
+
+
+_ACTIVE_KALSHI_STATUSES = {"active", "open", "trading", "initialized"}
+_INACTIVE_KALSHI_STATUSES = {"closed", "settled", "expired", "finalized", "resolved"}
+_INACTIVE_POLYMARKET_STATES = {
+    "closed", "resolved", "settled", "suspended", "halted", "expired", "finalized",
+}
+
+
+def _is_active_kalshi_item(item: dict[str, Any]) -> bool:
+    status = str(item.get("status") or item.get("market_status") or "").strip().lower()
+    if status in _INACTIVE_KALSHI_STATUSES:
+        return False
+    if status in _ACTIVE_KALSHI_STATUSES:
+        return True
+    close_date = _coerce_date(item.get("close_time") or item.get("expiration_time"))
+    if close_date is not None and close_date < date.today():
+        return False
+    # Keep unknown statuses because some Kalshi event payloads omit status.
+    return not status
+
+
+def _is_active_polymarket_item(item: dict[str, Any]) -> bool:
+    state = str(item.get("state") or item.get("status") or "").strip().lower()
+    if state in _INACTIVE_POLYMARKET_STATES:
+        return False
+    for flag in ("closed", "archived", "resolved", "settled", "expired"):
+        if item.get(flag) is True:
+            return False
+    if item.get("active") is False:
+        return False
+    return True
+
+
+async def _call_with_supported_kwargs(func: Callable[..., Any], **kwargs: Any) -> Any:
+    """Call an async collector method while tolerating older test doubles."""
+    try:
+        return await func(**kwargs)
+    except TypeError as exc:
+        unexpected_kw = "unexpected keyword" in str(exc) or "got an unexpected" in str(exc)
+        if not kwargs or not unexpected_kw:
+            raise
+        return await func()
 
 
 def _normalize_category(value: Any) -> str:
@@ -167,12 +276,7 @@ def _looks_like_multi_leg_kalshi_market(market: dict[str, Any]) -> bool:
     event_ticker = str(market.get("event_ticker", "") or "").upper()
     title = str(market.get("title", "") or "")
     normalized = normalize_market_text(title)
-    multi_prefixes = (
-        "KXMVECROSSCATEGORY",
-        "KXMVESPORTSMULTIGAME",
-        "KXMVESPORTSMULTIGAMEEXTENDED",
-    )
-    if ticker.startswith(multi_prefixes) or event_ticker.startswith(multi_prefixes):
+    if ticker.startswith("KXMVE") or event_ticker.startswith("KXMVE"):
         return True
     if title.count(",") >= 2 and (normalized.count("yes ") + normalized.count("no ")) >= 2:
         return True
@@ -230,6 +334,7 @@ def _build_poly_entries(poly_markets: list[dict[str, Any]]) -> tuple[list[dict[s
             "tokens": tokens,
             "category": _normalize_category(pm.get("category") or pm.get("groupItemTitle")),
             "date": _coerce_date(pm.get("closeTime") or pm.get("endDate") or pm.get("slug")),
+            "fingerprint": fingerprint_polymarket_market(pm),
         }
         poly_entries.append(entry)
         entry_index = len(poly_entries) - 1
@@ -237,6 +342,26 @@ def _build_poly_entries(poly_markets: list[dict[str, Any]]) -> tuple[list[dict[s
             poly_index[token].add(entry_index)
 
     return poly_entries, poly_index
+
+
+def _poly_fingerprint_index(poly_entries: list[dict[str, Any]]) -> dict[str, set[int]]:
+    index: dict[str, set[int]] = defaultdict(set)
+    for entry_index, entry in enumerate(poly_entries):
+        fingerprint = entry.get("fingerprint")
+        market_key = getattr(fingerprint, "market_key", "")
+        if market_key:
+            index[market_key].add(entry_index)
+    return index
+
+
+def _poly_event_fingerprint_index(poly_entries: list[dict[str, Any]]) -> dict[str, set[int]]:
+    index: dict[str, set[int]] = defaultdict(set)
+    for entry_index, entry in enumerate(poly_entries):
+        fingerprint = entry.get("fingerprint")
+        event_key = getattr(fingerprint, "event_key", "")
+        if event_key:
+            index[event_key].add(entry_index)
+    return index
 
 
 def _candidate_payload(
@@ -316,7 +441,7 @@ def _finalize_candidates(candidates: list[dict[str, Any]], *, max_candidates: in
 
 
 def _candidate_resolution_criteria(candidate: dict[str, Any], *, operator_note: str) -> dict[str, Any]:
-    return {
+    criteria = {
         "kalshi": {
             "source": candidate.get("kalshi_resolution_source"),
             "rule": candidate.get("kalshi_tie_break_rule"),
@@ -330,6 +455,9 @@ def _candidate_resolution_criteria(candidate: dict[str, Any], *, operator_note: 
         "criteria_match": "identical",
         "operator_note": operator_note,
     }
+    if candidate.get("polarity") == "same":
+        criteria["polarity"] = "same"
+    return criteria
 
 
 def _synthetic_kalshi_orderbook(market: dict[str, Any]) -> dict[str, Any]:
@@ -458,12 +586,21 @@ async def _apply_auto_promote(
     kalshi_client,
     polymarket_us_client,
     promotion_settings: dict[str, Any],
+    progress: ProgressCallback | None = None,
 ) -> list[dict[str, Any]]:
     if not promotion_settings.get("auto_promote_enabled", False):
+        _emit_progress(
+            progress,
+            "validate_candidates",
+            "Auto-promotion disabled; candidates remain queued for review",
+            counts={"candidates_total": len(candidates), "promoted": 0},
+            rejection_reasons={"auto_promote_disabled": len(candidates)} if candidates else {},
+        )
         return candidates
 
     from arbiter.mapping.auto_promote import maybe_promote
     from arbiter.mapping.llm_verifier import verify as llm_verify
+    from arbiter.mapping.llm_verifier import verify_batch as llm_verify_batch
 
     max_promotions_raw = promotion_settings.get("auto_promote_daily_cap", len(candidates))
     max_promotions = int(len(candidates) if max_promotions_raw is None else max_promotions_raw)
@@ -484,6 +621,68 @@ async def _apply_auto_promote(
     advisory_scans_raw = promotion_settings.get("auto_promote_advisory_scans", advisory_scans_default)
     advisory_scans = int(advisory_scans_default if advisory_scans_raw is None else advisory_scans_raw)
     today = date.today()
+    llm_results: dict[tuple[str, str], str] = {}
+
+    preverify_candidates: list[dict[str, Any]] = []
+    for candidate in candidates:
+        score = float(candidate.get("score", 0.0) or 0.0)
+        if score < min_score:
+            continue
+        resolution_date = _coerce_date(candidate.get("resolution_date"))
+        if resolution_date is not None and (resolution_date - today).days > max_days:
+            continue
+        if int(candidate.get("advisory_scans", 0) or 0) < advisory_scans:
+            continue
+        preverify_candidates.append(candidate)
+
+    _emit_progress(
+        progress,
+        "validate_candidates",
+        "Preparing candidates for LLM and structured promotion gates",
+        counts={
+            "candidates_total": len(candidates),
+            "preverify_candidates": len(preverify_candidates),
+            "auto_promote_min_score": min_score,
+            "auto_promote_max_days": max_days,
+        },
+    )
+
+    if preverify_candidates:
+        pairs = [
+            (str(candidate.get("kalshi_title", "") or ""), str(candidate.get("poly_question", "") or ""))
+            for candidate in preverify_candidates
+        ]
+        _emit_progress(
+            progress,
+            "llm_batch",
+            "Running cached batch LLM verification",
+            counts={"pairs": len(pairs)},
+        )
+        try:
+            batch_results = await llm_verify_batch(pairs)
+            for pair, result in zip(pairs, batch_results):
+                llm_results[pair] = result
+            _emit_progress(
+                progress,
+                "llm_batch",
+                "Batch LLM verification complete",
+                counts={"pairs": len(pairs), "verdicts": len(llm_results)},
+            )
+        except Exception as exc:
+            logger.warning("auto_discovery: batch LLM verification failed closed: %s", exc)
+            _emit_progress(
+                progress,
+                "llm_batch",
+                "Batch LLM verification failed closed",
+                counts={"pairs": len(pairs), "verdicts": 0},
+                error=str(exc),
+            )
+
+    async def _cached_llm_verify(kalshi_q: str, poly_q: str) -> str:
+        result = llm_results.get((kalshi_q, poly_q))
+        if result is not None:
+            return result
+        return await llm_verify(kalshi_q, poly_q)
 
     async def _evaluate(candidate: dict[str, Any]) -> tuple[dict[str, Any], Any]:
         score = float(candidate.get("score", 0.0) or 0.0)
@@ -506,7 +705,7 @@ async def _apply_auto_promote(
                 candidate,
                 settings=promotion_settings,
                 orderbooks=orderbooks,
-                llm_verifier=llm_verify,
+                llm_verifier=_cached_llm_verify,
                 today_promoted_count=0,
                 cooling_state={},
             )
@@ -535,6 +734,17 @@ async def _apply_auto_promote(
         promoted_this_pass, len(candidates), min_score, max_days, advisory_scans,
         ", ".join(f"{r}={c}" for r, c in sorted(reason_counts.items(), key=lambda x: -x[1])),
     )
+    _emit_progress(
+        progress,
+        "validate_candidates",
+        "Auto-promotion gates complete",
+        counts={
+            "candidates_total": len(candidates),
+            "promoted": promoted_this_pass,
+            "evaluated": sum(reason_counts.values()),
+        },
+        rejection_reasons=reason_counts,
+    )
     return candidates
 
 
@@ -543,6 +753,8 @@ async def _discover_from_kalshi_events(
     kalshi_events: list[dict[str, Any]],
     poly_entries: list[dict[str, Any]],
     poly_index: dict[str, set[int]],
+    poly_fingerprints: dict[str, set[int]],
+    poly_event_fingerprints: dict[str, set[int]],
     *,
     min_score: float,
     max_candidates: int,
@@ -576,24 +788,39 @@ async def _discover_from_kalshi_events(
         )
         event_category_for_score = "" if event_category == "sports" and event_date is None else event_category
 
+        event_fingerprint = fingerprint_kalshi_event(event)
         candidate_indexes: set[int] = set()
-        for token in event_tokens:
-            candidate_indexes.update(poly_index.get(token, ()))
+        if event_fingerprint is not None:
+            candidate_indexes.update(poly_event_fingerprints.get(event_fingerprint.event_key, ()))
+        else:
+            candidate_indexes.update(
+                _candidate_indexes_from_tokens(
+                    event_tokens,
+                    poly_index,
+                    max_postings=50,
+                    max_total=25,
+                )
+            )
         if not candidate_indexes:
             continue
 
         for entry_index in candidate_indexes:
             pm_entry = poly_entries[entry_index]
-            score = _candidate_score(
-                kalshi_text=event_text,
-                poly_text=pm_entry["text"],
-                kalshi_tokens=event_tokens,
-                poly_tokens=pm_entry["tokens"],
-                kalshi_category=event_category_for_score,
-                poly_category=pm_entry["category"],
-                kalshi_date=event_date,
-                poly_date=pm_entry["date"],
-            )
+            poly_fingerprint = pm_entry.get("fingerprint")
+            score = 0.9999 if (
+                event_fingerprint is not None
+                and poly_fingerprint is not None
+                and event_fingerprint.event_key == poly_fingerprint.event_key
+            ) else _candidate_score(
+                    kalshi_text=event_text,
+                    poly_text=pm_entry["text"],
+                    kalshi_tokens=event_tokens,
+                    poly_tokens=pm_entry["tokens"],
+                    kalshi_category=event_category_for_score,
+                    poly_category=pm_entry["category"],
+                    kalshi_date=event_date,
+                    poly_date=pm_entry["date"],
+                )
             scored_pairs += 1
             if score < event_min_score:
                 continue
@@ -636,7 +863,12 @@ async def _discover_from_kalshi_events(
             k_category = _normalize_category(km.get("category")) or fallback_category
             k_date = _coerce_date(km.get("close_time") or km.get("expiration_time")) or fallback_date
 
-            for _, entry_index, _, _, _ in top_matches:
+            candidate_indexes = {entry_index for _, entry_index, _, _, _ in top_matches}
+            k_fingerprint = fingerprint_kalshi_market(km)
+            if k_fingerprint is not None:
+                candidate_indexes.update(poly_fingerprints.get(k_fingerprint.market_key, ()))
+
+            for entry_index in candidate_indexes:
                 pm_entry = poly_entries[entry_index]
 
                 # ── Bracket-vs-binary guard (event path) ─────────────
@@ -644,8 +876,12 @@ async def _discover_from_kalshi_events(
                 k_ticker = str(km.get("ticker", "") or "")
                 if _is_bracket_vs_binary_mismatch(k_ticker, p_slug):
                     continue
+                sports_safety = evaluate_sports_pair(k_ticker, p_slug)
+                if sports_safety.known and not sports_safety.safe:
+                    continue
 
-                score = _candidate_score(
+                exact_match = structural_match(km, pm_entry["market"])
+                score = 0.9999 if exact_match is not None else _candidate_score(
                     kalshi_text=k_text,
                     poly_text=pm_entry["text"],
                     kalshi_tokens=k_tokens,
@@ -658,17 +894,20 @@ async def _discover_from_kalshi_events(
                 scored_pairs += 1
                 if score < min_score:
                     continue
-                candidates.append(
-                    _candidate_payload(
-                        km=km,
-                        pm_entry=pm_entry,
-                        k_text=k_text,
-                        k_tokens=k_tokens,
-                        k_category=k_category,
-                        k_date=k_date,
-                        score=score,
-                    )
+                candidate = _candidate_payload(
+                    km=km,
+                    pm_entry=pm_entry,
+                    k_text=k_text,
+                    k_tokens=k_tokens,
+                    k_category=k_category,
+                    k_date=k_date,
+                    score=score,
                 )
+                if sports_safety.known:
+                    candidate.update(sports_safety.candidate_fields())
+                if exact_match is not None:
+                    candidate.update(exact_match.candidate_fields())
+                candidates.append(candidate)
 
     return candidates, scored_pairs
 
@@ -745,6 +984,7 @@ async def discover(
     min_score: float = 0.25,
     max_candidates: int = 500,
     promotion_settings: dict[str, Any] | None = None,
+    progress: ProgressCallback | None = None,
 ) -> int:
     """Pull all live markets from both platforms, score candidate pairs, write candidates.
 
@@ -771,6 +1011,12 @@ async def discover(
 
     # ── Pull Kalshi catalogs ───────────────────────────────────────────────────
     # Rate-limit sleep before each platform call so both sleeps count.
+    _emit_progress(
+        progress,
+        "fetch_kalshi_markets",
+        "Fetching Kalshi active market catalog",
+        counts={"kalshi_markets": 0},
+    )
     await asyncio.sleep(request_interval)
     market_discovery = inspect.iscoroutinefunction(getattr(kalshi_client, "list_all_markets", None))
     event_discovery = (
@@ -782,39 +1028,167 @@ async def discover(
     kalshi_markets: list[dict] = []
     if market_discovery:
         logger.info("auto_discovery: fetching Kalshi markets")
-        kalshi_markets = await kalshi_client.list_all_markets()
+        kalshi_max_pages = int(_env_float("AUTO_DISCOVERY_KALSHI_MARKET_MAX_PAGES", 10))
+        kalshi_markets = await _call_with_supported_kwargs(
+            kalshi_client.list_all_markets,
+            status="open",
+            page_size=1000,
+            max_pages=kalshi_max_pages,
+        )
+        raw_kalshi_markets = len(kalshi_markets)
+        kalshi_markets = [m for m in kalshi_markets if _is_active_kalshi_item(m)]
         t1 = time.monotonic()
-        logger.info("auto_discovery: got %d Kalshi markets in %.2fs", len(kalshi_markets), t1 - t0)
+        logger.info(
+            "auto_discovery: got %d/%d active Kalshi markets in %.2fs",
+            len(kalshi_markets),
+            raw_kalshi_markets,
+            t1 - t0,
+        )
+        _emit_progress(
+            progress,
+            "fetch_kalshi_markets",
+            "Fetched Kalshi active market catalog",
+            counts={
+                "kalshi_markets": len(kalshi_markets),
+                "kalshi_markets_raw": raw_kalshi_markets,
+            },
+            elapsed_seconds=round(t1 - t0, 3),
+        )
     else:
         t1 = t0
 
     kalshi_events: list[dict] = []
     if event_discovery:
+        _emit_progress(
+            progress,
+            "fetch_kalshi_events",
+            "Fetching Kalshi event hierarchy",
+            counts={"kalshi_events": 0},
+        )
         await asyncio.sleep(request_interval)
         t_events = time.monotonic()
         logger.info("auto_discovery: fetching Kalshi events")
-        kalshi_events = await kalshi_client.list_all_events()
+        kalshi_event_max_pages = int(_env_float("AUTO_DISCOVERY_KALSHI_EVENT_MAX_PAGES", 25))
+        kalshi_events = await _call_with_supported_kwargs(
+            kalshi_client.list_all_events,
+            status="open",
+            page_size=200,
+            max_pages=kalshi_event_max_pages,
+        )
+        raw_kalshi_events = len(kalshi_events)
+        kalshi_events = [e for e in kalshi_events if _is_active_kalshi_item(e)]
         t1 = time.monotonic()
-        logger.info("auto_discovery: got %d Kalshi events in %.2fs", len(kalshi_events), t1 - t_events)
+        logger.info(
+            "auto_discovery: got %d/%d active Kalshi events in %.2fs",
+            len(kalshi_events),
+            raw_kalshi_events,
+            t1 - t_events,
+        )
+        _emit_progress(
+            progress,
+            "fetch_kalshi_events",
+            "Fetched Kalshi event hierarchy",
+            counts={
+                "kalshi_events": len(kalshi_events),
+                "kalshi_events_raw": raw_kalshi_events,
+            },
+            elapsed_seconds=round(t1 - t_events, 3),
+        )
 
     # Rate-limit sleep between platform and Polymarket calls
     await asyncio.sleep(request_interval)
 
     # ── Pull Polymarket US markets ─────────────────────────────────────────────
+    _emit_progress(
+        progress,
+        "fetch_polymarket_markets",
+        "Fetching Polymarket active market catalog",
+        counts={"polymarket_markets": 0},
+    )
     logger.info("auto_discovery: fetching Polymarket US markets")
     poly_markets: list[dict] = []
-    async for market in polymarket_us_client.list_markets(purpose="discovery"):
-        poly_markets.append(market)
+    raw_poly_markets = 0
+    skipped_inactive_poly = 0
+    polymarket_max_pages = int(_env_float("AUTO_DISCOVERY_POLYMARKET_MAX_PAGES", 40))
+    async for market in polymarket_us_client.list_markets(
+        purpose="discovery",
+        max_pages=polymarket_max_pages,
+        active=True,
+        closed=False,
+        archived=False,
+    ):
+        raw_poly_markets += 1
+        if _is_active_polymarket_item(market):
+            poly_markets.append(market)
+        else:
+            skipped_inactive_poly += 1
+        if raw_poly_markets % 1000 == 0:
+            _emit_progress(
+                progress,
+                "fetch_polymarket_markets",
+                f"Fetched {len(poly_markets)} active Polymarket markets...",
+                counts={
+                    "polymarket_markets": len(poly_markets),
+                    "polymarket_markets_raw": raw_poly_markets,
+                    "polymarket_markets_skipped_inactive": skipped_inactive_poly,
+                },
+            )
     t2 = time.monotonic()
-    logger.info("auto_discovery: got %d Polymarket markets in %.2fs", len(poly_markets), t2 - t1)
+    logger.info(
+        "auto_discovery: got %d/%d active Polymarket markets in %.2fs",
+        len(poly_markets),
+        raw_poly_markets,
+        t2 - t1,
+    )
+    _emit_progress(
+        progress,
+        "fetch_polymarket_markets",
+        "Fetched Polymarket active market catalog",
+        counts={
+            "polymarket_markets": len(poly_markets),
+            "polymarket_markets_raw": raw_poly_markets,
+            "polymarket_markets_skipped_inactive": skipped_inactive_poly,
+        },
+        elapsed_seconds=round(t2 - t1, 3),
+    )
 
     if (not kalshi_markets and not kalshi_events) or not poly_markets:
         logger.info("auto_discovery: no markets on one or both platforms — no candidates")
+        _emit_progress(
+            progress,
+            "persist_candidates",
+            "No active markets available on one or both platforms",
+            counts={"candidates_written": 0},
+        )
         return 0
 
     poly_entries, poly_index = _build_poly_entries(poly_markets)
+    poly_fingerprints = _poly_fingerprint_index(poly_entries)
+    poly_event_fingerprints = _poly_event_fingerprint_index(poly_entries)
+    _emit_progress(
+        progress,
+        "index_polymarket",
+        "Indexed Polymarket text and canonical fingerprints",
+        counts={
+            "polymarket_indexed": len(poly_entries),
+            "fingerprint_markets": len(poly_fingerprints),
+            "fingerprint_events": len(poly_event_fingerprints),
+        },
+    )
     candidates: list[dict[str, Any]] = []
     scored_pairs = 0
+
+    _emit_progress(
+        progress,
+        "score_candidates",
+        "Scoring structural and fuzzy candidate pairs",
+        counts={
+            "kalshi_markets": len(kalshi_markets),
+            "kalshi_events": len(kalshi_events),
+            "polymarket_markets": len(poly_markets),
+            "scored_pairs": 0,
+        },
+    )
 
     if market_discovery:
         for idx, km in enumerate(kalshi_markets, start=1):
@@ -835,9 +1209,10 @@ async def discover(
             k_category = _normalize_category(km.get("category"))
             k_date = _coerce_date(km.get("close_time") or km.get("expiration_time"))
 
-            candidate_indexes: set[int] = set()
-            for token in k_tokens:
-                candidate_indexes.update(poly_index.get(token, ()))
+            candidate_indexes = _candidate_indexes_from_tokens(k_tokens, poly_index)
+            k_fingerprint = fingerprint_kalshi_market(km)
+            if k_fingerprint is not None:
+                candidate_indexes.update(poly_fingerprints.get(k_fingerprint.market_key, ()))
             if not candidate_indexes:
                 continue
 
@@ -849,8 +1224,12 @@ async def discover(
                 k_ticker = str(km.get("ticker", "") or "")
                 if _is_bracket_vs_binary_mismatch(k_ticker, p_slug):
                     continue
+                sports_safety = evaluate_sports_pair(k_ticker, p_slug)
+                if sports_safety.known and not sports_safety.safe:
+                    continue
 
-                score = _candidate_score(
+                exact_match = structural_match(km, pm_entry["market"])
+                score = 0.9999 if exact_match is not None else _candidate_score(
                     kalshi_text=k_text,
                     poly_text=pm_entry["text"],
                     kalshi_tokens=k_tokens,
@@ -864,17 +1243,20 @@ async def discover(
                 if score < min_score:
                     continue
 
-                candidates.append(
-                    _candidate_payload(
-                        km=km,
-                        pm_entry=pm_entry,
-                        k_text=k_text,
-                        k_tokens=k_tokens,
-                        k_category=k_category,
-                        k_date=k_date,
-                        score=score,
-                    )
+                candidate = _candidate_payload(
+                    km=km,
+                    pm_entry=pm_entry,
+                    k_text=k_text,
+                    k_tokens=k_tokens,
+                    k_category=k_category,
+                    k_date=k_date,
+                    score=score,
                 )
+                if sports_safety.known:
+                    candidate.update(sports_safety.candidate_fields())
+                if exact_match is not None:
+                    candidate.update(exact_match.candidate_fields())
+                candidates.append(candidate)
 
     if event_discovery and kalshi_events:
         event_candidates, event_scored_pairs = await _discover_from_kalshi_events(
@@ -882,6 +1264,8 @@ async def discover(
             kalshi_events,
             poly_entries,
             poly_index,
+            poly_fingerprints,
+            poly_event_fingerprints,
             min_score=min_score,
             max_candidates=max_candidates,
         )
@@ -889,6 +1273,15 @@ async def discover(
         scored_pairs += event_scored_pairs
 
     candidates = _finalize_candidates(candidates, max_candidates=max_candidates)
+    _emit_progress(
+        progress,
+        "score_candidates",
+        "Candidate scoring complete",
+        counts={
+            "scored_pairs": scored_pairs,
+            "candidates_selected": len(candidates),
+        },
+    )
 
     if promotion_settings is not None:
         candidates = await _apply_auto_promote(
@@ -896,6 +1289,7 @@ async def discover(
             kalshi_client=kalshi_client,
             polymarket_us_client=polymarket_us_client,
             promotion_settings=promotion_settings,
+            progress=progress,
         )
 
     logger.info(
@@ -911,7 +1305,31 @@ async def discover(
     if candidates:
         sync_candidates = getattr(mapping_store, "sync_candidates", None)
         if sync_candidates is not None and asyncio.iscoroutinefunction(sync_candidates):
-            return await sync_candidates(candidates)
-        return await mapping_store.write_candidates(candidates)
+            written = await sync_candidates(candidates)
+        else:
+            written = await mapping_store.write_candidates(candidates)
+        _emit_progress(
+            progress,
+            "persist_candidates",
+            "Persisted discovery candidates",
+            counts={
+                "candidates_written": written,
+                "candidates_selected": len(candidates),
+                "scored_pairs": scored_pairs,
+                "confirmed_in_batch": sum(1 for candidate in candidates if candidate.get("status") == "confirmed"),
+            },
+        )
+        return written
 
+    _emit_progress(
+        progress,
+        "persist_candidates",
+        "No candidates met discovery thresholds",
+        counts={
+            "candidates_written": 0,
+            "candidates_selected": 0,
+            "scored_pairs": scored_pairs,
+            "confirmed_in_batch": 0,
+        },
+    )
     return 0

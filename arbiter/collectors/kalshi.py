@@ -188,7 +188,7 @@ class KalshiCollector:
         self,
         status: Optional[str] = None,
         page_size: int = 1000,
-        max_pages: int = 20,
+        max_pages: int = 80,
     ) -> list[dict]:
         """List Kalshi markets with cursor pagination for discovery."""
         cursor: Optional[str] = None
@@ -215,7 +215,12 @@ class KalshiCollector:
 
         return all_markets
 
-    async def list_all_events(self, page_size: int = 100, max_pages: int = 20) -> list[dict]:
+    async def list_all_events(
+        self,
+        page_size: int = 200,
+        max_pages: int = 100,
+        status: Optional[str] = None,
+    ) -> list[dict]:
         """List Kalshi events for coarse-grained discovery matching.
 
         Events are dramatically less noisy than the raw global market feed and
@@ -226,6 +231,8 @@ class KalshiCollector:
 
         for _ in range(max_pages):
             params = {"limit": str(page_size)}
+            if status:
+                params["status"] = status
             if cursor:
                 params["cursor"] = cursor
 

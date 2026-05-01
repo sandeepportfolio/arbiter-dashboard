@@ -179,6 +179,18 @@ window.MOCK = (() => {
     // Market mappings ─ /api/mappings
     mappings: [],
 
+    // Discovery/refetch status ─ /api/discovery/status
+    discovery: {
+      status: 'idle',
+      phase: 'idle',
+      message: 'No discovery run has started.',
+      progress_pct: 0,
+      counts: {},
+      rejection_reasons: {},
+      events: [],
+      settings_used: {},
+    },
+
     // Health rollup ─ /api/health (+ /api/readiness, /api/profitability,
     // /api/reconciliation merge into the sub-fields).
     health: {
@@ -212,6 +224,40 @@ window.MOCK = (() => {
 // ─────────────────────────────────────────────────────────────────────
 (() => {
   const API = window.location.origin;
+  const AUTH_TOKEN_KEY = 'arbiter-auth-token';
+
+  function readAuthToken() {
+    try {
+      return sessionStorage.getItem(AUTH_TOKEN_KEY) || '';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  function rememberAuthToken(token) {
+    try {
+      if (token) sessionStorage.setItem(AUTH_TOKEN_KEY, String(token));
+    } catch (_) {}
+  }
+
+  function clearAuthToken() {
+    try { sessionStorage.removeItem(AUTH_TOKEN_KEY); } catch (_) {}
+  }
+
+  function authHeaders(extra) {
+    const headers = Object.assign({}, extra || {});
+    const token = readAuthToken();
+    if (token && !headers.Authorization) {
+      headers.Authorization = 'Bearer ' + token;
+    }
+    return headers;
+  }
+
+  async function authFetch(path, opts) {
+    const options = Object.assign({ credentials: 'same-origin' }, opts || {});
+    options.headers = authHeaders(options.headers);
+    return fetch(API + path, options);
+  }
 
   async function safeJson(path, opts) {
     try {
@@ -380,9 +426,15 @@ window.MOCK = (() => {
 
   function mergeMappings(M, rows) {
     if (!Array.isArray(rows) || rows.length === 0) return;
-    // Mappings are read by PageMappings via a hardcoded list today; expose
-    // the live data on M.mappings for any future component that wants it.
     M.mappings = rows;
+  }
+
+  function mergeDiscovery(M, discovery) {
+    if (!discovery || typeof discovery !== 'object') return;
+    M.discovery = Object.assign({}, M.discovery || {}, discovery);
+    if (!M.discovery.counts || typeof M.discovery.counts !== 'object') M.discovery.counts = {};
+    if (!M.discovery.rejection_reasons || typeof M.discovery.rejection_reasons !== 'object') M.discovery.rejection_reasons = {};
+    if (!Array.isArray(M.discovery.events)) M.discovery.events = [];
   }
 
   function mergeSettings(M, settings) {
@@ -530,16 +582,21 @@ window.MOCK = (() => {
   async function refresh() {
     const M = window.MOCK;
     if (!M) return;
-    const [health, balances, opps, execs, pnl, deposits, mappings,
+    const [health, balances, opps, execs, pnl, deposits,
+           confirmedMappings, candidateMappings, reviewMappings, rejectedMappings, expiredMappings,
            settings, reconciliation, readiness, profitability,
-           failedTrades, errors, portfolio] = await Promise.all([
+           failedTrades, errors, portfolio, discovery] = await Promise.all([
       safeJson('/api/health'),
       safeJson('/api/balances'),
       safeJson('/api/opportunities'),
       safeJson('/api/executions'),
       safeJson('/api/pnl'),
       safeJson('/api/deposits'),
-      safeJson('/api/mappings'),
+      safeJson('/api/mappings?status=confirmed&limit=5000'),
+      safeJson('/api/mappings?status=candidate&limit=5000'),
+      safeJson('/api/mappings?status=review&limit=5000'),
+      safeJson('/api/mappings?status=rejected&limit=200'),
+      safeJson('/api/mappings?status=expired&limit=200'),
       safeJson('/api/settings'),
       safeJson('/api/reconciliation'),
       safeJson('/api/readiness'),
@@ -547,6 +604,7 @@ window.MOCK = (() => {
       safeJson('/api/failed-trades'),
       safeJson('/api/errors'),
       safeJson('/api/portfolio'),
+      safeJson('/api/discovery/status'),
     ]);
     mergeHealth(M, health);
     mergeBalances(M, balances);
@@ -554,7 +612,13 @@ window.MOCK = (() => {
     mergeExecutions(M, execs);
     mergePnl(M, pnl);
     mergeDeposits(M, deposits);
-    mergeMappings(M, mappings);
+    mergeMappings(M, [
+      ...(Array.isArray(confirmedMappings) ? confirmedMappings : []),
+      ...(Array.isArray(candidateMappings) ? candidateMappings : []),
+      ...(Array.isArray(reviewMappings) ? reviewMappings : []),
+      ...(Array.isArray(rejectedMappings) ? rejectedMappings : []),
+      ...(Array.isArray(expiredMappings) ? expiredMappings : []),
+    ]);
     mergeSettings(M, settings);
     mergeReconciliation(M, reconciliation);
     mergeReadiness(M, readiness);
@@ -562,6 +626,7 @@ window.MOCK = (() => {
     mergeFailedTrades(M, failedTrades);
     mergeErrors(M, errors);
     mergePortfolio(M, portfolio);
+    mergeDiscovery(M, discovery);
     // Synthesize the time-series data the dashboard charts need but the
     // backend doesn't yet expose: equity curve, scanner history, edge
     // bucket histogram. Each runs every refresh to keep charts moving.
@@ -592,10 +657,9 @@ window.MOCK = (() => {
       if (armed && !body.reason) {
         return { ok: false, error: 'reason required to arm kill switch' };
       }
-      const r = await fetch(API + '/api/kill-switch', {
+      const r = await authFetch('/api/kill-switch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
         body: JSON.stringify(body),
       });
       if (!r.ok) return { ok: false, error: await readError(r) };
@@ -607,9 +671,8 @@ window.MOCK = (() => {
 
   async function retryFailedTrade(arbId) {
     try {
-      const r = await fetch(API + '/api/failed-trades/' + encodeURIComponent(arbId) + '/retry', {
+      const r = await authFetch('/api/failed-trades/' + encodeURIComponent(arbId) + '/retry', {
         method: 'POST',
-        credentials: 'same-origin',
       });
       if (!r.ok) return { ok: false, error: await readError(r) };
       return { ok: true, data: await r.json() };
@@ -627,10 +690,9 @@ window.MOCK = (() => {
       if (!body.platform || !Number.isFinite(body.amount) || body.amount === 0) {
         return { ok: false, error: 'platform and non-zero amount required' };
       }
-      const r = await fetch(API + '/api/deposits', {
+      const r = await authFetch('/api/deposits', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
         body: JSON.stringify(body),
       });
       if (!r.ok) return { ok: false, error: await readError(r) };
@@ -664,10 +726,9 @@ window.MOCK = (() => {
       return { ok: false, error: 'settings patch required' };
     }
     try {
-      const r = await fetch(API + '/api/settings', {
+      const r = await authFetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
         body: JSON.stringify(patch),
       });
       if (!r.ok) return { ok: false, error: await readError(r) };
@@ -685,11 +746,37 @@ window.MOCK = (() => {
       return { ok: false, error: 'action must be pause or resume' };
     }
     try {
-      const r = await fetch(API + '/api/scanner/control', {
+      const r = await authFetch('/api/scanner/control', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
         body: JSON.stringify({ action: norm }),
+      });
+      if (!r.ok) return { ok: false, error: await readError(r) };
+      return { ok: true, data: await r.json() };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  }
+
+  async function discoveryStatus() {
+    try {
+      const r = await fetch(API + '/api/discovery/status', {
+        method: 'GET',
+        credentials: 'same-origin',
+      });
+      if (!r.ok) return { ok: false, error: await readError(r) };
+      return { ok: true, data: await r.json() };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  }
+
+  async function batchDiscover(payload) {
+    try {
+      const r = await authFetch('/api/batch-discover', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload || {}),
       });
       if (!r.ok) return { ok: false, error: await readError(r) };
       return { ok: true, data: await r.json() };
@@ -710,10 +797,9 @@ window.MOCK = (() => {
     }
     try {
       const body = Object.assign({ action: act }, extra || {});
-      const r = await fetch(API + '/api/market-mappings/' + encodeURIComponent(id), {
+      const r = await authFetch('/api/market-mappings/' + encodeURIComponent(id), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
         body: JSON.stringify(body),
       });
       if (!r.ok) return { ok: false, error: await readError(r) };
@@ -737,20 +823,32 @@ window.MOCK = (() => {
         body: JSON.stringify({ email: e, password: p }),
       });
       if (!r.ok) return { ok: false, error: await readError(r) };
-      return { ok: true, data: await r.json() };
+      const data = await r.json();
+      rememberAuthToken(data && data.token);
+      return { ok: true, data };
     } catch (err) {
       return { ok: false, error: String((err && err.message) || err) };
+    }
+  }
+
+  async function authMe() {
+    try {
+      const r = await authFetch('/api/auth/me', { method: 'GET' });
+      if (!r.ok) return { ok: false, error: await readError(r) };
+      return { ok: true, data: await r.json() };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
     }
   }
 
   // POST /api/auth/logout — invalidates the session cookie.
   async function logout() {
     try {
-      const r = await fetch(API + '/api/auth/logout', {
+      const r = await authFetch('/api/auth/logout', {
         method: 'POST',
-        credentials: 'same-origin',
       });
       if (!r.ok) return { ok: false, error: await readError(r) };
+      clearAuthToken();
       return { ok: true, data: await r.json() };
     } catch (e) {
       return { ok: false, error: String((e && e.message) || e) };
@@ -764,9 +862,14 @@ window.MOCK = (() => {
   window.__arbiterLivePrices = liveMarketPrices;
   window.__arbiterUpdateSettings = updateSettings;
   window.__arbiterScannerControl = scannerControl;
+  window.__arbiterDiscoveryStatus = discoveryStatus;
+  window.__arbiterBatchDiscover = batchDiscover;
   window.__arbiterMappingAction = mappingAction;
   window.__arbiterLogin = login;
   window.__arbiterLogout = logout;
+  window.__arbiterAuthMe = authMe;
+  window.__arbiterRememberAuthToken = rememberAuthToken;
+  window.__arbiterClearAuthToken = clearAuthToken;
 
   // Translate UI setting keys (used by the Settings page sliders) into the
   // backend's nested settings payload. Returns null when the key isn't
@@ -2369,20 +2472,25 @@ function PriceCell({ yes }) {
 function PageMappings() {
   const { t, setModal, toast } = window.useApp();
   const M = window.MOCK;
-  // ⚠ BACKEND NOTE: hardcoded list — real impl pulls from /api/mappings/candidates
-  // with filters (status=pending|review). The "Validate with agent" button on each
-  // row should POST /api/mappings/validate/{id} which streams agent reasoning back
-  // via SSE — see agent-validate.jsx for the full event schema and tool list.
-  const candidates = [
-    { score: 0.97, k: 'TRUMP-2028-NOM-Y', p: 'will-trump-win-2028-gop-nomination', s: 'confirmed' },
-    { score: 0.94, k: 'BTC-150K-DEC2026', p: 'will-bitcoin-reach-150k-by-2026', s: 'confirmed' },
-    { score: 0.89, k: 'FED-JUN26-CUT-Y', p: 'fed-rate-cut-june-2026-meeting', s: 'pending' },
-    { score: 0.82, k: 'GPT-6-RELEASE-Q4', p: 'gpt-6-released-before-q4-2026', s: 'pending' },
-    { score: 0.71, k: 'SENATE-DEM-26', p: 'democrats-control-senate-after-2026-midterms', s: 'review' },
-    { score: 0.64, k: 'AAPL-AR-GLASS-26', p: 'apple-launches-ar-headset-2026', s: 'review' },
-    { score: 0.43, k: 'OPENAI-DOD-26', p: 'openai-government-defense-deal-2026', s: 'rejected' },
-  ];
-  const reviewable = candidates.filter(c => c.s === 'pending' || c.s === 'review');
+  const rows = Array.isArray(M.mappings) ? M.mappings : [];
+  const candidates = rows.map((r) => ({
+    raw: r,
+    canonical_id: r.canonical_id || `${r.kalshi_market_id || r.kalshi_ticker || ''}::${r.polymarket_slug || r.poly_slug || ''}`,
+    score: Number(r.mapping_score ?? r.score ?? r.confidence ?? 0),
+    k: r.kalshi_market_id || r.kalshi_ticker || r.kalshi || '',
+    p: r.polymarket_slug || r.poly_slug || r.polymarket || '',
+    s: r.status || 'candidate',
+    auto: !!r.allow_auto_trade,
+    match: r.resolution_match_status || 'pending_operator_review',
+    reason: r.auto_promote_reason || '',
+  }));
+  const reviewable = candidates.filter(c => c.s === 'candidate' || c.s === 'pending' || c.s === 'review');
+  const confirmedCount = candidates.filter(c => c.s === 'confirmed').length;
+  const avgScore = candidates.length
+    ? candidates.reduce((sum, c) => sum + (Number.isFinite(c.score) ? c.score : 0), 0) / candidates.length
+    : 0;
+  const discovery = M.discovery || {};
+  const discoveryCounts = discovery.counts || {};
 
   return (
     <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto' }}>
@@ -2399,10 +2507,10 @@ function PageMappings() {
       </window.PageHeader>
 
       <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap: 14, marginBottom: 18 }}>
-        <window.Card padding={18}><window.Stat label="Confirmed" value="312" tone="green" sub="Actively scanned" mono/></window.Card>
-        <window.Card padding={18}><window.Stat label="Pending review" value={reviewable.length} tone="amber" sub="Score 0.6–0.95" mono/></window.Card>
-        <window.Card padding={18}><window.Stat label="Avg score" value="0.91" sub="Across confirmed pool" mono/></window.Card>
-        <window.Card padding={18}><window.Stat label="Last refetch" value="2h ago" sub="3,160 markets · 47 new" mono/></window.Card>
+        <window.Card padding={18}><window.Stat label="Confirmed" value={confirmedCount.toLocaleString()} tone="green" sub={`${candidates.filter(c => c.auto).length.toLocaleString()} auto-trade`} mono/></window.Card>
+        <window.Card padding={18}><window.Stat label="Pending review" value={reviewable.length.toLocaleString()} tone="amber" sub="Candidate + review queue" mono/></window.Card>
+        <window.Card padding={18}><window.Stat label="Avg score" value={avgScore ? avgScore.toFixed(2) : '—'} sub="Visible mapping pool" mono/></window.Card>
+        <window.Card padding={18}><window.Stat label="Last refetch" value={discovery.status || 'idle'} sub={`${(discoveryCounts.kalshi_markets || 0).toLocaleString()} K · ${(discoveryCounts.polymarket_markets || 0).toLocaleString()} P`} mono/></window.Card>
       </div>
 
       <window.Card title="Candidate mappings" padding={0} action={<span style={{ fontSize: 11, color: t.textMuted }}>{candidates.length} total · {reviewable.length} actionable</span>}>
@@ -2415,6 +2523,7 @@ function PageMappings() {
           { label: 'Kalshi ticker', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12, color: t.text }}>{r.k}</span> },
           { label: 'Polymarket slug', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 11.5, color: t.textDim }}>{r.p}</span> },
           { label: 'Status', w: '110px', render: r => <window.StatusBadge status={r.s}/> },
+          { label: 'Criteria', w: '150px', render: r => <span style={{ fontSize: 11, color: r.match === 'identical' ? t.green : r.match === 'divergent' ? t.red : t.textDim }}>{r.match}</span> },
           { label: '', w: '230px', align:'right', render: r => {
             if (r.s === 'confirmed') return <span style={{ fontSize: 11, color: t.textMuted }}>Active · scanned every 5s</span>;
             if (r.s === 'rejected') return <window.Btn variant="ghost" size="sm" onClick={async (e) => {
@@ -2444,7 +2553,7 @@ function PageMappings() {
               </div>
             );
           }},
-        ]} rows={candidates} onRowClick={(r) => { if (r.s === 'pending' || r.s === 'review') setModal({ kind:'agentValidate', payload: r }); }} emptyTitle="No mapping candidates" emptyHint="The mapping pipeline will surface candidate cross-platform pairs here for review." emptyIcon="⇄"/>
+        ]} rows={candidates} onRowClick={(r) => { if (r.s === 'candidate' || r.s === 'pending' || r.s === 'review') setModal({ kind:'agentValidate', payload: r }); }} emptyTitle="No mapping candidates" emptyHint="The mapping pipeline will surface candidate cross-platform pairs here for review." emptyIcon="⇄"/>
       </window.Card>
 
       <div style={{ marginTop: 12, padding: '12px 14px', background: t.bgSubtle, border:`1px dashed ${t.border}`, borderRadius: 8, fontSize: 11, color: t.textDim, display:'flex', alignItems:'center', gap: 10 }}>
@@ -4149,10 +4258,8 @@ function CliCursor() {
 // RefetchMappingsModal — long-running job progress for re-pulling all
 // markets from both platforms and re-scoring candidate mappings.
 //
-// BACKEND NOTE: The `phases` array below is a scripted simulation.
-// Replace with SSE stream from POST /api/mappings/refetch:
-//   { phase: 'pull_kalshi'  | 'pull_poly' | 'embed' | 'score' | 'done',
-//     pct: 0..100, count: <int>, eta_s: <int>, message: <string> }
+// This opens a real POST /api/batch-discover run and polls
+// /api/discovery/status for stage, count, and rejection-reason updates.
 // ─────────────────────────────────────────────────────────────────────
 
 function RefetchMappingsModal() {
@@ -4180,91 +4287,132 @@ function RefetchMappingsModal() {
   );
 }
 
+const DISCOVERY_PHASES = [
+  { key: 'fetch_kalshi_markets', label: 'Pulling Kalshi markets', sub: 'Active ticker catalog', count: 'kalshi_markets' },
+  { key: 'fetch_kalshi_events', label: 'Pulling Kalshi events', sub: 'Event hierarchy before outcome matching', count: 'kalshi_events' },
+  { key: 'fetch_polymarket_markets', label: 'Pulling Polymarket markets', sub: 'Active slug catalog', count: 'polymarket_markets' },
+  { key: 'index_polymarket', label: 'Building fingerprints', sub: 'Text tokens plus canonical event keys', count: 'polymarket_indexed' },
+  { key: 'score_candidates', label: 'Scoring candidate pairs', sub: 'Structural exact matches before fuzzy fallback', count: 'candidates_selected' },
+  { key: 'llm_batch', label: 'LLM verification', sub: 'Cached batch semantic checks', count: 'verdicts' },
+  { key: 'validate_candidates', label: 'Promotion gates', sub: 'Resolution, polarity, liquidity, date window', count: 'evaluated' },
+  { key: 'persist_candidates', label: 'Persisting mappings', sub: 'Upsert candidates and confirmed rows', count: 'candidates_written' },
+];
+
 function RefetchSession({ onClose, onDone, mobile }) {
   const { t } = window.useApp();
-  const [step, setStep] = aVUseState(0);
-  const [counts, setCounts] = aVUseState({ kalshi: 0, poly: 0, pairs: 0, scored: 0, added: 0, confirmed: 0 });
+  const [run, setRun] = aVUseState(() => window.MOCK.discovery || {});
+  const [requestError, setRequestError] = aVUseState('');
   const startedRef = aVUseRef(false);
+  const doneRef = aVUseRef(false);
 
-  // BACKEND NOTE: replace this with SSE stream from /api/mappings/refetch
-  const phases = [
-    { label: 'Pulling Kalshi markets', sub: 'paginated /v2/markets (status=open)', target: 1842, key: 'kalshi', dur: 2400 },
-    { label: 'Pulling Polymarket markets', sub: 'CLOB /markets?active=true', target: 1318, key: 'poly', dur: 2000 },
-    { label: 'Generating embeddings', sub: 'voyage-3-large · description + rules', target: 3160, key: 'pairs', dur: 1800 },
-    { label: 'Scoring candidate pairs', sub: 'cosine similarity · threshold 0.6', target: 412, key: 'scored', dur: 2200 },
-    { label: 'Persisting new mappings', sub: 'upsert into mappings · auto-confirm > 0.95', target: 47, key: 'added', dur: 800 },
-  ];
+  const updateRun = (next) => {
+    if (!next || typeof next !== 'object') return;
+    window.MOCK.discovery = Object.assign({}, window.MOCK.discovery || {}, next);
+    setRun(Object.assign({}, window.MOCK.discovery));
+  };
+  const notifyDone = (snapshot) => {
+    if (doneRef.current || !snapshot || snapshot.status !== 'completed') return;
+    doneRef.current = true;
+    const c = snapshot.counts || {};
+    onDone({
+      added: Number(c.candidates_written || 0),
+      confirmed: Number(c.confirmed_in_batch || c.confirmed_total || 0),
+    });
+  };
 
   aVUseEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
     let cancelled = false;
-    let phaseIdx = 0;
-    const runPhase = () => {
-      if (cancelled || phaseIdx >= phases.length) {
-        if (!cancelled) {
-          setCounts(c => ({ ...c, confirmed: 31 }));
-          setTimeout(() => onDone({ added: 47, confirmed: 31 }), 400);
-        }
+
+    const poll = async () => {
+      if (!window.__arbiterDiscoveryStatus) return;
+      const res = await window.__arbiterDiscoveryStatus();
+      if (cancelled) return;
+      if (res.ok) {
+        updateRun(res.data);
+        notifyDone(res.data);
+      }
+    };
+
+    poll();
+    const pollId = setInterval(poll, 1500);
+    (async () => {
+      if (!window.__arbiterBatchDiscover) {
+        setRequestError('Batch discovery API is not available in this build.');
         return;
       }
-      const p = phases[phaseIdx];
-      setStep(phaseIdx);
-      const ticks = 30;
-      let i = 0;
-      const interval = setInterval(() => {
-        if (cancelled) { clearInterval(interval); return; }
-        i++;
-        setCounts(c => ({ ...c, [p.key]: Math.round((i / ticks) * p.target) }));
-        if (i >= ticks) {
-          clearInterval(interval);
-          phaseIdx++;
-          setTimeout(runPhase, 200);
-        }
-      }, p.dur / ticks);
+      const res = await window.__arbiterBatchDiscover({ auto_promote: true });
+      if (cancelled) return;
+      if (!res.ok) {
+        setRequestError(res.error || 'Discovery request failed');
+        await poll();
+        return;
+      }
+      const snapshot = res.data?.discovery || res.data;
+      updateRun(snapshot);
+      notifyDone(snapshot);
+      if (window.__arbiterTick) { try { await window.__arbiterTick(); } catch {} }
+    })();
+
+    return () => {
+      cancelled = true;
+      clearInterval(pollId);
     };
-    runPhase();
-    return () => { cancelled = true; };
   }, []);
 
-  const cur = phases[step] || phases[phases.length - 1];
-  const overallPct = Math.min(100, Math.round(((step + (counts[cur.key] || 0) / cur.target) / phases.length) * 100));
-  const finishing = step >= phases.length - 1 && counts.added >= phases[phases.length - 1].target;
+  const counts = run.counts || {};
+  const reasons = run.rejection_reasons || {};
+  const events = Array.isArray(run.events) ? run.events : [];
+  const phase = run.phase || 'idle';
+  const phaseIndex = DISCOVERY_PHASES.findIndex(p => p.key === phase);
+  const completed = run.status === 'completed';
+  const failed = run.status === 'failed' || !!requestError;
+  const pct = Math.max(0, Math.min(100, Math.round(Number(run.progress_pct || 0))));
+  const statusLabel = failed ? 'Attention' : completed ? 'Complete' : run.status === 'running' ? 'Re-fetching' : 'Ready';
+  const latestMessage = requestError || run.message || 'Waiting for discovery status.';
+  const reasonEntries = Object.entries(reasons).sort((a, b) => Number(b[1]) - Number(a[1])).slice(0, 5);
 
   return (
     <div>
       <div style={{ padding: '20px 24px', borderBottom: `1px solid ${t.border}` }}>
         <div style={{ display:'flex', alignItems:'center', gap: 8, marginBottom: 6 }}>
-          <span style={{ width: 8, height: 8, borderRadius:'50%', background: finishing ? t.green : t.accent, animation: finishing ? 'none' : 'pulse 1.4s infinite' }}/>
-          <span style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.08em', textTransform:'uppercase', fontWeight: 600 }}>{finishing ? 'Complete' : 'Re-fetching'}</span>
+          <span style={{ width: 8, height: 8, borderRadius:'50%', background: failed ? t.red : completed ? t.green : t.accent, animation: completed || failed ? 'none' : 'pulse 1.4s infinite' }}/>
+          <span style={{ fontSize: 11, color: failed ? t.red : t.textMuted, letterSpacing:'0.08em', textTransform:'uppercase', fontWeight: 600 }}>{statusLabel}</span>
         </div>
         <div style={{ fontSize: 17, fontWeight: 600, color: t.text, letterSpacing:'-0.01em' }}>Re-fetch market mappings</div>
-        <div style={{ fontSize: 12, color: t.textDim, marginTop: 4 }}>Pulls fresh market data from both platforms and re-scores candidate pairs.</div>
+        <div style={{ fontSize: 12, color: t.textDim, marginTop: 4 }}>{latestMessage}</div>
       </div>
 
       <div style={{ padding: 24 }}>
-        {/* Overall bar */}
         <div style={{ display:'flex', justifyContent:'space-between', marginBottom: 6, fontSize: 11, color: t.textDim }}>
           <span>Overall</span>
-          <span style={{ fontFamily: window.FONTS.mono, color: t.text }}>{overallPct}%</span>
+          <span style={{ fontFamily: window.FONTS.mono, color: t.text }}>{pct}%</span>
         </div>
         <div style={{ height: 6, background: t.bgSubtle, borderRadius: 99, overflow:'hidden', marginBottom: 18 }}>
-          <div style={{ height:'100%', width: `${overallPct}%`, background: t.accent, transition: 'width 0.3s' }}/>
+          <div style={{ height:'100%', width: `${pct}%`, background: failed ? t.red : completed ? t.green : t.accent, transition: 'width 0.3s' }}/>
         </div>
 
-        {/* Phases */}
+        <div style={{ display:'grid', gridTemplateColumns: mobile ? '1fr 1fr' : 'repeat(4, 1fr)', gap: 8, marginBottom: 16 }}>
+          <MiniRunStat label="Kalshi" value={counts.kalshi_markets || 0}/>
+          <MiniRunStat label="Polymarket" value={counts.polymarket_markets || 0}/>
+          <MiniRunStat label="Selected" value={counts.candidates_selected || 0}/>
+          <MiniRunStat label="Promoted" value={counts.promoted || counts.confirmed_in_batch || 0}/>
+        </div>
+
         <div style={{ display:'flex', flexDirection:'column', gap: 10 }}>
-          {phases.map((p, i) => {
-            const active = i === step;
-            const done = i < step || finishing;
-            const pct = i < step || finishing ? 100 : i === step ? Math.round((counts[p.key] / p.target) * 100) : 0;
+          {DISCOVERY_PHASES.map((p, i) => {
+            const active = p.key === phase && !completed && !failed;
+            const seen = events.some(e => e.phase === p.key);
+            const done = completed || (phaseIndex > i) || (seen && !active);
+            const value = Number(counts[p.count] || 0);
             return (
-              <div key={i} style={{ display:'flex', alignItems:'center', gap: 12, padding: '10px 12px', background: active ? t.bgSubtle : 'transparent', borderRadius: 7, opacity: i > step && !finishing ? 0.4 : 1 }}>
+              <div key={p.key} style={{ display:'flex', alignItems:'center', gap: 12, padding: '10px 12px', background: active ? t.bgSubtle : 'transparent', borderRadius: 7, opacity: !done && !active && !completed ? 0.48 : 1 }}>
                 <div style={{ width: 22, height: 22, borderRadius:'50%', background: done ? t.green : active ? t.accent : t.bgSubtle, display:'flex', alignItems:'center', justifyContent:'center', fontSize: 11, color: done || active ? '#fff' : t.textMuted, flexShrink: 0, fontWeight: 700 }}>{done ? '✓' : i + 1}</div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display:'flex', alignItems:'baseline', gap: 8 }}>
                     <span style={{ fontSize: 12.5, color: t.text, fontWeight: active ? 600 : 500, flex: 1, minWidth: 0, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{p.label}</span>
-                    <span style={{ fontSize: 11, color: t.textDim, fontFamily: window.FONTS.mono }}>{(counts[p.key] || 0).toLocaleString()}{active || done ? ` / ${p.target.toLocaleString()}` : ''}</span>
+                    <span style={{ fontSize: 11, color: t.textDim, fontFamily: window.FONTS.mono }}>{value ? value.toLocaleString() : '—'}</span>
                   </div>
                   <div style={{ fontSize: 10.5, color: t.textMuted, marginTop: 1 }}>{p.sub}</div>
                 </div>
@@ -4272,12 +4420,34 @@ function RefetchSession({ onClose, onDone, mobile }) {
             );
           })}
         </div>
+
+        {reasonEntries.length > 0 && (
+          <div style={{ marginTop: 14, padding: '12px 14px', background: t.bgSubtle, borderRadius: 8, border: `1px solid ${t.border}` }}>
+            <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.08em', textTransform:'uppercase', marginBottom: 8 }}>Top validation blockers</div>
+            {reasonEntries.map(([reason, n]) => (
+              <div key={reason} style={{ display:'flex', justifyContent:'space-between', fontSize: 11.5, padding:'3px 0', color: t.textDim, fontFamily: window.FONTS.mono }}>
+                <span>{reason}</span>
+                <span>{Number(n).toLocaleString()}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div style={{ padding: '14px 24px', borderTop: `1px solid ${t.border}`, background: t.bgSubtle, display:'flex', justifyContent:'space-between', alignItems:'center', gap: 8 }}>
-        <span style={{ fontSize: 11, color: t.textMuted, fontFamily: window.FONTS.mono }}>{finishing ? `+${counts.added} new · ${counts.confirmed} auto-confirmed` : 'Running in background — safe to close'}</span>
-        <window.Btn variant={finishing ? 'primary' : 'secondary'} size="sm" onClick={onClose}>{finishing ? 'Done' : 'Close'}</window.Btn>
+        <span style={{ fontSize: 11, color: failed ? t.red : t.textMuted, fontFamily: window.FONTS.mono }}>{completed ? `${Number(counts.candidates_written || 0).toLocaleString()} written · ${Number(counts.confirmed_total || 0).toLocaleString()} confirmed total` : failed ? latestMessage : 'Running in background — safe to close'}</span>
+        <window.Btn variant={completed ? 'primary' : failed ? 'danger' : 'secondary'} size="sm" onClick={onClose}>{completed || failed ? 'Done' : 'Close'}</window.Btn>
       </div>
+    </div>
+  );
+}
+
+function MiniRunStat({ label, value }) {
+  const { t } = window.useApp();
+  return (
+    <div style={{ background: t.bgSubtle, border: `1px solid ${t.border}`, borderRadius: 8, padding: '9px 10px' }}>
+      <div style={{ fontSize: 10.5, color: t.textMuted, marginBottom: 3 }}>{label}</div>
+      <div style={{ fontSize: 13, color: t.text, fontFamily: window.FONTS.mono, fontWeight: 600 }}>{Number(value || 0).toLocaleString()}</div>
     </div>
   );
 }
@@ -4787,23 +4957,28 @@ function MobRow({ icon, label, sub, tone, onClick, last }) {
 
 function MobMappings() {
   const { t, setModal, toast } = window.useApp();
-  // ⚠ BACKEND NOTE: same source as desktop PageMappings — should pull from
-  // /api/mappings/candidates. Keep mobile + desktop fed by the same endpoint
-  // so verdicts apply across both.
-  const candidates = [
-    { score: 0.97, k: 'TRUMP-2028-NOM-Y', p: 'will-trump-win-2028-gop-nomination', s: 'confirmed' },
-    { score: 0.94, k: 'BTC-150K-DEC2026', p: 'will-bitcoin-reach-150k-by-2026', s: 'confirmed' },
-    { score: 0.89, k: 'FED-JUN26-CUT-Y', p: 'fed-rate-cut-june-2026-meeting', s: 'pending' },
-    { score: 0.82, k: 'GPT-6-RELEASE-Q4', p: 'gpt-6-released-before-q4-2026', s: 'pending' },
-    { score: 0.71, k: 'SENATE-DEM-26', p: 'democrats-control-senate-after-2026-midterms', s: 'review' },
-    { score: 0.64, k: 'AAPL-AR-GLASS-26', p: 'apple-launches-ar-headset-2026', s: 'review' },
-    { score: 0.43, k: 'OPENAI-DOD-26', p: 'openai-government-defense-deal-2026', s: 'rejected' },
-  ];
-  const reviewable = candidates.filter(c => c.s === 'pending' || c.s === 'review');
+  const M = window.MOCK;
+  const rows = Array.isArray(M.mappings) ? M.mappings : [];
+  const candidates = rows.map((r) => ({
+    raw: r,
+    canonical_id: r.canonical_id || `${r.kalshi_market_id || r.kalshi_ticker || ''}::${r.polymarket_slug || r.poly_slug || ''}`,
+    score: Number(r.mapping_score ?? r.score ?? r.confidence ?? 0),
+    k: r.kalshi_market_id || r.kalshi_ticker || r.kalshi || r.ticker || '',
+    p: r.polymarket_slug || r.poly_slug || r.polymarket || '',
+    description: r.description || r.polymarket_question || r.question || '',
+    s: r.status || 'candidate',
+    match: r.resolution_match_status || 'pending_operator_review',
+    auto: !!r.allow_auto_trade,
+  }));
+  const reviewable = candidates.filter(c => c.s === 'candidate' || c.s === 'pending' || c.s === 'review');
+  const confirmed = candidates.filter(c => c.s === 'confirmed').length;
+  const active = candidates.filter(c => c.s === 'confirmed' || c.s === 'candidate' || c.s === 'review');
+  const discovery = M.discovery || {};
+  const discoveryCounts = discovery.counts || {};
   return (
     <div style={{ paddingTop: 8 }}>
       <div style={{ fontSize: 18, fontWeight: 600, color: t.text, marginBottom: 4, padding: '0 4px' }}>Mappings</div>
-      <div style={{ fontSize: 11.5, color: t.textDim, marginBottom: 14, padding: '0 4px' }}>312 confirmed · {reviewable.length} pending agent review</div>
+      <div style={{ fontSize: 11.5, color: t.textDim, marginBottom: 14, padding: '0 4px' }}>{confirmed.toLocaleString()} confirmed · {reviewable.length.toLocaleString()} pending agent review</div>
 
       {/* Action buttons — full feature parity with desktop */}
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 8, marginBottom: 14 }}>
@@ -4815,23 +4990,56 @@ function MobMappings() {
         </button>
       </div>
 
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap: 8, marginBottom: 12 }}>
+        <MiniMapStat label="Confirmed" value={confirmed.toLocaleString()} tone="green"/>
+        <MiniMapStat label="Pending" value={reviewable.length.toLocaleString()} tone="amber"/>
+        <MiniMapStat label="Refetch" value={discovery.status || 'idle'} tone={discovery.status === 'failed' ? 'red' : 'blue'}/>
+      </div>
+      {(discovery.status && discovery.status !== 'idle') && (
+        <div style={{ marginBottom: 12, padding: '10px 12px', background: t.bgSubtle, border:`1px solid ${t.border}`, borderRadius: 10, color: t.textDim, fontSize: 11, lineHeight: 1.45 }}>
+          <div style={{ color: t.text, fontWeight: 600, marginBottom: 2 }}>{discovery.phase || discovery.status} · {Number(discovery.progress_pct || 0)}%</div>
+          <div>{(discoveryCounts.kalshi_markets || 0).toLocaleString()} Kalshi · {(discoveryCounts.polymarket_markets || 0).toLocaleString()} Polymarket · {(discoveryCounts.candidates_written || 0).toLocaleString()} written</div>
+        </div>
+      )}
+
       {/* Candidates list */}
-      {candidates.map((c, i) => {
-        const tone = c.s === 'confirmed' ? 'green' : c.s === 'pending' ? 'amber' : c.s === 'review' ? 'blue' : 'red';
-        const actionable = c.s === 'pending' || c.s === 'review';
+      {active.length === 0 && (
+        <div style={{ padding: 18, background: t.bgCard, border:`1px solid ${t.border}`, borderRadius: 12, color: t.textDim, fontSize: 12.5, lineHeight: 1.5 }}>
+          No active mapping rows are loaded yet. Re-fetch mappings to pull the latest Kalshi and Polymarket catalogs.
+        </div>
+      )}
+      {active.map((c, i) => {
+        const actionable = c.s === 'candidate' || c.s === 'pending' || c.s === 'review';
+        const kalshiLabel = c.k || c.description || c.canonical_id || 'Kalshi market unavailable';
+        const polyLabel = c.p || c.description || 'Polymarket market unavailable';
         return (
-          <div key={i} onClick={() => actionable && setModal({ kind:'agentValidate', payload: c })} style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 14, marginBottom: 8, cursor: actionable ? 'pointer' : 'default' }}>
-            <div style={{ display:'flex', alignItems:'center', gap: 10, marginBottom: 8 }}>
+          <div key={c.canonical_id || `${c.k}:${c.p}:${i}`} onClick={() => actionable && setModal({ kind:'agentValidate', payload: c })} style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 14, marginBottom: 8, cursor: actionable ? 'pointer' : 'default', minHeight: 118 }}>
+            <div style={{ display:'grid', gridTemplateColumns:'42px minmax(0, 1fr)', columnGap: 10, rowGap: 8, alignItems:'start' }}>
               <div style={{ width: 36, height: 36, borderRadius:'50%', background: c.score >= 0.9 ? t.greenSoft : c.score >= 0.7 ? t.amberSoft : t.redSoft, display:'flex', alignItems:'center', justifyContent:'center', fontSize: 11.5, fontWeight: 700, color: c.score >= 0.9 ? t.green : c.score >= 0.7 ? t.amber : t.red, fontFamily: window.FONTS.mono, flexShrink: 0 }}>{c.score.toFixed(2)}</div>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 11.5, color: t.text, fontFamily: window.FONTS.mono, fontWeight: 600, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{c.k}</div>
-                <div style={{ fontSize: 10.5, color: t.textDim, fontFamily: window.FONTS.mono, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>⇄ {c.p}</div>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap: 8, marginBottom: 7 }}>
+                  <div style={{ fontSize: 10, color: t.textMuted, letterSpacing:'0.08em', textTransform:'uppercase', fontWeight: 700 }}>Pair</div>
+                  <window.StatusBadge status={c.s} size="sm"/>
+                </div>
+                <MapLine label="K" value={kalshiLabel} tone={t.text}/>
+                <MapLine label="P" value={polyLabel} tone={t.textDim}/>
+                <div style={{ display:'flex', gap: 6, alignItems:'center', flexWrap:'wrap', marginTop: 8 }}>
+                  <span style={{ fontSize: 10.5, color: c.match === 'identical' ? t.green : c.match === 'divergent' ? t.red : t.textDim, background: t.bgSubtle, border:`1px solid ${t.border}`, borderRadius: 999, padding:'3px 7px' }}>{c.match}</span>
+                  {c.auto && <span style={{ fontSize: 10.5, color: t.green, background: t.greenSoft, borderRadius: 999, padding:'3px 7px' }}>auto-trade</span>}
+                </div>
               </div>
-              <window.StatusBadge status={c.s} size="sm"/>
             </div>
             {actionable && (
               <div style={{ display:'flex', gap: 6, paddingTop: 8, borderTop: `1px solid ${t.border}` }}>
-                <button onClick={(e) => { e.stopPropagation(); toast('Mapping rejected', { sub: c.k }); }} style={{ flex: 1, padding: '8px', background:'transparent', border:`1px solid ${t.border}`, borderRadius: 7, fontSize: 11.5, color: t.textDim, fontWeight: 500, cursor:'pointer' }}>Reject</button>
+                <button onClick={async (e) => {
+                  e.stopPropagation();
+                  if (window.__arbiterMappingAction) {
+                    const res = await window.__arbiterMappingAction(c.canonical_id || c.k, 'reject', { note: 'rejected from mobile mapping desk' });
+                    if (!res.ok) { toast('Reject failed', { sub: res.error, tone: 'error' }); return; }
+                    if (window.__arbiterTick) { try { await window.__arbiterTick(); } catch {} }
+                  }
+                  toast('Mapping rejected', { sub: c.k });
+                }} style={{ flex: 1, padding: '8px', background:'transparent', border:`1px solid ${t.border}`, borderRadius: 7, fontSize: 11.5, color: t.textDim, fontWeight: 500, cursor:'pointer' }}>Reject</button>
                 <button onClick={(e) => { e.stopPropagation(); setModal({ kind:'agentValidate', payload: c }); }} style={{ flex: 1, padding: '8px', background: t.bgSubtle, border:`1px solid ${t.border}`, borderRadius: 7, fontSize: 11.5, color: t.text, fontWeight: 600, cursor:'pointer' }}>◇ Validate</button>
               </div>
             )}
@@ -4842,6 +5050,27 @@ function MobMappings() {
       <div style={{ marginTop: 12, padding: '10px 12px', background: t.bgSubtle, border:`1px dashed ${t.border}`, borderRadius: 8, fontSize: 10.5, color: t.textDim, lineHeight: 1.5 }}>
         Tap any pending or review candidate to spin up an agent that validates the match live. The CLI session shows every tool call and verdict.
       </div>
+    </div>
+  );
+}
+
+function MiniMapStat({ label, value, tone }) {
+  const { t } = window.useApp();
+  const c = tone === 'green' ? t.green : tone === 'amber' ? t.amber : tone === 'red' ? t.red : t.blue;
+  return (
+    <div style={{ background: t.bgCard, border:`1px solid ${t.border}`, borderRadius: 10, padding: '10px 9px' }}>
+      <div style={{ fontSize: 9.5, color: t.textMuted, letterSpacing:'0.08em', textTransform:'uppercase', marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 13, color: c, fontWeight: 700, fontFamily: window.FONTS.mono, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{value}</div>
+    </div>
+  );
+}
+
+function MapLine({ label, value, tone }) {
+  const { t } = window.useApp();
+  return (
+    <div style={{ display:'grid', gridTemplateColumns:'18px minmax(0, 1fr)', gap: 6, alignItems:'baseline', marginTop: 4 }}>
+      <span style={{ fontSize: 10, color: t.textMuted, fontWeight: 700, fontFamily: window.FONTS.mono }}>{label}</span>
+      <span style={{ fontSize: 11.5, lineHeight: 1.35, color: tone, fontFamily: window.FONTS.mono, fontWeight: label === 'K' ? 650 : 500, overflowWrap:'anywhere' }}>{value}</span>
     </div>
   );
 }
@@ -4870,6 +5099,8 @@ function LoginScreen({ onSignIn }) {
       if (window.__arbiterLogin) {
         const res = await window.__arbiterLogin(e, p);
         if (!res.ok) { setError(res.error || 'Sign-in failed.'); return; }
+        onSignIn?.(res.data);
+        return;
       }
       onSignIn?.();
     } catch (err) {
@@ -5179,6 +5410,9 @@ window.LoginScreen = LoginScreen;
     const [signedIn, setSignedIn] = useState(() => {
       try { return localStorage.getItem('arbiter-signed-in') === '1'; } catch { return false; }
     });
+    const [checkingSession, setCheckingSession] = useState(() => {
+      try { return localStorage.getItem('arbiter-signed-in') === '1'; } catch { return false; }
+    });
     const [, setTick] = useState(0);
 
     // Track viewport size; re-render between desktop and mobile shells.
@@ -5195,6 +5429,34 @@ window.LoginScreen = LoginScreen;
       window.addEventListener('unhandledrejection', onRej);
       return () => window.removeEventListener('unhandledrejection', onRej);
     }, []);
+
+    // A stale local signed-in flag should never expose an operator shell whose
+    // write actions will just 401. Confirm the server session before loading.
+    useEffect(() => {
+      if (!signedIn) {
+        setCheckingSession(false);
+        return;
+      }
+      let cancelled = false;
+      const verify = async () => {
+        if (!window.__arbiterAuthMe) {
+          if (!cancelled) setCheckingSession(false);
+          return;
+        }
+        const res = await window.__arbiterAuthMe();
+        if (cancelled) return;
+        if (!res.ok || !res.data || res.data.authenticated !== true) {
+          try { localStorage.removeItem('arbiter-signed-in'); } catch {}
+          if (window.__arbiterClearAuthToken) window.__arbiterClearAuthToken();
+          window.MOCK.loaded = false;
+          setSignedIn(false);
+        }
+        setCheckingSession(false);
+      };
+      setCheckingSession(true);
+      verify();
+      return () => { cancelled = true; };
+    }, [signedIn]);
 
     // Initial fetch + 10s polling, but only after sign-in. On each refresh,
     // bump tick so the tree re-renders and reads the freshly-mutated
@@ -5219,19 +5481,27 @@ window.LoginScreen = LoginScreen;
       };
     }, [signedIn]);
 
-    const handleSignIn = () => {
+    const handleSignIn = (session) => {
+      if (session && session.token && window.__arbiterRememberAuthToken) {
+        window.__arbiterRememberAuthToken(session.token);
+      }
       try { localStorage.setItem('arbiter-signed-in', '1'); } catch {}
       setSignedIn(true);
+      setCheckingSession(false);
     };
     const handleSignOut = () => {
       try { localStorage.removeItem('arbiter-signed-in'); } catch {}
+      if (window.__arbiterClearAuthToken) window.__arbiterClearAuthToken();
+      window.MOCK.loaded = false;
       setSignedIn(false);
     };
 
     // Once signed in, hold the dashboard shell behind a loading state until
     // the first /api/* refresh resolves. Empty defaults shouldn't be shown
     // as if they were the live picture of the system.
-    const dashboard = !window.MOCK.loaded
+    const dashboard = checkingSession
+      ? <BootLoading/>
+      : !window.MOCK.loaded
       ? <BootLoading/>
       : (isMobile ? <MobileShellInner/> : <DesktopShellInner/>);
 

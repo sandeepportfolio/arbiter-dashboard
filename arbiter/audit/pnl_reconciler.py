@@ -235,26 +235,53 @@ class PnLReconciler:
             # Fire-and-forget persistence — don't block the caller
             asyncio.ensure_future(self._persist_balance(platform))
 
-    async def rebaseline(self, current_balances: dict):
-        """Reset starting balances to the current actual balances, clear all
-        recorded PnL and flags. Call when reconciliation drift is stale
-        (e.g. after manual deposit corrections or container restarts)."""
+    @staticmethod
+    def _pnl_by_platform(executions) -> Dict[str, float]:
+        """Return ledger P&L split across the two platforms for each arb."""
+        pnl_by_platform: Dict[str, float] = {}
+        for execution in executions or []:
+            pnl = float(getattr(execution, "realized_pnl", 0.0) or 0.0)
+            opportunity = getattr(execution, "opportunity", None)
+            yes_platform = getattr(opportunity, "yes_platform", None)
+            no_platform = getattr(opportunity, "no_platform", None)
+            if pnl == 0.0 or not yes_platform or not no_platform:
+                continue
+
+            split_pnl = pnl / 2.0
+            pnl_by_platform[yes_platform] = pnl_by_platform.get(yes_platform, 0.0) + split_pnl
+            pnl_by_platform[no_platform] = pnl_by_platform.get(no_platform, 0.0) + split_pnl
+        return pnl_by_platform
+
+    async def rebaseline(self, current_balances: dict, executions=None):
+        """Re-anchor baselines to the current balances.
+
+        When an execution ledger is supplied, preserve its realized P&L and
+        move starting balances behind it so the next reconciliation remains
+        healthy after load_execution_history() refreshes recorded P&L.
+        """
+        ledger_pnl = self._pnl_by_platform(executions)
         for platform, balance in current_balances.items():
-            self._starting_balances[platform] = balance
-            self._recorded_pnl[platform] = 0.0
+            recorded = ledger_pnl.get(platform, 0.0)
+            self._starting_balances[platform] = balance - recorded
+            self._recorded_pnl[platform] = recorded
             self._total_deposits[platform] = 0.0
+        for platform, recorded in ledger_pnl.items():
+            if platform not in current_balances:
+                self._starting_balances.setdefault(platform, -recorded)
+                self._recorded_pnl[platform] = recorded
+                self._total_deposits[platform] = 0.0
         self._flag_count = 0
         self._reports.clear()
         self._reconciliation_count = 0
         logger.info(
             "Reconciler re-baselined: %s",
-            {p: f"${b:.2f}" for p, b in current_balances.items()},
+            {p: f"${b:.2f}" for p, b in self._starting_balances.items()},
         )
         # Persist the new baselines
         if self._pg_pool is not None:
             try:
                 async with self._pg_pool.acquire() as conn:
-                    for platform, balance in current_balances.items():
+                    for platform, balance in self._starting_balances.items():
                         await conn.execute(
                             """INSERT INTO platform_balances (platform, starting_balance, total_deposits)
                                VALUES ($1, $2, 0.0)
@@ -294,18 +321,7 @@ class PnLReconciler:
             platform: 0.0
             for platform in self._starting_balances
         }
-
-        for execution in executions or []:
-            pnl = float(getattr(execution, "realized_pnl", 0.0) or 0.0)
-            opportunity = getattr(execution, "opportunity", None)
-            yes_platform = getattr(opportunity, "yes_platform", None)
-            no_platform = getattr(opportunity, "no_platform", None)
-            if pnl == 0.0 or not yes_platform or not no_platform:
-                continue
-
-            split_pnl = pnl / 2.0
-            self._recorded_pnl[yes_platform] = self._recorded_pnl.get(yes_platform, 0.0) + split_pnl
-            self._recorded_pnl[no_platform] = self._recorded_pnl.get(no_platform, 0.0) + split_pnl
+        self._recorded_pnl.update(self._pnl_by_platform(executions))
 
     def _is_duplicate_deposit(self, platform: str, balance_before: float,
                               balance_after: float, now: float) -> bool:

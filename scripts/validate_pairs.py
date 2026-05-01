@@ -15,7 +15,7 @@ import urllib.request
 BASE = "http://localhost:8080"
 
 TEAM_NORM = {
-    "atl": "atl", "mtl": "mim", "mim": "mim",
+    "atl": "atl", "mtl": "mtl", "mim": "mim",
     "atx": "aus", "aus": "aus", "stl": "stl",
     "hou": "hou", "bal": "bal", "det": "det", "nyy": "nyy",
     "tex": "tex", "wsh": "wsh", "nym": "nym", "tor": "tor",

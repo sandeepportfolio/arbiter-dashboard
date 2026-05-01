@@ -252,6 +252,7 @@ async def test_upsert_and_get(mock_pool, monkeypatch):
         polymarket_slug="poly-test-abc",
         mapping_score=0.85,
         confidence=0.80,
+        resolution_match_status="identical",
     )
 
     await store.upsert(mapping)
@@ -281,6 +282,7 @@ async def test_iter_confirmed_filter(mock_pool, monkeypatch):
             status=MappingStatus.CONFIRMED,
             allow_auto_trade=(i == 0),
             kalshi_market_id=f"k-{i}",
+            resolution_match_status="identical",
         )
         await store.upsert(m)
 
@@ -424,6 +426,7 @@ async def test_write_candidates_keeps_confirmed_mapping_confirmed(mock_pool, mon
         allow_auto_trade=True,
         kalshi_market_id="KALSHI-123",
         polymarket_slug="rates-fall-june",
+        resolution_match_status="identical",
     )
     await store.upsert(confirmed)
 
@@ -479,6 +482,34 @@ async def test_write_candidates_preserves_auto_promoted_mapping_state(mock_pool,
     assert mapping.allow_auto_trade is True
     assert mapping.resolution_match_status == "identical"
     assert "Auto-promoted" in mapping.notes
+
+    await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_write_candidates_refuses_confirmed_without_resolution_criteria(mock_pool, monkeypatch):
+    store = MarketMappingStore("postgres://mock/mock")
+    await store.connect()
+
+    await store.write_candidates([
+        {
+            "canonical_id": "AUTO-PROMOTE-NO-CRITERIA",
+            "kalshi_ticker": "KALSHI-123",
+            "kalshi_title": "Will the home team win?",
+            "poly_slug": "home-team-win",
+            "poly_question": "Will the home team win?",
+            "score": 0.99,
+            "status": "confirmed",
+            "allow_auto_trade": True,
+            "resolution_match_status": "identical",
+        }
+    ])
+
+    mapping = await store.get("AUTO-PROMOTE-NO-CRITERIA")
+    assert mapping is not None
+    assert mapping.status == MappingStatus.REVIEW
+    assert mapping.allow_auto_trade is False
+    assert mapping.resolution_match_status == "pending_operator_review"
 
     await store.disconnect()
 

@@ -203,7 +203,7 @@ class TestAutoPromoteGate2:
 
 
 class TestAutoPromoteGate3:
-    """Gate 3: resolution_check — DIVERGENT blocks, IDENTICAL/PENDING allowed."""
+    """Gate 3: resolution_check must return IDENTICAL."""
 
     def test_divergent_rejects(self):
         result = asyncio.get_event_loop().run_until_complete(
@@ -234,8 +234,8 @@ class TestAutoPromoteGate3:
         )
         assert result.promoted
 
-    def test_pending_with_high_score_passes(self):
-        """PENDING resolution + high score + LLM YES → should pass."""
+    def test_pending_with_high_score_rejects(self):
+        """PENDING resolution + high score + LLM YES is still not confirmed."""
         result = asyncio.get_event_loop().run_until_complete(
             maybe_promote(
                 _make_candidate(score=0.95),
@@ -247,10 +247,11 @@ class TestAutoPromoteGate3:
                 resolution_checker=_pending_checker,
             )
         )
-        assert result.promoted
+        assert not result.promoted
+        assert result.reason == "resolution_pending"
 
     def test_pending_with_low_score_rejects(self):
-        """PENDING resolution + barely-passing score → should reject (needs higher bar)."""
+        """PENDING resolution rejects before any score-bump fallback."""
         result = asyncio.get_event_loop().run_until_complete(
             maybe_promote(
                 _make_candidate(score=0.86),
@@ -263,7 +264,7 @@ class TestAutoPromoteGate3:
             )
         )
         assert not result.promoted
-        assert result.reason == "score_low_for_pending_resolution"
+        assert result.reason == "resolution_pending"
 
 
 class TestAutoPromoteGate4:
@@ -285,7 +286,7 @@ class TestAutoPromoteGate4:
         assert result.reason == "llm_no"
 
     def test_llm_maybe_with_low_score_rejects(self):
-        """MAYBE is fail-safe ONLY when score < AUTO_PROMOTE_MAYBE_MIN_SCORE."""
+        """MAYBE is ambiguity and fails closed."""
         result = asyncio.get_event_loop().run_until_complete(
             maybe_promote(
                 _make_candidate(score=0.20),
@@ -301,7 +302,7 @@ class TestAutoPromoteGate4:
             )
         )
         assert not result.promoted
-        assert result.reason == "llm_maybe_low_score"
+        assert result.reason == "llm_maybe"
 
 
 class TestAutoPromoteGate5:

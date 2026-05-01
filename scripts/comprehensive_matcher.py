@@ -110,7 +110,7 @@ SPORT_MAP = {
 # ── Team abbreviation normalization ────────────────────────────────
 TEAM_NORM = {
     # MLS
-    "atl": "atl", "mtl": "mim", "mim": "mim",  # Montreal = MIM on Polymarket
+    "atl": "atl", "mtl": "mtl", "mim": "mim",
     "atx": "aus", "aus": "aus",  # Austin FC
     "stl": "stl",
     # MLB

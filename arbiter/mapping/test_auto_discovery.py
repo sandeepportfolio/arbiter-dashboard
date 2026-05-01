@@ -72,7 +72,7 @@ async def test_pulls_both_platforms():
 
     await discover(kalshi, poly, store, budget_rps=100.0)
 
-    kalshi.list_all_markets.assert_called_once_with()
+    kalshi.list_all_markets.assert_called_once_with(status="open", page_size=1000, max_pages=10)
     # poly.list_markets was called (it returns an async generator)
     poly.list_markets.assert_called()
 
@@ -304,6 +304,188 @@ async def test_prefers_date_aligned_unique_pair_for_noisy_sports_candidates():
 
 
 @pytest.mark.asyncio
+async def test_skips_flipped_polarity_sports_binary_slug():
+    """Kalshi YES on Polymarket team2 is inverted when the Poly slug has no side."""
+    kalshi = _make_kalshi_client([
+        {
+            "ticker": "KXMLBGAME-26APR28HOUBAL-BAL",
+            "title": "Houston vs Baltimore",
+            "category": "sports",
+            "close_time": "2026-04-28T20:00:00Z",
+            "status": "open",
+        },
+    ])
+    poly = _make_poly_client([
+        {
+            "slug": "aec-mlb-hou-bal-2026-04-28",
+            "question": "Houston vs Baltimore",
+            "category": "sports",
+            "endDate": "2026-04-28",
+        },
+    ])
+    store = _make_store()
+
+    count = await discover(kalshi, poly, store, budget_rps=100.0, min_score=0.1)
+
+    assert count == 0
+    assert store.written == []
+
+
+@pytest.mark.asyncio
+async def test_gate0_rejects_kxmve_family_markets():
+    kalshi = _make_kalshi_client([
+        {
+            "ticker": "KXMVENBASINGLEGAME-S20262F2A52A9B78-1210E55A951",
+            "event_ticker": "KXMVENBASINGLEGAME-S20262F2A52A9B78",
+            "title": "NBA New York vs Atlanta total points 219.5",
+            "category": "sports",
+            "close_time": "2026-04-30T23:00:00Z",
+            "status": "open",
+        },
+    ])
+    poly = _make_poly_client([
+        {
+            "slug": "tsc-nba-ny-atl-2026-04-30-219pt5",
+            "question": "NBA New York vs Atlanta total points 219.5",
+            "category": "sports",
+            "endDate": "2026-04-30",
+        },
+    ])
+    store = _make_store()
+
+    count = await discover(kalshi, poly, store, budget_rps=100.0, min_score=0.1)
+
+    assert count == 0
+    assert store.written == []
+
+
+@pytest.mark.asyncio
+async def test_keeps_same_polarity_sports_binary_slug_for_first_team():
+    """Polymarket side-less binary sports slugs mean YES = first team."""
+    kalshi = _make_kalshi_client([
+        {
+            "ticker": "KXMLBGAME-26APR28HOUBAL-HOU",
+            "title": "Houston vs Baltimore",
+            "category": "sports",
+            "close_time": "2026-04-28T20:00:00Z",
+            "status": "open",
+        },
+    ])
+    poly = _make_poly_client([
+        {
+            "slug": "aec-mlb-hou-bal-2026-04-28",
+            "question": "Houston vs Baltimore",
+            "category": "sports",
+            "endDate": "2026-04-28",
+        },
+    ])
+    store = _make_store()
+
+    count = await discover(kalshi, poly, store, budget_rps=100.0, min_score=0.1)
+
+    assert count == 1
+    assert store.written[0]["kalshi_ticker"] == "KXMLBGAME-26APR28HOUBAL-HOU"
+    assert store.written[0]["polarity"] == "same"
+
+
+@pytest.mark.asyncio
+async def test_structural_fingerprint_finds_sports_pair_without_text_overlap():
+    """Ticker/slug fingerprints should find exact game-outcome pairs even when
+    venue display text shares no useful tokens."""
+    kalshi = _make_kalshi_client([
+        {
+            "ticker": "KXLALIGAGAME-26MAY02OSABAR-BAR",
+            "title": "Home side result",
+            "category": "sports",
+            "close_time": "2026-05-02T20:00:00Z",
+            "status": "open",
+        },
+    ])
+    poly = _make_poly_client([
+        {
+            "slug": "atc-lal-osa-fcb-2026-05-02-fcb",
+            "question": "La Liga fixture",
+            "category": "sports",
+            "endDate": "2026-05-02",
+        },
+    ])
+    store = _make_store()
+
+    count = await discover(kalshi, poly, store, budget_rps=100.0, min_score=0.9)
+
+    assert count == 1
+    assert store.written[0]["structural_match"] is True
+    assert store.written[0]["event_fingerprint"] == "sports:lal:fcb-osa:2026-05-02:winner:moneyline"
+    assert store.written[0]["polarity"] == "same"
+
+
+@pytest.mark.asyncio
+async def test_structural_fingerprint_rejects_different_crypto_threshold():
+    kalshi = _make_kalshi_client([
+        {
+            "ticker": "KXBTCD-26APR2207-T85799.99",
+            "title": "Bitcoin price on Apr 22, 2026? $85,800 or above",
+            "category": "crypto",
+            "status": "open",
+        },
+    ])
+    poly = _make_poly_client([
+        {
+            "slug": "will-bitcoin-reach-100000-by-december-31-2026",
+            "question": "Will Bitcoin reach $100,000 by December 31, 2026?",
+            "category": "crypto",
+            "endDate": "2026-12-31",
+        },
+    ])
+    store = _make_store()
+
+    count = await discover(kalshi, poly, store, budget_rps=100.0, min_score=0.9)
+
+    assert count == 0
+    assert store.written == []
+
+
+@pytest.mark.asyncio
+async def test_event_fingerprint_fetches_matching_event_before_outcome_matching():
+    kalshi = _make_event_capable_kalshi_client(
+        [
+            {
+                "event_ticker": "KXLALIGAGAME-26MAY02OSABAR",
+                "title": "Fixture",
+                "category": "sports",
+            },
+        ],
+        {
+            "KXLALIGAGAME-26MAY02OSABAR": [
+                {
+                    "ticker": "KXLALIGAGAME-26MAY02OSABAR-BAR",
+                    "title": "Home side result",
+                    "category": "sports",
+                    "close_time": "2026-05-02T20:00:00Z",
+                    "status": "open",
+                },
+            ],
+        },
+    )
+    poly = _make_poly_client([
+        {
+            "slug": "atc-lal-osa-fcb-2026-05-02-fcb",
+            "question": "La Liga fixture",
+            "category": "sports",
+            "endDate": "2026-05-02",
+        },
+    ])
+    store = _make_store()
+
+    count = await discover(kalshi, poly, store, budget_rps=100.0, min_score=0.9)
+
+    assert count == 1
+    kalshi.list_markets_for_event.assert_called_once_with("KXLALIGAGAME-26MAY02OSABAR", limit=50)
+    assert store.written[0]["structural_match"] is True
+    assert store.written[0]["kalshi_ticker"] == "KXLALIGAGAME-26MAY02OSABAR-BAR"
+
+
+@pytest.mark.asyncio
 async def test_discover_auto_promotes_when_enabled_and_candidate_passes_gates():
     kalshi = _make_kalshi_client([
         {
@@ -330,7 +512,8 @@ async def test_discover_auto_promotes_when_enabled_and_candidate_passes_gates():
     ])
     store = _make_store()
 
-    with patch("arbiter.mapping.llm_verifier.verify", new=AsyncMock(return_value="YES")):
+    with patch("arbiter.mapping.llm_verifier.verify", new=AsyncMock(return_value="YES")), \
+         patch("arbiter.mapping.llm_verifier.verify_batch", new=AsyncMock(return_value=["YES"])):
         count = await discover(
             kalshi,
             poly,
@@ -351,6 +534,128 @@ async def test_discover_auto_promotes_when_enabled_and_candidate_passes_gates():
     assert store.written[0]["status"] == "confirmed"
     assert store.written[0]["allow_auto_trade"] is True
     assert store.written[0]["resolution_match_status"] == "identical"
+
+
+@pytest.mark.asyncio
+async def test_structural_sports_auto_promote_normalizes_binary_outcome_set():
+    """Exact sports fingerprints are YES/NO contracts even when venue metadata
+    labels the displayed outcomes with team names."""
+    kalshi = _make_kalshi_client([
+        {
+            "ticker": "KXMLBGAME-26MAY012145KCSEA-KC",
+            "title": "Kansas City vs Seattle Winner?",
+            "category": "sports",
+            "close_time": "2026-05-01T21:45:00Z",
+            "status": "open",
+            "yes_bid": 55,
+            "yes_bid_size_fp": 500,
+        },
+    ])
+    poly = _make_poly_client([
+        {
+            "slug": "aec-mlb-kc-sea-2026-05-01",
+            "question": "MLB: KC wins on 2026-05-01",
+            "category": "sports",
+            "endDate": "2026-05-01",
+            "outcomes": ["KC", "SEA"],
+        },
+    ])
+    store = _make_store()
+
+    with patch("arbiter.mapping.llm_verifier.verify", new=AsyncMock(return_value="YES")), \
+         patch("arbiter.mapping.llm_verifier.verify_batch", new=AsyncMock(return_value=["YES"])):
+        count = await discover(
+            kalshi,
+            poly,
+            store,
+            budget_rps=100.0,
+            min_score=0.9,
+            promotion_settings={
+                "auto_promote_enabled": True,
+                "auto_promote_min_score": 0.75,
+                "auto_promote_daily_cap": 25,
+                "auto_promote_advisory_scans": 0,
+                "auto_promote_max_days": 400,
+                "phase5_max_order_usd": 10,
+            },
+        )
+
+    assert count == 1
+    assert store.written[0]["structural_match"] is True
+    assert store.written[0]["resolution_match_status"] == "identical"
+    assert store.written[0]["status"] == "confirmed"
+
+
+@pytest.mark.asyncio
+async def test_discover_emits_progress_events_for_ops_visibility():
+    kalshi = _make_kalshi_client([
+        {
+            "ticker": "FED-MAY26",
+            "title": "Will the Federal Reserve cut rates in May 2026?",
+            "status": "open",
+        },
+    ])
+    poly = _make_poly_client([
+        {
+            "slug": "fed-rate-cut-may-2026",
+            "question": "Will the Federal Reserve cut rates in May 2026?",
+        },
+    ])
+    store = _make_store()
+    events = []
+
+    count = await discover(kalshi, poly, store, budget_rps=100.0, progress=events.append)
+
+    assert count == 1
+    phases = [event["phase"] for event in events]
+    assert "fetch_kalshi_markets" in phases
+    assert "fetch_polymarket_markets" in phases
+    assert "score_candidates" in phases
+    assert "persist_candidates" in phases
+    assert events[-1]["phase"] == "persist_candidates"
+    assert events[-1]["counts"]["candidates_written"] == 1
+
+
+@pytest.mark.asyncio
+async def test_discover_progress_reports_auto_promote_rejection_reasons():
+    kalshi = _make_kalshi_client([
+        {
+            "ticker": "FED-MAY26",
+            "title": "Will the Federal Reserve cut rates in May 2026?",
+            "status": "open",
+            "yes_bid": 55,
+            "yes_bid_size_fp": 500,
+        },
+    ])
+    poly = _make_poly_client([
+        {
+            "slug": "fed-rate-cut-may-2026",
+            "question": "Will the Federal Reserve cut rates in May 2026?",
+        },
+    ])
+    store = _make_store()
+    events = []
+
+    await discover(
+        kalshi,
+        poly,
+        store,
+        budget_rps=100.0,
+        min_score=0.1,
+        progress=events.append,
+        promotion_settings={
+            "auto_promote_enabled": True,
+            "auto_promote_min_score": 1.1,
+            "auto_promote_daily_cap": 25,
+            "auto_promote_advisory_scans": 0,
+            "auto_promote_max_days": 400,
+            "phase5_max_order_usd": 10,
+        },
+    )
+
+    validation = [event for event in events if event["phase"] == "validate_candidates"]
+    assert validation
+    assert validation[-1]["rejection_reasons"]["score_low"] == 1
 
 
 # ─── Orderbook normalizers ───────────────────────────────────────────────────
@@ -448,7 +753,8 @@ async def test_polymarket_book_response_passes_liquidity_gate():
 
     store = _make_store()
 
-    with patch("arbiter.mapping.llm_verifier.verify", new=AsyncMock(return_value="YES")):
+    with patch("arbiter.mapping.llm_verifier.verify", new=AsyncMock(return_value="YES")), \
+         patch("arbiter.mapping.llm_verifier.verify_batch", new=AsyncMock(return_value=["YES"])):
         await discover(
             kalshi,
             poly,

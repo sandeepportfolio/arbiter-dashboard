@@ -85,14 +85,16 @@ def test_api_and_dashboard_contracts():
 
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5) as response:
             public_html = response.read().decode("utf-8")
-        assert "ARBITER Live Desk" in public_html
-        assert 'id="heroTitle"' in public_html
-        assert 'id="connectionOverlay"' in public_html
+        assert "Arbiter" in public_html
+        assert 'id="root"' in public_html
+        assert "/api/discovery/status" in public_html
+        assert "Operator desk" in public_html or "operator desk" in public_html
 
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/ops", timeout=5) as response:
             ops_html = response.read().decode("utf-8")
-        assert "Arbiter Live" in ops_html
-        assert 'id="equityChart"' in ops_html
+        assert "Arbiter" in ops_html
+        assert 'id="root"' in ops_html
+        assert "__arbiterBatchDiscover" in ops_html
 
         health = get_json("/api/health")
         assert health["status"] == "ok"
@@ -369,6 +371,43 @@ def test_direct_health_endpoints_are_unambiguous_without_socket_binding():
         assert ready["live_trading_endpoint"] == "/api/readiness"
 
     asyncio.run(_run())
+
+
+def test_discovery_status_endpoint_defaults_to_idle():
+    async def _run():
+        api = await _make_rate_limit_api()
+        response = await api.handle_discovery_status(None)
+        payload = json.loads(response.text)
+
+        assert payload["status"] == "idle"
+        assert payload["phase"] == "idle"
+        assert isinstance(payload["events"], list)
+        assert isinstance(payload["counts"], dict)
+
+    asyncio.run(_run())
+
+
+def test_ops_refetch_modal_uses_live_discovery_api():
+    html = open(os.path.join(os.getcwd(), "arbiter", "web", "ops.html"), encoding="utf-8").read()
+
+    assert "/api/discovery/status" in html
+    assert "/api/batch-discover" in html
+    assert "function authHeaders" in html
+    assert "window.__arbiterAuthMe" in html
+    assert "sessionStorage.setItem(AUTH_TOKEN_KEY" in html
+    assert "authFetch('/api/batch-discover'" in html
+    assert "/api/mappings?status=confirmed&limit=5000" in html
+    assert "/api/mappings?status=candidate&limit=5000" in html
+    assert "The `phases` array below is a scripted simulation" not in html
+
+
+def test_mobile_mappings_render_api_field_names():
+    html = open(os.path.join(os.getcwd(), "arbiter", "web", "ops.html"), encoding="utf-8").read()
+
+    assert "function MobMappings()" in html
+    assert "r.kalshi_market_id || r.kalshi_ticker || r.kalshi || r.ticker" in html
+    assert "r.polymarket_slug || r.poly_slug || r.polymarket" in html
+    assert "function MapLine" in html
 
 
 def test_rate_limit_ws_event_shape():

@@ -308,6 +308,7 @@ def main():
                     "kalshi": {"source": "Kalshi", "rule": k_title or desc},
                     "polymarket": {"source": "Polymarket US", "rule": desc},
                     "criteria_match": "identical",
+                    "polarity": "same",
                 },
                 "resolution_match_status": "identical",
             }
@@ -335,7 +336,7 @@ def main():
     if new_pairs:
         print("\nNEW PAIRS ADDED — rebuild Docker to deploy:")
         print("  docker compose -f docker-compose.prod.yml --env-file .env.production build arbiter-api-prod")
-        print("  docker compose -f docker-compose.prod.yml --env-file .env.production up -d arbiter-api-prod")
+        print("  docker compose -f docker-compose.prod.yml --env-file .env.production up -d --no-deps arbiter-api-prod")
 
     return len(new_pairs)
 

@@ -465,6 +465,11 @@ async def run_market_discovery_loop(
                 max_candidates=int(runtime["auto_discovery_max_candidates"]),
                 promotion_settings=runtime,
             )
+            await mapping_store.refresh_runtime_cache()
+            if hasattr(kalshi, "refresh_tracked_markets"):
+                kalshi.refresh_tracked_markets()
+            if hasattr(polymarket, "refresh_tracked_markets"):
+                polymarket.refresh_tracked_markets()
             pending = await mapping_store.count_candidates()
             if metrics is not None:
                 metrics["auto_discovery_candidates_pending"] = pending

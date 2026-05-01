@@ -170,6 +170,38 @@ def _coerce_status(value: str | MappingStatus | None) -> MappingStatus:
         return MappingStatus.CANDIDATE
 
 
+def _enforce_auto_trade_safety(mapping: MarketMapping) -> None:
+    """Disable auto-trade when required confirmation metadata is absent."""
+    if not mapping.allow_auto_trade:
+        return
+
+    if str(mapping.resolution_match_status or "").lower() != "identical":
+        logger.warning(
+            "Mapping %s requested allow_auto_trade without identical resolution; disabling auto-trade",
+            mapping.canonical_id,
+        )
+        mapping.allow_auto_trade = False
+        return
+
+    if "sports" not in {str(tag).lower() for tag in mapping.tags}:
+        return
+
+    polarity = ""
+    if mapping.resolution_criteria_json:
+        try:
+            criteria = json.loads(mapping.resolution_criteria_json)
+            if isinstance(criteria, dict):
+                polarity = str(criteria.get("polarity") or "").lower()
+        except (TypeError, ValueError):
+            polarity = ""
+    if polarity != "same":
+        logger.warning(
+            "Sports mapping %s requested allow_auto_trade without confirmed same polarity; disabling auto-trade",
+            mapping.canonical_id,
+        )
+        mapping.allow_auto_trade = False
+
+
 SQL_INIT = """
 CREATE TABLE IF NOT EXISTS market_mappings (
     canonical_id         VARCHAR(200) PRIMARY KEY,
@@ -302,11 +334,14 @@ class MarketMappingStore:
                     "SELECT 1 FROM market_mappings WHERE canonical_id = $1",
                     record.canonical_id,
                 )
-                # Always re-upsert confirmed seeds so mapping_score stays current
-                if existing and not overwrite and record.status != "confirmed":
+                # Live operator decisions take precedence over bundled seeds.
+                # In particular, startup must not re-confirm a row that an
+                # audit demoted because a market expired or failed validation.
+                if existing and not overwrite:
                     continue
 
                 mapping = MarketMapping.from_record(record)
+                _enforce_auto_trade_safety(mapping)
                 criteria_value = mapping.resolution_criteria_json or None
                 await conn.execute(
                     """
@@ -376,6 +411,7 @@ class MarketMappingStore:
 
     async def upsert(self, mapping: MarketMapping) -> MarketMapping:
         """Insert or update a mapping."""
+        _enforce_auto_trade_safety(mapping)
         conn = await self.acquire()
         try:
             now = utc_now()
@@ -782,33 +818,38 @@ class MarketMappingStore:
     async def refresh_runtime_cache(self) -> int:
         """Mirror all durable mappings into the legacy in-process MARKET_MAP.
 
-        Prioritizes confirmed/auto-trade mappings by fetching them first,
-        then fills with candidates up to the limit. This ensures confirmed
-        pairs are never dropped by the LIMIT clause even when the DB has
-        many thousands of auto-discovered candidate rows.
+        Runtime matching only needs active mapping states. Keeping expired and
+        rejected rows out of this query avoids forcing Postgres to sort the
+        historical mapping table during API startup.
         """
-        # Always include ALL confirmed mappings (tiny set, critical path)
-        confirmed = await self.all(status="confirmed", limit=500)
-        # Then fill with non-expired candidates/others
-        others = await self.all(limit=5000)
-        # Merge: confirmed first, then others (dedup by canonical_id)
-        seen = set()
-        merged = []
-        for m in confirmed:
-            if m and m.canonical_id not in seen:
-                seen.add(m.canonical_id)
-                merged.append(m)
-        for m in others:
-            if m and m.canonical_id not in seen:
-                seen.add(m.canonical_id)
-                merged.append(m)
+        conn = await self.acquire()
+        try:
+            rows = await conn.fetch(
+                """
+                SELECT *
+                FROM market_mappings
+                WHERE status IN ('confirmed', 'candidate', 'review')
+                ORDER BY
+                    CASE status
+                        WHEN 'confirmed' THEN 0
+                        WHEN 'candidate' THEN 1
+                        ELSE 2
+                    END,
+                    updated_at DESC NULLS LAST
+                LIMIT 5000
+                """
+            )
+        finally:
+            await self._pool.release(conn)
+
+        merged = [self._row_to_mapping(r) for r in rows]
         replace_runtime_market_map(
             (mapping.canonical_id, mapping.to_dict()) for mapping in merged
         )
         logger.info(
             "refresh_runtime_cache: %d mappings loaded (%d confirmed)",
             len(merged),
-            len(confirmed),
+            sum(1 for mapping in merged if mapping.status == MappingStatus.CONFIRMED),
         )
         return len(merged)
 
@@ -897,6 +938,15 @@ class MarketMappingStore:
         score = float(candidate.get("score", 0.0) or 0.0)
         candidate_status = _coerce_status(candidate.get("status", MappingStatus.CANDIDATE.value))
         candidate_allow_auto = bool(candidate.get("allow_auto_trade", False))
+        criteria = candidate.get("resolution_criteria")
+        if candidate_status == MappingStatus.CONFIRMED and criteria is None:
+            logger.warning(
+                "Refusing auto-confirmation for %s/%s: missing resolution_criteria",
+                kalshi_ticker,
+                poly_slug,
+            )
+            candidate_status = MappingStatus.REVIEW
+            candidate_allow_auto = False
         existing.description = self._candidate_description(candidate, fallback=existing.description)
         # Ensure platform IDs are always set from the candidate (defensive; should already be set in constructor)
         existing.kalshi_market_id = kalshi_ticker
@@ -913,18 +963,22 @@ class MarketMappingStore:
         existing.mapping_score = score
         existing.confidence = score
         existing.notes = str(candidate.get("notes", "") or existing.notes or "Auto-discovered candidate mapping.")
-        criteria = candidate.get("resolution_criteria")
         if criteria is not None:
             existing.resolution_criteria_json = json.dumps(criteria)
         existing.resolution_match_status = str(
             candidate.get("resolution_match_status", existing.resolution_match_status or "pending_operator_review")
             or "pending_operator_review"
         )
+        if candidate_status == MappingStatus.REVIEW and criteria is None and not existing.resolution_criteria_json:
+            existing.resolution_match_status = "pending_operator_review"
         if existing.status == MappingStatus.CONFIRMED:
             existing.allow_auto_trade = existing.allow_auto_trade
         elif candidate_status == MappingStatus.CONFIRMED:
             existing.status = MappingStatus.CONFIRMED
             existing.allow_auto_trade = candidate_allow_auto
+        elif candidate_status == MappingStatus.REVIEW:
+            existing.status = MappingStatus.REVIEW
+            existing.allow_auto_trade = False
         else:
             existing.allow_auto_trade = False
             if existing.status not in {MappingStatus.REJECTED, MappingStatus.EXPIRED, MappingStatus.REVIEW}:

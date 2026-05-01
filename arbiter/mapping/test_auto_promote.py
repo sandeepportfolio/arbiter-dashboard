@@ -109,6 +109,10 @@ def _resolution_check_divergent(a: MarketFacts, b: MarketFacts) -> ResolutionMat
     return ResolutionMatch.DIVERGENT
 
 
+def _resolution_check_pending(a: MarketFacts, b: MarketFacts) -> ResolutionMatch:
+    return ResolutionMatch.PENDING
+
+
 # ─── Condition 1: AUTO_PROMOTE_ENABLED ────────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -181,6 +185,28 @@ async def test_resolution_divergent():
     assert result.reason == "resolution_divergent"
 
 
+@pytest.mark.asyncio
+async def test_resolution_pending_cannot_auto_promote_even_with_llm_yes():
+    """Gate 3: PENDING structured resolution is insufficient for live auto-trading."""
+    settings = _make_settings()
+    candidate = _make_candidate(score=0.99)
+    orderbooks = _make_orderbooks()
+    llm = _make_llm_verifier("YES")
+
+    result = await maybe_promote(
+        candidate,
+        settings=settings,
+        orderbooks=orderbooks,
+        llm_verifier=llm,
+        today_promoted_count=0,
+        cooling_state={},
+        resolution_checker=_resolution_check_pending,
+    )
+
+    assert not result.promoted
+    assert result.reason == "resolution_pending"
+
+
 # ─── Condition 4: LLM verifier == YES ─────────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -207,7 +233,7 @@ async def test_llm_no():
 
 @pytest.mark.asyncio
 async def test_llm_maybe_with_low_score_rejected():
-    """MAYBE from LLM with score below AUTO_PROMOTE_MAYBE_MIN_SCORE → reject."""
+    """MAYBE from LLM is ambiguous and must reject regardless of score."""
     settings = _make_settings(min_score=0.18, AUTO_PROMOTE_MAYBE_MIN_SCORE=0.30)
     candidate = _make_candidate(score=0.20)
     orderbooks = _make_orderbooks()
@@ -224,7 +250,29 @@ async def test_llm_maybe_with_low_score_rejected():
     )
 
     assert not result.promoted
-    assert result.reason == "llm_maybe_low_score"
+    assert result.reason == "llm_maybe"
+
+
+@pytest.mark.asyncio
+async def test_llm_maybe_cannot_auto_promote_even_with_high_score():
+    """Gate 4: LLM MAYBE is ambiguous and must fail closed for live auto-trading."""
+    settings = _make_settings(min_score=0.85, AUTO_PROMOTE_MAYBE_MIN_SCORE=0.30)
+    candidate = _make_candidate(score=0.99)
+    orderbooks = _make_orderbooks()
+    llm = _make_llm_verifier("MAYBE")
+
+    result = await maybe_promote(
+        candidate,
+        settings=settings,
+        orderbooks=orderbooks,
+        llm_verifier=llm,
+        today_promoted_count=0,
+        cooling_state={},
+        resolution_checker=_resolution_check_identical,
+    )
+
+    assert not result.promoted
+    assert result.reason == "llm_maybe"
 
 
 # ─── Condition 5: Liquidity depth ≥ PHASE5_MAX_ORDER_USD (ARITHMETIC) ────────
@@ -339,6 +387,28 @@ async def test_date_out_of_window():
     """Gate 6: resolution_date > 90 days from today → reason='date_out_of_window'."""
     settings = _make_settings()
     candidate = _make_candidate(score=0.90, resolution_date=_days_from_now(120))  # 120 days
+    orderbooks = _make_orderbooks(200.0, 200.0)
+    llm = _make_llm_verifier("YES")
+
+    result = await maybe_promote(
+        candidate,
+        settings=settings,
+        orderbooks=orderbooks,
+        llm_verifier=llm,
+        today_promoted_count=0,
+        cooling_state={},
+        resolution_checker=_resolution_check_identical,
+    )
+
+    assert not result.promoted
+    assert result.reason == "date_out_of_window"
+
+
+@pytest.mark.asyncio
+async def test_past_resolution_date_rejected_as_out_of_window():
+    """Gate 6: past resolution dates are expired and must not auto-promote."""
+    settings = _make_settings()
+    candidate = _make_candidate(score=0.90, resolution_date=_days_from_now(-1))
     orderbooks = _make_orderbooks(200.0, 200.0)
     llm = _make_llm_verifier("YES")
 

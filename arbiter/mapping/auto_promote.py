@@ -16,8 +16,8 @@ Conditions (in order — first failing wins):
 
 Tunable thresholds (read from env when not present in `settings`):
   AUTO_PROMOTE_MIN_SCORE          — Gate 2 minimum score (default 0.85)
-  AUTO_PROMOTE_MAYBE_MIN_SCORE    — Gate 4 LLM=MAYBE minimum score (default 0.30)
-  AUTO_PROMOTE_PENDING_SCORE_BUMP — Gate 4 PENDING resolution score bump (default 0.02)
+  AUTO_PROMOTE_MAYBE_MIN_SCORE    — legacy setting, ignored; MAYBE fails closed
+  AUTO_PROMOTE_PENDING_SCORE_BUMP — legacy setting, ignored; PENDING fails closed
 
 Metrics: increments auto_promote_rejections_total{reason=...} counter when available.
 """
@@ -73,7 +73,8 @@ class PromotionResult:
     """Result of the auto-promote gate evaluation."""
     promoted: bool
     reason: str  # one of: "auto_promote_disabled", "score_low", "resolution_divergent",
-                 #       "llm_no", "liquidity_low", "date_out_of_window",
+                 #       "resolution_pending", "llm_no", "llm_maybe",
+                 #       "liquidity_low", "date_out_of_window",
                  #       "daily_cap", "cooling_off", "promoted"
 
 
@@ -176,50 +177,36 @@ async def maybe_promote(
     if score < min_score:
         return _reject("score_low")
 
-    # ── Gate 3: resolution_check — reject DIVERGENT, allow IDENTICAL or PENDING ─
-    # DIVERGENT = confirmed mismatch (different dates, different sources) → block.
-    # IDENTICAL = perfect structured match → proceed.
-    # PENDING = insufficient structured data → defer to LLM (Gate 4).
-    # This relaxation is safe because Gate 4 (LLM) will catch semantic
-    # mismatches that lack structured data, and DIVERGENT still blocks.
+    # ── Gate 3: resolution_check must return IDENTICAL ───────────────────────
+    # Live-money auto-trading requires confirmed identical resolution criteria.
+    # DIVERGENT = confirmed mismatch; PENDING = insufficient structured data.
+    # Both fail closed. LLM text equivalence is a second opinion, not a
+    # substitute for structured resolution evidence.
     kalshi_facts = _candidate_to_market_facts(candidate, "kalshi")
     poly_facts = _candidate_to_market_facts(candidate, "polymarket")
     resolution_result = resolution_checker(kalshi_facts, poly_facts)
     if resolution_result == ResolutionMatch.DIVERGENT:
         return _reject("resolution_divergent")
-    resolution_is_identical = resolution_result == ResolutionMatch.IDENTICAL
+    if resolution_result != ResolutionMatch.IDENTICAL:
+        return _reject("resolution_pending")
 
-    # ── Gate 4: LLM verifier == YES or MAYBE ────────────────────────────────
-    # When resolution_check returned PENDING (not enough structured data),
-    # the LLM is the primary validator. When IDENTICAL, the LLM is a
-    # second opinion that must also agree.
-    # MAYBE is accepted when score >= AUTO_PROMOTE_MAYBE_MIN_SCORE (decent
-    # textual overlap suggests the markets are related even if the LLM
-    # can't be certain from question text alone — e.g. different phrasing
-    # of the same underlying event).
+    category = str(candidate.get("category") or candidate.get("kalshi_category") or "").lower()
+    if category == "sports":
+        polarity = str(candidate.get("polarity") or "").lower()
+        if polarity == "flipped":
+            return _reject("polarity_flipped")
+        if polarity != "same":
+            return _reject("polarity_unconfirmed")
+
+    # ── Gate 4: LLM verifier must return YES ────────────────────────────────
+    # MAYBE is ambiguity, not confirmation. Any non-YES verdict fails closed.
     kalshi_q = candidate.get("kalshi_title", "")
     poly_q = candidate.get("poly_question", "")
     llm_result = await llm_verifier(kalshi_q, poly_q)
     if llm_result == "NO":
         return _reject("llm_no")
-    maybe_min_score = float(_setting(
-        settings, "AUTO_PROMOTE_MAYBE_MIN_SCORE", "auto_promote_maybe_min_score",
-        default=_env_float("AUTO_PROMOTE_MAYBE_MIN_SCORE", 0.30),
-    ))
-    if llm_result == "MAYBE" and score < maybe_min_score:
-        return _reject("llm_maybe_low_score")
-
-    # When resolution data is PENDING (not enough structured data to confirm),
-    # the LLM is the primary validator.  We only need a modest score bump
-    # above the base threshold as a sanity check — the LLM already said YES.
-    if not resolution_is_identical:
-        pending_bump = float(_setting(
-            settings, "AUTO_PROMOTE_PENDING_SCORE_BUMP", "auto_promote_pending_score_bump",
-            default=_env_float("AUTO_PROMOTE_PENDING_SCORE_BUMP", 0.02),
-        ))
-        high_score_threshold = min_score + pending_bump
-        if score < high_score_threshold:
-            return _reject("score_low_for_pending_resolution")
+    if llm_result != "YES":
+        return _reject("llm_maybe")
 
     # ── Gate 5: Liquidity depth ≥ PHASE5_MAX_ORDER_USD (combined bid+ask) ─────
     phase5_max = float(_setting(settings, "PHASE5_MAX_ORDER_USD", "phase5_max_order_usd", default=50.0))
@@ -238,7 +225,7 @@ async def maybe_promote(
         )
         return _reject("liquidity_low")
 
-    # ── Gate 6: resolution_date within AUTO_PROMOTE_MAX_DAYS ──────────────────
+    # ── Gate 6: resolution_date active and within AUTO_PROMOTE_MAX_DAYS ───────
     max_days = int(_setting(
         settings, "AUTO_PROMOTE_MAX_DAYS", "auto_promote_max_days",
         default=int(_env_float("AUTO_PROMOTE_MAX_DAYS", 90.0)),
@@ -248,7 +235,7 @@ async def maybe_promote(
         try:
             res_date = date.fromisoformat(resolution_date_str)
             days_until = (res_date - date.today()).days
-            if days_until > max_days:
+            if days_until < 0 or days_until > max_days:
                 return _reject("date_out_of_window")
         except (ValueError, TypeError):
             # Can't parse date → treat as out of window (safe-fail)

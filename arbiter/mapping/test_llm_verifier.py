@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch, call
 
 import pytest
 
-from arbiter.mapping.llm_verifier import verify
+from arbiter.mapping.llm_verifier import verify, verify_batch
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -40,7 +40,8 @@ def _make_mock_client(response_text: str):
 async def test_yes_response_returns_YES():
     """A clear YES response should return 'YES'."""
     mock_client = _make_mock_client("YES - these two markets resolve to the same outcome.")
-    with patch("arbiter.mapping.llm_verifier._get_client", return_value=mock_client):
+    with patch("arbiter.mapping.llm_verifier._get_client", return_value=mock_client), \
+         patch("arbiter.mapping.llm_verifier._BACKEND", "api"):
         result = await verify(
             "Will the Fed cut rates in May 2026?",
             "Federal Reserve rate cut May 2026?",
@@ -52,7 +53,8 @@ async def test_yes_response_returns_YES():
 async def test_no_response_returns_NO():
     """A clear NO response should return 'NO'."""
     mock_client = _make_mock_client("NO - these markets have different resolution dates.")
-    with patch("arbiter.mapping.llm_verifier._get_client", return_value=mock_client):
+    with patch("arbiter.mapping.llm_verifier._get_client", return_value=mock_client), \
+         patch("arbiter.mapping.llm_verifier._BACKEND", "api"):
         result = await verify(
             "Will the Fed cut rates in May 2026?",
             "Will the Fed cut rates by July 2026?",
@@ -66,7 +68,8 @@ async def test_ambiguous_response_returns_MAYBE():
     mock_client = _make_mock_client(
         "I cannot determine from the text whether these markets resolve identically."
     )
-    with patch("arbiter.mapping.llm_verifier._get_client", return_value=mock_client):
+    with patch("arbiter.mapping.llm_verifier._get_client", return_value=mock_client), \
+         patch("arbiter.mapping.llm_verifier._BACKEND", "api"):
         result = await verify(
             "Will Bitcoin hit 100K?",
             "Will BTC exceed $100,000?",
@@ -78,7 +81,8 @@ async def test_ambiguous_response_returns_MAYBE():
 async def test_maybe_explicit_returns_MAYBE():
     """An explicit MAYBE response should return 'MAYBE'."""
     mock_client = _make_mock_client("MAYBE - the resolution criteria are unclear.")
-    with patch("arbiter.mapping.llm_verifier._get_client", return_value=mock_client):
+    with patch("arbiter.mapping.llm_verifier._get_client", return_value=mock_client), \
+         patch("arbiter.mapping.llm_verifier._BACKEND", "api"):
         result = await verify(
             "Will Trump win the 2028 election?",
             "Will Trump be elected president in 2028?",
@@ -93,7 +97,8 @@ async def test_api_exception_returns_MAYBE():
     """On any API exception, verify() must return MAYBE (fail-safe invariant)."""
     mock_client = AsyncMock()
     mock_client.messages.create = AsyncMock(side_effect=RuntimeError("connection refused"))
-    with patch("arbiter.mapping.llm_verifier._get_client", return_value=mock_client):
+    with patch("arbiter.mapping.llm_verifier._get_client", return_value=mock_client), \
+         patch("arbiter.mapping.llm_verifier._BACKEND", "api"):
         result = await verify(
             "Will BTC hit 100K in 2026?",
             "Bitcoin above 100K 2026?",
@@ -109,7 +114,8 @@ async def test_api_timeout_returns_MAYBE():
     mock_client.messages.create = AsyncMock(
         side_effect=_asyncio.TimeoutError("timeout")
     )
-    with patch("arbiter.mapping.llm_verifier._get_client", return_value=mock_client):
+    with patch("arbiter.mapping.llm_verifier._get_client", return_value=mock_client), \
+         patch("arbiter.mapping.llm_verifier._BACKEND", "api"):
         result = await verify(
             "Will the EU raise tariffs in 2026?",
             "European Union tariff increase 2026?",
@@ -127,7 +133,8 @@ async def test_same_pair_hits_cache_no_second_api_call():
     lv._cache.clear()
 
     mock_client = _make_mock_client("YES - same outcome.")
-    with patch("arbiter.mapping.llm_verifier._get_client", return_value=mock_client):
+    with patch("arbiter.mapping.llm_verifier._get_client", return_value=mock_client), \
+         patch("arbiter.mapping.llm_verifier._BACKEND", "api"):
         r1 = await verify("Will the Fed cut rates in May 2026?", "Fed rate cut May 2026?")
         r2 = await verify("Will the Fed cut rates in May 2026?", "Fed rate cut May 2026?")
 
@@ -145,7 +152,8 @@ async def test_reversed_pair_hits_cache():
     lv._cache.clear()
 
     mock_client = _make_mock_client("YES")
-    with patch("arbiter.mapping.llm_verifier._get_client", return_value=mock_client):
+    with patch("arbiter.mapping.llm_verifier._get_client", return_value=mock_client), \
+         patch("arbiter.mapping.llm_verifier._BACKEND", "api"):
         r1 = await verify("question A", "question B")
         r2 = await verify("question B", "question A")
 
@@ -170,7 +178,8 @@ async def test_system_prompt_has_cache_control():
     mock_client = AsyncMock()
     mock_client.messages.create = _capture_create
 
-    with patch("arbiter.mapping.llm_verifier._get_client", return_value=mock_client):
+    with patch("arbiter.mapping.llm_verifier._get_client", return_value=mock_client), \
+         patch("arbiter.mapping.llm_verifier._BACKEND", "api"):
         await verify("Will the Fed cut rates?", "Fed rate cut decision?")
 
     assert len(captured_calls) == 1
@@ -186,3 +195,31 @@ async def test_system_prompt_has_cache_control():
     assert has_cache_control, (
         "At least one system block must have cache_control set for prompt caching"
     )
+
+
+@pytest.mark.asyncio
+async def test_verify_batch_uses_single_api_call_and_populates_cache():
+    """Batch verification should amortize API calls and feed the pair cache."""
+    import arbiter.mapping.llm_verifier as lv
+    lv._cache.clear()
+
+    response = """
+    [
+      {"index": 0, "answer": "YES", "reason": "same event"},
+      {"index": 1, "answer": "NO", "reason": "different threshold"}
+    ]
+    """
+    mock_client = _make_mock_client(response)
+    pairs = [
+        ("Will A happen?", "Will A happen on the same date?"),
+        ("BTC above 85000?", "BTC above 100000?"),
+    ]
+
+    with patch("arbiter.mapping.llm_verifier._get_client", return_value=mock_client), \
+         patch("arbiter.mapping.llm_verifier._BACKEND", "api"):
+        results = await verify_batch(pairs)
+        cached = await verify(*pairs[0])
+
+    assert results == ["YES", "NO"]
+    assert cached == "YES"
+    assert mock_client.messages.create.call_count == 1

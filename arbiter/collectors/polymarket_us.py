@@ -17,6 +17,7 @@ import time
 from datetime import date, timedelta
 from dataclasses import dataclass, field
 from typing import AsyncIterator, Optional
+from urllib.parse import urlencode
 
 import aiohttp
 
@@ -251,15 +252,37 @@ class PolymarketUSClient:
     async def list_markets(
         self,
         page_size: int = 100,
+        max_pages: Optional[int] = None,
         purpose: str = "live",
+        active: Optional[bool] = None,
+        closed: Optional[bool] = None,
+        archived: Optional[bool] = None,
     ) -> AsyncIterator[dict]:
         offset = 0
+        pages = 0
         while True:
+            if max_pages is not None and pages >= max_pages:
+                logger.warning(
+                    "Polymarket US list_markets reached max_pages=%d at offset=%d",
+                    max_pages,
+                    offset,
+                )
+                break
+
+            params = {"limit": page_size, "offset": offset}
+            if active is not None:
+                params["active"] = str(active).lower()
+            if closed is not None:
+                params["closed"] = str(closed).lower()
+            if archived is not None:
+                params["archived"] = str(archived).lower()
+
             data = await self._public(
                 "GET",
-                f"/markets?limit={page_size}&offset={offset}",
+                f"/markets?{urlencode(params)}",
                 purpose=purpose,
             )
+            pages += 1
             markets = data.get("markets", [])
             if not markets:
                 break

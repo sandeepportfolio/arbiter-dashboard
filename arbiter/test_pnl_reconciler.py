@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from arbiter.audit.pnl_reconciler import PnLReconciler
 
 
@@ -36,6 +38,32 @@ def test_load_execution_history_rebuilds_instead_of_double_counting():
 
     reconciler.load_execution_history([make_execution(2.0)])
     assert reconciler.stats["recorded_pnl"] == {"kalshi": 1.0, "polymarket": 1.0}
+
+
+@pytest.mark.asyncio
+async def test_rebaseline_preserves_execution_history_without_future_drift():
+    reconciler = PnLReconciler(log_to_disk=False)
+    executions = [make_execution(4.0)]
+
+    await reconciler.rebaseline(
+        {"kalshi": 102.0, "polymarket": 202.0},
+        executions,
+    )
+
+    assert reconciler.stats["starting_balances"] == {
+        "kalshi": 100.0,
+        "polymarket": 200.0,
+    }
+    assert reconciler.stats["recorded_pnl"] == {
+        "kalshi": 2.0,
+        "polymarket": 2.0,
+    }
+
+    reconciler.load_execution_history(executions)
+    report = reconciler.reconcile({"kalshi": 102.0, "polymarket": 202.0})
+
+    assert report.has_flags is False
+    assert reconciler.stats["flag_count"] == 0
 
 
 def test_record_deposit_dedups_within_window():

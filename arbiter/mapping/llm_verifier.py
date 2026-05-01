@@ -16,6 +16,7 @@ MAYBE as "not-YES", so a flaky network can never accidentally promote.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -127,6 +128,17 @@ def _parse_answer(text: str) -> Literal["YES", "NO", "MAYBE"]:
     return "MAYBE"
 
 
+def _cache_key(kalshi_question: str, poly_question: str) -> frozenset:
+    return frozenset({kalshi_question, poly_question})
+
+
+def _remember(cache_key: frozenset, result: Literal["YES", "NO", "MAYBE"]) -> None:
+    if len(_cache) >= _CACHE_MAX:
+        oldest_key = next(iter(_cache))
+        del _cache[oldest_key]
+    _cache[cache_key] = result
+
+
 # ─── CLI backend ─────────────────────────────────────────────────────────────
 
 async def _verify_cli(
@@ -211,16 +223,25 @@ async def _verify_cli(
 
 # ─── API backend ─────────────────────────────────────────────────────────────
 
+def _get_client():
+    """Build the Anthropic async client.
+
+    Kept as a tiny helper so tests can patch the client without hitting the
+    network, regardless of which backend this host auto-detects by default.
+    """
+    import anthropic
+    return anthropic.AsyncAnthropic(
+        api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
+    )
+
+
 async def _verify_api(
     kalshi_question: str,
     poly_question: str,
 ) -> Literal["YES", "NO", "MAYBE"]:
     """Call Anthropic API directly (requires ANTHROPIC_API_KEY)."""
     try:
-        import anthropic
-        client = anthropic.AsyncAnthropic(
-            api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
-        )
+        client = _get_client()
         resp = await client.messages.create(
             model=_API_MODEL,
             max_tokens=64,
@@ -291,6 +312,123 @@ async def _verify_http(
         return "MAYBE"
 
 
+def _parse_batch_response(text: str, expected_count: int) -> list[Literal["YES", "NO", "MAYBE"]]:
+    """Parse a JSON batch response; fail closed per item on malformed output."""
+    results: list[Literal["YES", "NO", "MAYBE"]] = ["MAYBE"] * expected_count
+    raw = text.strip()
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        match = re.search(r"\[[\s\S]*\]", raw)
+        if not match:
+            return results
+        try:
+            parsed = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return results
+
+    if not isinstance(parsed, list):
+        return results
+
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        try:
+            index = int(item.get("index"))
+        except (TypeError, ValueError):
+            continue
+        if not 0 <= index < expected_count:
+            continue
+        answer = str(item.get("answer", "MAYBE")).upper()
+        if answer in ("YES", "NO", "MAYBE"):
+            results[index] = answer  # type: ignore[assignment]
+    return results
+
+
+async def _verify_batch_api(
+    pairs: list[tuple[str, str]],
+) -> list[Literal["YES", "NO", "MAYBE"]]:
+    """Call Anthropic once for a batch of candidate pairs."""
+    try:
+        client = _get_client()
+        numbered = "\n".join(
+            f"{idx}. Q1 (Kalshi): {kalshi_q}\n   Q2 (Polymarket): {poly_q}"
+            for idx, (kalshi_q, poly_q) in enumerate(pairs)
+        )
+        resp = await client.messages.create(
+            model=_API_MODEL,
+            max_tokens=max(256, 96 * len(pairs)),
+            system=[
+                {
+                    "type": "text",
+                    "text": _SYSTEM_PROMPT,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        "For each indexed pair, decide whether the two markets resolve "
+                        "to the exact same real-world outcome. Respond only as JSON: "
+                        "[{\"index\":0,\"answer\":\"YES|NO|MAYBE\",\"reason\":\"short\"}, ...].\n\n"
+                        f"{numbered}"
+                    ),
+                }
+            ],
+        )
+        text = resp.content[0].text if resp.content else ""
+        return _parse_batch_response(text, len(pairs))
+    except Exception as exc:
+        logger.warning(
+            "llm_verifier batch API error (returning MAYBE): %s: %s",
+            type(exc).__name__,
+            exc,
+        )
+        return ["MAYBE"] * len(pairs)
+
+
+async def _verify_batch_http(
+    pairs: list[tuple[str, str]],
+) -> list[Literal["YES", "NO", "MAYBE"]]:
+    """Call a host-side batch verifier when available; fallback fails closed."""
+    import aiohttp
+
+    single_url = os.environ.get("LLM_VERIFIER_HTTP_URL", "http://host.docker.internal:8079/verify")
+    url = single_url.rsplit("/", 1)[0] + "/verify_batch"
+    payload = {
+        "pairs": [
+            {"kalshi_question": kalshi_q, "poly_question": poly_q}
+            for kalshi_q, poly_q in pairs
+        ]
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                url,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=180),
+            ) as resp:
+                if resp.status != 200:
+                    return ["MAYBE"] * len(pairs)
+                data = await resp.json()
+                raw_results = data.get("results", [])
+                results: list[Literal["YES", "NO", "MAYBE"]] = []
+                for idx in range(len(pairs)):
+                    value = "MAYBE"
+                    if idx < len(raw_results):
+                        value = str(raw_results[idx]).upper()
+                    results.append(value if value in ("YES", "NO", "MAYBE") else "MAYBE")  # type: ignore[arg-type]
+                return results
+    except Exception as exc:
+        logger.warning(
+            "llm_verifier batch HTTP error (returning MAYBE): %s: %s",
+            type(exc).__name__,
+            exc,
+        )
+        return ["MAYBE"] * len(pairs)
+
+
 # ─── Public API ───────────────────────────────────────────────────────────────
 
 # Detect once at module load
@@ -310,7 +448,7 @@ async def verify(
     On any failure returns MAYBE (fail-safe — the auto-promote gate treats
     MAYBE as "not-YES", so errors never accidentally promote).
     """
-    cache_key = frozenset({kalshi_question, poly_question})
+    cache_key = _cache_key(kalshi_question, poly_question)
 
     # Check in-memory cache first
     if cache_key in _cache:
@@ -324,10 +462,46 @@ async def verify(
     else:
         result = await _verify_api(kalshi_question, poly_question)
 
-    # Store in cache (evict oldest if over limit — simple FIFO)
-    if len(_cache) >= _CACHE_MAX:
-        oldest_key = next(iter(_cache))
-        del _cache[oldest_key]
-    _cache[cache_key] = result
+    _remember(cache_key, result)
 
     return result
+
+
+async def verify_batch(
+    pairs: list[tuple[str, str]],
+    *,
+    batch_size: int = 20,
+) -> list[Literal["YES", "NO", "MAYBE"]]:
+    """Layer 2 batch verifier with the same fail-safe/cache semantics as verify()."""
+    if not pairs:
+        return []
+
+    results: list[Literal["YES", "NO", "MAYBE"] | None] = [None] * len(pairs)
+    missing: list[tuple[int, tuple[str, str], frozenset]] = []
+
+    for idx, (kalshi_question, poly_question) in enumerate(pairs):
+        key = _cache_key(kalshi_question, poly_question)
+        cached = _cache.get(key)
+        if cached is not None:
+            results[idx] = cached
+        else:
+            missing.append((idx, (kalshi_question, poly_question), key))
+
+    for start in range(0, len(missing), max(1, batch_size)):
+        chunk = missing[start:start + max(1, batch_size)]
+        chunk_pairs = [pair for _, pair, _ in chunk]
+        if _BACKEND == "api":
+            chunk_results = await _verify_batch_api(chunk_pairs)
+        elif _BACKEND == "http":
+            chunk_results = await _verify_batch_http(chunk_pairs)
+            if all(result == "MAYBE" for result in chunk_results):
+                chunk_results = [await verify(*pair) for pair in chunk_pairs]
+        else:
+            chunk_results = [await verify(*pair) for pair in chunk_pairs]
+
+        for (result_index, _, key), result in zip(chunk, chunk_results):
+            normalized = result if result in ("YES", "NO", "MAYBE") else "MAYBE"
+            results[result_index] = normalized
+            _remember(key, normalized)
+
+    return [result or "MAYBE" for result in results]
