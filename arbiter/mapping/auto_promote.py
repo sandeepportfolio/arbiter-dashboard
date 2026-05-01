@@ -7,12 +7,13 @@ Returns the first-failing reason or promoted=True.
 Conditions (in order — first failing wins):
 1. AUTO_PROMOTE_ENABLED=true
 2. score >= AUTO_PROMOTE_MIN_SCORE  (env var; default 0.85 if unset)
-3. resolution_check(...) == IDENTICAL
-4. LLM verifier returns YES
-5. Both orderbooks have combined (bid + ask) depth >= PHASE5_MAX_ORDER_USD
-6. resolution_date within 90 days
-7. today_promoted_count < AUTO_PROMOTE_DAILY_CAP (default 20)
-8. Cooling-off: first AUTO_PROMOTE_ADVISORY_SCANS after first-see are advisory-only
+3. Candidate was structurally parsed and matched
+4. resolution_check(...) == IDENTICAL
+5. LLM verifier returns YES
+6. Both orderbooks have combined (bid + ask) depth >= PHASE5_MAX_ORDER_USD
+7. resolution_date within 90 days
+8. today_promoted_count < AUTO_PROMOTE_DAILY_CAP (default 20)
+9. Cooling-off: first AUTO_PROMOTE_ADVISORY_SCANS after first-see are advisory-only
 
 Tunable thresholds (read from env when not present in `settings`):
   AUTO_PROMOTE_MIN_SCORE          — Gate 2 minimum score (default 0.85)
@@ -73,7 +74,7 @@ class PromotionResult:
     """Result of the auto-promote gate evaluation."""
     promoted: bool
     reason: str  # one of: "auto_promote_disabled", "score_low", "resolution_divergent",
-                 #       "resolution_pending", "llm_no", "llm_maybe",
+                 #       "structural_unverified", "resolution_pending", "llm_no", "llm_maybe",
                  #       "liquidity_low", "date_out_of_window",
                  #       "daily_cap", "cooling_off", "promoted"
 
@@ -177,7 +178,14 @@ async def maybe_promote(
     if score < min_score:
         return _reject("score_low")
 
-    # ── Gate 3: resolution_check must return IDENTICAL ───────────────────────
+    # ── Gate 3: category parser/fingerprint must have proven the pair ───────
+    # Fuzzy text + LLM is good enough for review candidates, not live trading.
+    # Auto-trade promotion requires the deterministic category-specific parser
+    # to prove same event/outcome/date/type/source first.
+    if not bool(candidate.get("structural_match")):
+        return _reject("structural_unverified")
+
+    # ── Gate 4: resolution_check must return IDENTICAL ───────────────────────
     # Live-money auto-trading requires confirmed identical resolution criteria.
     # DIVERGENT = confirmed mismatch; PENDING = insufficient structured data.
     # Both fail closed. LLM text equivalence is a second opinion, not a
@@ -198,7 +206,7 @@ async def maybe_promote(
         if polarity != "same":
             return _reject("polarity_unconfirmed")
 
-    # ── Gate 4: LLM verifier must return YES ────────────────────────────────
+    # ── Gate 5: LLM verifier must return YES ────────────────────────────────
     # MAYBE is ambiguity, not confirmation. Any non-YES verdict fails closed.
     kalshi_q = candidate.get("kalshi_verification_text") or candidate.get("kalshi_title", "")
     poly_q = (
@@ -212,7 +220,7 @@ async def maybe_promote(
     if llm_result != "YES":
         return _reject("llm_maybe")
 
-    # ── Gate 5: Liquidity depth ≥ PHASE5_MAX_ORDER_USD (combined bid+ask) ─────
+    # ── Gate 6: Liquidity depth ≥ PHASE5_MAX_ORDER_USD (combined bid+ask) ─────
     phase5_max = float(_setting(
         settings, "PHASE5_MAX_ORDER_USD", "phase5_max_order_usd",
         default=_env_float("PHASE5_MAX_ORDER_USD", 50.0),
@@ -232,7 +240,7 @@ async def maybe_promote(
         )
         return _reject("liquidity_low")
 
-    # ── Gate 6: resolution_date active and within AUTO_PROMOTE_MAX_DAYS ───────
+    # ── Gate 7: resolution_date active and within AUTO_PROMOTE_MAX_DAYS ───────
     max_days = int(_setting(
         settings, "AUTO_PROMOTE_MAX_DAYS", "auto_promote_max_days",
         default=int(_env_float("AUTO_PROMOTE_MAX_DAYS", 90.0)),
@@ -249,7 +257,7 @@ async def maybe_promote(
             return _reject("date_out_of_window")
     # If no resolution date provided, skip this gate (insufficient data)
 
-    # ── Gate 7: daily cap ─────────────────────────────────────────────────────
+    # ── Gate 8: daily cap ─────────────────────────────────────────────────────
     daily_cap = int(_setting(
         settings, "AUTO_PROMOTE_DAILY_CAP", "auto_promote_daily_cap",
         default=int(_env_float("AUTO_PROMOTE_DAILY_CAP", 20.0)),
@@ -257,7 +265,7 @@ async def maybe_promote(
     if today_promoted_count >= daily_cap:
         return _reject("daily_cap")
 
-    # ── Gate 8: cooling-off ───────────────────────────────────────────────────
+    # ── Gate 9: cooling-off ───────────────────────────────────────────────────
     ticker = candidate.get("kalshi_ticker", "")
     advisory_scans = int(_setting(
         settings, "AUTO_PROMOTE_ADVISORY_SCANS", "auto_promote_advisory_scans",

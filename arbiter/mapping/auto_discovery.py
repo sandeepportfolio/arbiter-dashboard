@@ -8,6 +8,7 @@ Returns the count of candidates written to the store.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 import logging
 import os
@@ -464,6 +465,52 @@ def _candidate_resolution_criteria(candidate: dict[str, Any], *, operator_note: 
     return criteria
 
 
+def _structured_canonical_id(candidate: dict[str, Any]) -> str:
+    """Stable canonical ID for parser-proven recurring markets.
+
+    The exact Kalshi/Polymarket pair remains the true uniqueness key, but a
+    readable deterministic ID prevents new structurally matched rows from
+    accumulating under opaque AUTO_* IDs as recurring sports/politics/econ
+    catalogs rotate.
+    """
+    category = str(candidate.get("category") or "").strip().lower()
+    event_key = str(candidate.get("event_fingerprint") or "")
+    outcome = normalize_market_text(str(candidate.get("outcome") or "")).replace(" ", "_").upper()
+    digest = hashlib.sha1(
+        f"{candidate.get('kalshi_ticker')}|{candidate.get('poly_slug')}|{event_key}|{outcome}".encode("utf-8")
+    ).hexdigest()[:8]
+
+    parts = event_key.split(":")
+    if category == "sports" and len(parts) >= 6:
+        _, sport, _entities, event_date, metric, _threshold = parts[:6]
+        if metric == "winner" and event_date:
+            compact_date = event_date.replace("-", "")
+            side = outcome or "YES"
+            return f"GAME_{sport.upper()}_{compact_date}_{side}_{digest}"
+
+    if category == "politics" and len(parts) >= 6:
+        _, subcategory, entity, event_date, metric, threshold = parts[:6]
+        compact_date = event_date.replace("-", "")
+        side = outcome or str(candidate.get("outcome") or "YES").upper()
+        return f"POL_{subcategory.upper()}_{entity.upper()}_{compact_date}_{metric.upper()}_{threshold.upper()}_{side}_{digest}"[:200]
+
+    if category == "crypto" and len(parts) >= 6:
+        _, asset, entity, event_date, metric, threshold = parts[:6]
+        compact_date = event_date.replace("-", "")
+        threshold_id = normalize_market_text(threshold).replace(" ", "_").upper()
+        return f"CRYPT_{asset.upper()}_{entity.upper()}_{compact_date}_{metric.upper()}_{threshold_id}_{digest}"[:200]
+
+    if category == "economics" and len(parts) >= 6:
+        _, subcategory, entity, event_date, metric, threshold = parts[:6]
+        compact_date = event_date.replace("-", "")
+        entity_id = normalize_market_text(entity).replace(" ", "_").upper()[:50]
+        threshold_id = normalize_market_text(threshold).replace(" ", "_").upper()[:32]
+        return f"ECON_{subcategory.upper()}_{entity_id}_{compact_date}_{metric.upper()}_{threshold_id}_{digest}"[:200]
+
+    base = normalize_market_text(event_key or str(candidate.get("kalshi_ticker") or "STRUCTURED")).replace(" ", "_").upper()
+    return f"MAP_{base[:64]}_{digest}"
+
+
 def _is_structured_sports_non_winner_pair(kalshi_ticker: str, poly_slug: str) -> bool:
     """Gate 0: never fuzzy-match sports moneyline tickers to spread/total slugs."""
     kalshi = parse_kalshi_sports_ticker(kalshi_ticker)
@@ -533,18 +580,29 @@ def _candidate_verification_pair(candidate: dict[str, Any]) -> tuple[str, str]:
 def _synthetic_kalshi_orderbook(market: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(market, dict):
         return {"bids": [], "asks": []}
-    px = market.get("yes_bid") or market.get("bid") or market.get("last_price") or 0
-    qty = market.get("yes_bid_size_fp") or market.get("yes_ask_size_fp") or market.get("volume") or 0
-    try:
-        px_f = float(px or 0)
-        qty_f = float(qty or 0)
-    except (TypeError, ValueError):
-        return {"bids": [], "asks": []}
-    if px_f > 1.0:
-        px_f /= 100.0
-    if px_f <= 0 or qty_f <= 0:
-        return {"bids": [], "asks": []}
-    return {"bids": [{"px": px_f, "qty": qty_f}], "asks": []}
+
+    def _level(price_keys: tuple[str, ...], qty_keys: tuple[str, ...]) -> dict[str, float] | None:
+        px = next((market.get(key) for key in price_keys if market.get(key) not in (None, "", 0)), 0)
+        qty = next((market.get(key) for key in qty_keys if market.get(key) not in (None, "", 0)), 0)
+        try:
+            px_f = float(px or 0)
+            qty_f = float(qty or 0)
+        except (TypeError, ValueError):
+            return None
+        if px_f > 1.0:
+            px_f /= 100.0
+        if px_f <= 0 or qty_f <= 0:
+            return None
+        return {"px": px_f, "qty": qty_f}
+
+    # Use only visible top-of-book sizes. Historical volume is not executable
+    # liquidity and must not satisfy an auto-trade promotion gate.
+    bid = _level(("yes_bid", "bid", "yes_bid_dollars"), ("yes_bid_size_fp", "yes_bid_size"))
+    ask = _level(("yes_ask", "ask", "yes_ask_dollars"), ("yes_ask_size_fp", "yes_ask_size"))
+    return {
+        "bids": [bid] if bid else [],
+        "asks": [ask] if ask else [],
+    }
 
 
 def _normalize_kalshi_orderbook(payload: Any) -> dict[str, Any]:
@@ -754,27 +812,32 @@ async def _apply_auto_promote(
     )
 
     if preverify_candidates:
-        pairs = []
+        pairs_by_category: dict[str, list[tuple[dict[str, Any], tuple[str, str]]]] = defaultdict(list)
         for candidate in preverify_candidates:
             kalshi_verify_text, poly_verify_text = _candidate_verification_pair(candidate)
             candidate["kalshi_verification_text"] = kalshi_verify_text
             candidate["polymarket_verification_text"] = poly_verify_text
-            pairs.append((kalshi_verify_text, poly_verify_text))
+            category = str(candidate.get("category") or "").strip().lower()
+            pairs_by_category[category].append((candidate, (kalshi_verify_text, poly_verify_text)))
         _emit_progress(
             progress,
             "llm_batch",
             "Running cached batch LLM verification",
-            counts={"pairs": len(pairs)},
+            counts={"pairs": len(preverify_candidates), "categories": len(pairs_by_category)},
         )
         try:
-            batch_results = await llm_verify_batch(pairs)
-            for pair, result in zip(pairs, batch_results):
-                llm_results[pair] = result
+            verdict_count = 0
+            for category, items in pairs_by_category.items():
+                pairs = [pair for _, pair in items]
+                batch_results = await llm_verify_batch(pairs, category=category or None)
+                for pair, result in zip(pairs, batch_results):
+                    llm_results[pair] = result
+                    verdict_count += 1
             _emit_progress(
                 progress,
                 "llm_batch",
                 "Batch LLM verification complete",
-                counts={"pairs": len(pairs), "verdicts": len(llm_results)},
+                counts={"pairs": len(preverify_candidates), "verdicts": verdict_count},
             )
         except Exception as exc:
             logger.warning("auto_discovery: batch LLM verification failed closed: %s", exc)
@@ -782,7 +845,7 @@ async def _apply_auto_promote(
                 progress,
                 "llm_batch",
                 "Batch LLM verification failed closed",
-                counts={"pairs": len(pairs), "verdicts": 0},
+                counts={"pairs": len(preverify_candidates), "verdicts": 0},
                 error=str(exc),
             )
 
@@ -825,6 +888,8 @@ async def _apply_auto_promote(
         candidate["auto_promote_reason"] = result.reason
         reason_counts[result.reason] = reason_counts.get(result.reason, 0) + 1
         if not result.promoted or promoted_this_pass >= max_promotions:
+            if not result.promoted:
+                candidate["review_note"] = f"Auto-promote gate: {result.reason}"
             continue
 
         promoted_this_pass += 1
@@ -836,6 +901,7 @@ async def _apply_auto_promote(
             operator_note="Auto-promoted by discovery engine after structured + LLM + liquidity checks.",
         )
         candidate["notes"] = "Auto-promoted by discovery engine."
+        candidate["review_note"] = ""
 
     logger.info(
         "auto_discovery: auto-promote summary — %d promoted, %d total, settings: min_score=%.2f max_days=%d advisory=%d, reasons: %s",
@@ -1017,6 +1083,7 @@ async def _discover_from_kalshi_events(
                     candidate.update(sports_safety.candidate_fields())
                 if exact_match is not None:
                     candidate.update(exact_match.candidate_fields())
+                    candidate.setdefault("canonical_id", _structured_canonical_id(candidate))
                 candidates.append(candidate)
 
     return candidates, scored_pairs
@@ -1368,6 +1435,7 @@ async def discover(
                     candidate.update(sports_safety.candidate_fields())
                 if exact_match is not None:
                     candidate.update(exact_match.candidate_fields())
+                    candidate.setdefault("canonical_id", _structured_canonical_id(candidate))
                 candidates.append(candidate)
 
     if event_discovery and kalshi_events:

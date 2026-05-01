@@ -152,6 +152,7 @@ class StructuralMatch:
             "structural_match": True,
             "event_fingerprint": self.event_key,
             "outcome_fingerprint": self.market_key,
+            "outcome": self.outcome,
             "category": self.category,
             "kalshi_category": self.category,
             "polymarket_category": self.category,
@@ -226,6 +227,8 @@ def structural_match(kalshi_market: dict, polymarket_market: dict) -> Structural
         return None
     if kalshi.market_key != poly.market_key:
         return None
+    if kalshi.source != poly.source:
+        return None
     return StructuralMatch(
         category=kalshi.category,
         event_key=kalshi.event_key,
@@ -233,7 +236,7 @@ def structural_match(kalshi_market: dict, polymarket_market: dict) -> Structural
         outcome=kalshi.outcome,
         polarity="same",
         resolution_date=kalshi.date,
-        resolution_source=kalshi.source if kalshi.source == poly.source else "official_result",
+        resolution_source=kalshi.source,
         rule=f"{kalshi.category}:{kalshi.metric}:{kalshi.threshold}:{kalshi.outcome}",
     )
 

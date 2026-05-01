@@ -80,6 +80,7 @@ def _make_candidate(**overrides):
         "status": "candidate",
         "resolution_date": "2026-06-01",
         "category": "politics",
+        "structural_match": True,
     }
     base.update(overrides)
     return base
@@ -204,6 +205,21 @@ class TestAutoPromoteGate2:
 
 class TestAutoPromoteGate3:
     """Gate 3: resolution_check must return IDENTICAL."""
+
+    def test_unstructured_candidate_rejects_before_llm(self):
+        result = asyncio.get_event_loop().run_until_complete(
+            maybe_promote(
+                _make_candidate(structural_match=False),
+                settings=_make_settings(),
+                orderbooks=_make_orderbooks(),
+                llm_verifier=_yes_verifier,
+                today_promoted_count=0,
+                cooling_state={},
+                resolution_checker=_identical_checker,
+            )
+        )
+        assert not result.promoted
+        assert result.reason == "structural_unverified"
 
     def test_divergent_rejects(self):
         result = asyncio.get_event_loop().run_until_complete(
