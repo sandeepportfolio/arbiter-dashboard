@@ -240,8 +240,16 @@ window.MOCK = (() => {
   window.__arbiterAPI = API;
 
   function readAuthToken() {
+    // Prefer sessionStorage, but keep a localStorage fallback so a browser
+    // refresh/resume does not leave the shell visually signed in while write
+    // endpoints fail with 401.  /api/auth/me still validates the token before
+    // exposing operator actions.
     try {
-      return sessionStorage.getItem(AUTH_TOKEN_KEY) || '';
+      const sessionToken = sessionStorage.getItem(AUTH_TOKEN_KEY);
+      if (sessionToken) return sessionToken;
+    } catch (_) {}
+    try {
+      return localStorage.getItem(AUTH_TOKEN_KEY) || '';
     } catch (_) {
       return '';
     }
@@ -251,10 +259,14 @@ window.MOCK = (() => {
     try {
       if (token) sessionStorage.setItem(AUTH_TOKEN_KEY, String(token));
     } catch (_) {}
+    try {
+      if (token) localStorage.setItem(AUTH_TOKEN_KEY, String(token));
+    } catch (_) {}
   }
 
   function clearAuthToken() {
     try { sessionStorage.removeItem(AUTH_TOKEN_KEY); } catch (_) {}
+    try { localStorage.removeItem(AUTH_TOKEN_KEY); } catch (_) {}
   }
 
   function authHeaders(extra) {
@@ -437,6 +449,10 @@ window.MOCK = (() => {
     if (health.readiness) {
       if (health.readiness.gates != null) M.health.readiness.gates = asNumber(health.readiness.gates, M.health.readiness.gates);
       if (health.readiness.passing != null) M.health.readiness.passing = asNumber(health.readiness.passing, M.health.readiness.passing);
+      if (Array.isArray(health.readiness.checks)) {
+        M.health.readiness.gates = health.readiness.checks.length;
+        M.health.readiness.passing = health.readiness.checks.filter(c => c && c.status === 'pass').length;
+      }
       if (health.readiness.ready_for_live_trading != null) M.health.readiness.ready = !!health.readiness.ready_for_live_trading;
       else if (health.readiness.ready != null) M.health.readiness.ready = !!health.readiness.ready;
     }
@@ -470,6 +486,10 @@ window.MOCK = (() => {
     if (!readiness || typeof readiness !== 'object') return;
     if (readiness.gates != null) M.health.readiness.gates = asNumber(readiness.gates, M.health.readiness.gates);
     if (readiness.passing != null) M.health.readiness.passing = asNumber(readiness.passing, M.health.readiness.passing);
+    if (Array.isArray(readiness.checks)) {
+      M.health.readiness.gates = readiness.checks.length;
+      M.health.readiness.passing = readiness.checks.filter(c => c && c.status === 'pass').length;
+    }
     if (readiness.ready_for_live_trading != null) M.health.readiness.ready = !!readiness.ready_for_live_trading;
     else if (readiness.ready != null) M.health.readiness.ready = !!readiness.ready;
   }
