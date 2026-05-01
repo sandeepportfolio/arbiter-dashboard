@@ -427,6 +427,8 @@ def test_ops_charts_and_markets_use_live_data_sources():
     assert "Includes $100 deposit at 14:32" not in html
     assert "Scans (24h)\" value=\"18,420\"" not in html
     assert "Annualized" not in html
+    assert "totalPnl/1000" not in html
+    assert "const startingCapital = Math.max(1, totalBal - totalPnl)" in html
 
 
 def test_rate_limit_ws_event_shape():

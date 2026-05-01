@@ -4758,12 +4758,14 @@ function MobHome({ totalBal, totalPnl }) {
   const M = window.MOCK;
   const [range, setRange] = mobUseState('24h');
   const equity = window.filterTimeSeries ? window.filterTimeSeries(M.equity, range) : M.equity;
+  const startingCapital = Math.max(1, totalBal - totalPnl);
+  const lifetimeReturn = totalPnl / startingCapital;
   return (
     <div>
       <div style={{ padding: '12px 4px 18px' }}>
         <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase' }}>Total balance</div>
         <div style={{ fontSize: 36, fontWeight: 600, color: t.text, fontFamily: window.FONTS.mono, letterSpacing:'-0.02em', marginTop: 4 }}>{window.fmt$(totalBal)}</div>
-        <div style={{ fontSize: 13, color: totalPnl >= 0 ? t.green : t.red, marginTop: 4 }}>{window.fmt$Sign(totalPnl)} ({window.fmtPct(totalPnl/1000)}) since inception</div>
+        <div style={{ fontSize: 13, color: totalPnl >= 0 ? t.green : t.red, marginTop: 4 }}>{window.fmt$Sign(totalPnl)} ({window.fmtPct(lifetimeReturn)}) since inception</div>
       </div>
 
       <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: '14px 14px 4px', marginBottom: 12 }}>
