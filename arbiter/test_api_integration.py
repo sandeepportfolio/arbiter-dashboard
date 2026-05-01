@@ -435,6 +435,23 @@ def test_ops_charts_and_markets_use_live_data_sources():
     assert "these 7 health checks" not in html
 
 
+def test_signed_auth_token_survives_worker_restart_state():
+    """A valid signed UI token should not 401 after in-memory sessions reset."""
+    from types import SimpleNamespace
+
+    import arbiter.api as api
+
+    token = api._generate_token("sparx.sandeep@gmail.com")
+    api._ACTIVE_SESSIONS.clear()
+    api._REVOKED_SESSIONS.clear()
+
+    request = SimpleNamespace(headers={"Authorization": f"Bearer {token}"}, cookies={})
+    user = asyncio.run(api.get_current_user(request))
+
+    assert user == "sparx.sandeep@gmail.com"
+    assert api._ACTIVE_SESSIONS[token] == "sparx.sandeep@gmail.com"
+
+
 def test_rate_limit_ws_event_shape():
     """SAFE-04: Within 3s of WS connect, a `rate_limit_state` message arrives
     with {platform: stats_dict} payload. Each stats_dict must carry the three

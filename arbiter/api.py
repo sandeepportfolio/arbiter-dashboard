@@ -129,8 +129,11 @@ def _verify_token(token: str) -> Optional[str]:
     return email
 
 
-# Active sessions: token -> email
+# Active sessions: token -> email. Tokens are HMAC-signed and self-validating,
+# so a process restart must not strand an otherwise valid browser session; the
+# in-memory map is only a best-effort view of logins seen by this worker.
 _ACTIVE_SESSIONS: Dict[str, str] = {}
+_REVOKED_SESSIONS: set[str] = set()
 
 
 async def get_current_user(request: web.Request) -> Optional[str]:
@@ -141,7 +144,8 @@ async def get_current_user(request: web.Request) -> Optional[str]:
     else:
         token = request.cookies.get("arbiter_session", "")
     email = _verify_token(token)
-    if email and _ACTIVE_SESSIONS.get(token) == email:
+    if email and token not in _REVOKED_SESSIONS:
+        _ACTIVE_SESSIONS.setdefault(token, email)
         return email
     return None
 
@@ -160,6 +164,8 @@ async def login_user(email: str, password: str) -> Optional[str]:
 async def logout_user(token: str) -> None:
     """Invalidate a session token."""
     _ACTIVE_SESSIONS.pop(token, None)
+    if token:
+        _REVOKED_SESSIONS.add(token)
 
 async def require_auth(request: web.Request) -> str:
     """Raise 401 if not authenticated."""
