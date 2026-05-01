@@ -457,6 +457,7 @@ def test_mobile_mappings_render_api_field_names():
     assert "r.kalshi_market_id || r.kalshi_ticker || r.kalshi || r.ticker" in html
     assert "r.polymarket_slug || r.poly_slug || r.polymarket" in html
     assert "function MapLine" in html
+    assert "setModal({ kind:'market', payload: marketPayload })" in html
 
 
 def test_ops_execution_ledger_preserves_context_and_filters_realized_losses():
@@ -491,6 +492,30 @@ def test_ops_charts_and_markets_use_live_data_sources():
     assert "c && c.status === 'pass'" in html
     assert "7/7 readiness gates" not in html
     assert "these 7 health checks" not in html
+
+
+def test_ops_scanner_balance_and_trades_widgets_use_live_telemetry():
+    html = open(os.path.join(os.getcwd(), "arbiter", "web", "ops.html"), encoding="utf-8").read()
+
+    assert "M.health.scanner.active_opportunities" in html
+    assert "M.health.scanner.tradable_opportunities" in html
+    assert "M.health.audit.recent_results" in html
+    assert "function edgeTelemetrySamples" in html
+    assert "function bestTelemetryEdge" in html
+    assert "M.edgeBucketSampleCount" in html
+    assert "Audited edge samples" in html
+    assert "Telemetry edge samples" in html
+    assert "function BalanceLegendItem" in html
+    assert "Rows show live balance details, source share, and recorded trading P&L" in html
+    assert "Rows show live balances and source P&L" in html
+    assert "Tap a row" not in html
+    assert "Edge samples" in html
+    assert "Scanner telemetry" in html
+    assert "Expected profit" in html
+    assert "expected_vs_realized" in html
+    assert "status_group" in html
+    assert "M.executions.slice(0, 8)" not in html
+    assert 'Avg edge captured" value="2.4' not in html
 
 
 def test_signed_auth_token_survives_worker_restart_state():

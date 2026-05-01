@@ -651,6 +651,12 @@ window.MOCK = (() => {
     if (!rows.length && asNumber(M.health && M.health.scanner && M.health.scanner.best_edge_cents, 0) > 0) {
       push({ source: 'scanner', canonical_id: 'scanner-best-edge', description: 'Scanner best edge', timestamp: Math.floor(Date.now() / 1000), net_edge_cents: M.health.scanner.best_edge_cents });
     }
+    if (!rows.length && asNumber(M.health && M.health.profitability && M.health.profitability.best_edge_cents, 0) > 0) {
+      push({ source: 'profitability', canonical_id: 'profitability-best-edge', description: 'Profitability best edge', timestamp: Math.floor(Date.now() / 1000), net_edge_cents: M.health.profitability.best_edge_cents });
+      if (asNumber(M.health && M.health.profitability && M.health.profitability.average_edge_cents, 0) > 0) {
+        push({ source: 'profitability', canonical_id: 'profitability-average-edge', description: 'Profitability average edge', timestamp: Math.floor(Date.now() / 1000) - 1, net_edge_cents: M.health.profitability.average_edge_cents });
+      }
+    }
     return rows.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
   }
 
@@ -708,7 +714,7 @@ window.MOCK = (() => {
     }
     M.edgeBuckets = buckets.map(({ range, count }) => ({ range, count }));
     M.edgeBucketSampleCount = samples.length;
-    M.edgeBucketSource = samples.some(s => s.source === 'active') ? 'active' : samples.length ? 'audit' : 'none';
+    M.edgeBucketSource = samples.some(s => s.source === 'active') ? 'active' : samples.some(s => s.source === 'audit') ? 'audit' : samples.length ? 'telemetry' : 'none';
   }
 
   async function refresh() {
@@ -1988,7 +1994,7 @@ function PageOverview() {
   const scanTradable = Number(M.health.scanner.tradable_opportunities || 0) || tradable.length;
   const scanManual = Number(M.health.scanner.manual_opportunities || 0);
   const scanPublished = Number(M.health.scanner.published || M.health.profitability.published_opportunities || 0);
-  const edgeLabel = M.edgeBucketSource === 'active' ? 'Active edges' : M.edgeBucketSource === 'audit' ? 'Audited edge samples' : 'Awaiting edges';
+  const edgeLabel = M.edgeBucketSource === 'active' ? 'Active edges' : M.edgeBucketSource === 'audit' ? 'Audited edge samples' : M.edgeBucketSource === 'telemetry' ? 'Telemetry edge samples' : 'Awaiting edges';
   const kShare = totalBal ? (M.balances.kalshi.balance / totalBal * 100).toFixed(1) : '0.0';
   const pShare = totalBal ? (M.balances.polymarket.balance / totalBal * 100).toFixed(1) : '0.0';
 
@@ -2005,7 +2011,7 @@ function PageOverview() {
         <KpiCard label="Total balance" value={window.fmt$(totalBal)} sub={`Kalshi ${window.fmt$(M.balances.kalshi.balance)} · Poly ${window.fmt$(M.balances.polymarket.balance)}`} sparkData={equity.slice(-48)} sparkColor={t.accent} />
         <KpiCard label="Trading P&L" value={window.fmt$Sign(totalPnl)} sub="Net of fees · since inception" tone={totalPnl >= 0 ? 'green' : 'red'} sparkData={equity.slice(-48).map(d => ({ ...d, v: d.v - equity[0].v }))} sparkColor={totalPnl >= 0 ? t.green : t.red} />
         <KpiCard label="Live opportunities" value={scanTradable} sub={`${scanActive} active · ${scanPublished} published · best ${bestEdge ? window.fmtC(bestEdge) : '—'}`} tone="accent" sparkData={(M.health.scanner.history || []).slice(-30).map(h => ({ v: h.tradable || 0 }))} sparkColor={t.accent} fallbackValue={scanTradable}/>
-        <KpiCard label="24h fills" value={last24Filled.length} sub={`${window.fmt$Sign(last24Pnl)} realized`} tone={last24Pnl >= 0 ? 'green' : 'red'} sparkData={equity.slice(-48)} sparkColor={t.green} />
+        <KpiCard label="24h completed" value={last24Filled.length} sub={`${window.fmt$Sign(last24Pnl)} realized`} tone={last24Pnl >= 0 ? 'green' : 'red'} sparkData={equity.slice(-48)} sparkColor={t.green} />
       </div>
 
       {/* Equity + opportunities */}
@@ -2063,7 +2069,7 @@ function PageOverview() {
               <BalanceLegendItem dot={t.green} label="Kalshi" value={window.fmt$(M.balances.kalshi.balance)} share={`${kShare}%`} pnl={M.pnl.recorded_trading_pnl.kalshi} updated={M.balances.kalshi.timestamp} description="CFTC-regulated cash available for Kalshi ticker orders."/>
               <div style={{ height: 12 }}/>
               <BalanceLegendItem dot={t.purple} label="Polymarket" value={window.fmt$(M.balances.polymarket.balance)} share={`${pShare}%`} pnl={M.pnl.recorded_trading_pnl.polymarket} updated={M.balances.polymarket.timestamp} description="Crypto wallet collateral available for Polymarket US slug orders."/>
-              <div style={{ fontSize: 10.5, color: t.textMuted, marginTop: 12, lineHeight: 1.45 }}>Tap a row for live balance details, source share, and recorded trading P&L.</div>
+              <div style={{ fontSize: 10.5, color: t.textMuted, marginTop: 12, lineHeight: 1.45 }}>Rows show live balance details, source share, and recorded trading P&L.</div>
             </div>
           </div>
         </window.Card>
@@ -2898,6 +2904,21 @@ function PageMappings() {
 function PageScanner() {
   const { t, scanner, setScanner, toast } = window.useApp();
   const M = window.MOCK;
+  const s = M.health.scanner || {};
+  const cfg = (M.settings && M.settings.scanner) || {};
+  const activeN = Number(s.active_opportunities || 0) || (Array.isArray(M.opportunities) ? M.opportunities.length : 0);
+  const tradableN = Number(s.tradable_opportunities || 0) || (Array.isArray(M.opportunities) ? M.opportunities.filter(o => o.status === 'tradable').length : 0);
+  const manualN = Number(s.manual_opportunities || 0);
+  const publishedN = Number(s.published || M.health.profitability.published_opportunities || 0);
+  const bestEdge = window.bestTelemetryEdge ? window.bestTelemetryEdge(M) : Number(s.best_edge_cents || 0);
+  const edgeSamples = window.edgeTelemetrySamples ? window.edgeTelemetrySamples(M) : [];
+  const opportunityState = [
+    { range:'Active', count: activeN },
+    { range:'Tradable', count: tradableN },
+    { range:'Manual', count: manualN },
+    { range:'Published', count: publishedN },
+    { range:'Edge samples', count: edgeSamples.length },
+  ];
   return (
     <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto' }}>
       <window.PageHeader kicker="Real-time" title="Scanner" sub="Continuously polls Kalshi and Polymarket order books, computes net edge, and publishes opportunities crossing the threshold.">
@@ -2913,9 +2934,9 @@ function PageScanner() {
       </window.PageHeader>
 
       <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap: 14, marginBottom: 18 }}>
-        <window.Card padding={18}><window.Stat label="Total scans" value={(M.health.scanner.scan_count || 0).toLocaleString()} sub={`${((M.health.uptime_seconds || 0)/3600).toFixed(1)}h uptime`} mono/></window.Card>
-        <window.Card padding={18}><window.Stat label="Avg latency" value={`${M.health.scanner.scan_time_ms || 0}ms`} sub="P50 across all markets" mono/></window.Card>
-        <window.Card padding={18}><window.Stat label="Published" value={M.health.scanner.published || 0} sub="Above threshold" tone="green" mono/></window.Card>
+        <window.Card padding={18}><window.Stat label="Total scans" value={(s.scan_count || 0).toLocaleString()} sub={`${((M.health.uptime_seconds || 0)/3600).toFixed(1)}h uptime`} mono/></window.Card>
+        <window.Card padding={18}><window.Stat label="Avg latency" value={`${s.scan_time_ms || 0}ms`} sub={`${activeN.toLocaleString()} active markets`} mono/></window.Card>
+        <window.Card padding={18}><window.Stat label="Published" value={publishedN.toLocaleString()} sub={`${tradableN.toLocaleString()} tradable · best ${bestEdge ? window.fmtC(bestEdge) : '—'}`} tone="green" mono/></window.Card>
         <window.Card padding={18}><window.Stat label="Status" value={scanner ? 'Live' : 'Paused'} tone={scanner ? 'green' : 'amber'} sub={scanner ? 'Heartbeat live' : 'Resume to monitor'} mono/></window.Card>
       </div>
 
@@ -2932,26 +2953,20 @@ function PageScanner() {
       </window.Card>
 
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 14 }}>
-        <window.Card title="Per-market scan latency" padding={20}>
+        <window.Card title="Opportunity state" padding={20}>
           <div style={{ height: 200 }}>
-            <window.BarChart data={[
-              { range:'0-100ms', count: 184 },
-              { range:'100-200ms', count: 96 },
-              { range:'200-300ms', count: 26 },
-              { range:'300-500ms', count: 5 },
-              { range:'500ms+', count: 1 },
-            ]} color={t.bgHover} accent={t.accent} labelColor={t.textDim}/>
+            <window.BarChart data={opportunityState} color={t.bgHover} accent={t.accent} labelColor={t.textDim} emptyLabel="No scanner state reported yet."/>
           </div>
         </window.Card>
         <window.Card title="Active scan engine" padding={20}>
           <div style={{ fontFamily: window.FONTS.mono, fontSize: 11, color: t.textDim, lineHeight: 1.7 }}>
-            <KV k="Scan interval" v="5.0s"/>
-            <KV k="Concurrency" v="32 markets / scan"/>
-            <KV k="Min edge threshold" v="1.0¢"/>
-            <KV k="Min volume" v="500 shares"/>
-            <KV k="Persistence" v="3 consecutive scans"/>
-            <KV k="Max position" v="$200 / pair"/>
-            <KV k="Slippage budget" v="0.5¢"/>
+            <KV k="Scan interval" v={`${Number(cfg.scan_interval || 0).toFixed(1)}s`}/>
+            <KV k="Min edge threshold" v={`${Number(cfg.min_edge_cents || 0).toFixed(2)}¢`}/>
+            <KV k="Min volume" v={`${Number(cfg.min_liquidity || s.min_liquidity || 0).toLocaleString()} shares`}/>
+            <KV k="Persistence" v={`${Number(cfg.persistence_scans || s.persistence_scans || 0).toLocaleString()} consecutive scans`}/>
+            <KV k="Max quote age" v={`${Number(cfg.max_quote_age_seconds || s.max_quote_age_seconds || 0).toFixed(1)}s`}/>
+            <KV k="Max position" v={window.fmt$(Number(cfg.max_position_usd || 0))}/>
+            <KV k="Slippage budget" v={`${Number(cfg.slippage_tolerance || 0).toFixed(2)}¢`}/>
           </div>
         </window.Card>
       </div>
@@ -4890,7 +4905,14 @@ function MobileDashboard() {
   const totalPnl = M.pnl.recorded_trading_pnl.kalshi + M.pnl.recorded_trading_pnl.polymarket;
 
   // When switching primary tabs, clear sub-page
-  const switchTab = (k) => { setTab(k); setMeSub(null); };
+  const switchTab = (k) => {
+    setTab(k);
+    setMeSub(null);
+    setTimeout(() => {
+      const el = document.querySelector('[data-mobile-scroll="true"]');
+      if (el) el.scrollTop = 0;
+    }, 0);
+  };
 
   return (
     <div style={{ position:'relative', width: '100%', height: '100%', background: t.bg, color: t.text, fontFamily: window.FONTS.sans, display:'flex', flexDirection:'column', overflow:'hidden' }}>
@@ -4907,7 +4929,7 @@ function MobileDashboard() {
         </div>
       </div>
 
-      <div style={{ flex: 1, overflow:'auto', padding: '0 16px', paddingBottom: 'calc(80px + env(safe-area-inset-bottom, 0px))', WebkitOverflowScrolling:'touch' }}>
+      <div data-mobile-scroll="true" style={{ flex: 1, overflow:'auto', padding: '0 16px', paddingBottom: 'calc(80px + env(safe-area-inset-bottom, 0px))', WebkitOverflowScrolling:'touch' }}>
         {meSub === 'funds' && <MobFunds/>}
         {meSub === 'pnl' && <MobPnL/>}
         {meSub === 'health' && <MobHealth/>}
@@ -4944,6 +4966,14 @@ function MobHome({ totalBal, totalPnl }) {
   const equity = window.filterTimeSeries ? window.filterTimeSeries(M.equity, range) : M.equity;
   const startingCapital = Math.max(1, totalBal - totalPnl);
   const lifetimeReturn = totalPnl / startingCapital;
+  const kShareMob = totalBal ? (M.balances.kalshi.balance / totalBal * 100).toFixed(1) : '0.0';
+  const pShareMob = totalBal ? (M.balances.polymarket.balance / totalBal * 100).toFixed(1) : '0.0';
+  const activeMob = Number(M.health.scanner.active_opportunities || 0) || (Array.isArray(M.opportunities) ? M.opportunities.length : 0);
+  const tradableMob = Number(M.health.scanner.tradable_opportunities || 0) || (Array.isArray(M.opportunities) ? M.opportunities.filter(o => o.status === 'tradable').length : 0);
+  const manualMob = Number(M.health.scanner.manual_opportunities || 0);
+  const publishedMob = Number(M.health.scanner.published || M.health.profitability.published_opportunities || 0);
+  const bestMob = window.bestTelemetryEdge ? window.bestTelemetryEdge(M) : Number(M.health.scanner.best_edge_cents || 0);
+  const edgeLabelMob = M.edgeBucketSource === 'active' ? 'Active edges' : M.edgeBucketSource === 'audit' ? 'Audited edge samples' : M.edgeBucketSource === 'telemetry' ? 'Telemetry edge samples' : 'Awaiting edges';
   return (
     <div>
       <div style={{ padding: '12px 4px 18px' }}>
@@ -4966,35 +4996,58 @@ function MobHome({ totalBal, totalPnl }) {
         </div>
       </div>
 
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 8, marginBottom: 12 }}>
-        <MobMini label="Kalshi" value={window.fmt$(M.balances.kalshi.balance)} dot={t.green}/>
-        <MobMini label="Polymarket" value={window.fmt$(M.balances.polymarket.balance)} dot={t.purple}/>
-      </div>
-
-      <div style={{ background: scanner ? t.greenSoft : t.bgSubtle, border: `1px solid ${scanner ? t.green + '30' : t.border}`, borderRadius: 12, padding: 14, marginBottom: 12, display:'flex', alignItems:'center', gap: 10 }}>
-        <span style={{ width: 8, height: 8, borderRadius:'50%', background: scanner ? t.green : t.textMuted, animation: scanner ? 'pulse 2s infinite' : 'none' }}/>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: scanner ? t.green : t.textDim }}>Scanner {scanner ? 'live' : 'paused'}</div>
-          <div style={{ fontSize: 10.5, color: t.textDim }}>
-            {(() => {
-              const opps = Array.isArray(M.opportunities) ? M.opportunities : [];
-              const tradableN = opps.filter(o => o.status === 'tradable').length;
-              const best = opps.length ? Math.max(...opps.map(o => o.net_edge_cents || 0)) : 0;
-              const lat = M.health.scanner.scan_time_ms || 0;
-              return scanner
-                ? `${tradableN} tradable · best ${best ? best.toFixed(1) + '¢' : '—'} · ${lat || '—'}${lat ? 'ms' : ''}`
-                : 'Resume to monitor markets';
-            })()}
+      <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 14, marginBottom: 12 }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom: 10 }}>
+          <span style={{ fontSize: 12, fontWeight: 600 }}>Balance composition</span>
+          <span style={{ fontSize: 10.5, color: t.textMuted }}>{window.fmt$(totalBal)}</span>
+        </div>
+        <div style={{ display:'flex', flexDirection:'column', alignItems:'stretch', gap: 10 }}>
+          <div style={{ display:'flex', justifyContent:'center' }}>
+            <window.Donut size={88} thickness={12} slices={[
+              { value: M.balances.kalshi.balance, color: t.green },
+              { value: M.balances.polymarket.balance, color: t.purple },
+            ]} label={window.fmt$(totalBal, 0)} sublabel="TOTAL" labelColor={t.text} dimColor={t.textMuted}/>
+          </div>
+          <div style={{ width: '100%' }}>
+            <BalanceLegendItem dot={t.green} label="Kalshi" value={window.fmt$(M.balances.kalshi.balance)} share={`${kShareMob}%`} pnl={M.pnl.recorded_trading_pnl.kalshi} updated={M.balances.kalshi.timestamp} description="Ticker cash."/>
+            <BalanceLegendItem dot={t.purple} label="Polymarket" value={window.fmt$(M.balances.polymarket.balance)} share={`${pShareMob}%`} pnl={M.pnl.recorded_trading_pnl.polymarket} updated={M.balances.polymarket.timestamp} description="Wallet collateral."/>
           </div>
         </div>
-        <button onClick={async () => {
-          const next = !scanner;
-          if (window.__arbiterScannerControl) {
-            const res = await window.__arbiterScannerControl(next ? 'resume' : 'pause');
-            if (!res.ok) { return; }
-          }
-          setScanner(next);
-        }} style={{ padding:'5px 10px', background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 6, fontSize: 11, fontWeight: 600, color: t.text, cursor:'pointer' }}>{scanner ? 'Pause' : 'Resume'}</button>
+        <div style={{ fontSize: 10.5, color: t.textMuted, marginTop: 8 }}>Rows show live balances and source P&L.</div>
+      </div>
+
+      <div style={{ background: scanner ? t.greenSoft : t.bgSubtle, border: `1px solid ${scanner ? t.green + '30' : t.border}`, borderRadius: 12, padding: 14, marginBottom: 12 }}>
+        <div style={{ display:'flex', alignItems:'center', gap: 10 }}>
+          <span style={{ width: 8, height: 8, borderRadius:'50%', background: scanner ? t.green : t.textMuted, animation: scanner ? 'pulse 2s infinite' : 'none' }}/>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: scanner ? t.green : t.textDim }}>Scanner telemetry</div>
+            <div style={{ fontSize: 10.5, color: t.textDim }}>{scanner ? `${activeMob.toLocaleString()} active · ${tradableMob.toLocaleString()} tradable · best ${bestMob ? window.fmtC(bestMob) : '—'} · ${M.health.scanner.scan_time_ms || '—'}${M.health.scanner.scan_time_ms ? 'ms' : ''}` : 'Resume to monitor markets'}</div>
+          </div>
+          <button onClick={async () => {
+            const next = !scanner;
+            if (window.__arbiterScannerControl) {
+              const res = await window.__arbiterScannerControl(next ? 'resume' : 'pause');
+              if (!res.ok) { return; }
+            }
+            setScanner(next);
+          }} style={{ padding:'5px 10px', background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 6, fontSize: 11, fontWeight: 600, color: t.text, cursor:'pointer' }}>{scanner ? 'Pause' : 'Resume'}</button>
+        </div>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(2, 1fr)', gap: 6, marginTop: 12 }}>
+          <MobMini label="Active" value={activeMob.toLocaleString()} dot={t.accent}/>
+          <MobMini label="Tradable" value={tradableMob.toLocaleString()} dot={tradableMob ? t.green : t.textMuted}/>
+          <MobMini label="Manual" value={manualMob.toLocaleString()} dot={t.amber}/>
+          <MobMini label="Published" value={publishedMob.toLocaleString()} dot={t.green}/>
+        </div>
+      </div>
+
+      <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 14, marginBottom: 12 }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom: 8 }}>
+          <span style={{ fontSize: 12, fontWeight: 600 }}>Edge distribution</span>
+          <span style={{ fontSize: 10.5, color: t.textMuted }}>{edgeLabelMob} · {(M.edgeBucketSampleCount || 0).toLocaleString()}</span>
+        </div>
+        <div style={{ height: 120 }}>
+          <window.BarChart data={M.edgeBuckets} color={t.bgHover} accent={t.accent} labelColor={t.textDim} emptyLabel="No active, audited, or telemetry edge samples yet."/>
+        </div>
       </div>
 
       <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.08em', padding: '4px', marginTop: 8, marginBottom: 8 }}>TOP OPPORTUNITIES</div>
@@ -5473,8 +5526,27 @@ function MobMappings() {
         const actionable = c.s === 'candidate' || c.s === 'pending' || c.s === 'review';
         const kalshiLabel = c.k || c.description || c.canonical_id || 'Kalshi market unavailable';
         const polyLabel = c.p || c.description || 'Polymarket market unavailable';
+        const marketPayload = {
+          raw: c.raw,
+          kind: 'mapping',
+          canonical_id: c.canonical_id,
+          description: c.description || c.canonical_id,
+          kalshi_market_id: c.k,
+          polymarket_slug: c.p,
+          status: c.s,
+          category: mappingCategory(c.raw || {}),
+          confidence: c.score,
+          mapping_score: c.score,
+          resolution_match_status: c.match,
+          resolution_criteria: c.raw?.resolution_criteria || null,
+          allow_auto_trade: c.auto,
+          polarity_flipped: !!c.raw?.polarity_flipped,
+        };
+        const openCard = () => actionable
+          ? setModal({ kind:'agentValidate', payload: c })
+          : setModal({ kind:'market', payload: marketPayload });
         return (
-          <div key={c.canonical_id || `${c.k}:${c.p}:${i}`} onClick={() => actionable && setModal({ kind:'agentValidate', payload: c })} style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 14, marginBottom: 8, cursor: actionable ? 'pointer' : 'default', minHeight: 118 }}>
+          <div key={c.canonical_id || `${c.k}:${c.p}:${i}`} onClick={openCard} style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 14, marginBottom: 8, cursor: 'pointer', minHeight: 118 }}>
             <div style={{ display:'grid', gridTemplateColumns:'42px minmax(0, 1fr)', columnGap: 10, rowGap: 8, alignItems:'start' }}>
               <div style={{ width: 36, height: 36, borderRadius:'50%', background: c.score >= 0.9 ? t.greenSoft : c.score >= 0.7 ? t.amberSoft : t.redSoft, display:'flex', alignItems:'center', justifyContent:'center', fontSize: 11.5, fontWeight: 700, color: c.score >= 0.9 ? t.green : c.score >= 0.7 ? t.amber : t.red, fontFamily: window.FONTS.mono, flexShrink: 0 }}>{c.score.toFixed(2)}</div>
               <div style={{ flex: 1, minWidth: 0 }}>
@@ -5509,7 +5581,7 @@ function MobMappings() {
       })}
 
       <div style={{ marginTop: 12, padding: '10px 12px', background: t.bgSubtle, border:`1px dashed ${t.border}`, borderRadius: 8, fontSize: 10.5, color: t.textDim, lineHeight: 1.5 }}>
-        Tap any pending or review candidate to spin up an agent that validates the match live. The CLI session shows every tool call and verdict.
+        Tap any confirmed mapping to inspect live prices and resolution status. Pending or review candidates open the validation agent with every tool call and verdict.
       </div>
     </div>
   );
