@@ -2038,7 +2038,10 @@ function PageOverview() {
       {/* KPI strip — sparklines fall back to a flat line at the current value
           when their underlying series has 0–1 points (handled by Sparkline). */}
       <div style={{ display:'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, marginBottom: 18 }}>
-        <KpiCard label="Total balance" value={window.fmt$(totalBal)} sub={`Kalshi ${window.fmt$(M.balances.kalshi.balance)} · Poly ${window.fmt$(M.balances.polymarket.balance)}`} sparkData={equity.slice(-48)} sparkColor={t.accent} />
+        <KpiCard label="Total balance" value={window.fmt$(totalBal)} sub={latestBalanceTs ? `Balances updated ${window.ago(latestBalanceTs)}` : 'Waiting for live balances'} sparkData={equity.slice(-48)} sparkColor={t.accent} platformBalances={[
+          { name: 'Kalshi', value: window.fmt$(M.balances.kalshi.balance), color: t.green, title: `Kalshi balance ${window.fmt$(M.balances.kalshi.balance)}` },
+          { name: 'Polymarket', value: window.fmt$(M.balances.polymarket.balance), color: t.purple, title: `Polymarket balance ${window.fmt$(M.balances.polymarket.balance)}` },
+        ]} />
         <KpiCard label="Trading P&L" value={window.fmt$Sign(totalPnl)} sub="Net of fees · since inception" tone={totalPnl >= 0 ? 'green' : 'red'} sparkData={equity.slice(-48).map(d => ({ ...d, v: d.v - equity[0].v }))} sparkColor={totalPnl >= 0 ? t.green : t.red} />
         <KpiCard label="Live opportunities" value={scanTradable} sub={`${scanActive} active · ${scanPublished} published · best ${bestEdge ? window.fmtC(bestEdge) : '—'}`} tone="accent" sparkData={(M.health.scanner.history || []).slice(-30).map(h => ({ v: h.tradable || 0 }))} sparkColor={t.accent} fallbackValue={scanTradable}/>
         <KpiCard label="24h completed" value={last24Filled.length} sub={`${window.fmt$Sign(last24Pnl)} realized`} tone={last24Pnl >= 0 ? 'green' : 'red'} sparkData={equity.slice(-48)} sparkColor={t.green} />
@@ -2147,9 +2150,10 @@ function PageOverview() {
   );
 }
 
-function KpiCard({ label, value, sub, tone, sparkData, sparkColor, fallbackValue }) {
+function KpiCard({ label, value, sub, tone, sparkData, sparkColor, fallbackValue, platformBalances }) {
   const { t } = window.useApp();
   const tones = { green: t.green, red: t.red, amber: t.amber, accent: t.accent };
+  const hasPlatformBalances = Array.isArray(platformBalances) && platformBalances.length > 0;
   // If no time series exists yet (scanner history just started, equity has
   // a single point, etc.), feed the sparkline a 2-point flat series so it
   // renders a horizontal baseline instead of vanishing.
@@ -2164,13 +2168,33 @@ function KpiCard({ label, value, sub, tone, sparkData, sparkColor, fallbackValue
   return (
     <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 10, padding: 18, overflow:'hidden' }}>
       <div style={{ fontSize: 11, color: t.textMuted, letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: 8, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{label}</div>
-      <div style={{ fontSize: 24, fontWeight: 600, color: tones[tone] || t.text, letterSpacing:'-0.018em', fontFamily: window.FONTS.mono, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{value}</div>
-      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap: 10, marginTop: 4 }}>
-        <div style={{ fontSize: 11, color: t.textDim, flex: 1, minWidth: 0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{sub}</div>
-        <div style={{ width: 64, height: 22, opacity: 0.85, flexShrink: 0 }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap: 12 }}>
+        <div style={{ fontSize: 24, fontWeight: 600, color: tones[tone] || t.text, letterSpacing:'-0.018em', fontFamily: window.FONTS.mono, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{value}</div>
+        {hasPlatformBalances && <div style={{ width: 64, height: 22, opacity: 0.85, flexShrink: 0 }}>
           <window.Sparkline data={safeSpark} width={64} height={22} stroke={sparkColor} fill={sparkColor + '22'}/>
-        </div>
+        </div>}
       </div>
+      {hasPlatformBalances ? (
+        <div style={{ display:'grid', gap: 6, marginTop: 10 }}>
+          {platformBalances.map((row) => (
+            <div key={row.name} title={row.title || `${row.name} ${row.value}`} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap: 10, minWidth: 0, padding: '6px 8px', borderRadius: 7, background: t.bgSubtle, border: `1px solid ${t.border}` }}>
+              <div style={{ display:'flex', alignItems:'center', gap: 7, minWidth: 0 }}>
+                <span style={{ width: 7, height: 7, borderRadius: '50%', background: row.color, flexShrink: 0 }}/>
+                <span style={{ fontSize: 11.5, color: t.textDim, whiteSpace:'nowrap' }}>{row.name}</span>
+              </div>
+              <span style={{ fontSize: 12.5, fontWeight: 600, color: t.text, fontFamily: window.FONTS.mono, whiteSpace:'nowrap' }}>{row.value}</span>
+            </div>
+          ))}
+          {sub && <div style={{ fontSize: 10.5, color: t.textMuted, lineHeight: 1.35 }}>{sub}</div>}
+        </div>
+      ) : (
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap: 10, marginTop: 4 }}>
+          <div style={{ fontSize: 11, color: t.textDim, flex: 1, minWidth: 0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{sub}</div>
+          <div style={{ width: 64, height: 22, opacity: 0.85, flexShrink: 0 }}>
+            <window.Sparkline data={safeSpark} width={64} height={22} stroke={sparkColor} fill={sparkColor + '22'}/>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

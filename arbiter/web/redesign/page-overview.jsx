@@ -18,7 +18,10 @@ function PageOverview() {
 
       {/* KPI strip */}
       <div style={{ display:'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, marginBottom: 18 }}>
-        <KpiCard label="Total balance" value={window.fmt$(totalBal)} sub={`Kalshi ${window.fmt$(M.balances.kalshi.balance)} · Poly ${window.fmt$(M.balances.polymarket.balance)}`} sparkData={M.equity.slice(-48)} sparkColor={t.accent} />
+        <KpiCard label="Total balance" value={window.fmt$(totalBal)} sub="Live venue balances" sparkData={M.equity.slice(-48)} sparkColor={t.accent} platformBalances={[
+          { name: 'Kalshi', value: window.fmt$(M.balances.kalshi.balance), color: t.green, title: `Kalshi balance ${window.fmt$(M.balances.kalshi.balance)}` },
+          { name: 'Polymarket', value: window.fmt$(M.balances.polymarket.balance), color: t.purple, title: `Polymarket balance ${window.fmt$(M.balances.polymarket.balance)}` },
+        ]} />
         <KpiCard label="Trading P&L" value={window.fmt$Sign(totalPnl)} sub="Net of fees · since inception" tone={totalPnl >= 0 ? 'green' : 'red'} sparkData={M.equity.slice(-48).map(d => ({ ...d, v: d.v - 1000 }))} sparkColor={totalPnl >= 0 ? t.green : t.red} />
         <KpiCard label="Live opportunities" value={tradable.length} sub={`${M.opportunities.length - tradable.length} candidates · best ${window.fmtC(M.opportunities[0].net_edge_cents)}`} tone="accent" sparkData={M.health.scanner.history.slice(-30).map(h => ({ v: h.tradable }))} sparkColor={t.accent} />
         <KpiCard label="24h fills" value={M.executions.filter(e => e.status === 'filled').length} sub={`${window.fmt$Sign(last24Pnl)} realized`} tone={last24Pnl >= 0 ? 'green' : 'red'} sparkData={M.equity.slice(-48)} sparkColor={t.green} />
@@ -114,15 +117,33 @@ function PageOverview() {
   );
 }
 
-function KpiCard({ label, value, sub, tone, sparkData, sparkColor }) {
+function KpiCard({ label, value, sub, tone, sparkData, sparkColor, platformBalances }) {
   const { t } = window.useApp();
   const tones = { green: t.green, red: t.red, amber: t.amber, accent: t.accent };
+  const hasPlatformBalances = Array.isArray(platformBalances) && platformBalances.length > 0;
   return (
     <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 10, padding: 18, position:'relative', overflow:'hidden' }}>
       <div style={{ fontSize: 11, color: t.textMuted, letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: 8 }}>{label}</div>
-      <div style={{ fontSize: 24, fontWeight: 600, color: tones[tone] || t.text, letterSpacing:'-0.018em', fontFamily: window.FONTS.mono }}>{value}</div>
-      <div style={{ fontSize: 11, color: t.textDim, marginTop: 4 }}>{sub}</div>
-      {sparkData && (
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap: 12 }}>
+        <div style={{ fontSize: 24, fontWeight: 600, color: tones[tone] || t.text, letterSpacing:'-0.018em', fontFamily: window.FONTS.mono, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{value}</div>
+      </div>
+      {hasPlatformBalances ? (
+        <div style={{ display:'grid', gap: 6, marginTop: 10 }}>
+          {platformBalances.map((row) => (
+            <div key={row.name} title={row.title || `${row.name} ${row.value}`} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap: 10, minWidth: 0, padding: '6px 8px', borderRadius: 7, background: t.bgSubtle, border: `1px solid ${t.border}` }}>
+              <div style={{ display:'flex', alignItems:'center', gap: 7, minWidth: 0 }}>
+                <span style={{ width: 7, height: 7, borderRadius: '50%', background: row.color, flexShrink: 0 }}/>
+                <span style={{ fontSize: 11.5, color: t.textDim, whiteSpace:'nowrap' }}>{row.name}</span>
+              </div>
+              <span style={{ fontSize: 12.5, fontWeight: 600, color: t.text, fontFamily: window.FONTS.mono, whiteSpace:'nowrap' }}>{row.value}</span>
+            </div>
+          ))}
+          {sub && <div style={{ fontSize: 10.5, color: t.textMuted, lineHeight: 1.35 }}>{sub}</div>}
+        </div>
+      ) : (
+        <div style={{ fontSize: 11, color: t.textDim, marginTop: 4 }}>{sub}</div>
+      )}
+      {sparkData && !hasPlatformBalances && (
         <div style={{ position:'absolute', right: 14, top: 14, width: 80, height: 30, opacity: 0.7 }}>
           <window.Sparkline data={sparkData} width={80} height={30} stroke={sparkColor} fill={sparkColor + '22'}/>
         </div>

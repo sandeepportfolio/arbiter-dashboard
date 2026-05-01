@@ -27,3 +27,17 @@ describe("ops mobile row interactions", () => {
     expect(mobile).not.toContain(": setModal({ kind:'market'");
   });
 });
+
+describe("ops desktop balance cards", () => {
+  it("renders the total balance platform split as structured rows", () => {
+    const overview = functionBody("PageOverview");
+    const kpiCard = functionBody("KpiCard");
+
+    expect(overview).toContain("platformBalances={[");
+    expect(overview).toContain("name: 'Polymarket'");
+    expect(overview).not.toContain("Poly ${window.fmt$");
+    expect(kpiCard).toContain("platformBalances");
+    expect(kpiCard).toContain("platformBalances.map");
+    expect(kpiCard).toContain("lineHeight: 1.35");
+  });
+});
