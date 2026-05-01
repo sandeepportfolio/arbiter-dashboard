@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from arbiter.mapping.auto_discovery import discover
+from arbiter.mapping.auto_discovery import _synthetic_kalshi_orderbook, discover
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -417,6 +417,7 @@ async def test_structural_fingerprint_finds_sports_pair_without_text_overlap():
     assert store.written[0]["structural_match"] is True
     assert store.written[0]["event_fingerprint"] == "sports:lal:fcb-osa:2026-05-02:winner:moneyline"
     assert store.written[0]["polarity"] == "same"
+    assert store.written[0]["canonical_id"].startswith("GAME_LAL_20260502_FCB_")
 
 
 @pytest.mark.asyncio
@@ -534,6 +535,67 @@ async def test_discover_auto_promotes_when_enabled_and_candidate_passes_gates():
     assert store.written[0]["status"] == "confirmed"
     assert store.written[0]["allow_auto_trade"] is True
     assert store.written[0]["resolution_match_status"] == "identical"
+
+
+@pytest.mark.asyncio
+async def test_auto_promote_rejects_high_score_fuzzy_pair_without_structural_match():
+    kalshi = _make_kalshi_client([
+        {
+            "ticker": "FED-MAY26",
+            "title": "Will the Federal Reserve cut rates in May 2026?",
+            "category": "economics",
+            "close_time": "2026-06-01T15:00:00Z",
+            "settlement_source": "Federal Reserve",
+            "status": "open",
+            "yes_bid": 55,
+            "yes_bid_size_fp": 500,
+        },
+    ])
+    poly = _make_poly_client([
+        {
+            "slug": "fed-rate-cut-may-2026",
+            "question": "Will the Federal Reserve cut rates in May 2026?",
+            "description": "Will the Federal Reserve cut rates in May 2026?",
+            "category": "economics",
+            "endDate": "2026-06-01T23:59:00Z",
+            "resolutionSource": "Federal Reserve",
+            "outcomes": ["Yes", "No"],
+        },
+    ])
+    store = _make_store()
+
+    with patch("arbiter.mapping.llm_verifier.verify", new=AsyncMock(return_value="YES")), \
+         patch("arbiter.mapping.llm_verifier.verify_batch", new=AsyncMock(return_value=["YES"])):
+        count = await discover(
+            kalshi,
+            poly,
+            store,
+            budget_rps=100.0,
+            min_score=0.2,
+            promotion_settings={
+                "auto_promote_enabled": True,
+                "auto_promote_min_score": 0.2,
+                "auto_promote_daily_cap": 25,
+                "auto_promote_advisory_scans": 0,
+                "auto_promote_max_days": 400,
+                "phase5_max_order_usd": 10,
+            },
+        )
+
+    assert count == 1
+    assert store.written[0]["status"] == "candidate"
+    assert store.written[0]["allow_auto_trade"] is False
+    assert store.written[0]["auto_promote_reason"] == "structural_unverified"
+    assert store.written[0]["review_note"] == "Auto-promote gate: structural_unverified"
+
+
+def test_synthetic_kalshi_orderbook_does_not_treat_volume_as_executable_depth():
+    orderbook = _synthetic_kalshi_orderbook({
+        "yes_bid": 55,
+        "volume": 100000,
+    })
+
+    assert orderbook == {"bids": [], "asks": []}
 
 
 @pytest.mark.asyncio

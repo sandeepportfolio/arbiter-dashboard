@@ -77,6 +77,7 @@ class MockConn:
         return None
 
     async def fetchrow(self, query: str, *args):
+        compact_query = " ".join(query.split())
         if "SELECT COUNT(*) AS total" in query:
             total = sum(
                 1
@@ -106,13 +107,13 @@ class MockConn:
         if "SELECT 1 FROM market_mappings WHERE canonical_id" in query:
             cid = args[0]
             return MockRecord({"exists": True}) if cid in self._mappings else None
-        if "SELECT * FROM market_mappings WHERE kalshi_market_id" in query:
+        if "kalshi_market_id = $1" in compact_query and "polymarket_slug = $2" not in compact_query:
             kid = args[0]
             for m in self._mappings.values():
                 if m.get("kalshi_market_id") == kid and kid:
                     return MockRecord(m)
             return None
-        if "SELECT * FROM market_mappings WHERE polymarket_slug" in query:
+        if "polymarket_slug = $1" in compact_query and "kalshi_market_id = $2" not in compact_query:
             sid = args[0]
             for m in self._mappings.values():
                 if m.get("polymarket_slug") == sid and sid:
@@ -179,6 +180,30 @@ class MockConn:
                 if q in m.get("description", "").lower()
                 and m.get("confidence", 0) >= min_conf
             ][:limit]
+        if "WITH ranked AS" in query and "UPDATE market_mappings AS m" in query:
+            grouped = {}
+            for cid, m in self._mappings.items():
+                if (
+                    m.get("status") in {"confirmed", "candidate", "review"}
+                    and m.get("kalshi_market_id")
+                    and m.get("polymarket_slug")
+                ):
+                    grouped.setdefault((m.get("kalshi_market_id"), m.get("polymarket_slug")), []).append((cid, m))
+            expired = []
+            status_rank = {"confirmed": 0, "review": 1, "candidate": 2}
+            for rows in grouped.values():
+                rows.sort(key=lambda item: (
+                    status_rank.get(item[1].get("status"), 3),
+                    1 if str(item[0]).startswith("AUTO_") else 0,
+                    str(item[1].get("updated_at", "")),
+                ))
+                for cid, m in rows[1:]:
+                    m["status"] = "expired"
+                    m["allow_auto_trade"] = False
+                    m["review_note"] = m.get("review_note") or "Expired duplicate exact venue pair by latest discovery sync."
+                    m["updated_at"] = utc_now()
+                    expired.append(MockRecord({"canonical_id": cid}))
+            return expired
         if "UPDATE market_mappings" in query and "RETURNING canonical_id" in query:
             canonical_id, kalshi_id, poly_slug = args
             expired = []

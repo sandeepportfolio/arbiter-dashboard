@@ -786,6 +786,7 @@ async def _apply_auto_promote(
     advisory_scans = int(advisory_scans_default if advisory_scans_raw is None else advisory_scans_raw)
     today = date.today()
     llm_results: dict[tuple[str, str], str] = {}
+    llm_categories: dict[tuple[str, str], str] = {}
 
     preverify_candidates: list[dict[str, Any]] = []
     for candidate in candidates:
@@ -818,7 +819,9 @@ async def _apply_auto_promote(
             candidate["kalshi_verification_text"] = kalshi_verify_text
             candidate["polymarket_verification_text"] = poly_verify_text
             category = str(candidate.get("category") or "").strip().lower()
-            pairs_by_category[category].append((candidate, (kalshi_verify_text, poly_verify_text)))
+            pair = (kalshi_verify_text, poly_verify_text)
+            pairs_by_category[category].append((candidate, pair))
+            llm_categories[pair] = category
         _emit_progress(
             progress,
             "llm_batch",
@@ -850,10 +853,11 @@ async def _apply_auto_promote(
             )
 
     async def _cached_llm_verify(kalshi_q: str, poly_q: str) -> str:
-        result = llm_results.get((kalshi_q, poly_q))
+        pair = (kalshi_q, poly_q)
+        result = llm_results.get(pair)
         if result is not None:
             return result
-        return await llm_verify(kalshi_q, poly_q)
+        return await llm_verify(kalshi_q, poly_q, category=llm_categories.get(pair) or None)
 
     async def _evaluate(candidate: dict[str, Any]) -> tuple[dict[str, Any], Any]:
         score = float(candidate.get("score", 0.0) or 0.0)
@@ -889,6 +893,7 @@ async def _apply_auto_promote(
         reason_counts[result.reason] = reason_counts.get(result.reason, 0) + 1
         if not result.promoted or promoted_this_pass >= max_promotions:
             if not result.promoted:
+                candidate["allow_auto_trade"] = False
                 candidate["review_note"] = f"Auto-promote gate: {result.reason}"
             continue
 

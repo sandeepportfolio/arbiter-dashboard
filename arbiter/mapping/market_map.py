@@ -562,7 +562,20 @@ class MarketMappingStore:
                 return None
 
             row = await conn.fetchrow(
-                f"SELECT * FROM market_mappings WHERE {col} = $1 AND {col} != ''",
+                f"""
+                SELECT * FROM market_mappings
+                WHERE {col} = $1 AND {col} != ''
+                ORDER BY
+                    CASE status
+                        WHEN 'confirmed' THEN 0
+                        WHEN 'review' THEN 1
+                        WHEN 'candidate' THEN 2
+                        ELSE 3
+                    END,
+                    CASE WHEN canonical_id LIKE 'AUTO_%' THEN 1 ELSE 0 END,
+                    updated_at DESC NULLS LAST
+                LIMIT 1
+                """,
                 platform_market_id,
             )
             return self._row_to_mapping(row) if row else None
@@ -836,6 +849,7 @@ class MarketMappingStore:
         rejected rows out of this query avoids forcing Postgres to sort the
         historical mapping table during API startup.
         """
+        await self.expire_duplicate_active_pairs()
         conn = await self.acquire()
         try:
             rows = await conn.fetch(
@@ -866,6 +880,67 @@ class MarketMappingStore:
             sum(1 for mapping in merged if mapping.status == MappingStatus.CONFIRMED),
         )
         return len(merged)
+
+    async def expire_duplicate_active_pairs(self) -> int:
+        """Expire active duplicate rows for the same exact venue pair.
+
+        Discovery has historically generated both readable GAME_* IDs and
+        opaque AUTO_* IDs for the same Kalshi/Polymarket contracts. The scanner
+        must not see both as independently tradable. Keep the highest-priority
+        row and retire the rest before hydrating runtime state.
+        """
+        conn = await self.acquire()
+        try:
+            rows = await conn.fetch(
+                """
+                WITH ranked AS (
+                    SELECT
+                        canonical_id,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY kalshi_market_id, polymarket_slug
+                            ORDER BY
+                                CASE status
+                                    WHEN 'confirmed' THEN 0
+                                    WHEN 'review' THEN 1
+                                    WHEN 'candidate' THEN 2
+                                    ELSE 3
+                                END,
+                                CASE WHEN canonical_id LIKE 'AUTO_%' THEN 1 ELSE 0 END,
+                                updated_at DESC NULLS LAST
+                        ) AS rn
+                    FROM market_mappings
+                    WHERE status IN ('confirmed', 'candidate', 'review')
+                      AND kalshi_market_id <> ''
+                      AND polymarket_slug <> ''
+                )
+                UPDATE market_mappings AS m
+                SET status = 'expired',
+                    allow_auto_trade = FALSE,
+                    review_note = CASE
+                        WHEN m.review_note IS NULL OR m.review_note = ''
+                        THEN 'Expired duplicate exact venue pair by latest discovery sync.'
+                        ELSE m.review_note
+                    END,
+                    updated_at = NOW()
+                FROM ranked
+                WHERE m.canonical_id = ranked.canonical_id
+                  AND ranked.rn > 1
+                RETURNING m.canonical_id
+                """
+            )
+        finally:
+            await self._pool.release(conn)
+
+        expired = [str(row["canonical_id"]) for row in rows]
+        if expired:
+            for canonical_id in expired:
+                MARKET_MAP.pop(canonical_id, None)
+            logger.warning(
+                "Expired %d duplicate active exact-pair mapping(s): %s",
+                len(expired),
+                ", ".join(expired[:20]) + ("..." if len(expired) > 20 else ""),
+            )
+        return len(expired)
 
     async def _expire_duplicate_exact_pair_mappings(
         self,
@@ -1028,6 +1103,10 @@ class MarketMappingStore:
         existing.mapping_score = score
         existing.confidence = score
         existing.notes = str(candidate.get("notes", "") or existing.notes or "Auto-discovered candidate mapping.")
+        if "review_note" in candidate:
+            existing.review_note = str(candidate.get("review_note") or "")
+        elif candidate_status == MappingStatus.CONFIRMED and str(existing.review_note or "").startswith("Expired"):
+            existing.review_note = ""
         if criteria is not None:
             existing.resolution_criteria_json = json.dumps(criteria)
         existing.resolution_match_status = str(
