@@ -210,10 +210,24 @@ window.MOCK = (() => {
       mode: 'unknown',
       live_trading_ready: false,
       uptime_seconds: 0,
-      scanner: { scan_count: 0, published: 0, scan_time_ms: 0, history: [] },
+      scanner: {
+        scan_count: 0,
+        published: 0,
+        scan_time_ms: 0,
+        active_opportunities: 0,
+        tradable_opportunities: 0,
+        manual_opportunities: 0,
+        best_edge_cents: 0,
+        persistence_scans: 0,
+        max_quote_age_seconds: 0,
+        min_liquidity: 0,
+        confidence_threshold: 0,
+        paused: false,
+        history: [],
+      },
       execution: { total_executions: 0, filled: 0, failed: 0, recovering: 0 },
-      audit: { audit_score: 0 },
-      profitability: { verdict: 'unknown', cumulative_pnl: 0 },
+      audit: { audit_score: 0, audits_run: 0, total_flags: 0, critical_flags: 0, pass_rate: 0, recent_results: [] },
+      profitability: { verdict: 'unknown', cumulative_pnl: 0, published_opportunities: 0, active_opportunities: 0, average_edge_cents: 0, best_edge_cents: 0 },
       reconciliation: { reconciliation_count: 0, flag_count: 0 },
       readiness: { ready: false, gates: 0, passing: 0 },
     },
@@ -221,6 +235,8 @@ window.MOCK = (() => {
     // Edge-bucket histogram. Computed at render time from current
     // opportunities; backend doesn't expose this directly.
     edgeBuckets: [],
+    edgeBucketSampleCount: 0,
+    edgeBucketSource: 'none',
   };
 })();
 
@@ -377,17 +393,33 @@ window.MOCK = (() => {
       const opp = e.opportunity || {};
       const yp = opp.yes_platform || e.yes_platform || 'kalshi';
       const np = opp.no_platform || e.no_platform || 'polymarket';
+      const qty = asNumber(opp.suggested_qty, 0);
+      const edgeCents = asNumber(opp.net_edge_cents, asNumber(e.net_edge_cents, 0));
+      const expectedProfit = asNumber(e.expected_profit, asNumber(opp.max_profit_usd, edgeCents * qty / 100));
+      const normalizedOpp = Object.assign({}, opp, {
+        description: opp.description || e.description || opp.canonical_id || e.canonical_id || 'Trade',
+        canonical_id: opp.canonical_id || e.canonical_id || 'UNKNOWN',
+        yes_platform: yp,
+        no_platform: np,
+        yes_price: asNumber(opp.yes_price, 0),
+        no_price: asNumber(opp.no_price, 0),
+        net_edge_cents: edgeCents,
+        net_edge: asNumber(opp.net_edge, edgeCents / 100),
+        suggested_qty: qty,
+        max_profit_usd: asNumber(opp.max_profit_usd, expectedProfit),
+        persistence_scans: asNumber(opp.persistence_scans, asNumber(opp.persistence_count, 0)),
+        persistence_count: asNumber(opp.persistence_count, asNumber(opp.persistence_scans, 0)),
+      });
       return {
         arb_id: e.arb_id || e.id || 'ARB-?',
         status: e.status || 'filled',
         realized_pnl: asNumber(e.realized_pnl, 0),
+        expected_profit: expectedProfit,
+        expected_cost: asNumber(e.expected_cost, (asNumber(opp.yes_price, 0) + asNumber(opp.no_price, 0)) * qty),
+        expected_vs_realized: asNumber(e.expected_vs_realized, asNumber(e.realized_pnl, 0) - expectedProfit),
+        status_group: e.status_group || ((['filled','closed','settled','simulated'].includes(String(e.status || '').toLowerCase())) ? 'completed' : (['pending','submitted','recovering'].includes(String(e.status || '').toLowerCase()) ? 'open' : (['failed','aborted','rejected'].includes(String(e.status || '').toLowerCase()) ? 'failed' : String(e.status || 'unknown').toLowerCase()))),
         timestamp: asNumber(e.timestamp, Math.floor(Date.now() / 1000)),
-        opportunity: {
-          description: opp.description || e.description || opp.canonical_id || e.canonical_id || 'Trade',
-          canonical_id: opp.canonical_id || e.canonical_id || 'UNKNOWN',
-          yes_platform: yp,
-          no_platform: np,
-        },
+        opportunity: normalizedOpp,
         leg_yes: {
           status: (e.leg_yes && e.leg_yes.status) || 'filled',
           fill_qty: asNumber(e.leg_yes && e.leg_yes.fill_qty, 0),
@@ -425,6 +457,15 @@ window.MOCK = (() => {
       M.health.scanner.scan_count = asNumber(s.scan_count, M.health.scanner.scan_count);
       M.health.scanner.published = asNumber(s.published, M.health.scanner.published);
       M.health.scanner.scan_time_ms = asNumber(s.scan_time_ms, asNumber(s.last_scan_ms, M.health.scanner.scan_time_ms));
+      M.health.scanner.active_opportunities = asNumber(s.active_opportunities, M.health.scanner.active_opportunities);
+      M.health.scanner.tradable_opportunities = asNumber(s.tradable_opportunities, M.health.scanner.tradable_opportunities);
+      M.health.scanner.manual_opportunities = asNumber(s.manual_opportunities, M.health.scanner.manual_opportunities);
+      M.health.scanner.best_edge_cents = asNumber(s.best_edge_cents, M.health.scanner.best_edge_cents);
+      M.health.scanner.persistence_scans = asNumber(s.persistence_scans, M.health.scanner.persistence_scans);
+      M.health.scanner.max_quote_age_seconds = asNumber(s.max_quote_age_seconds, M.health.scanner.max_quote_age_seconds);
+      M.health.scanner.min_liquidity = asNumber(s.min_liquidity, M.health.scanner.min_liquidity);
+      M.health.scanner.confidence_threshold = asNumber(s.confidence_threshold, M.health.scanner.confidence_threshold);
+      if (s.paused != null) M.health.scanner.paused = !!s.paused;
       // Keep history if backend doesn't expose one (dashboard chart needs data).
       if (Array.isArray(s.history) && s.history.length) M.health.scanner.history = s.history;
     }
@@ -435,12 +476,23 @@ window.MOCK = (() => {
       M.health.execution.failed = asNumber(x.failed, M.health.execution.failed);
       M.health.execution.recovering = asNumber(x.recovering, M.health.execution.recovering);
     }
-    if (health.audit && health.audit.audit_score != null) {
-      M.health.audit.audit_score = asNumber(health.audit.audit_score, M.health.audit.audit_score);
+    if (health.audit) {
+      if (health.audit.audit_score != null) M.health.audit.audit_score = asNumber(health.audit.audit_score, M.health.audit.audit_score);
+      if (health.audit.audits_run != null) M.health.audit.audits_run = asNumber(health.audit.audits_run, M.health.audit.audits_run);
+      if (health.audit.total_flags != null) M.health.audit.total_flags = asNumber(health.audit.total_flags, M.health.audit.total_flags);
+      if (health.audit.critical_flags != null) M.health.audit.critical_flags = asNumber(health.audit.critical_flags, M.health.audit.critical_flags);
+      if (health.audit.pass_rate != null) M.health.audit.pass_rate = asNumber(health.audit.pass_rate, M.health.audit.pass_rate);
+      if (Array.isArray(health.audit.recent_results)) M.health.audit.recent_results = health.audit.recent_results;
+    } else if (health.execution && health.execution.audit && Array.isArray(health.execution.audit.recent_results)) {
+      M.health.audit.recent_results = health.execution.audit.recent_results;
     }
     if (health.profitability) {
       if (health.profitability.verdict) M.health.profitability.verdict = health.profitability.verdict;
       if (health.profitability.cumulative_pnl != null) M.health.profitability.cumulative_pnl = asNumber(health.profitability.cumulative_pnl, M.health.profitability.cumulative_pnl);
+      if (health.profitability.published_opportunities != null) M.health.profitability.published_opportunities = asNumber(health.profitability.published_opportunities, M.health.profitability.published_opportunities);
+      if (health.profitability.active_opportunities != null) M.health.profitability.active_opportunities = asNumber(health.profitability.active_opportunities, M.health.profitability.active_opportunities);
+      if (health.profitability.average_edge_cents != null) M.health.profitability.average_edge_cents = asNumber(health.profitability.average_edge_cents, M.health.profitability.average_edge_cents);
+      if (health.profitability.best_edge_cents != null) M.health.profitability.best_edge_cents = asNumber(health.profitability.best_edge_cents, M.health.profitability.best_edge_cents);
     }
     if (health.reconciliation) {
       if (health.reconciliation.reconciliation_count != null) M.health.reconciliation.reconciliation_count = asNumber(health.reconciliation.reconciliation_count, M.health.reconciliation.reconciliation_count);
@@ -498,6 +550,10 @@ window.MOCK = (() => {
     if (!prof || typeof prof !== 'object') return;
     if (prof.verdict) M.health.profitability.verdict = prof.verdict;
     if (prof.cumulative_pnl != null) M.health.profitability.cumulative_pnl = asNumber(prof.cumulative_pnl, M.health.profitability.cumulative_pnl);
+    if (prof.published_opportunities != null) M.health.profitability.published_opportunities = asNumber(prof.published_opportunities, M.health.profitability.published_opportunities);
+    if (prof.active_opportunities != null) M.health.profitability.active_opportunities = asNumber(prof.active_opportunities, M.health.profitability.active_opportunities);
+    if (prof.average_edge_cents != null) M.health.profitability.average_edge_cents = asNumber(prof.average_edge_cents, M.health.profitability.average_edge_cents);
+    if (prof.best_edge_cents != null) M.health.profitability.best_edge_cents = asNumber(prof.best_edge_cents, M.health.profitability.best_edge_cents);
   }
 
   function mergeFailedTrades(M, rows) {
@@ -571,20 +627,56 @@ window.MOCK = (() => {
   // pushes a new point. Capped at SCANNER_MAX_POINTS so the buffer stays
   // bounded over a long session.
   const SCANNER_MAX_POINTS = 60;
+
+  function edgeTelemetrySamples(M) {
+    const rows = [];
+    const seen = new Set();
+    const push = (row) => {
+      const edge = asNumber(row.net_edge_cents, 0);
+      if (!Number.isFinite(edge) || edge <= 0) return;
+      const key = `${row.source || 'sample'}:${row.canonical_id || ''}:${row.timestamp || ''}:${edge.toFixed(4)}:${row.yes_platform || ''}:${row.no_platform || ''}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      rows.push(Object.assign({}, row, { net_edge_cents: +edge.toFixed(4) }));
+    };
+    for (const o of Array.isArray(M.opportunities) ? M.opportunities : []) {
+      push({ source: 'active', canonical_id: o.canonical_id, description: o.description, yes_platform: o.yes_platform, no_platform: o.no_platform, timestamp: o.timestamp || o.last_seen, net_edge_cents: o.net_edge_cents });
+    }
+    const audits = Array.isArray(M.health && M.health.audit && M.health.audit.recent_results) ? M.health.audit.recent_results : [];
+    for (const r of audits) {
+      const shadow = r.shadow || {};
+      if (shadow.net_edge_cents == null) continue;
+      push({ source: 'audit', canonical_id: r.canonical_id, description: r.canonical_id || 'Audited market', yes_platform: r.yes_platform, no_platform: r.no_platform, timestamp: r.timestamp, net_edge_cents: shadow.net_edge_cents, expected_profit: shadow.max_profit_usd });
+    }
+    if (!rows.length && asNumber(M.health && M.health.scanner && M.health.scanner.best_edge_cents, 0) > 0) {
+      push({ source: 'scanner', canonical_id: 'scanner-best-edge', description: 'Scanner best edge', timestamp: Math.floor(Date.now() / 1000), net_edge_cents: M.health.scanner.best_edge_cents });
+    }
+    return rows.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+  }
+
+  function bestTelemetryEdge(M) {
+    const samples = edgeTelemetrySamples(M);
+    const sampleBest = samples.length ? Math.max(...samples.map(s => asNumber(s.net_edge_cents, 0))) : 0;
+    return Math.max(sampleBest, asNumber(M.health && M.health.scanner && M.health.scanner.best_edge_cents, 0), asNumber(M.health && M.health.profitability && M.health.profitability.best_edge_cents, 0));
+  }
+
+  window.edgeTelemetrySamples = edgeTelemetrySamples;
+  window.bestTelemetryEdge = bestTelemetryEdge;
+
   function appendScannerHistory(M) {
     const now = Math.floor(Date.now() / 1000);
     const opps = Array.isArray(M.opportunities) ? M.opportunities : [];
-    const tradable = opps.filter(o => o.status === 'tradable').length;
-    const bestEdge = opps.length
-      ? Math.max(0, ...opps.map(o => asNumber(o.net_edge_cents, 0)))
-      : 0;
+    const tradableFromRows = opps.filter(o => o.status === 'tradable').length;
+    const activeFromHealth = asNumber(M.health.scanner.active_opportunities, 0);
+    const tradable = asNumber(M.health.scanner.tradable_opportunities, tradableFromRows);
+    const bestEdge = bestTelemetryEdge(M);
     const point = {
       t: now,
       timestamp: now,
       scan_count: asNumber(M.health.scanner.scan_count, 0),
       scan_time_ms: asNumber(M.health.scanner.scan_time_ms, 0),
       published: asNumber(M.health.scanner.published, 0),
-      active_opportunities: opps.length,
+      active_opportunities: activeFromHealth || opps.length,
       tradable,
       best_edge_cents: +bestEdge.toFixed(2),
     };
@@ -607,14 +699,16 @@ window.MOCK = (() => {
       { range: '3–5¢',  min: 3,   max: 5,  count: 0 },
       { range: '5¢+',   min: 5,   max: Infinity, count: 0 },
     ];
-    const opps = Array.isArray(M.opportunities) ? M.opportunities : [];
-    for (const o of opps) {
+    const samples = edgeTelemetrySamples(M);
+    for (const o of samples) {
       const e = asNumber(o.net_edge_cents, 0);
       for (const b of buckets) {
         if (e >= b.min && e < b.max) { b.count += 1; break; }
       }
     }
     M.edgeBuckets = buckets.map(({ range, count }) => ({ range, count }));
+    M.edgeBucketSampleCount = samples.length;
+    M.edgeBucketSource = samples.some(s => s.source === 'active') ? 'active' : samples.length ? 'audit' : 'none';
   }
 
   async function refresh() {
@@ -1273,6 +1367,8 @@ function Stat({ label, value, sub, tone, mono, big }) {
 const STATUS_INFO = {
   // Execution statuses
   filled:     { tone: 'green',  icon: '✓', desc: 'Order fully executed at target price' },
+  closed:     { tone: 'green',  icon: '✓', desc: 'Trade completed and closed; realized P&L is final' },
+  pending:    { tone: 'amber',  icon: '◌', desc: 'Trade has been submitted or queued and is not final yet' },
   submitted:  { tone: 'purple', icon: '◌', desc: 'Order sent to exchange, awaiting fill confirmation' },
   failed:     { tone: 'red',    icon: '✕', desc: 'Order rejected or timed out — no capital at risk' },
   recovering: { tone: 'blue',   icon: '↻', desc: 'One leg filled, system working to close the other side' },
@@ -1877,16 +1973,22 @@ function PageOverview() {
   const totalBal = M.balances.kalshi.balance + M.balances.polymarket.balance;
   const totalPnl = M.pnl.recorded_trading_pnl.kalshi + M.pnl.recorded_trading_pnl.polymarket;
   const tradable = opps.filter(o => o.status === 'tradable');
+  const completedStatuses = ['filled','closed','settled','simulated'];
   const last24Execs = window.filterRowsByRange ? window.filterRowsByRange(execs, '24h', 'timestamp') : execs;
-  const last24Filled = last24Execs.filter(e => e.status === 'filled');
+  const last24Filled = last24Execs.filter(e => e.status_group === 'completed' || completedStatuses.includes(String(e.status || '').toLowerCase()));
   const last24Pnl = last24Filled.reduce((s, e) => s + (e.realized_pnl || 0), 0);
-  const bestEdge = opps.length ? Math.max(...opps.map(o => Number(o.net_edge_cents) || 0)) : null;
+  const bestEdge = window.bestTelemetryEdge ? window.bestTelemetryEdge(M) : (opps.length ? Math.max(...opps.map(o => Number(o.net_edge_cents) || 0)) : 0);
   const lastEquity = equityRange[equityRange.length - 1]?.v ?? totalBal;
   const rangeDelta = window.seriesDelta ? window.seriesDelta(equityRange) : 0;
   const rangeBase = Math.abs(Number(equityRange[0]?.v) || totalBal || 1);
   const confirmedMappings = window.marketRowsFromMappings ? window.marketRowsFromMappings(M, 'confirmed') : (M.mappings || []).filter(r => r.status === 'confirmed');
   const latestBalanceTs = Math.max(Number(M.balances.kalshi.timestamp) || 0, Number(M.balances.polymarket.timestamp) || 0);
   const scannerHist = Array.isArray(M.health.scanner.history) ? M.health.scanner.history : [];
+  const scanActive = Number(M.health.scanner.active_opportunities || 0) || opps.length;
+  const scanTradable = Number(M.health.scanner.tradable_opportunities || 0) || tradable.length;
+  const scanManual = Number(M.health.scanner.manual_opportunities || 0);
+  const scanPublished = Number(M.health.scanner.published || M.health.profitability.published_opportunities || 0);
+  const edgeLabel = M.edgeBucketSource === 'active' ? 'Active edges' : M.edgeBucketSource === 'audit' ? 'Audited edge samples' : 'Awaiting edges';
   const kShare = totalBal ? (M.balances.kalshi.balance / totalBal * 100).toFixed(1) : '0.0';
   const pShare = totalBal ? (M.balances.polymarket.balance / totalBal * 100).toFixed(1) : '0.0';
 
@@ -1902,7 +2004,7 @@ function PageOverview() {
       <div style={{ display:'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, marginBottom: 18 }}>
         <KpiCard label="Total balance" value={window.fmt$(totalBal)} sub={`Kalshi ${window.fmt$(M.balances.kalshi.balance)} · Poly ${window.fmt$(M.balances.polymarket.balance)}`} sparkData={equity.slice(-48)} sparkColor={t.accent} />
         <KpiCard label="Trading P&L" value={window.fmt$Sign(totalPnl)} sub="Net of fees · since inception" tone={totalPnl >= 0 ? 'green' : 'red'} sparkData={equity.slice(-48).map(d => ({ ...d, v: d.v - equity[0].v }))} sparkColor={totalPnl >= 0 ? t.green : t.red} />
-        <KpiCard label="Live opportunities" value={tradable.length} sub={`${Math.max(0, opps.length - tradable.length)} candidates · best ${bestEdge != null ? window.fmtC(bestEdge) : '—'}`} tone="accent" sparkData={(M.health.scanner.history || []).slice(-30).map(h => ({ v: h.tradable || 0 }))} sparkColor={t.accent} fallbackValue={tradable.length}/>
+        <KpiCard label="Live opportunities" value={scanTradable} sub={`${scanActive} active · ${scanPublished} published · best ${bestEdge ? window.fmtC(bestEdge) : '—'}`} tone="accent" sparkData={(M.health.scanner.history || []).slice(-30).map(h => ({ v: h.tradable || 0 }))} sparkColor={t.accent} fallbackValue={scanTradable}/>
         <KpiCard label="24h fills" value={last24Filled.length} sub={`${window.fmt$Sign(last24Pnl)} realized`} tone={last24Pnl >= 0 ? 'green' : 'red'} sparkData={equity.slice(-48)} sparkColor={t.green} />
       </div>
 
@@ -1958,31 +2060,38 @@ function PageOverview() {
               ]} label={window.fmt$(totalBal, 0)} sublabel="TOTAL" labelColor={t.text} dimColor={t.textMuted}/>
             </div>
             <div style={{ flex: 1 }}>
-              <Row dot={t.green} label="Kalshi" value={window.fmt$(M.balances.kalshi.balance)} sub={`${kShare}% · ${window.fmt$Sign(M.pnl.recorded_trading_pnl.kalshi)}`}/>
+              <BalanceLegendItem dot={t.green} label="Kalshi" value={window.fmt$(M.balances.kalshi.balance)} share={`${kShare}%`} pnl={M.pnl.recorded_trading_pnl.kalshi} updated={M.balances.kalshi.timestamp} description="CFTC-regulated cash available for Kalshi ticker orders."/>
               <div style={{ height: 12 }}/>
-              <Row dot={t.purple} label="Polymarket" value={window.fmt$(M.balances.polymarket.balance)} sub={`${pShare}% · ${window.fmt$Sign(M.pnl.recorded_trading_pnl.polymarket)}`}/>
+              <BalanceLegendItem dot={t.purple} label="Polymarket" value={window.fmt$(M.balances.polymarket.balance)} share={`${pShare}%`} pnl={M.pnl.recorded_trading_pnl.polymarket} updated={M.balances.polymarket.timestamp} description="Crypto wallet collateral available for Polymarket US slug orders."/>
+              <div style={{ fontSize: 10.5, color: t.textMuted, marginTop: 12, lineHeight: 1.45 }}>Tap a row for live balance details, source share, and recorded trading P&L.</div>
             </div>
           </div>
         </window.Card>
 
-        <window.Card title="Scanner activity" action={<span style={{ fontSize: 10.5, color: scanner ? t.green : t.textMuted, fontFamily: window.FONTS.mono }}>{scanner ? 'LIVE' : 'PAUSED'}</span>} padding={0}>
-          <div style={{ padding: '14px 18px', display:'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14 }}>
+        <window.Card title="Scanner telemetry" action={<span style={{ fontSize: 10.5, color: scanner ? t.green : t.textMuted, fontFamily: window.FONTS.mono }}>{scanner ? 'LIVE' : 'PAUSED'}</span>} padding={0}>
+          <div style={{ padding: '14px 18px', display:'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: 14 }}>
             <Mini label="Scans" value={(M.health.scanner.scan_count || 0).toLocaleString()} mono/>
             <Mini label="Avg latency" value={`${M.health.scanner.scan_time_ms || 0}ms`} mono/>
-            <Mini label="Published" value={(M.health.scanner.published || 0).toLocaleString()} mono/>
-            <Mini label="Best edge" value={bestEdge != null ? window.fmtC(bestEdge) : '—'} mono tone="green"/>
+            <Mini label="Active" value={scanActive.toLocaleString()} mono/>
+            <Mini label="Tradable" value={scanTradable.toLocaleString()} mono tone={scanTradable ? 'green' : undefined}/>
+            <Mini label="Manual" value={scanManual.toLocaleString()} mono/>
+          </div>
+          <div style={{ padding: '0 18px 10px', display:'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10 }}>
+            <Mini label="Published" value={scanPublished.toLocaleString()} mono/>
+            <Mini label="Best edge" value={bestEdge ? window.fmtC(bestEdge) : '—'} mono tone="green"/>
+            <Mini label="Audit feed" value={(M.health.audit.recent_results || []).length.toLocaleString()} mono/>
           </div>
           <div style={{ padding: '0 18px 14px' }}>
-            <div style={{ fontSize: 10, color: t.textMuted, letterSpacing: '0.08em', marginBottom: 6 }}>BEST EDGE — LAST 5 MIN, 5s BUCKETS</div>
+            <div style={{ fontSize: 10, color: t.textMuted, letterSpacing: '0.08em', marginBottom: 6 }}>BEST EDGE — LIVE SCANS + AUDITED SHADOW SAMPLES</div>
             <div style={{ height: 56 }}>
               <window.EdgeStrip history={scannerHist} scale={[t.bgSubtle, t.accentSoft, t.accent + '90', t.green]}/>
             </div>
           </div>
         </window.Card>
 
-        <window.Card title="Edge distribution" action={<span style={{ fontSize: 10.5, color: t.textMuted }}>NOW · {opps.length} {opps.length === 1 ? 'market' : 'markets'}</span>} padding={20}>
+        <window.Card title="Edge distribution" action={<span style={{ fontSize: 10.5, color: t.textMuted }}>{edgeLabel} · {(M.edgeBucketSampleCount || 0).toLocaleString()}</span>} padding={20}>
           <div style={{ height: 180 }}>
-            <window.BarChart data={M.edgeBuckets} color={t.bgHover} accent={t.accent} labelColor={t.textDim} emptyLabel="No active opportunities — edges will plot here as soon as the scanner finds one."/>
+            <window.BarChart data={M.edgeBuckets} color={t.bgHover} accent={t.accent} labelColor={t.textDim} emptyLabel="No active or audited edge samples yet — the scanner will plot live and shadow spreads here."/>
           </div>
         </window.Card>
       </div>
@@ -1994,8 +2103,9 @@ function PageOverview() {
           { label: 'ID', w: '110px', render: r => <span style={{ fontFamily: window.FONTS.mono, color: t.text, fontSize: 11.5 }}>{r.arb_id}</span> },
           { label: 'Market', render: r => <span style={{ fontSize: 12.5 }}>{r.opportunity.description}</span> },
           { label: 'Status', w: '120px', render: r => <window.StatusBadge status={r.status}/> },
+          { label: 'Expected', w: '110px', align: 'right', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12.5, color: t.textDim }}>{window.fmt$Sign(Number(r.expected_profit || 0))}</span> },
           { label: 'P&L', w: '110px', align: 'right', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12.5, color: r.realized_pnl >= 0 ? t.green : t.red, fontWeight: 600 }}>{window.fmt$Sign(r.realized_pnl)}</span> },
-        ]} rows={execs.slice(0, 5)} onRowClick={(r) => { setPage('trades'); }} emptyTitle="No trades yet" emptyHint="Filled and recovering arbitrage trades will show up here." emptyIcon="↗"/>
+        ]} rows={execs.slice(0, 5)} onRowClick={(r) => { setPage('trades'); }} emptyTitle="No trades yet" emptyHint="Pending, recovering, closed, and failed arbitrage attempts will show up here from /api/executions." emptyIcon="↗"/>
       </window.Card>
     </div>
   );
@@ -2043,13 +2153,32 @@ function Row({ dot, label, value, sub }) {
   );
 }
 
+function BalanceLegendItem({ dot, label, value, share, pnl, updated, description }) {
+  const { t } = window.useApp();
+  const title = `${label}: ${value}. ${share} of live capital. Trading P&L ${window.fmt$Sign(Number(pnl || 0))}. ${updated ? 'Updated ' + window.ago(updated) + '. ' : ''}${description}`;
+  return (
+    <div title={title} style={{ padding: '8px 0', borderBottom: `1px solid ${t.border}`, cursor: 'help' }}>
+      <div style={{ display:'flex', alignItems:'center', gap: 8, marginBottom: 4 }}>
+        <span style={{ width: 8, height: 8, borderRadius: '50%', background: dot, flexShrink: 0 }}/>
+        <span style={{ fontSize: 12, color: t.text, fontWeight: 600 }}>{label}</span>
+        <span style={{ marginLeft:'auto', fontSize: 13, fontWeight: 700, color: t.text, fontFamily: window.FONTS.mono }}>{value}</span>
+      </div>
+      <div style={{ display:'flex', justifyContent:'space-between', gap: 10, paddingLeft: 16, fontSize: 10.5, color: t.textMuted }}>
+        <span>{share} of capital · {updated ? `updated ${window.ago(updated)}` : 'awaiting balance refresh'}</span>
+        <span style={{ color: Number(pnl || 0) >= 0 ? t.green : t.red, fontFamily: window.FONTS.mono }}>{window.fmt$Sign(Number(pnl || 0))}</span>
+      </div>
+      <div style={{ paddingLeft: 16, fontSize: 10.5, color: t.textDim, marginTop: 3, lineHeight: 1.35 }}>{description}</div>
+    </div>
+  );
+}
+
 function Mini({ label, value, mono, tone }) {
   const { t } = window.useApp();
   const c = tone === 'green' ? t.green : t.text;
   return (
     <div>
       <div style={{ fontSize: 10, color: t.textMuted, letterSpacing: '0.06em', textTransform:'uppercase', marginBottom: 4 }}>{label}</div>
-      <div style={{ fontSize: 15, fontWeight: 600, color: c, fontFamily: mono ? window.FONTS.mono : window.FONTS.sans }}>{value}</div>
+      <div style={{ fontSize: 15, fontWeight: 600, color: c, fontFamily: mono ? window.FONTS.mono : window.FONTS.sans, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{value}</div>
     </div>
   );
 }
@@ -2359,23 +2488,39 @@ function PageTrades() {
   const { t, setModal } = window.useApp();
   const M = window.MOCK;
   const [statusFilter, setStatusFilter] = pUseState('all');
-  const filtered = statusFilter === 'all' ? M.executions : M.executions.filter(e => e.status === statusFilter);
-  const totalPnl = M.executions.reduce((s, e) => s + e.realized_pnl, 0);
-  const filled = M.executions.filter(e => e.status === 'filled').length;
+  const rows = pUseMemo(() => {
+    const list = Array.isArray(M.executions) ? [...M.executions] : [];
+    return list.sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0));
+  }, [M.executions, M.lastFetch]);
+  const isOpenTrade = e => e.status_group === 'open' || ['pending','submitted','recovering'].includes(String(e.status || '').toLowerCase());
+  const filtered = rows.filter(e => {
+    if (statusFilter === 'all') return true;
+    if (statusFilter === 'completed') return e.status_group === 'completed' || ['filled','closed','settled','simulated'].includes(String(e.status || '').toLowerCase());
+    if (statusFilter === 'open') return isOpenTrade(e);
+    if (statusFilter === 'losses') return !isOpenTrade(e) && Number(e.realized_pnl || 0) < 0;
+    return String(e.status || '').toLowerCase() === statusFilter;
+  });
+  const totalPnl = rows.reduce((s, e) => s + Number(e.realized_pnl || 0), 0);
+  const totalExpected = rows.reduce((s, e) => s + Number(e.expected_profit || 0), 0);
+  const completed = rows.filter(e => e.status_group === 'completed' || ['filled','closed','settled','simulated'].includes(String(e.status || '').toLowerCase())).length;
+  const open = rows.filter(e => e.status_group === 'open' || ['pending','submitted','recovering'].includes(String(e.status || '').toLowerCase())).length;
+  const failed = rows.filter(e => e.status_group === 'failed' || ['failed','aborted','rejected'].includes(String(e.status || '').toLowerCase())).length;
+  const losses = rows.filter(e => Number(e.realized_pnl || 0) < 0).reduce((s, e) => s + Number(e.realized_pnl || 0), 0);
+  const fillRate = rows.length ? completed / rows.length : 0;
 
   return (
     <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto' }}>
-      <window.PageHeader kicker="Execution ledger" title="Trades" sub="Every leg pair the executor has touched. Click a trade for the submission → fill → settle timeline."/>
+      <window.PageHeader kicker="Execution ledger" title="Trades" sub={`${rows.length.toLocaleString()} placed trades loaded from the execution ledger, including completed, failed, recovering, and pending arbs.`}/>
 
       <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap: 14, marginBottom: 18 }}>
-        <window.Card padding={18}><window.Stat label="Total trades" value={M.executions.length} sub={`${filled} filled · ${M.executions.length - filled} other`} mono/></window.Card>
+        <window.Card padding={18}><window.Stat label="Total trades" value={rows.length} sub={`${completed} completed · ${open} open · ${failed} failed`} mono/></window.Card>
         <window.Card padding={18}><window.Stat label="Realized P&L" value={window.fmt$Sign(totalPnl)} tone={totalPnl >= 0 ? 'green' : 'red'} sub="Net of fees, all platforms" mono/></window.Card>
-        <window.Card padding={18}><window.Stat label="Fill rate" value={`${(filled/M.executions.length*100).toFixed(0)}%`} sub="Both legs filled within tolerance" mono/></window.Card>
-        <window.Card padding={18}><window.Stat label="Avg edge captured" value="2.4¢" sub="vs 2.7¢ scanner edge" mono/></window.Card>
+        <window.Card padding={18}><window.Stat label="Expected profit" value={window.fmt$Sign(totalExpected)} sub={`${window.fmt$Sign(totalPnl - totalExpected)} vs expected`} tone={totalPnl - totalExpected >= 0 ? 'green' : 'red'} mono/></window.Card>
+        <window.Card padding={18}><window.Stat label="Completion rate" value={`${(fillRate*100).toFixed(0)}%`} sub={`${window.fmt$Sign(losses)} realized losses`} tone={losses < 0 ? 'red' : 'green'} mono/></window.Card>
       </div>
 
       <div style={{ display:'flex', alignItems:'center', gap: 4, padding: 4, background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 9, marginBottom: 14, width:'fit-content' }}>
-        {['all','filled','recovering','failed'].map(s => (
+        {['all','completed','open','failed','losses'].map(s => (
           <button key={s} onClick={() => setStatusFilter(s)} style={{ padding: '6px 12px', background: statusFilter === s ? t.bgSubtle : 'transparent', border:'none', fontSize: 12, color: statusFilter === s ? t.text : t.textDim, fontWeight: statusFilter === s ? 600 : 400, borderRadius: 6, cursor:'pointer', textTransform:'capitalize' }}>{s}</button>
         ))}
       </div>
@@ -2393,8 +2538,10 @@ function PageTrades() {
           { label: 'YES', w: '160px', render: r => <LegCell leg={r.leg_yes} platform={r.opportunity.yes_platform}/> },
           { label: 'NO', w: '160px', render: r => <LegCell leg={r.leg_no} platform={r.opportunity.no_platform}/> },
           { label: 'Status', w: '100px', render: r => <window.StatusBadge status={r.status}/> },
-          { label: 'P&L', w: '100px', align: 'right', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12.5, color: r.realized_pnl > 0 ? t.green : r.realized_pnl < 0 ? t.red : t.textDim, fontWeight: 600 }}>{window.fmt$Sign(r.realized_pnl)}</span> },
-        ]} rows={filtered} onRowClick={(r) => setModal({ kind: 'trade', payload: r })} emptyTitle="No trades in ledger" emptyHint="Once the executor fires its first arbitrage, every trade and recovery will land here." emptyIcon="↗"/>
+          { label: 'Expected', w: '105px', align: 'right', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12.5, color: Number(r.expected_profit || 0) >= 0 ? t.green : t.red, fontWeight: 600 }}>{window.fmt$Sign(Number(r.expected_profit || 0))}</span> },
+          { label: 'Actual P&L', w: '110px', align: 'right', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12.5, color: r.realized_pnl > 0 ? t.green : r.realized_pnl < 0 ? t.red : t.textDim, fontWeight: 600 }}>{window.fmt$Sign(r.realized_pnl)}</span> },
+          { label: 'Delta', w: '100px', align: 'right', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12, color: Number(r.expected_vs_realized || 0) >= 0 ? t.green : t.red }}>{window.fmt$Sign(Number(r.expected_vs_realized || 0))}</span> },
+        ]} rows={filtered} onRowClick={(r) => setModal({ kind: 'trade', payload: r })} emptyTitle="No trades in ledger" emptyHint="Completed, pending, recovering, and failed trades from /api/executions will show here." emptyIcon="↗"/>
       </window.Card>
     </div>
   );
@@ -3345,12 +3492,18 @@ function Row({ k, v, bold, positive }) {
 function TradeDetailModal() {
   const { t, modal, setModal, toast } = window.useApp();
   const r = modal.payload;
+  const expectedProfit = Number(r.expected_profit || r.opportunity?.max_profit_usd || 0);
+  const realizedPnl = Number(r.realized_pnl || 0);
+  const expectedDelta = Number(r.expected_vs_realized ?? (realizedPnl - expectedProfit));
+  const netEdgeCents = Number(r.opportunity?.net_edge_cents || 0);
+  const persistence = Number(r.opportunity?.persistence_scans || r.opportunity?.persistence_count || 0);
+  const totalNotional = Number(r.expected_cost || ((r.leg_yes.quantity || r.leg_yes.fill_qty || 0) * (r.leg_yes.price || r.leg_yes.fill_price || 0)) + ((r.leg_no.quantity || r.leg_no.fill_qty || 0) * (r.leg_no.price || r.leg_no.fill_price || 0)));
   const tl = [
-    { ok: true, label: 'Opportunity detected', t: 'T+0.000s', detail: `Net edge ${window.fmtC(4.8)} · 12 persistence scans` },
+    { ok: true, label: 'Opportunity detected', t: 'T+0.000s', detail: `Net edge ${window.fmtC(netEdgeCents)} · ${persistence || '—'} persistence scans · expected ${window.fmt$Sign(expectedProfit)}` },
     { ok: true, label: 'Risk gates passed', t: 'T+0.012s', detail: '7/7 gates · auto-execute armed' },
     { ok: r.leg_yes.status === 'filled' || r.leg_yes.status === 'submitted', label: `YES leg → ${r.opportunity.yes_platform}`, t: 'T+0.032s', detail: `${r.leg_yes.fill_qty} @ $${r.leg_yes.fill_price.toFixed(2)} · ${r.leg_yes.status}` },
     { ok: r.leg_no.status === 'filled' || r.leg_no.status === 'submitted', label: `NO leg → ${r.opportunity.no_platform}`, t: 'T+0.041s', detail: `${r.leg_no.fill_qty} @ $${r.leg_no.fill_price.toFixed(2)} · ${r.leg_no.status}` },
-    { ok: r.status === 'filled', label: 'Reconciled', t: 'T+1.840s', detail: r.status === 'filled' ? `Both legs settled · P&L ${window.fmt$Sign(r.realized_pnl)}` : r.status === 'recovering' ? 'Recovery flow in progress' : 'Failed leg refunded' },
+    { ok: r.status === 'filled' || r.status === 'closed', label: 'Reconciled', t: 'T+1.840s', detail: (r.status === 'filled' || r.status === 'closed') ? `Trade closed · actual P&L ${window.fmt$Sign(realizedPnl)} · delta ${window.fmt$Sign(expectedDelta)}` : r.status === 'recovering' ? 'Recovery flow in progress' : 'Failed leg refunded' },
   ];
 
   return (
@@ -3368,9 +3521,15 @@ function TradeDetailModal() {
 
       <div style={{ padding: 24, overflow:'auto' }}>
         <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap: 12, marginBottom: 24 }}>
-          <Tile label="Realized P&L" value={window.fmt$Sign(r.realized_pnl)} tone={r.realized_pnl >= 0 ? 'green' : 'red'}/>
+          <Tile label="Expected profit" value={window.fmt$Sign(expectedProfit)} tone={expectedProfit >= 0 ? 'green' : 'red'}/>
+          <Tile label="Actual P&L" value={window.fmt$Sign(realizedPnl)} tone={realizedPnl >= 0 ? 'green' : 'red'}/>
+          <Tile label="Delta vs expected" value={window.fmt$Sign(expectedDelta)} tone={expectedDelta >= 0 ? 'green' : 'red'}/>
+        </div>
+
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap: 12, marginBottom: 24 }}>
           <Tile label="Submitted" value={window.tsTime(r.timestamp)} sub={window.tsDate(r.timestamp)}/>
-          <Tile label="Total notional" value={window.fmt$((r.leg_yes.fill_qty * r.leg_yes.fill_price) + (r.leg_no.fill_qty * r.leg_no.fill_price))}/>
+          <Tile label="Expected notional" value={window.fmt$(totalNotional)}/>
+          <Tile label="Status group" value={r.status_group || r.status}/>
         </div>
 
         <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom: 12 }}>EXECUTION TIMELINE</div>
@@ -4901,10 +5060,20 @@ function MobOpps() {
 function MobTrades() {
   const { t } = window.useApp();
   const M = window.MOCK;
+  const rows = Array.isArray(M.executions) ? [...M.executions].sort((a,b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0)) : [];
+  const realized = rows.reduce((s, r) => s + Number(r.realized_pnl || 0), 0);
+  const expected = rows.reduce((s, r) => s + Number(r.expected_profit || 0), 0);
+  const open = rows.filter(r => r.status_group === 'open' || ['pending','submitted','recovering'].includes(String(r.status || '').toLowerCase())).length;
   return (
     <div style={{ paddingTop: 8 }}>
       <div style={{ fontSize: 18, fontWeight: 600, color: t.text, marginBottom: 12, padding: '0 4px' }}>Trades</div>
-      {M.executions.slice(0, 8).map((r, i) => (
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap: 8, marginBottom: 12 }}>
+        <MobMini label="Trades" value={rows.length.toLocaleString()} dot={t.accent}/>
+        <MobMini label="Actual" value={window.fmt$Sign(realized)} dot={realized >= 0 ? t.green : t.red}/>
+        <MobMini label="Open" value={open.toLocaleString()} dot={t.amber}/>
+      </div>
+      <div style={{ fontSize: 10.5, color: t.textMuted, margin: '0 4px 10px' }}>Expected {window.fmt$Sign(expected)} · delta {window.fmt$Sign(realized - expected)}</div>
+      {rows.map((r, i) => (
         <div key={i} style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 14, marginBottom: 8 }}>
           <div style={{ display:'flex', alignItems:'center', gap: 8, marginBottom: 6 }}>
             <span style={{ fontSize: 11, fontFamily: window.FONTS.mono, fontWeight: 700, color: t.text }}>{r.arb_id}</span>
@@ -4913,7 +5082,8 @@ function MobTrades() {
           </div>
           <div style={{ fontSize: 12, color: t.text, marginBottom: 8, lineHeight: 1.35 }}>{r.opportunity.description}</div>
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', paddingTop: 8, borderTop: `1px solid ${t.border}` }}>
-            <span style={{ fontSize: 10.5, color: t.textMuted, fontFamily: window.FONTS.mono }}>{r.leg_yes.fill_qty} pairs</span>
+            <span style={{ fontSize: 10.5, color: t.textMuted, fontFamily: window.FONTS.mono }}>exp {window.fmt$Sign(Number(r.expected_profit || 0))}</span>
+            <span style={{ fontSize: 11, color: Number(r.expected_vs_realized || 0) >= 0 ? t.green : t.red, fontFamily: window.FONTS.mono }}>Δ {window.fmt$Sign(Number(r.expected_vs_realized || 0))}</span>
             <span style={{ fontSize: 13, fontWeight: 700, color: r.realized_pnl >= 0 ? t.green : t.red, fontFamily: window.FONTS.mono }}>{window.fmt$Sign(r.realized_pnl)}</span>
           </div>
         </div>

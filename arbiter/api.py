@@ -587,7 +587,52 @@ class ArbiterAPI:
         )
 
     async def handle_trades(self, request):
-        return web.json_response([execution.to_dict() for execution in self.engine.execution_history[-100:]])
+        """Return the durable execution ledger newest-first.
+
+        The engine stores rehydrated and live executions in memory.  Keep the
+        API presentation explicit so the ops console can show every completed,
+        failed, recovering, and pending trade with expected-vs-realized P&L.
+        """
+        try:
+            limit = int(request.query.get("limit", "500")) if request is not None else 500
+        except Exception:
+            limit = 500
+        limit = max(1, min(limit, 1000))
+
+        rows = [self._execution_payload(execution) for execution in getattr(self.engine, "execution_history", [])]
+        rows.sort(key=lambda x: x.get("timestamp") or 0, reverse=True)
+        return web.json_response(rows[:limit])
+
+    @staticmethod
+    def _execution_payload(execution) -> dict:
+        payload = execution.to_dict()
+        opp = payload.get("opportunity") or {}
+
+        qty = float(opp.get("suggested_qty") or 0.0)
+        expected_profit = opp.get("max_profit_usd")
+        if expected_profit is None:
+            expected_profit = (float(opp.get("net_edge_cents") or 0.0) / 100.0) * qty
+        expected_profit = round(float(expected_profit or 0.0), 4)
+
+        yes_price = float(opp.get("yes_price") or 0.0)
+        no_price = float(opp.get("no_price") or 0.0)
+        expected_cost = round((yes_price + no_price) * qty, 4)
+        realized_pnl = float(payload.get("realized_pnl") or 0.0)
+        status = str(payload.get("status") or "").lower()
+        if status in {"filled", "closed", "settled", "simulated"}:
+            status_group = "completed"
+        elif status in {"pending", "submitted", "recovering"}:
+            status_group = "open"
+        elif status in {"failed", "aborted", "rejected"}:
+            status_group = "failed"
+        else:
+            status_group = status or "unknown"
+
+        payload["expected_profit"] = expected_profit
+        payload["expected_cost"] = expected_cost
+        payload["expected_vs_realized"] = round(realized_pnl - expected_profit, 4)
+        payload["status_group"] = status_group
+        return payload
 
     async def handle_failed_trades(self, request):
         """Return failed executions enriched with retry-scheduler context.

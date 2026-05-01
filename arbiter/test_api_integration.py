@@ -373,6 +373,55 @@ def test_direct_health_endpoints_are_unambiguous_without_socket_binding():
     asyncio.run(_run())
 
 
+def test_trades_endpoint_returns_complete_newest_first_expected_actual_ledger():
+    async def _run():
+        from types import SimpleNamespace
+
+        api = await _make_rate_limit_api()
+
+        def execution(arb_id, ts, status, expected, realized):
+            opp = {
+                "description": f"Market {arb_id}",
+                "canonical_id": f"CAN-{arb_id}",
+                "yes_price": 0.40,
+                "no_price": 0.55,
+                "suggested_qty": 10,
+                "net_edge_cents": expected * 10,
+                "max_profit_usd": expected,
+            }
+            return SimpleNamespace(
+                to_dict=lambda: {
+                    "arb_id": arb_id,
+                    "opportunity": opp,
+                    "leg_yes": {"status": "filled", "fill_qty": 10, "fill_price": 0.40},
+                    "leg_no": {"status": "filled", "fill_qty": 10, "fill_price": 0.55},
+                    "status": status,
+                    "realized_pnl": realized,
+                    "timestamp": ts,
+                }
+            )
+
+        api.engine.execution_history = [
+            execution("old-closed", 100, "closed", 1.25, 1.00),
+            execution("new-pending", 300, "pending", 0.50, 0.00),
+            execution("mid-failed", 200, "failed", 2.00, -0.25),
+        ]
+
+        class Req:
+            query = {}
+
+        response = await api.handle_trades(Req())
+        payload = json.loads(response.text)
+
+        assert [row["arb_id"] for row in payload] == ["new-pending", "mid-failed", "old-closed"]
+        assert [row["status_group"] for row in payload] == ["open", "failed", "completed"]
+        assert payload[0]["expected_profit"] == 0.5
+        assert payload[1]["expected_vs_realized"] == -2.25
+        assert payload[2]["expected_cost"] == 9.5
+
+    asyncio.run(_run())
+
+
 def test_discovery_status_endpoint_defaults_to_idle():
     async def _run():
         api = await _make_rate_limit_api()
@@ -408,6 +457,15 @@ def test_mobile_mappings_render_api_field_names():
     assert "r.kalshi_market_id || r.kalshi_ticker || r.kalshi || r.ticker" in html
     assert "r.polymarket_slug || r.poly_slug || r.polymarket" in html
     assert "function MapLine" in html
+
+
+def test_ops_execution_ledger_preserves_context_and_filters_realized_losses():
+    html = open(os.path.join(os.getcwd(), "arbiter", "web", "ops.html"), encoding="utf-8").read()
+
+    assert "const normalizedOpp = Object.assign({}, opp" in html
+    assert "net_edge_cents: edgeCents" in html
+    assert "persistence_scans: asNumber(opp.persistence_scans" in html
+    assert "if (statusFilter === 'losses') return !isOpenTrade(e) && Number(e.realized_pnl || 0) < 0;" in html
 
 
 def test_ops_charts_and_markets_use_live_data_sources():
