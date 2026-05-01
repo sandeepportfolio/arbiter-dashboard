@@ -2973,7 +2973,7 @@ function PageMappings() {
         <StatButton active={mappingFilter === 'confirmed'} onClick={() => setMappingFilter('confirmed')}><window.Card padding={18}><window.Stat label="Confirmed" value={confirmedCount.toLocaleString()} tone="green" sub={`${candidates.filter(c => c.auto).length.toLocaleString()} auto-trade`} mono/></window.Card></StatButton>
         <StatButton active={mappingFilter === 'pending'} onClick={() => setMappingFilter('pending')}><window.Card padding={18}><window.Stat label="Pending review" value={reviewable.length.toLocaleString()} tone="amber" sub="Candidate + review queue" mono/></window.Card></StatButton>
         <StatButton active={mappingFilter === 'live'} onClick={() => setMappingFilter('live')}><window.Card padding={18}><window.Stat label="Live mappings" value={liveCount.toLocaleString()} tone="accent" sub="Confirmed + identical + auto-trade" mono/></window.Card></StatButton>
-        <StatButton onClick={() => setModal({ kind:'refetchMappings', payload:{ title:'Discovery history', inspectOnly:true } })}><window.Card padding={18}><window.Stat label="Last refetch" value={lastRefetchValue} sub={lastRefetchSub} mono/></window.Card></StatButton>
+        <StatButton onClick={() => setModal({ kind:'refetchMappings', payload:{ title:'Discovery history', inspectOnly:true, autoPromote:false } })}><window.Card padding={18}><window.Stat label="Last refetch" value={lastRefetchValue} sub={lastRefetchSub} mono/></window.Card></StatButton>
       </div>
 
       <div style={{ display:'flex', alignItems:'center', gap: 8, flexWrap:'wrap', marginBottom: 14 }}>
@@ -5784,7 +5784,7 @@ function MobMappings() {
       <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap: 8, marginBottom: 12 }}>
         <MiniMapStat label="Confirmed" value={confirmed.toLocaleString()} tone="green" active={mappingFilter === 'confirmed'} onClick={() => setMappingFilter('confirmed')}/>
         <MiniMapStat label="Pending" value={reviewable.length.toLocaleString()} tone="amber" active={mappingFilter === 'pending'} onClick={() => setMappingFilter('pending')}/>
-        <MiniMapStat label="Refetch" value={discoveryStatus === 'idle' ? 'ready' : discovery.status} tone={discovery.status === 'failed' ? 'red' : 'blue'} onClick={() => setModal({ kind:'refetchMappings', payload:{ title:'Discovery history', inspectOnly:true } })}/>
+        <MiniMapStat label="Refetch" value={discoveryStatus === 'idle' ? 'ready' : discovery.status} tone={discovery.status === 'failed' ? 'red' : 'blue'} onClick={() => setModal({ kind:'refetchMappings', payload:{ title:'Discovery history', inspectOnly:true, autoPromote:false } })}/>
       </div>
       {(discovery.status && discovery.status !== 'idle') && (
         <div style={{ marginBottom: 12, padding: '10px 12px', background: t.bgSubtle, border:`1px solid ${t.border}`, borderRadius: 10, color: t.textDim, fontSize: 11, lineHeight: 1.45 }}>

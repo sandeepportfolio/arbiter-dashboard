@@ -87,10 +87,10 @@ async def analyze_arb_from_db(conn, arb_id: str) -> str:
         arb_id,
     )
     fill_rows = await conn.fetch(
-        "SELECT f.fill_id, f.order_id, f.price, f.quantity, f.fees_paid, f.created_at, "
+        "SELECT f.fill_id, f.order_id, f.price, f.quantity, f.fees_paid, f.filled_at, "
         "       o.platform, o.side "
         "FROM execution_fills f JOIN execution_orders o USING (order_id) "
-        "WHERE o.arb_id = $1 ORDER BY f.created_at ASC",
+        "WHERE o.arb_id = $1 ORDER BY f.filled_at ASC",
         arb_id,
     )
     incident_rows = await conn.fetch(
