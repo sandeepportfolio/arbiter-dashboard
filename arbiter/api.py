@@ -1100,7 +1100,52 @@ class ArbiterAPI:
                 })
 
         poly_collector = self.collectors.get("polymarket") if hasattr(self, "collectors") else None
-        if poly_slug and poly_collector is not None and hasattr(poly_collector, "_get_session"):
+        poly_client = getattr(poly_collector, "client", None) if poly_collector is not None else None
+        if poly_slug and poly_client is not None and hasattr(poly_client, "get_market_by_slug"):
+            try:
+                payload = await asyncio.wait_for(
+                    poly_client.get_market_by_slug(poly_slug),
+                    timeout=12.0,
+                )
+                payload = payload if isinstance(payload, dict) else {}
+                market = (
+                    payload.get("market")
+                    if isinstance(payload.get("market"), dict)
+                    else payload
+                )
+                market = market if isinstance(market, dict) else {}
+                market_data = (
+                    market.get("marketData")
+                    if isinstance(market.get("marketData"), dict)
+                    else market
+                )
+                state = str(market_data.get("state") or market.get("state") or payload.get("state") or "").lower()
+                closed = bool(
+                    market_data.get("closed")
+                    or market_data.get("archived")
+                    or market.get("closed")
+                    or market.get("archived")
+                    or state in {"closed", "resolved", "settled", "suspended", "halted", "expired", "finalized"}
+                )
+                active_flag = market_data.get("active", market.get("active"))
+                active = (not closed) if active_flag is None else bool(active_flag) and not closed
+                result["polymarket"].update({
+                    "checked": True,
+                    "exists": bool(market),
+                    "active": bool(active) if market else False,
+                    "question": market_data.get("question") or market.get("question") or market.get("title"),
+                    "state": state or "unknown",
+                    "closed": closed,
+                    "end_date": market_data.get("endDate") or market.get("endDate"),
+                })
+            except Exception as exc:
+                result["polymarket"].update({
+                    "checked": True,
+                    "exists": False if "404" in str(exc) else None,
+                    "active": False if "404" in str(exc) else None,
+                    "error": str(exc)[:240],
+                })
+        elif poly_slug and poly_collector is not None and hasattr(poly_collector, "_get_session"):
             try:
                 async def fetch_polymarket_event() -> list[dict[str, Any]]:
                     session = await poly_collector._get_session()

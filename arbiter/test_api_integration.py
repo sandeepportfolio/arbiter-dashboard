@@ -859,6 +859,39 @@ def test_market_mapping_validation_history_and_run_are_read_only(monkeypatch):
         MARKET_MAP["DEM_HOUSE_2026"] = original
 
 
+def test_mapping_validation_checks_polymarket_us_client():
+    """Polymarket US validation should use the current client, not legacy Gamma only."""
+    from types import SimpleNamespace
+
+    async def _run():
+        api = await _make_mapping_api()
+
+        class FakePolyClient:
+            async def get_market_by_slug(self, slug):
+                assert slug == "pm-live-slug"
+                return {
+                    "slug": slug,
+                    "question": "Will the live event happen?",
+                    "state": "open",
+                    "active": True,
+                    "closed": False,
+                    "endDate": "2026-06-01T00:00:00Z",
+                }
+
+        api.collectors = {
+            "polymarket": SimpleNamespace(client=FakePolyClient()),
+        }
+        result = await api._validate_live_market_presence({
+            "polymarket": "pm-live-slug",
+        })
+        assert result["polymarket"]["checked"] is True
+        assert result["polymarket"]["exists"] is True
+        assert result["polymarket"]["active"] is True
+        assert result["polymarket"]["question"] == "Will the live event happen?"
+
+    asyncio.run(_run())
+
+
 def test_market_mapping_update_accepts_criteria(monkeypatch):
     """SAFE-06 truth: POST /api/market-mappings/{id} accepts a
     resolution_criteria body and persists it, returning the stored payload.
