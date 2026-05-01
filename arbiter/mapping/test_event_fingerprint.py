@@ -78,6 +78,46 @@ def test_crypto_fingerprint_rejects_different_threshold_and_date():
     assert structural_match(kalshi, poly) is None
 
 
+def test_economics_fed_decision_fingerprint_matches_exact_outcome_and_date():
+    kalshi = {
+        "ticker": "KXFEDDECISION-26JUN17-HOLD",
+        "title": "Will the Fed hold rates at the June 17, 2026 FOMC meeting?",
+    }
+    poly = {
+        "slug": "rdc-usfed-fomc-2026-06-17-maintains",
+        "question": "Will the Federal Reserve maintain rates after the June 2026 FOMC meeting?",
+    }
+
+    match = structural_match(kalshi, poly)
+
+    assert match is not None
+    assert match.event_key == "economics:us:fomc-rate-decision:2026-06-17:fed-rate-decision:target-range"
+    assert match.outcome == "maintains"
+    assert match.resolution_source == "federal_reserve"
+
+
+def test_economics_cpi_and_unemployment_require_same_period_threshold_and_source():
+    cpi_kalshi = {
+        "ticker": "KXCPIYOY-26MAY13-GTE3.0PCT",
+        "title": "April 2026 CPI YoY at least 3.0%?",
+    }
+    cpi_poly = {
+        "slug": "cpic-uscpi-apr2026yoy-2026-05-13-gte3pt0pct",
+        "question": "Will US CPI YoY for April 2026 be at least 3.0%?",
+    }
+    unemployment_kalshi = {
+        "ticker": "KXUNEMP-26MAY08-GTE4.0PCT",
+        "title": "April 2026 unemployment rate at least 4.0%?",
+    }
+    unemployment_poly_wrong_threshold = {
+        "slug": "uec-usunemployment-apr2026-2026-05-08-gte4pt1pct",
+        "question": "Will US unemployment for April 2026 be at least 4.1%?",
+    }
+
+    assert structural_match(cpi_kalshi, cpi_poly) is not None
+    assert structural_match(unemployment_kalshi, unemployment_poly_wrong_threshold) is None
+
+
 def test_team_alias_split_distinguishes_montreal_and_inter_miami():
     assert normalize_entity_code("MTL") == "mtl"
     assert normalize_entity_code("MIM") == "mim"

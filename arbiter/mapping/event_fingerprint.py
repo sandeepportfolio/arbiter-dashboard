@@ -8,6 +8,7 @@ from typing import Any
 from arbiter.config.settings import normalize_market_text
 from arbiter.mapping.sports_safety import (
     KALSHI_SPORT_TO_POLY,
+    SUPPORTED_POLY_WINNER_PREFIXES,
     parse_kalshi_sports_ticker,
     parse_polymarket_sports_slug,
 )
@@ -34,6 +35,32 @@ _GDP_POLY_RE = re.compile(
     r"^will-us-gdp-growth-in-(?P<period>q[1-4]-20\d{2}|20\d{2})-be-"
     r"(?P<direction>greater-than|less-than|between)-(?P<threshold>[0-9]+pt[0-9]+)"
     r"(?:-and-(?P<threshold2>[0-9]+pt[0-9]+))?$"
+)
+_FED_KALSHI_RE = re.compile(
+    r"^KXFED(?:DECISION|RATE|FOMC)-(?P<yy>\d{2})(?P<mon>[A-Z]{3})(?P<dd>\d{2})-"
+    r"(?P<outcome>HOLD|C25P|C25|H25P|H25)$"
+)
+_FED_POLY_RE = re.compile(
+    r"^rdc-usfed-fomc-(?P<date>20\d{2}-\d{2}-\d{2})-"
+    r"(?P<outcome>maintains|cut25bps|cutgt25bps|hike25bps|hikegt25bps)$"
+)
+_CPI_KALSHI_RE = re.compile(
+    r"^KXCPI(?P<basis>YOY|MOM)?-(?P<yy>\d{2})(?P<mon>[A-Z]{3})(?P<dd>\d{2})-"
+    r"(?P<bucket>(?:GTE|LTE|T)?[0-9]+(?:\.[0-9]+)?PCT?)$"
+)
+_CPI_POLY_RE = re.compile(
+    r"^cpic-uscpi-(?P<period>[a-z]{3}20\d{2})(?P<basis>yoy|mom)-"
+    r"(?P<release>20\d{2}-\d{2}-\d{2})-"
+    r"(?P<bucket>(?:gte|lte)?[0-9]+pt[0-9]+pct)$"
+)
+_UNEMPLOYMENT_KALSHI_RE = re.compile(
+    r"^KXUNEMP(?:LOYMENT)?(?P<basis>RATE)?-(?P<yy>\d{2})(?P<mon>[A-Z]{3})(?P<dd>\d{2})-"
+    r"(?P<bucket>(?:GTE|LTE|T)?[0-9]+(?:\.[0-9]+)?PCT?)$"
+)
+_UNEMPLOYMENT_POLY_RE = re.compile(
+    r"^(?:uec|unemp)-usunemployment-(?P<period>[a-z]{3}20\d{2})-"
+    r"(?P<release>20\d{2}-\d{2}-\d{2})-"
+    r"(?P<bucket>(?:gte|lte)?[0-9]+pt[0-9]+pct)$"
 )
 _KALSHI_SPORT_EVENT_RE = re.compile(
     r"^KX([A-Z0-9]+?)(?:GAME|MATCH)-(\d{2})([A-Z]{3})(\d{2})(\d*)([A-Z]+)$"
@@ -150,6 +177,9 @@ def fingerprint_kalshi_market(market: dict) -> MarketFingerprint | None:
         or _fingerprint_kalshi_politics(market)
         or _fingerprint_kalshi_crypto(market)
         or _fingerprint_kalshi_gdp(market)
+        or _fingerprint_kalshi_fed_decision(market)
+        or _fingerprint_kalshi_cpi(market)
+        or _fingerprint_kalshi_unemployment(market)
     )
 
 
@@ -183,6 +213,9 @@ def fingerprint_polymarket_market(market: dict) -> MarketFingerprint | None:
         or _fingerprint_poly_politics(market)
         or _fingerprint_poly_crypto(market)
         or _fingerprint_poly_gdp(market)
+        or _fingerprint_poly_fed_decision(market)
+        or _fingerprint_poly_cpi(market)
+        or _fingerprint_poly_unemployment(market)
     )
 
 
@@ -227,7 +260,7 @@ def _fingerprint_kalshi_sports(market: dict) -> MarketFingerprint | None:
 
 def _fingerprint_poly_sports(market: dict) -> MarketFingerprint | None:
     parsed = parse_polymarket_sports_slug(str(market.get("slug", "") or ""))
-    if parsed is None:
+    if parsed is None or parsed.prefix not in SUPPORTED_POLY_WINNER_PREFIXES:
         return None
     outcome = normalize_entity_code(parsed.side) if parsed.side else normalize_entity_code(parsed.team1)
     return MarketFingerprint(
@@ -356,15 +389,120 @@ def _fingerprint_poly_gdp(market: dict) -> MarketFingerprint | None:
     else:
         direction = "above" if direction_raw == "greater-than" else "below"
         threshold = _normalize_decimal(match.group("threshold"))
+    period = match.group("period")
     return MarketFingerprint(
         category="economics",
         subcategory="us",
-        entity=f"gdp-growth-{match.group('period')}",
-        date=str(market.get("endDate") or market.get("closeTime") or ""),
+        entity=f"gdp-growth-{period}",
+        date=_gdp_release_date_for_period(period) or str(market.get("endDate") or market.get("closeTime") or ""),
         metric=direction,
         threshold=threshold,
         outcome="yes",
         source="bea",
+    )
+
+
+def _fingerprint_kalshi_fed_decision(market: dict) -> MarketFingerprint | None:
+    ticker = str(market.get("ticker", "") or "").upper()
+    match = _FED_KALSHI_RE.match(ticker)
+    if not match:
+        return None
+    text = normalize_market_text(" ".join(str(market.get(field, "") or "") for field in ("title", "subtitle", "rules_primary")))
+    if "dissent" in text or (text and "fed" not in text and "fomc" not in text and "federal reserve" not in text):
+        return None
+    outcome = _normalize_fed_outcome(match.group("outcome"))
+    return MarketFingerprint(
+        category="economics",
+        subcategory="us",
+        entity="fomc-rate-decision",
+        date=_kalshi_date(match.group("yy"), match.group("mon"), match.group("dd")) or "",
+        metric="fed-rate-decision",
+        threshold="target-range",
+        outcome=outcome,
+        source="federal_reserve",
+    )
+
+
+def _fingerprint_poly_fed_decision(market: dict) -> MarketFingerprint | None:
+    match = _FED_POLY_RE.match(str(market.get("slug", "") or "").lower())
+    if not match:
+        return None
+    return MarketFingerprint(
+        category="economics",
+        subcategory="us",
+        entity="fomc-rate-decision",
+        date=match.group("date"),
+        metric="fed-rate-decision",
+        threshold="target-range",
+        outcome=_normalize_fed_outcome(match.group("outcome")),
+        source="federal_reserve",
+    )
+
+
+def _fingerprint_kalshi_cpi(market: dict) -> MarketFingerprint | None:
+    match = _CPI_KALSHI_RE.match(str(market.get("ticker", "") or "").upper())
+    if not match:
+        return None
+    basis = (match.group("basis") or "YOY").lower()
+    release_date = _kalshi_date(match.group("yy"), match.group("mon"), match.group("dd")) or ""
+    return MarketFingerprint(
+        category="economics",
+        subcategory="us",
+        entity=f"cpi-{basis}-{_period_from_text_or_release(market, release_date)}",
+        date=release_date,
+        metric="cpi",
+        threshold=_normalize_percent_bucket(match.group("bucket")),
+        outcome="yes",
+        source="bls",
+    )
+
+
+def _fingerprint_poly_cpi(market: dict) -> MarketFingerprint | None:
+    match = _CPI_POLY_RE.match(str(market.get("slug", "") or "").lower())
+    if not match:
+        return None
+    return MarketFingerprint(
+        category="economics",
+        subcategory="us",
+        entity=f"cpi-{match.group('basis')}-{match.group('period')}",
+        date=match.group("release"),
+        metric="cpi",
+        threshold=_normalize_percent_bucket(match.group("bucket")),
+        outcome="yes",
+        source="bls",
+    )
+
+
+def _fingerprint_kalshi_unemployment(market: dict) -> MarketFingerprint | None:
+    match = _UNEMPLOYMENT_KALSHI_RE.match(str(market.get("ticker", "") or "").upper())
+    if not match:
+        return None
+    release_date = _kalshi_date(match.group("yy"), match.group("mon"), match.group("dd")) or ""
+    return MarketFingerprint(
+        category="economics",
+        subcategory="us",
+        entity=f"unemployment-rate-{_period_from_text_or_release(market, release_date)}",
+        date=release_date,
+        metric="unemployment-rate",
+        threshold=_normalize_percent_bucket(match.group("bucket")),
+        outcome="yes",
+        source="bls",
+    )
+
+
+def _fingerprint_poly_unemployment(market: dict) -> MarketFingerprint | None:
+    match = _UNEMPLOYMENT_POLY_RE.match(str(market.get("slug", "") or "").lower())
+    if not match:
+        return None
+    return MarketFingerprint(
+        category="economics",
+        subcategory="us",
+        entity=f"unemployment-rate-{match.group('period')}",
+        date=match.group("release"),
+        metric="unemployment-rate",
+        threshold=_normalize_percent_bucket(match.group("bucket")),
+        outcome="yes",
+        source="bls",
     )
 
 
@@ -384,3 +522,71 @@ def _normalize_decimal(value: str) -> str:
     if number.is_integer():
         return str(int(number))
     return f"{number:.4f}".rstrip("0").rstrip(".")
+
+
+def _normalize_fed_outcome(value: str) -> str:
+    return {
+        "hold": "maintains",
+        "maintains": "maintains",
+        "c25": "cut25bps",
+        "c25p": "cutgt25bps",
+        "cut25bps": "cut25bps",
+        "cutgt25bps": "cutgt25bps",
+        "h25": "hike25bps",
+        "h25p": "hikegt25bps",
+        "hike25bps": "hike25bps",
+        "hikegt25bps": "hikegt25bps",
+    }.get(str(value or "").lower(), str(value or "").lower())
+
+
+def _normalize_percent_bucket(value: str) -> str:
+    text = str(value or "").lower().replace("pct", "").replace("%", "")
+    prefix = ""
+    for candidate in ("gte", "lte", "t"):
+        if text.startswith(candidate):
+            prefix = candidate
+            text = text[len(candidate):]
+            break
+    normalized = _normalize_decimal(text)
+    return f"{prefix}{normalized}" if prefix else normalized
+
+
+def _gdp_release_date_for_period(period: str) -> str | None:
+    # First advance GDP estimate release dates are deterministic enough for
+    # structural matching; exact source still comes from BEA on both venues.
+    match = re.match(r"q([1-4])-(20\d{2})$", str(period or "").lower())
+    if not match:
+        return None
+    quarter, year = int(match.group(1)), int(match.group(2))
+    return {
+        1: f"{year}-04-30",
+        2: f"{year}-07-30",
+        3: f"{year}-10-29",
+        4: f"{year + 1}-01-29",
+    }[quarter]
+
+
+def _period_from_text_or_release(market: dict, release_date: str) -> str:
+    text = normalize_market_text(" ".join(str(market.get(field, "") or "") for field in ("title", "subtitle", "rules_primary", "description")))
+    match = re.search(
+        r"\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(20\d{2})\b",
+        text,
+    )
+    if match:
+        month = _MONTHS.get(match.group(1))
+        if month:
+            # Slugs use three-letter month abbreviations, e.g. apr2026.
+            abbrev = next(k for k, v in _MONTHS.items() if len(k) == 3 and v == month)
+            return f"{abbrev}{match.group(2)}"
+
+    try:
+        year_s, month_s, _ = release_date.split("-", 2)
+        year = int(year_s)
+        month = int(month_s) - 1
+        if month == 0:
+            month = 12
+            year -= 1
+        abbrev = next(k for k, v in _MONTHS.items() if len(k) == 3 and v == f"{month:02d}")
+        return f"{abbrev}{year}"
+    except Exception:
+        return "unknown"

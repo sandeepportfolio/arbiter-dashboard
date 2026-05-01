@@ -410,6 +410,25 @@ def test_mobile_mappings_render_api_field_names():
     assert "function MapLine" in html
 
 
+def test_ops_charts_and_markets_use_live_data_sources():
+    html = open(os.path.join(os.getcwd(), "arbiter", "web", "ops.html"), encoding="utf-8").read()
+
+    assert "window.location.protocol === 'file:'" in html
+    assert "window.__arbiterAPI = API" in html
+    assert "const RANGE_SECONDS" in html
+    assert "window.filterTimeSeries" in html
+    assert "window.filterRowsByRange" in html
+    assert "window.seriesDelta" in html
+    assert "TimeRange value={range} onChange={setRange}" in html
+    assert "marketRowsFromMappings(M, 'confirmed')" in html
+    assert "rows={visibleRows}" in html
+    assert "rows={M.opportunities}" not in html
+    assert "The scanner is monitoring 312 mapped markets" not in html
+    assert "Includes $100 deposit at 14:32" not in html
+    assert "Scans (24h)\" value=\"18,420\"" not in html
+    assert "Annualized" not in html
+
+
 def test_rate_limit_ws_event_shape():
     """SAFE-04: Within 3s of WS connect, a `rate_limit_state` message arrives
     with {platform: stats_dict} payload. Each stats_dict must carry the three

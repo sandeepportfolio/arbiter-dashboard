@@ -73,6 +73,13 @@
   } catch (_) { /* localStorage may be blocked; fall back to media query CSS */ }
 })();
 </script>
+<script>
+(function () {
+  if (window.location.protocol === 'file:') {
+    window.location.replace('http://localhost:8080/ops');
+  }
+})();
+</script>
 <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" integrity="sha384-DGyLxAyjq0f9SPpVevD6IgztCFlnMF6oW/XQGmfe+IsZ8TqEiDrcHkMLKI6fiB/Z" crossorigin="anonymous" onerror="window.__arbiterCdnFail&&window.__arbiterCdnFail('react')"></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" integrity="sha384-gTGxhz21lVGYNMcdJOyq01Edg0jhn/c22nsx0kyqP0TxaV5WVdsSH1fSDUf5YJj1" crossorigin="anonymous" onerror="window.__arbiterCdnFail&&window.__arbiterCdnFail('react-dom')"></script>
 <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous" onerror="window.__arbiterCdnFail&&window.__arbiterCdnFail('babel')"></script>
@@ -147,6 +154,11 @@ window.MOCK = (() => {
       total_deposits_all_platforms: 0,
       recorded_trading_pnl: { kalshi: 0, polymarket: 0 },
       total_balance: 0,
+      net_balance_change: 0,
+      deployed_capital: 0,
+      expected_settlement: 0,
+      expected_profit_at_settlement: 0,
+      open_positions: 0,
     },
 
     // Equity curve points {t, v}. Backend has no historical store yet, so this
@@ -223,8 +235,9 @@ window.MOCK = (() => {
 // every component picking it up at render time gets fresh values.
 // ─────────────────────────────────────────────────────────────────────
 (() => {
-  const API = window.location.origin;
+  const API = window.location.protocol === 'file:' ? 'http://localhost:8080' : window.location.origin;
   const AUTH_TOKEN_KEY = 'arbiter-auth-token';
+  window.__arbiterAPI = API;
 
   function readAuthToken() {
     try {
@@ -261,7 +274,7 @@ window.MOCK = (() => {
 
   async function safeJson(path, opts) {
     try {
-      const r = await fetch(API + path, Object.assign({ credentials: 'same-origin' }, opts || {}));
+      const r = await authFetch(path, opts);
       if (!r.ok) return null;
       return await r.json();
     } catch (e) {
@@ -296,6 +309,11 @@ window.MOCK = (() => {
     if (pnl.recorded_trading_pnl) M.pnl.recorded_trading_pnl = Object.assign({}, M.pnl.recorded_trading_pnl, pnl.recorded_trading_pnl);
     if (pnl.total_balance != null) M.pnl.total_balance = asNumber(pnl.total_balance, M.pnl.total_balance);
     if (pnl.total_deposits_all_platforms != null) M.pnl.total_deposits_all_platforms = asNumber(pnl.total_deposits_all_platforms, M.pnl.total_deposits_all_platforms);
+    if (pnl.net_balance_change != null) M.pnl.net_balance_change = asNumber(pnl.net_balance_change, M.pnl.net_balance_change);
+    if (pnl.deployed_capital != null) M.pnl.deployed_capital = asNumber(pnl.deployed_capital, M.pnl.deployed_capital);
+    if (pnl.expected_settlement != null) M.pnl.expected_settlement = asNumber(pnl.expected_settlement, M.pnl.expected_settlement);
+    if (pnl.expected_profit_at_settlement != null) M.pnl.expected_profit_at_settlement = asNumber(pnl.expected_profit_at_settlement, M.pnl.expected_profit_at_settlement);
+    if (pnl.open_positions != null) M.pnl.open_positions = asNumber(pnl.open_positions, M.pnl.open_positions);
   }
 
   function mergeOpportunities(M, opps) {
@@ -394,7 +412,7 @@ window.MOCK = (() => {
       const s = health.scanner;
       M.health.scanner.scan_count = asNumber(s.scan_count, M.health.scanner.scan_count);
       M.health.scanner.published = asNumber(s.published, M.health.scanner.published);
-      M.health.scanner.scan_time_ms = asNumber(s.scan_time_ms, M.health.scanner.scan_time_ms);
+      M.health.scanner.scan_time_ms = asNumber(s.scan_time_ms, asNumber(s.last_scan_ms, M.health.scanner.scan_time_ms));
       // Keep history if backend doesn't expose one (dashboard chart needs data).
       if (Array.isArray(s.history) && s.history.length) M.health.scanner.history = s.history;
     }
@@ -708,9 +726,7 @@ window.MOCK = (() => {
   async function liveMarketPrices(canonicalId) {
     if (!canonicalId) return { ok: false, error: 'canonical_id required' };
     try {
-      const r = await fetch(API + '/api/live-prices/' + encodeURIComponent(canonicalId), {
-        credentials: 'same-origin',
-      });
+      const r = await authFetch('/api/live-prices/' + encodeURIComponent(canonicalId));
       if (!r.ok) return { ok: false, error: await readError(r) };
       return { ok: true, data: await r.json() };
     } catch (e) {
@@ -929,6 +945,56 @@ function buildPath(points, width, height, pad = 4) {
   return { area, line, dots: mapped, yMin, yMax };
 }
 
+const RANGE_SECONDS = {
+  '1h': 60 * 60,
+  '6h': 6 * 60 * 60,
+  '24h': 24 * 60 * 60,
+  '7d': 7 * 24 * 60 * 60,
+  '30d': 30 * 24 * 60 * 60,
+  '90d': 90 * 24 * 60 * 60,
+  all: Infinity,
+};
+function rangeSeconds(range) {
+  const key = String(range || 'All').toLowerCase();
+  return Object.prototype.hasOwnProperty.call(RANGE_SECONDS, key) ? RANGE_SECONDS[key] : Infinity;
+}
+function pointTimestamp(row, index, key) {
+  const raw = row && (key ? row[key] : (row.t ?? row.timestamp ?? row.time));
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : index;
+}
+window.filterTimeSeries = function(data, range) {
+  const arr = Array.isArray(data) ? data.filter(Boolean) : [];
+  const seconds = rangeSeconds(range);
+  if (!arr.length || !Number.isFinite(seconds)) return arr;
+  const cutoff = Math.floor(Date.now() / 1000) - seconds;
+  const meta = arr.map((d, i) => ({ d, i, ts: pointTimestamp(d, i) }));
+  const filtered = meta.filter(p => p.ts >= cutoff);
+  const before = [...meta].reverse().find(p => p.ts < cutoff);
+  let out = before && filtered.length ? [before, ...filtered] : filtered;
+  if (!out.length) out = meta.slice(-1);
+  if (out.length === 1 && meta.length > 1) {
+    const idx = out[0].i;
+    if (idx > 0) out = [meta[idx - 1], out[0]];
+  }
+  return out.map(p => p.d);
+};
+window.filterRowsByRange = function(rows, range, key) {
+  const arr = Array.isArray(rows) ? rows : [];
+  const seconds = rangeSeconds(range);
+  if (!arr.length || !Number.isFinite(seconds)) return arr;
+  const cutoff = Math.floor(Date.now() / 1000) - seconds;
+  return arr.filter((row, i) => pointTimestamp(row, i, key || 'timestamp') >= cutoff);
+};
+window.seriesDelta = function(series) {
+  const arr = Array.isArray(series) ? series : [];
+  if (arr.length < 2) return 0;
+  const first = Number(arr[0]?.v);
+  const last = Number(arr[arr.length - 1]?.v);
+  if (!Number.isFinite(first) || !Number.isFinite(last)) return 0;
+  return +(last - first).toFixed(2);
+};
+
 // ── AreaChart ─────────────────────────────────────────────────────────
 function AreaChart({ data, width = 600, height = 200, stroke, fill, grid, showAxis = true, showGrid = true, currency = true, accentDot = true, axisColor, dotRingColor }) {
   const { t: theme } = window.useApp() || { t: window.THEMES.light };
@@ -938,8 +1004,9 @@ function AreaChart({ data, width = 600, height = 200, stroke, fill, grid, showAx
   dotRingColor = dotRingColor || theme.bgCard;
   const [hover, setHover] = useState(null);
   const ref = useRef(null);
+  const gradId = useMemo(() => 'area-grad-' + Math.random().toString(36).slice(2), []);
   const safeData = Array.isArray(data) ? data : [];
-  const points = safeData.map((d, i) => ({ x: i, y: d.v, t: d.t }));
+  const points = safeData.map((d, i) => ({ x: pointTimestamp(d, i), y: Number(d.v), t: d.t })).filter(p => Number.isFinite(p.y));
   const { area, line, dots, yMin = 0, yMax = 0 } = buildPath(points, width, height, 8);
 
   const onMove = e => {
@@ -963,12 +1030,12 @@ function AreaChart({ data, width = 600, height = 200, stroke, fill, grid, showAx
         <line key={i} x1="0" x2={width} y1={y} y2={y} stroke={grid} strokeDasharray="2 4" />
       ))}
       <defs>
-        <linearGradient id="area-grad" x1="0" x2="0" y1="0" y2="1">
+        <linearGradient id={gradId} x1="0" x2="0" y1="0" y2="1">
           <stop offset="0%" stopColor={stroke} stopOpacity="0.32" />
           <stop offset="100%" stopColor={stroke} stopOpacity="0" />
         </linearGradient>
       </defs>
-      <path d={area} fill="url(#area-grad)" />
+      <path d={area} fill={`url(#${gradId})`} />
       <path d={line} fill="none" stroke={stroke} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
       {accentDot && dots.length > 0 && (
         <circle cx={dots[dots.length - 1].x} cy={dots[dots.length - 1].y} r="3" fill={stroke} />
@@ -1719,8 +1786,9 @@ function CommandPalette() {
 function AlertsInbox() {
   const { t, alerts, setAlerts, setModal, toast, setPage } = window.useApp();
   if (!alerts) return null;
+  const M = window.MOCK;
   const items = [
-    { sev: 'info', title: 'Scanner heartbeat clean', body: '18,420 scans · 214ms avg latency', ts: '2m', icon: '⚡', go:'scanner', detail:'Last 12 scans within 220ms · 0 errors · published 14 opportunities' },
+    { sev: 'info', title: 'Scanner heartbeat clean', body: `${(M.health.scanner.scan_count || 0).toLocaleString()} scans · ${M.health.scanner.scan_time_ms || 0}ms latency`, ts: 'now', icon: '⚡', go:'scanner', detail:`Live scanner heartbeat · ${(M.health.scanner.published || 0).toLocaleString()} published opportunities` },
     { sev: 'warn', title: 'Polymarket fee rate updated', body: 'GPT-6 market — 2.0% → 2.4% on YES leg', ts: '14m', icon: '$', go:'markets', detail:'effective fee_rate_yes: 0.020 → 0.024\nimpact: net edge reduced by 0.4¢ on this market' },
     { sev: 'info', title: 'New mapping confirmed', body: 'BTC-150K-EOY-2026 score 0.94 → confirmed', ts: '38m', icon: '⇄', go:'mappings', detail:'kalshi: BTC-150K-DEC2026\npoly: will-bitcoin-reach-150k-by-2026\nsimilarity: 0.94' },
     { sev: 'ok',   title: 'Deposit settled', body: '+$100.00 to Polymarket · tx confirmed', ts: '2h', icon: '◐', go:'deposits', detail:'tx: 0x4a7…f2c9\nblock: 14,392,108\namount: $100.00 USDC' },
@@ -1778,19 +1846,30 @@ const { useState: oUseState } = React;
 function PageOverview() {
   const { t, setPage, setDrawer, scanner, minEdge, setMinEdge, autoExec, setAutoExec } = window.useApp();
   const M = window.MOCK;
+  const [range, setRange] = oUseState('24h');
   const opps = Array.isArray(M.opportunities) ? M.opportunities : [];
   const execs = Array.isArray(M.executions) ? M.executions : [];
   const equity = Array.isArray(M.equity) && M.equity.length ? M.equity : [{ t: 0, v: 0 }];
+  const equityRange = window.filterTimeSeries ? window.filterTimeSeries(equity, range) : equity;
   const totalBal = M.balances.kalshi.balance + M.balances.polymarket.balance;
   const totalPnl = M.pnl.recorded_trading_pnl.kalshi + M.pnl.recorded_trading_pnl.polymarket;
   const tradable = opps.filter(o => o.status === 'tradable');
-  const last24Pnl = execs.reduce((s, e) => s + (e.realized_pnl || 0), 0);
-  const bestEdge = opps.length ? opps[0].net_edge_cents : null;
-  const lastEquity = equity[equity.length - 1].v;
+  const last24Execs = window.filterRowsByRange ? window.filterRowsByRange(execs, '24h', 'timestamp') : execs;
+  const last24Filled = last24Execs.filter(e => e.status === 'filled');
+  const last24Pnl = last24Filled.reduce((s, e) => s + (e.realized_pnl || 0), 0);
+  const bestEdge = opps.length ? Math.max(...opps.map(o => Number(o.net_edge_cents) || 0)) : null;
+  const lastEquity = equityRange[equityRange.length - 1]?.v ?? totalBal;
+  const rangeDelta = window.seriesDelta ? window.seriesDelta(equityRange) : 0;
+  const rangeBase = Math.abs(Number(equityRange[0]?.v) || totalBal || 1);
+  const confirmedMappings = window.marketRowsFromMappings ? window.marketRowsFromMappings(M, 'confirmed') : (M.mappings || []).filter(r => r.status === 'confirmed');
+  const latestBalanceTs = Math.max(Number(M.balances.kalshi.timestamp) || 0, Number(M.balances.polymarket.timestamp) || 0);
+  const scannerHist = Array.isArray(M.health.scanner.history) ? M.health.scanner.history : [];
+  const kShare = totalBal ? (M.balances.kalshi.balance / totalBal * 100).toFixed(1) : '0.0';
+  const pShare = totalBal ? (M.balances.polymarket.balance / totalBal * 100).toFixed(1) : '0.0';
 
   return (
     <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto' }}>
-      <window.PageHeader kicker="Operator desk" title="Overview" sub="Live arbitrage activity across Kalshi and Polymarket. The scanner is monitoring 312 mapped markets.">
+      <window.PageHeader kicker="Operator desk" title="Overview" sub={`Live arbitrage activity across Kalshi and Polymarket. The scanner is monitoring ${confirmedMappings.length.toLocaleString()} confirmed mapped markets.`}>
         <window.Btn variant="secondary" size="sm" icon="↓" hint="Add funds to Kalshi or Polymarket" onClick={() => setPage('deposits')}>Deposit</window.Btn>
         <window.Btn variant="primary" size="sm" icon="◇" hint="Browse all detected cross-platform arb edges" onClick={() => setPage('opportunities')}>View opportunities</window.Btn>
       </window.PageHeader>
@@ -1801,21 +1880,21 @@ function PageOverview() {
         <KpiCard label="Total balance" value={window.fmt$(totalBal)} sub={`Kalshi ${window.fmt$(M.balances.kalshi.balance)} · Poly ${window.fmt$(M.balances.polymarket.balance)}`} sparkData={equity.slice(-48)} sparkColor={t.accent} />
         <KpiCard label="Trading P&L" value={window.fmt$Sign(totalPnl)} sub="Net of fees · since inception" tone={totalPnl >= 0 ? 'green' : 'red'} sparkData={equity.slice(-48).map(d => ({ ...d, v: d.v - equity[0].v }))} sparkColor={totalPnl >= 0 ? t.green : t.red} />
         <KpiCard label="Live opportunities" value={tradable.length} sub={`${Math.max(0, opps.length - tradable.length)} candidates · best ${bestEdge != null ? window.fmtC(bestEdge) : '—'}`} tone="accent" sparkData={(M.health.scanner.history || []).slice(-30).map(h => ({ v: h.tradable || 0 }))} sparkColor={t.accent} fallbackValue={tradable.length}/>
-        <KpiCard label="24h fills" value={execs.filter(e => e.status === 'filled').length} sub={`${window.fmt$Sign(last24Pnl)} realized`} tone={last24Pnl >= 0 ? 'green' : 'red'} sparkData={equity.slice(-48)} sparkColor={t.green} />
+        <KpiCard label="24h fills" value={last24Filled.length} sub={`${window.fmt$Sign(last24Pnl)} realized`} tone={last24Pnl >= 0 ? 'green' : 'red'} sparkData={equity.slice(-48)} sparkColor={t.green} />
       </div>
 
       {/* Equity + opportunities */}
       <div style={{ display: 'grid', gridTemplateColumns: '1.65fr 1fr', gap: 14, marginBottom: 18 }}>
-        <window.Card title="Equity curve" action={<TimeRange/>} padding={0}>
+        <window.Card title="Equity curve" action={<TimeRange value={range} onChange={setRange}/>} padding={0}>
           <div style={{ padding: '18px 22px 8px', display:'flex', alignItems:'baseline', gap: 16 }}>
             <div>
               <div style={{ fontSize: 28, fontWeight: 600, color: t.text, letterSpacing:'-0.02em', fontFamily: window.FONTS.mono }}>{window.fmt$(lastEquity)}</div>
-              <div style={{ fontSize: 11.5, color: totalPnl >= 0 ? t.green : t.red, marginTop: 2 }}>{window.fmt$Sign(totalPnl)} ({window.fmtPct(totalPnl/1000)}) · 24h</div>
+              <div style={{ fontSize: 11.5, color: rangeDelta >= 0 ? t.green : t.red, marginTop: 2 }}>{window.fmt$Sign(rangeDelta)} ({window.fmtPct(rangeDelta/rangeBase)}) · {range}</div>
             </div>
-            <div style={{ marginLeft: 'auto', fontSize: 11, color: t.textMuted }}>Includes $100 deposit at 14:32</div>
+            <div style={{ marginLeft: 'auto', fontSize: 11, color: t.textMuted }}>{latestBalanceTs ? `Balances updated ${window.ago(latestBalanceTs)}` : 'Waiting for live balances'}</div>
           </div>
           <div style={{ height: 240, padding: '0 12px 12px' }}>
-            <window.AreaChart data={equity} width={780} height={240} stroke={t.accent} grid={t.border} accentDot={true}/>
+            <window.AreaChart data={equityRange} width={780} height={240} stroke={t.accent} grid={t.border} accentDot={true}/>
           </div>
         </window.Card>
 
@@ -1856,24 +1935,24 @@ function PageOverview() {
               ]} label={window.fmt$(totalBal, 0)} sublabel="TOTAL" labelColor={t.text} dimColor={t.textMuted}/>
             </div>
             <div style={{ flex: 1 }}>
-              <Row dot={t.green} label="Kalshi" value={window.fmt$(M.balances.kalshi.balance)} sub={`${(M.balances.kalshi.balance/totalBal*100).toFixed(1)}% · ${window.fmt$Sign(M.pnl.recorded_trading_pnl.kalshi)}`}/>
+              <Row dot={t.green} label="Kalshi" value={window.fmt$(M.balances.kalshi.balance)} sub={`${kShare}% · ${window.fmt$Sign(M.pnl.recorded_trading_pnl.kalshi)}`}/>
               <div style={{ height: 12 }}/>
-              <Row dot={t.purple} label="Polymarket" value={window.fmt$(M.balances.polymarket.balance)} sub={`${(M.balances.polymarket.balance/totalBal*100).toFixed(1)}% · ${window.fmt$Sign(M.pnl.recorded_trading_pnl.polymarket)}`}/>
+              <Row dot={t.purple} label="Polymarket" value={window.fmt$(M.balances.polymarket.balance)} sub={`${pShare}% · ${window.fmt$Sign(M.pnl.recorded_trading_pnl.polymarket)}`}/>
             </div>
           </div>
         </window.Card>
 
         <window.Card title="Scanner activity" action={<span style={{ fontSize: 10.5, color: scanner ? t.green : t.textMuted, fontFamily: window.FONTS.mono }}>{scanner ? 'LIVE' : 'PAUSED'}</span>} padding={0}>
           <div style={{ padding: '14px 18px', display:'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14 }}>
-            <Mini label="Scans (24h)" value="18,420" mono/>
-            <Mini label="Avg latency" value="214ms" mono/>
-            <Mini label="Published" value="312" mono/>
+            <Mini label="Scans" value={(M.health.scanner.scan_count || 0).toLocaleString()} mono/>
+            <Mini label="Avg latency" value={`${M.health.scanner.scan_time_ms || 0}ms`} mono/>
+            <Mini label="Published" value={(M.health.scanner.published || 0).toLocaleString()} mono/>
             <Mini label="Best edge" value={bestEdge != null ? window.fmtC(bestEdge) : '—'} mono tone="green"/>
           </div>
           <div style={{ padding: '0 18px 14px' }}>
             <div style={{ fontSize: 10, color: t.textMuted, letterSpacing: '0.08em', marginBottom: 6 }}>BEST EDGE — LAST 5 MIN, 5s BUCKETS</div>
             <div style={{ height: 56 }}>
-              <window.EdgeStrip history={M.health.scanner.history} scale={[t.bgSubtle, t.accentSoft, t.accent + '90', t.green]}/>
+              <window.EdgeStrip history={scannerHist} scale={[t.bgSubtle, t.accentSoft, t.accent + '90', t.green]}/>
             </div>
           </div>
         </window.Card>
@@ -1952,13 +2031,19 @@ function Mini({ label, value, mono, tone }) {
   );
 }
 
-function TimeRange() {
+function TimeRange({ value, onChange, ranges }) {
   const { t } = window.useApp();
-  const [r, setR] = oUseState('24h');
+  const [inner, setInner] = oUseState(value || '24h');
+  const active = value || inner;
+  const opts = ranges || ['1h','6h','24h','7d','All'];
+  const choose = (next) => {
+    setInner(next);
+    if (onChange) onChange(next);
+  };
   return (
     <div style={{ display:'flex', background: t.bgSubtle, borderRadius: 6, padding: 2 }}>
-      {['1h','6h','24h','7d','All'].map(x => (
-        <button key={x} onClick={() => setR(x)} style={{ padding: '4px 10px', background: r === x ? t.bgCard : 'transparent', border: 'none', fontSize: 11, color: r === x ? t.text : t.textDim, fontWeight: r === x ? 500 : 400, borderRadius: 4, cursor:'pointer', boxShadow: r === x ? '0 1px 2px rgba(0,0,0,0.06)' : 'none' }}>{x}</button>
+      {opts.map(x => (
+        <button key={x} onClick={() => choose(x)} style={{ padding: '4px 10px', background: active === x ? t.bgCard : 'transparent', border: 'none', fontSize: 11, color: active === x ? t.text : t.textDim, fontWeight: active === x ? 500 : 400, borderRadius: 4, cursor:'pointer', boxShadow: active === x ? '0 1px 2px rgba(0,0,0,0.06)' : 'none' }}>{x}</button>
       ))}
     </div>
   );
@@ -2309,13 +2394,19 @@ function LegCell({ leg, platform }) {
 function PagePnL() {
   const { t } = window.useApp();
   const M = window.MOCK;
-  const totalDeposits = M.pnl.total_deposits.kalshi + M.pnl.total_deposits.polymarket;
+  const [range, setRange] = React.useState('All');
+  const totalDeposits = M.pnl.total_deposits_all_platforms ?? (M.pnl.total_deposits.kalshi + M.pnl.total_deposits.polymarket);
   const tradingPnl = M.pnl.recorded_trading_pnl.kalshi + M.pnl.recorded_trading_pnl.polymarket;
+  const equity = Array.isArray(M.equity) ? M.equity : [];
+  const equityRange = window.filterTimeSeries ? window.filterTimeSeries(equity, range) : equity;
+  const rangeDelta = window.seriesDelta ? window.seriesDelta(equityRange) : 0;
+  const startingCapital = Math.max(1, Math.abs((M.pnl.starting_balances.kalshi || 0) + (M.pnl.starting_balances.polymarket || 0)));
+  const lifetimeReturn = tradingPnl / startingCapital;
 
   return (
     <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto' }}>
       <window.PageHeader kicker="Performance" title="P&L" sub="Reconciled trading P&L by platform. Deposits are subtracted from balance changes to isolate true trading performance.">
-        <window.TimeRange/>
+        <window.TimeRange value={range} onChange={setRange} ranges={['24h','7d','30d','All']}/>
       </window.PageHeader>
 
       <window.Card padding={0} style={{ marginBottom: 18 }}>
@@ -2327,19 +2418,19 @@ function PagePnL() {
           <div>
             <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom: 6 }}>Trading P&L</div>
             <div style={{ fontSize: 24, fontWeight: 600, color: tradingPnl >= 0 ? t.green : t.red, fontFamily: window.FONTS.mono }}>{window.fmt$Sign(tradingPnl)}</div>
-            <div style={{ fontSize: 11, color: t.textDim, marginTop: 2 }}>{window.fmtPct(tradingPnl/1000)} since inception</div>
+            <div style={{ fontSize: 11, color: t.textDim, marginTop: 2 }}>{window.fmtPct(lifetimeReturn)} since inception</div>
           </div>
           <div>
             <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom: 6 }}>Total deposits</div>
             <div style={{ fontSize: 24, fontWeight: 600, color: t.text, fontFamily: window.FONTS.mono }}>{window.fmt$(totalDeposits)}</div>
           </div>
           <div>
-            <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom: 6 }}>Annualized</div>
-            <div style={{ fontSize: 24, fontWeight: 600, color: tradingPnl >= 0 ? t.green : t.red, fontFamily: window.FONTS.mono }}>{tradingPnl >= 0 ? '+' : ''}{(tradingPnl/1000*365).toFixed(1)}%</div>
+            <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom: 6 }}>Selected range</div>
+            <div style={{ fontSize: 24, fontWeight: 600, color: rangeDelta >= 0 ? t.green : t.red, fontFamily: window.FONTS.mono }}>{window.fmt$Sign(rangeDelta)}</div>
           </div>
         </div>
         <div style={{ height: 320, padding: 16 }}>
-          <window.AreaChart data={M.equity} width={1320} height={300} stroke={t.accent} grid={t.border}/>
+          <window.AreaChart data={equityRange} width={1320} height={300} stroke={t.accent} grid={t.border}/>
         </div>
       </window.Card>
 
@@ -5348,9 +5439,9 @@ function LoginScreen({ onSignIn }) {
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom: 14 }}>
             <div style={{ fontSize: 12, color: t.textDim, fontWeight: 500 }}>Last 24 hours</div>
             <div style={{ display:'flex', gap: 12, fontFamily: window.FONTS.mono, fontSize: 11.5 }}>
-              <span style={{ color: t.textDim }}>Scans <span style={{ color: t.text, fontWeight: 600 }}>18,420</span></span>
-              <span style={{ color: t.textDim }}>Trades <span style={{ color: t.text, fontWeight: 600 }}>87</span></span>
-              <span style={{ color: t.textDim }}>Best edge <span style={{ color: t.green, fontWeight: 600 }}>4.8¢</span></span>
+              <span style={{ color: t.textDim }}>Scans <span style={{ color: t.text, fontWeight: 600 }}>{(M.health.scanner.scan_count || 0).toLocaleString()}</span></span>
+              <span style={{ color: t.textDim }}>Trades <span style={{ color: t.text, fontWeight: 600 }}>{(M.health.execution.total_executions || 0).toLocaleString()}</span></span>
+              <span style={{ color: t.textDim }}>Best edge <span style={{ color: t.green, fontWeight: 600 }}>{(() => { const hist = M.health.scanner.history || []; const best = hist.length ? Math.max(...hist.map(h => Number(h.best_edge_cents || 0))) : 0; return best ? window.fmtC(best) : '—'; })()}</span></span>
             </div>
           </div>
           <div style={{ height: 100 }}>

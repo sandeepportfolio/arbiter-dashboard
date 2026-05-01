@@ -200,8 +200,12 @@ async def maybe_promote(
 
     # ── Gate 4: LLM verifier must return YES ────────────────────────────────
     # MAYBE is ambiguity, not confirmation. Any non-YES verdict fails closed.
-    kalshi_q = candidate.get("kalshi_title", "")
-    poly_q = candidate.get("poly_question", "")
+    kalshi_q = candidate.get("kalshi_verification_text") or candidate.get("kalshi_title", "")
+    poly_q = (
+        candidate.get("polymarket_verification_text")
+        or candidate.get("poly_verification_text")
+        or candidate.get("poly_question", "")
+    )
     llm_result = await llm_verifier(kalshi_q, poly_q)
     if llm_result == "NO":
         return _reject("llm_no")
@@ -209,7 +213,10 @@ async def maybe_promote(
         return _reject("llm_maybe")
 
     # ── Gate 5: Liquidity depth ≥ PHASE5_MAX_ORDER_USD (combined bid+ask) ─────
-    phase5_max = float(_setting(settings, "PHASE5_MAX_ORDER_USD", "phase5_max_order_usd", default=50.0))
+    phase5_max = float(_setting(
+        settings, "PHASE5_MAX_ORDER_USD", "phase5_max_order_usd",
+        default=_env_float("PHASE5_MAX_ORDER_USD", 50.0),
+    ))
     required_depth = phase5_max
 
     kalshi_ob = orderbooks.get("kalshi", {})

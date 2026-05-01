@@ -658,6 +658,93 @@ async def test_discover_progress_reports_auto_promote_rejection_reasons():
     assert validation[-1]["rejection_reasons"]["score_low"] == 1
 
 
+
+@pytest.mark.asyncio
+async def test_gate0_rejects_structured_sports_spread_prefix_against_winner_ticker():
+    """Structured sports slugs with spread/total prefixes are not winner markets;
+    they must not be matched to Kalshi moneyline winner tickers."""
+    kalshi = _make_kalshi_client([
+        {
+            "ticker": "KXMLBGAME-26MAY02TORMIN-TOR",
+            "title": "Toronto vs Minnesota winner",
+            "category": "sports",
+            "close_time": "2026-05-02T14:10:00Z",
+            "status": "open",
+        },
+    ])
+    poly = _make_poly_client([
+        {
+            "slug": "asc-mlb-tor-min-2026-05-02-neg-1pt5",
+            "question": "Toronto vs Minnesota spread -1.5",
+            "category": "sports",
+            "endDate": "2026-05-02",
+        },
+    ])
+    store = _make_store()
+
+    count = await discover(kalshi, poly, store, budget_rps=100.0, min_score=0.1)
+
+    assert count == 0
+    assert store.written == []
+
+
+@pytest.mark.asyncio
+async def test_structural_politics_llm_verifier_receives_enriched_context():
+    """LLM verification should see parser-extracted chamber/party context,
+    not only a generic venue title."""
+    kalshi = _make_kalshi_client([
+        {
+            "ticker": "CONTROLS-2026-D",
+            "title": "Which party will win the U.S. Senate?",
+            "category": "Elections",
+            "close_time": "2026-11-03T23:59:00Z",
+            "settlement_source": "AP",
+            "status": "open",
+        },
+    ])
+    poly = _make_poly_client([
+        {
+            "slug": "paccc-usse-midterms-2026-11-03-dem",
+            "question": "Will the Democratic Party win the Senate in the 2026 Midterms?",
+            "description": "Will the Democratic Party win the Senate in the 2026 Midterms?",
+            "category": "politics",
+            "endDate": "2026-11-03T23:59:00Z",
+            "resolutionSource": "AP",
+            "outcomes": ["Yes", "No"],
+        },
+    ])
+    store = _make_store()
+    verify_batch = AsyncMock(return_value=["YES"])
+
+    with patch("arbiter.mapping.llm_verifier.verify", new=AsyncMock(return_value="YES")), \
+         patch("arbiter.mapping.llm_verifier.verify_batch", new=verify_batch):
+        count = await discover(
+            kalshi,
+            poly,
+            store,
+            budget_rps=100.0,
+            min_score=0.8,
+            promotion_settings={
+                "auto_promote_enabled": True,
+                "auto_promote_min_score": 0.75,
+                "auto_promote_daily_cap": 25,
+                "auto_promote_advisory_scans": 0,
+                "auto_promote_max_days": 400,
+                "phase5_max_order_usd": 10,
+            },
+        )
+
+    assert count == 1
+    assert verify_batch.await_count == 1
+    pairs = verify_batch.await_args.args[0]
+    assert pairs and len(pairs[0]) == 2
+    kalshi_prompt, poly_prompt = pairs[0]
+    assert "event_fingerprint: politics:us:senate:2026-11-03:party-control:majority" in kalshi_prompt
+    assert "outcome_fingerprint: politics:us:senate:2026-11-03:party-control:majority:yes:dem" in kalshi_prompt
+    assert "polarity: same" in poly_prompt
+    assert store.written[0]["status"] == "confirmed"
+
+
 # ─── Orderbook normalizers ───────────────────────────────────────────────────
 
 
@@ -710,6 +797,22 @@ def test_normalize_kalshi_orderbook_includes_no_side_as_asks():
     book = _normalize_kalshi_orderbook(payload)
     assert book["bids"] == [{"px": 0.55, "qty": 100.0}]
     assert book["asks"] == [{"px": 0.44, "qty": 200.0}]
+
+
+def test_normalize_kalshi_orderbook_accepts_orderbook_fp_dollar_shape():
+    """Kalshi live snapshots may expose dollar strings under orderbook_fp;
+    the liquidity gate should not treat that real depth as zero."""
+    from arbiter.mapping.auto_discovery import _normalize_kalshi_orderbook
+
+    payload = {
+        "orderbook_fp": {
+            "yes_dollars": [["0.57", "125"]],
+            "no_dollars": [["0.41", "250"]],
+        }
+    }
+    book = _normalize_kalshi_orderbook(payload)
+    assert book["bids"] == [{"px": 0.57, "qty": 125.0}]
+    assert book["asks"] == [{"px": 0.41, "qty": 250.0}]
 
 
 @pytest.mark.asyncio

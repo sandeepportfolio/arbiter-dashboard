@@ -247,7 +247,11 @@ class PolymarketUSClient:
     ) -> dict:
         request_path = _request_path_for_base(self.public_base_url, path)
         url = f"{self.public_base_url.rstrip('/')}{request_path}"
-        return await self._request(method, url, purpose=purpose)
+        headers = {
+            "Accept": "application/json",
+            "User-Agent": "arbiter-polymarket-us/1.0",
+        }
+        return await self._request(method, url, headers=headers, purpose=purpose)
 
     async def list_markets(
         self,

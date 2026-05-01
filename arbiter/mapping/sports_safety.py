@@ -44,15 +44,22 @@ KALSHI_SPORT_TO_POLY = {
     "itfw": "wta",
 }
 
+# Prefixes whose Polymarket slugs encode same-event winner / draw outcomes.
+# Spread/total/range/futures markets (for example `asc-*` alternate spreads,
+# `tsc-*` totals, or `tec-*` championship futures) must not be treated as
+# moneyline game/match winners even when the first slug segments look similar.
+SUPPORTED_POLY_WINNER_PREFIXES = {"aec", "atc"}
+
 _KALSHI_GAME_RE = re.compile(
     r"^KX([A-Z0-9]+?)GAME-(\d{2})([A-Z]{3})(\d{2})(\d*)([A-Z]+)-([A-Z]+)$"
 )
 _KALSHI_MATCH_RE = re.compile(
     r"^KX([A-Z0-9]+?)MATCH-(\d{2})([A-Z]{3})(\d{2})([A-Z]+)-([A-Z]+)$"
 )
+_POLY_SPORTS_PREFIXES = ("aec", "tec", "atc", "tsc", "asc", "rdc")
 _POLY_SPORTS_RE = re.compile(
-    r"^(aec|tec|atc|tsc|paccc|asc|rdc)-([a-z0-9]+)-([a-z0-9]+)-([a-z0-9]+)-"
-    r"(\d{4}-\d{2}-\d{2})(?:-([a-z0-9]+))?"
+    r"^(aec|tec|atc|tsc|asc|rdc)-([a-z0-9]+)-([a-z0-9]+)-([a-z0-9]+)-"
+    r"(\d{4}-\d{2}-\d{2})(?:-([a-z0-9]+))?$"
 )
 
 
@@ -155,9 +162,67 @@ def parse_polymarket_sports_slug(slug: str) -> PolymarketSportsSlug | None:
     )
 
 
+def _sports_prefix(slug: str) -> str | None:
+    text = str(slug or "").strip().lower()
+    prefix = text.split("-", 1)[0]
+    return prefix if prefix in _POLY_SPORTS_PREFIXES else None
+
+
+def is_sports_like_polymarket_slug(slug: str) -> bool:
+    return _sports_prefix(slug) is not None
+
+
+def is_supported_polymarket_winner_slug(slug: str) -> bool:
+    parsed = parse_polymarket_sports_slug(slug)
+    return parsed is not None and parsed.prefix in SUPPORTED_POLY_WINNER_PREFIXES
+
+
+def is_sports_like_kalshi_ticker(ticker: str) -> bool:
+    text = str(ticker or "").strip().upper()
+    if parse_kalshi_sports_ticker(text) is not None:
+        return True
+    if not text.startswith("KX"):
+        return False
+    sport_markers = (
+        "MLB", "NBA", "NFL", "NHL", "MLS", "BUNDESLIGA", "SERIEA",
+        "LALIGA", "EPL", "ATP", "WTA", "ITF", "UFC",
+    )
+    market_type_markers = (
+        "GAME", "MATCH", "SPREAD", "TOTAL", "OVERTIME", "SINGLEGAME",
+        "MULTIGAME", "PLAYER", "RUNS", "POINTS", "GOALS", "CHAMP",
+    )
+    return any(marker in text for marker in sport_markers) and any(
+        marker in text for marker in market_type_markers
+    )
+
+
+def is_supported_kalshi_winner_ticker(ticker: str) -> bool:
+    return parse_kalshi_sports_ticker(ticker) is not None
+
+
+def unsupported_sports_pair_reason(kalshi_ticker: str, poly_slug: str) -> str | None:
+    """Fail closed on obvious sports market-type mismatches at Gate 0."""
+    kalshi_sports = is_sports_like_kalshi_ticker(kalshi_ticker)
+    poly_sports = is_sports_like_polymarket_slug(poly_slug)
+    if not kalshi_sports and not poly_sports:
+        return None
+    if kalshi_sports and not is_supported_kalshi_winner_ticker(kalshi_ticker):
+        return "unsupported_kalshi_sports_market_type"
+    if poly_sports and not is_supported_polymarket_winner_slug(poly_slug):
+        return "unsupported_polymarket_sports_market_type"
+    return None
+
+
 def evaluate_sports_pair(kalshi_ticker: str, poly_slug: str) -> SportsPairSafety:
     kalshi = parse_kalshi_sports_ticker(kalshi_ticker)
     poly = parse_polymarket_sports_slug(poly_slug)
+    unsupported_reason = unsupported_sports_pair_reason(kalshi_ticker, poly_slug)
+    if unsupported_reason is not None:
+        return SportsPairSafety(
+            known=True,
+            safe=False,
+            reason=unsupported_reason,
+        )
     if kalshi is None or poly is None:
         return SportsPairSafety(
             known=False,

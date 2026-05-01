@@ -25,7 +25,11 @@ from arbiter.mapping.event_fingerprint import (
     fingerprint_polymarket_market,
     structural_match,
 )
-from arbiter.mapping.sports_safety import evaluate_sports_pair
+from arbiter.mapping.sports_safety import (
+    SUPPORTED_POLY_WINNER_PREFIXES,
+    evaluate_sports_pair,
+    parse_kalshi_sports_ticker,
+)
 
 logger = logging.getLogger("arbiter.mapping.auto_discovery")
 ProgressCallback = Callable[[dict[str, Any]], None]
@@ -460,6 +464,72 @@ def _candidate_resolution_criteria(candidate: dict[str, Any], *, operator_note: 
     return criteria
 
 
+def _is_structured_sports_non_winner_pair(kalshi_ticker: str, poly_slug: str) -> bool:
+    """Gate 0: never fuzzy-match sports moneyline tickers to spread/total slugs."""
+    kalshi = parse_kalshi_sports_ticker(kalshi_ticker)
+    if kalshi is None:
+        return False
+    match = re.match(r"^(?P<prefix>[a-z]+)-(?P<sport>[a-z0-9]+)-", str(poly_slug or "").strip().lower())
+    if not match:
+        return False
+    if match.group("sport") != kalshi.poly_sport:
+        return False
+    return match.group("prefix") not in SUPPORTED_POLY_WINNER_PREFIXES
+
+
+def _candidate_verification_pair(candidate: dict[str, Any]) -> tuple[str, str]:
+    """Build LLM verification strings with parser context for structural pairs.
+
+    Raw venue titles can be too terse for exact structured markets (e.g. a
+    Kalshi politics outcome may be titled only "Which party will win the
+    Senate?" while the party lives in the ticker suffix).  The structured
+    parser has already passed exact market-key equality before auto-promotion,
+    so include those extracted fields for the LLM while still showing raw IDs
+    and text so conflicts can be caught.
+    """
+    kalshi_raw = str(candidate.get("kalshi_title", "") or "")
+    poly_raw = str(candidate.get("poly_question", "") or "")
+    if not candidate.get("structural_match"):
+        return kalshi_raw, poly_raw
+
+    shared = {
+        "category": candidate.get("category"),
+        "event_fingerprint": candidate.get("event_fingerprint"),
+        "outcome_fingerprint": candidate.get("outcome_fingerprint"),
+        "resolution_date": candidate.get("resolution_date"),
+        "resolution_source": candidate.get("resolution_source"),
+        "market_rule": candidate.get("tie_break_rule"),
+        "polarity": candidate.get("polarity"),
+    }
+
+    def _format(side: str, raw: str, market_id: str, yes_side: str | None) -> str:
+        lines = [
+            f"{side} raw question/title: {raw}",
+            f"{side} market id: {market_id}",
+            "Parser-extracted structured criteria (must agree with raw text):",
+        ]
+        for key, value in shared.items():
+            if value not in (None, "", ()):  # keep prompt concise
+                lines.append(f"- {key}: {value}")
+        if yes_side:
+            lines.append(f"- yes_outcome_side: {yes_side}")
+        return "\n".join(lines)
+
+    kalshi_text = _format(
+        "Kalshi",
+        kalshi_raw,
+        str(candidate.get("kalshi_ticker", "") or ""),
+        str(candidate.get("kalshi_yes_side", "") or candidate.get("outcome", "") or "") or None,
+    )
+    poly_text = _format(
+        "Polymarket",
+        poly_raw,
+        str(candidate.get("poly_slug", "") or ""),
+        str(candidate.get("polymarket_yes_side", "") or candidate.get("outcome", "") or "") or None,
+    )
+    return kalshi_text, poly_text
+
+
 def _synthetic_kalshi_orderbook(market: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(market, dict):
         return {"bids": [], "asks": []}
@@ -478,21 +548,45 @@ def _synthetic_kalshi_orderbook(market: dict[str, Any]) -> dict[str, Any]:
 
 
 def _normalize_kalshi_orderbook(payload: Any) -> dict[str, Any]:
-    """Normalize Kalshi orderbook to {bids, asks} of {px, qty} levels.
+    """Normalize Kalshi orderbooks to {bids, asks} of {px, qty} levels.
 
-    Kalshi exposes both sides of the YES contract under `orderbook.yes` (bids)
-    and `orderbook.no` (which represents bids for NO, ≡ asks for YES). We treat
-    both as activity for the liquidity gate.
+    Kalshi has emitted both integer-cent and fixed-point dollar shapes:
+      * {"orderbook": {"yes": [[55, 100]], "no": [[44, 200]]}}
+      * {"orderbook_fp": {"yes_dollars": [["0.55", "100"]], ...}}
+
+    The NO side is a bid for NO, equivalent to visible activity on the YES ask
+    side, so both sides count for the coarse liquidity gate.
     """
-    orderbook = payload.get("orderbook", payload) if isinstance(payload, dict) else {}
+    if not isinstance(payload, dict):
+        return {"bids": [], "asks": []}
+
+    orderbook = payload.get("orderbook")
+    orderbook_fp = payload.get("orderbook_fp")
+    if not isinstance(orderbook, dict):
+        orderbook = payload if any(key in payload for key in ("yes", "no", "yes_dollars", "no_dollars")) else {}
+    if not isinstance(orderbook_fp, dict):
+        orderbook_fp = {}
+
+    def _level_values(level: Any) -> tuple[Any, Any]:
+        if isinstance(level, dict):
+            px_raw = level.get("px", level.get("price", level.get("yes_price")))
+            if isinstance(px_raw, dict):
+                px_raw = px_raw.get("value")
+            qty_raw = level.get("qty", level.get("quantity", level.get("size")))
+            return px_raw, qty_raw
+        try:
+            return level[0], level[1]
+        except (IndexError, TypeError):
+            return None, None
 
     def _convert(levels: Any) -> list[dict[str, float]]:
         result: list[dict[str, float]] = []
         for level in levels or []:
+            px_raw, qty_raw = _level_values(level)
             try:
-                px = float(level[0])
-                qty = float(level[1])
-            except (IndexError, TypeError, ValueError):
+                px = float(px_raw or 0)
+                qty = float(qty_raw or 0)
+            except (TypeError, ValueError):
                 continue
             if px > 1.0:
                 px /= 100.0
@@ -501,8 +595,20 @@ def _normalize_kalshi_orderbook(payload: Any) -> dict[str, Any]:
             result.append({"px": px, "qty": qty})
         return result
 
-    yes_levels = orderbook.get("yes", []) if isinstance(orderbook, dict) else []
-    no_levels = orderbook.get("no", []) if isinstance(orderbook, dict) else []
+    yes_levels = (
+        orderbook.get("yes")
+        or orderbook.get("yes_dollars")
+        or orderbook_fp.get("yes_dollars")
+        or orderbook_fp.get("yes")
+        or []
+    )
+    no_levels = (
+        orderbook.get("no")
+        or orderbook.get("no_dollars")
+        or orderbook_fp.get("no_dollars")
+        or orderbook_fp.get("no")
+        or []
+    )
     return {"bids": _convert(yes_levels), "asks": _convert(no_levels)}
 
 
@@ -648,10 +754,12 @@ async def _apply_auto_promote(
     )
 
     if preverify_candidates:
-        pairs = [
-            (str(candidate.get("kalshi_title", "") or ""), str(candidate.get("poly_question", "") or ""))
-            for candidate in preverify_candidates
-        ]
+        pairs = []
+        for candidate in preverify_candidates:
+            kalshi_verify_text, poly_verify_text = _candidate_verification_pair(candidate)
+            candidate["kalshi_verification_text"] = kalshi_verify_text
+            candidate["polymarket_verification_text"] = poly_verify_text
+            pairs.append((kalshi_verify_text, poly_verify_text))
         _emit_progress(
             progress,
             "llm_batch",
@@ -875,6 +983,8 @@ async def _discover_from_kalshi_events(
                 p_slug = str(pm_entry["market"].get("slug", "") or "")
                 k_ticker = str(km.get("ticker", "") or "")
                 if _is_bracket_vs_binary_mismatch(k_ticker, p_slug):
+                    continue
+                if _is_structured_sports_non_winner_pair(k_ticker, p_slug):
                     continue
                 sports_safety = evaluate_sports_pair(k_ticker, p_slug)
                 if sports_safety.known and not sports_safety.safe:
@@ -1223,6 +1333,8 @@ async def discover(
                 p_slug = str(pm_entry["market"].get("slug", "") or "")
                 k_ticker = str(km.get("ticker", "") or "")
                 if _is_bracket_vs_binary_mismatch(k_ticker, p_slug):
+                    continue
+                if _is_structured_sports_non_winner_pair(k_ticker, p_slug):
                     continue
                 sports_safety = evaluate_sports_pair(k_ticker, p_slug)
                 if sports_safety.known and not sports_safety.safe:
