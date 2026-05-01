@@ -2417,26 +2417,94 @@ function ReconRow({ label, value, ok, pillTone }) {
 }
 
 // ── Markets ─────────────────────────────────────────────────────────
+function mappingField(row, names) {
+  for (const name of names) {
+    const value = row && row[name];
+    if (value != null && String(value).trim()) return String(value).trim();
+  }
+  return '';
+}
+
+function mappingCategory(row) {
+  const tags = Array.isArray(row?.tags) ? row.tags.map(x => String(x).toLowerCase()) : [];
+  const text = [
+    row?.description, row?.polymarket_question, row?.canonical_id,
+    mappingField(row, ['kalshi_market_id', 'kalshi_ticker', 'kalshi']),
+    mappingField(row, ['polymarket_slug', 'poly_slug', 'polymarket']),
+    tags.join(' '),
+  ].filter(Boolean).join(' ').toLowerCase();
+  if (tags.includes('sports') || /\b(mlb|nba|nfl|nhl|mls|epl|lal|sea|bun|game|championship|finals)\b/.test(text)) return 'Sports';
+  if (tags.includes('politics') || /\b(election|senate|house|president|congress|governor|mayor|cabinet|party)\b/.test(text)) return 'Politics';
+  if (tags.includes('crypto') || /\b(bitcoin|btc|ethereum|eth|solana|crypto|stablecoin)\b/.test(text)) return 'Crypto';
+  if (tags.includes('economics') || tags.includes('macro') || /\b(cpi|fed|rate|gdp|inflation|unemployment|jobs|treasury)\b/.test(text)) return 'Macro';
+  if (tags.includes('entertainment') || /\b(oscar|emmy|grammy|movie|album|box office|streaming)\b/.test(text)) return 'Entertainment';
+  if (tags.includes('weather') || /\b(weather|temperature|rain|snow|hurricane|storm)\b/.test(text)) return 'Weather';
+  if (tags.includes('science') || /\b(space|nasa|ai|launch|science)\b/.test(text)) return 'Science';
+  if (tags.includes('geo') || /\b(war|ceasefire|country|border|treaty)\b/.test(text)) return 'Geo';
+  return 'Other';
+}
+
+function marketRowsFromMappings(M, status) {
+  const rows = Array.isArray(M?.mappings) ? M.mappings : [];
+  const opps = Array.isArray(M?.opportunities) ? M.opportunities : [];
+  const oppById = new Map(opps.map(o => [o.canonical_id, o]));
+  return rows
+    .filter(r => !status || (r.status || '').toLowerCase() === status)
+    .map((r) => {
+      const canonical = r.canonical_id || `${mappingField(r, ['kalshi_market_id', 'kalshi_ticker', 'kalshi'])}::${mappingField(r, ['polymarket_slug', 'poly_slug', 'polymarket'])}`;
+      const live = oppById.get(canonical) || null;
+      return {
+        raw: r,
+        kind: 'mapping',
+        canonical_id: canonical,
+        description: r.description || r.polymarket_question || canonical,
+        kalshi_market_id: mappingField(r, ['kalshi_market_id', 'kalshi_ticker', 'kalshi', 'ticker']),
+        polymarket_slug: mappingField(r, ['polymarket_slug', 'poly_slug', 'polymarket']),
+        status: r.status || 'candidate',
+        category: mappingCategory(r),
+        tags: Array.isArray(r.tags) ? r.tags : [],
+        confidence: Number(r.confidence ?? r.mapping_score ?? r.score ?? 0),
+        mapping_score: Number(r.mapping_score ?? r.confidence ?? r.score ?? 0),
+        resolution_match_status: r.resolution_match_status || 'pending_operator_review',
+        resolution_criteria: r.resolution_criteria || null,
+        allow_auto_trade: !!r.allow_auto_trade,
+        polarity_flipped: !!r.polarity_flipped,
+        live,
+        net_edge_cents: live ? Number(live.net_edge_cents || 0) : null,
+        expected_profit: live ? Number(live.expected_profit || 0) : null,
+        timestamp: live ? live.timestamp : null,
+      };
+    })
+    .sort((a, b) => a.category.localeCompare(b.category) || b.confidence - a.confidence || a.description.localeCompare(b.description));
+}
+window.marketRowsFromMappings = marketRowsFromMappings;
+
 function PageMarkets() {
   const { t, setModal } = window.useApp();
   const M = window.MOCK;
+  const [category, setCategory] = React.useState('All');
+  const rows = marketRowsFromMappings(M, 'confirmed');
+  const categories = Array.from(rows.reduce((m, row) => m.set(row.category, (m.get(row.category) || 0) + 1), new Map()).entries())
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  const cards = [['All', rows.length], ...categories];
+  const visibleRows = category === 'All' ? rows : rows.filter(row => row.category === category);
+  const liveRows = rows.filter(row => row.live);
   return (
     <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto' }}>
-      <window.PageHeader kicker="Mapped universe" title="Markets" sub="312 confirmed mappings across 8 categories. Click any market to see live prices on both platforms.">
+      <window.PageHeader kicker="Mapped universe" title="Markets" sub={`${rows.length.toLocaleString()} confirmed mappings across ${Math.max(1, categories.length).toLocaleString()} categories. ${liveRows.length.toLocaleString()} have a live scanner quote right now; click any mapping to fetch current platform prices.`}>
         <window.Btn variant="secondary" size="sm" icon="↓" hint="Download the full mapped-market list as CSV or JSON" onClick={() => setModal({ kind: 'export', payload: 'markets' })}>Export</window.Btn>
         <window.Btn variant="primary" size="sm" icon="+" hint="Manually add a cross-platform market pair" onClick={() => setModal({ kind: 'newMapping' })}>New mapping</window.Btn>
       </window.PageHeader>
 
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(8, 1fr)', gap: 8, marginBottom: 16 }}>
-        {[
-          ['Politics', 84], ['Crypto', 52], ['Macro', 47], ['Sports', 39],
-          ['Tech', 36], ['Geo', 28], ['Entertainment', 16], ['Other', 10],
-        ].map(([n, c]) => (
-          <div key={n} style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 8, padding: '12px 14px' }}>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(120px, 1fr))', gap: 8, marginBottom: 16 }}>
+        {cards.map(([n, c]) => {
+          const active = category === n;
+          return (
+          <button key={n} onClick={() => setCategory(n)} style={{ textAlign:'left', background: active ? t.bgSubtle : t.bgCard, border: `1px solid ${active ? t.accent : t.border}`, borderRadius: 8, padding: '12px 14px', cursor:'pointer', color: t.text }}>
             <div style={{ fontSize: 10.5, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase' }}>{n}</div>
             <div style={{ fontSize: 18, fontWeight: 600, color: t.text, fontFamily: window.FONTS.mono, marginTop: 4 }}>{c}</div>
-          </div>
-        ))}
+          </button>
+        );})}
       </div>
 
       <window.Card padding={0}>
@@ -2447,12 +2515,13 @@ function PageMarkets() {
               <div style={{ fontSize: 10.5, color: t.textMuted, fontFamily: window.FONTS.mono }}>{r.canonical_id}</div>
             </div>
           )},
-          { label: 'Kalshi', w: '130px', render: r => <PriceCell yes={r.yes_platform === 'kalshi' ? r.yes_price : 1 - r.no_price}/> },
-          { label: 'Polymarket', w: '130px', render: r => <PriceCell yes={r.yes_platform === 'polymarket' ? r.yes_price : 1 - r.no_price}/> },
-          { label: 'Spread', w: '90px', align:'right', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12, color: t.text }}>{((r.yes_price - (1 - r.no_price)) * 100).toFixed(1)}¢</span> },
-          { label: 'Volume 24h', w: '120px', align:'right', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12, color: t.textDim }}>{(r.yes_volume + r.no_volume).toLocaleString()}</span> },
-          { label: 'Edge', w: '90px', align:'right', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12.5, color: r.net_edge_cents >= 1 ? t.green : t.textDim, fontWeight: 600 }}>{window.fmtC(r.net_edge_cents)}</span> },
-        ]} rows={M.opportunities} onRowClick={(r) => setModal({ kind: 'market', payload: r })} emptyTitle="No mapped markets" emptyHint="Once mappings between Kalshi and Polymarket are confirmed, the universe will populate here." emptyIcon="◈"/>
+          { label: 'Category', w: '110px', render: r => <span style={{ fontSize: 12, color: t.textDim }}>{r.category}</span> },
+          { label: 'Kalshi', w: '210px', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 11.5, color: t.text, overflowWrap:'anywhere' }}>{r.kalshi_market_id || '—'}</span> },
+          { label: 'Polymarket', w: '250px', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 11.5, color: t.textDim, overflowWrap:'anywhere' }}>{r.polymarket_slug || '—'}</span> },
+          { label: 'Criteria', w: '135px', render: r => <window.Pill tone={r.resolution_match_status === 'identical' ? 'green' : r.resolution_match_status === 'divergent' ? 'red' : 'amber'}>{r.resolution_match_status}</window.Pill> },
+          { label: 'Confidence', w: '105px', align:'right', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12.5, color: r.confidence >= 0.9 ? t.green : t.textDim, fontWeight: 600 }}>{r.confidence ? r.confidence.toFixed(2) : '—'}</span> },
+          { label: 'Live edge', w: '105px', align:'right', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12.5, color: r.live ? (r.net_edge_cents >= 1 ? t.green : t.textDim) : t.textMuted, fontWeight: r.live ? 600 : 400 }}>{r.live ? window.fmtC(r.net_edge_cents) : 'No quote'}</span> },
+        ]} rows={visibleRows} onRowClick={(r) => setModal({ kind: 'market', payload: r })} emptyTitle="No mapped markets" emptyHint={category === 'All' ? 'No confirmed mapping rows are loaded from /api/mappings yet.' : `No confirmed ${category} mappings are loaded.`} emptyIcon="◈"/>
       </window.Card>
     </div>
   );
@@ -3464,54 +3533,131 @@ function WithdrawModal() {
 function MarketDetailModal() {
   const { t, modal, setModal, setPage, setDrawer, toast, watchlist, setWatchlist } = window.useApp();
   const M = window.MOCK;
-  const o = modal.payload;
-  const inList = watchlist.includes(o.canonical_id);
+  const o = modal.payload || {};
+  const canonical = o.canonical_id || '';
+  const inList = watchlist.includes(canonical);
+  const [live, setLive] = aUseS(null);
+  const [loading, setLoading] = aUseS(false);
+  const [error, setError] = aUseS('');
+  const activeOpp = o.live || (Array.isArray(M.opportunities) ? M.opportunities.find(x => x.canonical_id === canonical) : null);
+
+  aUseE(() => {
+    let cancelled = false;
+    if (!canonical || !window.__arbiterLivePrices) return undefined;
+    setLoading(true);
+    setError('');
+    window.__arbiterLivePrices(canonical).then((res) => {
+      if (cancelled) return;
+      if (res.ok) setLive(res.data);
+      else setError(res.error || 'live price fetch failed');
+    }).catch((e) => {
+      if (!cancelled) setError(String(e));
+    }).finally(() => {
+      if (!cancelled) setLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [canonical]);
+
+  const prices = live?.prices || {};
+  const kalshiPrice = prices.kalshi || null;
+  const polyPrice = prices.polymarket || null;
+  const edge = live?.edge?.best || (activeOpp ? {
+    yes_platform: activeOpp.yes_platform,
+    yes_price: activeOpp.yes_price,
+    no_platform: activeOpp.no_platform,
+    no_price: activeOpp.no_price,
+    net_edge_cents: activeOpp.net_edge_cents,
+  } : null);
+  const criteria = o.resolution_criteria || o.raw?.resolution_criteria || null;
+  const criteriaStatus = o.resolution_match_status || o.raw?.resolution_match_status || 'pending_operator_review';
+  const mappingKalshi = o.kalshi_market_id || o.raw?.kalshi_market_id || o.raw?.kalshi_ticker || o.raw?.kalshi || '';
+  const mappingPoly = o.polymarket_slug || o.raw?.polymarket_slug || o.raw?.poly_slug || o.raw?.polymarket || '';
+  const edgeSeries = (M.health.scanner.history || []).map(h => ({ t: h.t || h.timestamp, v: Number(h.best_edge_cents || 0) }));
+  const oppIndex = activeOpp ? M.opportunities.indexOf(activeOpp) : -1;
   return (
     <Shell width={620}>
-      <Header kicker="Market" title={o.description}/>
+      <Header kicker="Market" title={o.description || canonical || 'Mapped market'}/>
       <div style={{ padding: 24, overflow:'auto' }}>
-        <div style={{ fontSize: 11, color: t.textMuted, fontFamily: window.FONTS.mono, marginBottom: 18 }}>{o.canonical_id}</div>
+        <div style={{ fontSize: 11, color: t.textMuted, fontFamily: window.FONTS.mono, marginBottom: 14, overflowWrap:'anywhere' }}>{canonical}</div>
+        <div style={{ display:'grid', gap: 6, marginBottom: 18, fontFamily: window.FONTS.mono, fontSize: 11.5 }}>
+          <MapLine label="K" value={mappingKalshi || 'Kalshi market unavailable'} tone={t.text}/>
+          <MapLine label="P" value={mappingPoly || 'Polymarket market unavailable'} tone={t.textDim}/>
+        </div>
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 12, marginBottom: 22 }}>
-          <PriceBox platform={o.yes_platform} side="YES" price={o.yes_price} fee={o.fee_rate_yes} vol={o.yes_volume}/>
-          <PriceBox platform={o.no_platform} side="NO" price={o.no_price} fee={o.fee_rate_no} vol={o.no_volume}/>
+          <PriceBox platform="kalshi" side="YES" price={kalshiPrice?.yes_price ?? (activeOpp?.yes_platform === 'kalshi' ? activeOpp.yes_price : null)} fee={kalshiPrice?.fee_rate ?? (activeOpp?.yes_platform === 'kalshi' ? activeOpp.yes_fee_rate : activeOpp?.no_platform === 'kalshi' ? activeOpp.no_fee_rate : null)} vol={kalshiPrice?.volume ?? activeOpp?.min_available_liquidity} age={kalshiPrice?.age_seconds}/>
+          <PriceBox platform="polymarket" side="YES" price={polyPrice?.yes_price ?? (activeOpp?.yes_platform === 'polymarket' ? activeOpp.yes_price : null)} fee={polyPrice?.fee_rate ?? (activeOpp?.yes_platform === 'polymarket' ? activeOpp.yes_fee_rate : activeOpp?.no_platform === 'polymarket' ? activeOpp.no_fee_rate : null)} vol={polyPrice?.volume ?? activeOpp?.min_available_liquidity} age={polyPrice?.age_seconds}/>
         </div>
-        <div style={{ background: t.bgSubtle, borderRadius: 10, padding: 16, fontFamily: window.FONTS.mono, fontSize: 12.5 }}>
-          <Row k="Combined cost" v={`$${(o.yes_price + o.no_price).toFixed(4)} per pair`}/>
-          <Row k="Fees" v={`$${(o.yes_price*o.fee_rate_yes + o.no_price*o.fee_rate_no).toFixed(4)} per pair`}/>
-          <Row k="Net edge" v={`${o.net_edge_cents.toFixed(2)}¢`} bold tone={o.net_edge_cents >= 1 ? 'green' : 'amber'}/>
-          <Row k="Persistence" v={`${o.persistence_count} scans`}/>
+        <div style={{ background: t.bgSubtle, borderRadius: 10, padding: 16, fontFamily: window.FONTS.mono, fontSize: 12.5, marginBottom: 14 }}>
+          {loading && <Row k="Live quote" v="Fetching fresh prices..."/>}
+          {!loading && error && <Row k="Live quote" v={error}/>}
+          <Row k="Criteria match" v={criteriaStatus} bold tone={criteriaStatus === 'identical' ? 'green' : criteriaStatus === 'divergent' ? 'red' : 'amber'}/>
+          <Row k="Auto-trade" v={o.allow_auto_trade ? 'enabled' : 'disabled'}/>
+          <Row k="Polarity" v={o.polarity_flipped ? 'flipped' : 'same'}/>
+          <Row k="Confidence" v={o.confidence ? o.confidence.toFixed(4) : '—'}/>
+          {edge ? (
+            <>
+              <Row k="Best direction" v={`${edge.yes_platform || '—'} YES + ${edge.no_platform || '—'} NO`}/>
+              <Row k="Combined cost" v={edge.yes_price != null && edge.no_price != null ? `$${(Number(edge.yes_price) + Number(edge.no_price)).toFixed(4)} per pair` : '—'}/>
+              <Row k="Net edge" v={`${Number(edge.net_edge_cents || 0).toFixed(2)}¢`} bold tone={Number(edge.net_edge_cents || 0) >= 1 ? 'green' : 'amber'}/>
+            </>
+          ) : (
+            <Row k="Live edge" v="No active cross-platform quote"/>
+          )}
         </div>
+        {criteria && (
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 10, marginBottom: 14 }}>
+            <CriteriaBox title="Kalshi criteria" data={criteria.kalshi}/>
+            <CriteriaBox title="Polymarket criteria" data={criteria.polymarket}/>
+          </div>
+        )}
         <div style={{ height: 120, marginTop: 18 }}>
-          <window.AreaChart data={M.equity.slice(-30).map((d,i)=>({t:i,v:o.net_edge_cents + Math.sin(i/3)*0.4}))} stroke={t.green} grid={t.border} currency={false} showAxis={false}/>
+          <window.AreaChart data={edgeSeries.length ? edgeSeries : [{ t: 0, v: 0 }, { t: 1, v: 0 }]} stroke={t.green} grid={t.border} currency={false} showAxis={false}/>
         </div>
       </div>
       <Footer>
-        <window.Btn variant="ghost" size="sm" hint={inList ? 'Remove this market from your watchlist — stops surfacing it on Overview' : 'Pin this market to your watchlist — appears at the top of Overview while edge persists'} onClick={() => { setWatchlist(w => inList ? w.filter(x=>x!==o.canonical_id) : [...w, o.canonical_id]); toast(inList ? 'Removed from watchlist' : 'Added to watchlist'); }}>{inList ? '★ Watching' : '☆ Watch'}</window.Btn>
+        <window.Btn variant="ghost" size="sm" hint={inList ? 'Remove this market from your watchlist — stops surfacing it on Overview' : 'Pin this market to your watchlist — appears at the top of Overview while edge persists'} onClick={() => { setWatchlist(w => inList ? w.filter(x=>x!==canonical) : [...w, canonical]); toast(inList ? 'Removed from watchlist' : 'Added to watchlist'); }}>{inList ? '★ Watching' : '☆ Watch'}</window.Btn>
         <window.Btn variant="secondary" size="sm" onClick={() => { setModal(null); setPage('mappings'); }}>View mapping</window.Btn>
-        <window.Btn variant="primary" size="sm" icon="→" onClick={() => { const idx = M.opportunities.indexOf(o); setModal(null); setPage('opportunities'); setDrawer({ kind:'opp', payload: idx >= 0 ? idx : 0 }); }}>Open opportunity</window.Btn>
+        {oppIndex >= 0 && <window.Btn variant="primary" size="sm" icon="→" onClick={() => { setModal(null); setPage('opportunities'); setDrawer({ kind:'opp', payload: oppIndex }); }}>Open opportunity</window.Btn>}
       </Footer>
     </Shell>
   );
 }
+function CriteriaBox({ title, data }) {
+  const { t } = window.useApp();
+  const rule = data?.rule || data?.criteria || 'No criteria text available';
+  const source = data?.source || 'source unavailable';
+  const date = data?.settlement_date || data?.date || '';
+  return (
+    <div style={{ border:`1px solid ${t.border}`, borderRadius: 9, padding: 12, background: t.bgCard }}>
+      <div style={{ fontSize: 10.5, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom: 6 }}>{title}</div>
+      <div style={{ fontSize: 11.5, color: t.text, lineHeight: 1.45 }}>{rule}</div>
+      <div style={{ fontSize: 10.5, color: t.textDim, marginTop: 8, fontFamily: window.FONTS.mono }}>{source}{date ? ` · ${date}` : ''}</div>
+    </div>
+  );
+}
 function PriceBox({ platform, side, price, fee, vol }) {
   const { t } = window.useApp();
+  const p = Number(price);
+  const hasPrice = Number.isFinite(p);
+  const f = Number(fee);
+  const v = Number(vol);
   return (
     <div style={{ border: `1px solid ${t.border}`, borderRadius: 10, padding: 14 }}>
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom: 10 }}>
         <span style={{ fontSize: 10.5, fontWeight: 600, color: t.textMuted, letterSpacing:'0.06em' }}>{side} LEG</span>
         <window.PlatformChip name={platform}/>
       </div>
-      <div style={{ fontSize: 22, fontWeight: 600, color: t.text, fontFamily: window.FONTS.mono, letterSpacing:'-0.01em' }}>${price.toFixed(2)}</div>
+      <div style={{ fontSize: 22, fontWeight: 600, color: t.text, fontFamily: window.FONTS.mono, letterSpacing:'-0.01em' }}>{hasPrice ? `$${p.toFixed(2)}` : '—'}</div>
       <div style={{ fontSize: 10.5, color: t.textDim, marginTop: 6, fontFamily: window.FONTS.mono, lineHeight: 1.6 }}>
-        <div>Fee {(fee*100).toFixed(2)}%</div>
-        <div>Vol {vol.toLocaleString()}</div>
+        <div>Fee {Number.isFinite(f) ? (f*100).toFixed(2) + '%' : '—'}</div>
+        <div>Vol {Number.isFinite(v) ? v.toLocaleString() : '—'}</div>
       </div>
     </div>
   );
 }
 function Row({ k, v, bold, tone }) {
   const { t } = window.useApp();
-  const c = tone === 'green' ? t.green : tone === 'amber' ? t.amber : t.text;
+  const c = tone === 'green' ? t.green : tone === 'amber' ? t.amber : tone === 'red' ? t.red : t.text;
   return (
     <div style={{ display:'flex', justifyContent:'space-between', padding: '4px 0', fontWeight: bold ? 700 : 400 }}>
       <span style={{ color: t.textDim }}>{k}</span>
@@ -4519,6 +4665,8 @@ function MobileDashboard() {
 function MobHome({ totalBal, totalPnl }) {
   const { t, setScanner, scanner } = window.useApp();
   const M = window.MOCK;
+  const [range, setRange] = mobUseState('24h');
+  const equity = window.filterTimeSeries ? window.filterTimeSeries(M.equity, range) : M.equity;
   return (
     <div>
       <div style={{ padding: '12px 4px 18px' }}>
@@ -4530,10 +4678,14 @@ function MobHome({ totalBal, totalPnl }) {
       <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: '14px 14px 4px', marginBottom: 12 }}>
         <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom: 8 }}>
           <span style={{ fontSize: 12, fontWeight: 600 }}>Equity</span>
-          <span style={{ fontSize: 10.5, color: t.textMuted, fontFamily: window.FONTS.mono }}>24h</span>
+          <div style={{ display:'flex', gap: 4 }}>
+            {['1h','24h','7d','All'].map(x => (
+              <button key={x} onClick={() => setRange(x)} style={{ padding:'3px 6px', border:'none', borderRadius: 5, background: range === x ? t.bgSubtle : 'transparent', color: range === x ? t.text : t.textMuted, fontSize: 10.5, fontFamily: window.FONTS.mono, cursor:'pointer' }}>{x}</button>
+            ))}
+          </div>
         </div>
         <div style={{ height: 100 }}>
-          <window.AreaChart data={M.equity} stroke={t.accent} grid={t.border} showAxis={false}/>
+          <window.AreaChart data={equity} stroke={t.accent} grid={t.border} showAxis={false}/>
         </div>
       </div>
 
@@ -4654,6 +4806,12 @@ function MobTrades() {
 
 function MobMe({ onSub }) {
   const { t, name, toggle, setModal, signOut, profile } = window.useApp();
+  const M = window.MOCK;
+  const totalBal = M.balances.kalshi.balance + M.balances.polymarket.balance;
+  const tradePnl = M.pnl.recorded_trading_pnl.kalshi + M.pnl.recorded_trading_pnl.polymarket;
+  const deposits = M.pnl.total_deposits_all_platforms ?? (M.pnl.total_deposits.kalshi + M.pnl.total_deposits.polymarket);
+  const gates = M.health.readiness.gates || 0;
+  const passing = M.health.readiness.passing || 0;
   return (
     <div style={{ paddingTop: 16 }}>
       <div onClick={() => setModal({ kind:'profile' })} style={{ display:'flex', alignItems:'center', gap: 12, marginBottom: 22, padding: '12px 4px', cursor:'pointer' }}>
@@ -4666,9 +4824,9 @@ function MobMe({ onSub }) {
       </div>
 
       <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, overflow:'hidden', marginBottom: 12 }}>
-        <MobRow icon="◐" label="Funds & deposits" sub="$1,099.50 across both platforms" onClick={() => onSub('funds')}/>
-        <MobRow icon="$" label="P&L" sub="−$0.50 trading · $100 deposits" onClick={() => onSub('pnl')}/>
-        <MobRow icon="✓" label="System health" sub="7/7 readiness gates" tone="green" onClick={() => onSub('health')}/>
+        <MobRow icon="◐" label="Funds & deposits" sub={`${window.fmt$(totalBal)} across both platforms`} onClick={() => onSub('funds')}/>
+        <MobRow icon="$" label="P&L" sub={`${window.fmt$Sign(tradePnl)} trading · ${window.fmt$(deposits)} deposits`} onClick={() => onSub('pnl')}/>
+        <MobRow icon="✓" label="System health" sub={`${passing}/${gates || 7} readiness gates`} tone={M.health.readiness.ready ? 'green' : undefined} onClick={() => onSub('health')}/>
         <MobRow icon="⚙" label="Settings" onClick={() => onSub('settings')} last/>
       </div>
 
@@ -4687,11 +4845,10 @@ function MobFunds() {
   const { t, setModal } = window.useApp();
   const M = window.MOCK;
   const total = M.balances.kalshi.balance + M.balances.polymarket.balance;
-  // Available = balance minus a synthetic ~7% locked-in-trades reserve
   const kBal = M.balances.kalshi.balance, pBal = M.balances.polymarket.balance;
   const platforms = [
-    { name: 'Kalshi', dot: t.green, bal: kBal, avail: +(kBal * 0.93).toFixed(2), locked: +(kBal * 0.07).toFixed(2) },
-    { name: 'Polymarket', dot: t.purple, bal: pBal, avail: +(pBal * 0.93).toFixed(2), locked: +(pBal * 0.07).toFixed(2) },
+    { name: 'Kalshi', key: 'kalshi', dot: t.green, bal: kBal, pnl: M.pnl.recorded_trading_pnl.kalshi, ts: M.balances.kalshi.timestamp },
+    { name: 'Polymarket', key: 'polymarket', dot: t.purple, bal: pBal, pnl: M.pnl.recorded_trading_pnl.polymarket, ts: M.balances.polymarket.timestamp },
   ];
   return (
     <div style={{ paddingTop: 8 }}>
@@ -4710,12 +4867,12 @@ function MobFunds() {
           </div>
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 8, marginBottom: 12 }}>
             <div style={{ background: t.bgSubtle, padding: '8px 10px', borderRadius: 7 }}>
-              <div style={{ fontSize: 9.5, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase' }}>Available</div>
-              <div style={{ fontSize: 13, fontFamily: window.FONTS.mono, fontWeight: 600, marginTop: 2 }}>{window.fmt$(p.avail)}</div>
+              <div style={{ fontSize: 9.5, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase' }}>P/L</div>
+              <div style={{ fontSize: 13, fontFamily: window.FONTS.mono, fontWeight: 600, marginTop: 2, color: p.pnl >= 0 ? t.green : t.red }}>{window.fmt$Sign(p.pnl)}</div>
             </div>
             <div style={{ background: t.bgSubtle, padding: '8px 10px', borderRadius: 7 }}>
-              <div style={{ fontSize: 9.5, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase' }}>In trades</div>
-              <div style={{ fontSize: 13, fontFamily: window.FONTS.mono, fontWeight: 600, marginTop: 2 }}>{window.fmt$(p.locked)}</div>
+              <div style={{ fontSize: 9.5, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase' }}>Updated</div>
+              <div style={{ fontSize: 13, fontFamily: window.FONTS.mono, fontWeight: 600, marginTop: 2 }}>{p.ts ? window.ago(p.ts) : '—'}</div>
             </div>
           </div>
           <div style={{ display:'flex', gap: 6 }}>
@@ -4742,10 +4899,25 @@ function MobFunds() {
 function MobPnL() {
   const { t } = window.useApp();
   const M = window.MOCK;
+  const [range, setRange] = mobUseState('30d');
   const tradePnl = M.pnl.recorded_trading_pnl.kalshi + M.pnl.recorded_trading_pnl.polymarket;
   const dep = M.pnl.total_deposits_all_platforms;
-  // Synthetic fees total — sum of ~2% on filled-trade notional
-  const fees = M.executions.filter(e => e.status === 'filled').reduce((s, e) => s + (e.leg_yes.fill_qty * e.leg_yes.fill_price + e.leg_no.fill_qty * e.leg_no.fill_price) * 0.022, 0);
+  const equity = window.filterTimeSeries ? window.filterTimeSeries(M.equity, range) : M.equity;
+  const deployed = M.pnl.deployed_capital || 0;
+  const execs = Array.isArray(M.executions) ? M.executions : [];
+  const statusRows = (() => {
+    const total = Math.max(1, execs.length);
+    const profitable = execs.filter(e => e.status === 'filled' && Number(e.realized_pnl || 0) > 0).length;
+    const breakeven = execs.filter(e => e.status === 'filled' && Number(e.realized_pnl || 0) === 0).length;
+    const recovering = execs.filter(e => e.status === 'recovering' || e.status === 'submitted').length;
+    const failed = execs.filter(e => e.status === 'failed' || e.status === 'aborted').length;
+    return [
+      ['Filled & profitable', profitable, profitable / total * 100, t.green],
+      ['Filled & break-even', breakeven, breakeven / total * 100, t.textDim],
+      ['Recovering / submitted', recovering, recovering / total * 100, t.amber],
+      ['Failed / aborted', failed, failed / total * 100, t.red],
+    ];
+  })();
   return (
     <div style={{ paddingTop: 8 }}>
       <div style={{ padding: '6px 4px 18px' }}>
@@ -4757,10 +4929,14 @@ function MobPnL() {
       <div style={{ background: t.bgCard, border:`1px solid ${t.border}`, borderRadius: 12, padding: 14, marginBottom: 10 }}>
         <div style={{ display:'flex', justifyContent:'space-between', marginBottom: 10 }}>
           <span style={{ fontSize: 12, fontWeight: 600 }}>Equity curve</span>
-          <span style={{ fontSize: 10.5, color: t.textDim, fontFamily: window.FONTS.mono }}>30d</span>
+          <div style={{ display:'flex', gap: 4 }}>
+            {['24h','7d','30d','All'].map(x => (
+              <button key={x} onClick={() => setRange(x)} style={{ padding:'3px 6px', border:'none', borderRadius: 5, background: range === x ? t.bgSubtle : 'transparent', color: range === x ? t.text : t.textMuted, fontSize: 10.5, fontFamily: window.FONTS.mono, cursor:'pointer' }}>{x}</button>
+            ))}
+          </div>
         </div>
         <div style={{ height: 130 }}>
-          <window.AreaChart data={M.equity} stroke={t.accent} grid={t.border} showAxis={false}/>
+          <window.AreaChart data={equity} stroke={t.accent} grid={t.border} showAxis={false}/>
         </div>
       </div>
 
@@ -4768,23 +4944,18 @@ function MobPnL() {
         <PnLStat label="Kalshi P&L" value={M.pnl.recorded_trading_pnl.kalshi} t={t}/>
         <PnLStat label="Polymarket P&L" value={M.pnl.recorded_trading_pnl.polymarket} t={t}/>
         <PnLStat label="Deposits" value={dep} t={t} neutral/>
-        <PnLStat label="Fees paid" value={-fees} t={t}/>
+        <PnLStat label="Deployed" value={deployed} t={t} neutral/>
       </div>
 
       <div style={{ background: t.bgCard, border:`1px solid ${t.border}`, borderRadius: 12, padding: 14 }}>
-        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 10 }}>Win rate breakdown</div>
-        {[
-          ['Filled & profitable', 71, t.green],
-          ['Filled & break-even', 18, t.textDim],
-          ['Recovering / partial', 8, t.amber],
-          ['Failed', 3, t.red],
-        ].map(([l, v, c]) => (
+        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 10 }}>Execution breakdown</div>
+        {statusRows.map(([l, count, pct, c]) => (
           <div key={l} style={{ marginBottom: 8 }}>
             <div style={{ display:'flex', justifyContent:'space-between', fontSize: 11, marginBottom: 3 }}>
-              <span>{l}</span><span style={{ fontFamily: window.FONTS.mono, color: c }}>{v}%</span>
+              <span>{l}</span><span style={{ fontFamily: window.FONTS.mono, color: c }}>{count} · {pct.toFixed(0)}%</span>
             </div>
             <div style={{ height: 5, background: t.bgSubtle, borderRadius: 99, overflow:'hidden' }}>
-              <div style={{ height:'100%', width: `${v}%`, background: c }}/>
+              <div style={{ height:'100%', width: `${pct}%`, background: c }}/>
             </div>
           </div>
         ))}
@@ -5293,12 +5464,15 @@ window.LoginScreen = LoginScreen;
       settings: window.PageSettings,
     };
     const tradableCount = (window.MOCK.opportunities || []).filter(o => o.status === 'tradable').length;
+    const confirmedMarketCount = window.marketRowsFromMappings
+      ? window.marketRowsFromMappings(window.MOCK, 'confirmed').length
+      : (window.MOCK.mappings || []).filter(r => (r.status || '').toLowerCase() === 'confirmed').length;
     const titles = {
       overview: ['Overview', 'Operator desk · Live'],
       opportunities: ['Opportunities', `Live scan · ${tradableCount} tradable`],
       trades: ['Trades', `Execution ledger · ${(window.MOCK.executions || []).length} trades`],
       pnl: ['P&L', 'Performance · since inception'],
-      markets: ['Markets', `Mapped universe · ${(window.MOCK.mappings || window.MOCK.opportunities || []).length} markets`],
+      markets: ['Markets', `Mapped universe · ${confirmedMarketCount.toLocaleString()} confirmed`],
       mappings: ['Mappings', 'Cross-platform · review queue'],
       scanner: ['Scanner', `Real-time · ${(window.MOCK.health.scanner.scan_count || 0).toLocaleString()} scans`],
       audit: ['Audit & Readiness', `System integrity · ${window.MOCK.health.readiness.passing || 0}/${window.MOCK.health.readiness.gates || 7} gates`],
