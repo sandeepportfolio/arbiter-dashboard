@@ -155,10 +155,37 @@ async def test_missing_mapping_skips_execute():
 
 
 @pytest.mark.asyncio
-async def test_notional_over_cap_skips_execute():
-    # yes_price=0.40, no_price=0.60, qty=50 => max-leg notional = 30 > 10
+async def test_notional_over_cap_clamps_before_execute():
+    # yes_price=0.40, no_price=0.60, qty=50 => pair notional = 50 > 10;
+    # AutoExecutor clamps to the per-trade cap, recomputes fees, then executes
+    # only if the capped trade still clears the pre-flight edge threshold.
+    ae, engine = _make_components(max_position_usd=10.0)
+    opp = _make_opportunity(suggested_qty=50)
+    opp.gross_edge = 0.06
+    await ae._consider_opportunity(opp)
+    engine.execute_opportunity.assert_awaited_once()
+    executed_opp = engine.execute_opportunity.await_args.args[0]
+    assert executed_opp.suggested_qty == 10
+    assert executed_opp.suggested_qty * (executed_opp.yes_price + executed_opp.no_price) <= 10.0
+    assert executed_opp.net_edge_cents == pytest.approx(3.34)
+    assert ae.stats.executed == 1
+    assert ae.stats.skipped_over_cap == 0
+
+
+@pytest.mark.asyncio
+async def test_notional_over_cap_skips_when_clamped_edge_is_below_threshold():
     ae, engine = _make_components(max_position_usd=10.0)
     await ae._consider_opportunity(_make_opportunity(suggested_qty=50))
+    engine.execute_opportunity.assert_not_awaited()
+    assert ae.stats.skipped_over_cap == 1
+
+
+@pytest.mark.asyncio
+async def test_notional_over_cap_skips_when_clamped_edge_is_negative():
+    ae, engine = _make_components(max_position_usd=10.0)
+    opp = _make_opportunity(suggested_qty=50)
+    opp.gross_edge = 0.01
+    await ae._consider_opportunity(opp)
     engine.execute_opportunity.assert_not_awaited()
     assert ae.stats.skipped_over_cap == 1
 

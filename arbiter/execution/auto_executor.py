@@ -272,13 +272,17 @@ class AutoExecutor:
             opp.yes_fee = yes_fee_new / max(clamped_qty, 1)
             opp.no_fee = no_fee_new / max(clamped_qty, 1)
             opp.max_profit_usd = round(new_net_edge * clamped_qty, 4)
-            # If recomputed edge is now negative, skip this opportunity
-            if new_net_edge <= 0:
+            # If recomputed edge falls below the executor pre-flight threshold,
+            # skip here too. The price_store-backed pre-flight is optional in
+            # tests/legacy wiring, so the clamp path must fail closed by itself.
+            if opp.net_edge_cents < self._config.min_edge_cents_preflight:
                 self.stats.skipped_over_cap += 1
                 log.info(
-                    "auto_executor.skip.negative_after_clamp",
+                    "auto_executor.skip.edge_low_after_clamp",
                     canonical_id=opp.canonical_id,
                     new_net_edge=round(new_net_edge, 4),
+                    new_net_edge_cents=round(opp.net_edge_cents, 2),
+                    threshold_cents=self._config.min_edge_cents_preflight,
                 )
                 return
 

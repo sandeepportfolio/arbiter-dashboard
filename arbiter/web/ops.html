@@ -1658,8 +1658,8 @@ function normalizePageId(value) {
 }
 
 function readStoredPage() {
-  const hashPage = normalizePageId(window.location.hash);
-  if (hashPage !== 'overview' || window.location.hash) return hashPage;
+  const hashPage = String(window.location.hash || '').replace(/^#\/?/, '').trim();
+  if (ARB_PAGE_IDS.includes(hashPage)) return hashPage;
   try { return normalizePageId(localStorage.getItem(ARB_PAGE_KEY)); } catch { return 'overview'; }
 }
 
@@ -2900,6 +2900,7 @@ function PriceCell({ yes }) {
 // ── Mappings ────────────────────────────────────────────────────────
 function PageMappings() {
   const { t, setModal, toast } = window.useApp();
+  const [mappingFilter, setMappingFilter] = React.useState('all');
   const M = window.MOCK;
   const rows = Array.isArray(M.mappings) ? M.mappings : [];
   const candidates = rows.map((r) => ({
@@ -2913,13 +2914,50 @@ function PageMappings() {
     match: r.resolution_match_status || 'pending_operator_review',
     reason: r.auto_promote_reason || '',
   }));
-  const reviewable = candidates.filter(c => c.s === 'candidate' || c.s === 'pending' || c.s === 'review');
-  const confirmedCount = candidates.filter(c => c.s === 'confirmed').length;
+  const statusOf = c => String(c.s || '').toLowerCase();
+  const matchOf = c => String(c.match || '').toLowerCase();
+  const reasonOf = c => String(c.reason || '').toLowerCase();
+  const isPending = c => ['candidate', 'pending', 'review'].includes(statusOf(c));
+  const isLive = c => statusOf(c) === 'confirmed' && !!c.auto && matchOf(c) === 'identical';
+  const isStale = c => statusOf(c) === 'expired' || matchOf(c) === 'expired' || reasonOf(c).includes('expired') || reasonOf(c).includes('stale');
+  const reviewable = candidates.filter(isPending);
+  const confirmedCount = candidates.filter(c => statusOf(c) === 'confirmed').length;
+  const liveCount = candidates.filter(isLive).length;
+  const staleCount = candidates.filter(isStale).length;
+  const rejectedCount = candidates.filter(c => statusOf(c) === 'rejected').length;
   const avgScore = candidates.length
     ? candidates.reduce((sum, c) => sum + (Number.isFinite(c.score) ? c.score : 0), 0) / candidates.length
     : 0;
   const discovery = M.discovery || {};
   const discoveryCounts = discovery.counts || {};
+  const discoveryStatus = String(discovery.status || 'idle').toLowerCase();
+  const discoveryEvents = Array.isArray(discovery.events) ? discovery.events : [];
+  const lastDiscoveryEvent = discoveryEvents[discoveryEvents.length - 1];
+  const lastRefetchValue = discoveryStatus === 'idle' ? 'ready' : discoveryStatus;
+  const lastRefetchSub = discoveryStatus === 'idle'
+    ? 'No run since API start'
+    : (lastDiscoveryEvent?.message || discovery.message || `${(discoveryCounts.kalshi_markets || 0).toLocaleString()} K · ${(discoveryCounts.polymarket_markets || 0).toLocaleString()} P`);
+  const MAPPING_FILTERS = [
+    { key:'all', label:'All', count:candidates.length },
+    { key:'confirmed', label:'Confirmed', count:confirmedCount },
+    { key:'pending', label:'Pending', count:reviewable.length },
+    { key:'live', label:'Live', count:liveCount },
+    { key:'stale', label:'Stale', count:staleCount },
+    { key:'rejected', label:'Rejected', count:rejectedCount },
+  ];
+  const filteredCandidates = candidates.filter(c => {
+    if (mappingFilter === 'confirmed') return statusOf(c) === 'confirmed';
+    if (mappingFilter === 'pending') return isPending(c);
+    if (mappingFilter === 'live') return isLive(c);
+    if (mappingFilter === 'stale') return isStale(c);
+    if (mappingFilter === 'rejected') return statusOf(c) === 'rejected';
+    return true;
+  });
+  const StatButton = ({ children, onClick, active }) => (
+    <button type="button" onClick={onClick} style={{ background:'transparent', border:'none', padding: 0, textAlign:'left', cursor:'pointer', borderRadius: 10, outline:'none', boxShadow: active ? `0 0 0 2px ${t.accent}` : 'none' }}>
+      {children}
+    </button>
+  );
 
   return (
     <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto' }}>
@@ -2932,13 +2970,22 @@ function PageMappings() {
       </window.PageHeader>
 
       <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap: 14, marginBottom: 18 }}>
-        <window.Card padding={18}><window.Stat label="Confirmed" value={confirmedCount.toLocaleString()} tone="green" sub={`${candidates.filter(c => c.auto).length.toLocaleString()} auto-trade`} mono/></window.Card>
-        <window.Card padding={18}><window.Stat label="Pending review" value={reviewable.length.toLocaleString()} tone="amber" sub="Candidate + review queue" mono/></window.Card>
-        <window.Card padding={18}><window.Stat label="Avg score" value={avgScore ? avgScore.toFixed(2) : '—'} sub="Visible mapping pool" mono/></window.Card>
-        <window.Card padding={18}><window.Stat label="Last refetch" value={discovery.status || 'idle'} sub={`${(discoveryCounts.kalshi_markets || 0).toLocaleString()} K · ${(discoveryCounts.polymarket_markets || 0).toLocaleString()} P`} mono/></window.Card>
+        <StatButton active={mappingFilter === 'confirmed'} onClick={() => setMappingFilter('confirmed')}><window.Card padding={18}><window.Stat label="Confirmed" value={confirmedCount.toLocaleString()} tone="green" sub={`${candidates.filter(c => c.auto).length.toLocaleString()} auto-trade`} mono/></window.Card></StatButton>
+        <StatButton active={mappingFilter === 'pending'} onClick={() => setMappingFilter('pending')}><window.Card padding={18}><window.Stat label="Pending review" value={reviewable.length.toLocaleString()} tone="amber" sub="Candidate + review queue" mono/></window.Card></StatButton>
+        <StatButton active={mappingFilter === 'live'} onClick={() => setMappingFilter('live')}><window.Card padding={18}><window.Stat label="Live mappings" value={liveCount.toLocaleString()} tone="accent" sub="Confirmed + identical + auto-trade" mono/></window.Card></StatButton>
+        <StatButton onClick={() => setModal({ kind:'refetchMappings', payload:{ title:'Discovery history', inspectOnly:true } })}><window.Card padding={18}><window.Stat label="Last refetch" value={lastRefetchValue} sub={lastRefetchSub} mono/></window.Card></StatButton>
       </div>
 
-      <window.Card title="Candidate mappings" padding={0} action={<span style={{ fontSize: 11, color: t.textMuted }}>{candidates.length} total · {reviewable.length} actionable</span>}>
+      <div style={{ display:'flex', alignItems:'center', gap: 8, flexWrap:'wrap', marginBottom: 14 }}>
+        {MAPPING_FILTERS.map(f => (
+          <button key={f.key} type="button" aria-pressed={mappingFilter === f.key} onClick={() => setMappingFilter(f.key)} style={{ padding:'7px 10px', border:`1px solid ${mappingFilter === f.key ? t.accent : t.border}`, background: mappingFilter === f.key ? t.bgSubtle : 'transparent', borderRadius: 8, color: mappingFilter === f.key ? t.text : t.textDim, fontSize: 12, fontWeight: mappingFilter === f.key ? 600 : 500, cursor:'pointer', display:'flex', alignItems:'center', gap: 7 }}>
+            <span>{f.label}</span>
+            <span style={{ fontFamily: window.FONTS.mono, fontSize: 10.5, color: mappingFilter === f.key ? t.accent : t.textMuted }}>{Number(f.count || 0).toLocaleString()}</span>
+          </button>
+        ))}
+      </div>
+
+      <window.Card title="Candidate mappings" padding={0} action={<span style={{ fontSize: 11, color: t.textMuted }}>{filteredCandidates.length} visible · {reviewable.length} actionable</span>}>
         <window.DataTable columns={[
           { label: 'Score', w: '90px', render: r => (
             <div style={{ display:'flex', alignItems:'center', gap: 6 }}>
@@ -2978,7 +3025,7 @@ function PageMappings() {
               </div>
             );
           }},
-        ]} rows={candidates} onRowClick={(r) => setModal({ kind:'agentValidate', payload: r })} emptyTitle="No mapping candidates" emptyHint="The mapping pipeline will surface candidate cross-platform pairs here for review." emptyIcon="⇄"/>
+        ]} rows={filteredCandidates} onRowClick={(r) => setModal({ kind:'agentValidate', payload: r })} emptyTitle="No mapping candidates" emptyHint={mappingFilter === 'all' ? 'The mapping pipeline will surface candidate cross-platform pairs here for review.' : 'No rows match this mapping filter. Choose another filter or run a discovery pass.'} emptyIcon="⇄"/>
       </window.Card>
 
       <div style={{ marginTop: 12, padding: '12px 14px', background: t.bgSubtle, border:`1px dashed ${t.border}`, borderRadius: 8, fontSize: 11, color: t.textDim, display:'flex', alignItems:'center', gap: 10 }}>

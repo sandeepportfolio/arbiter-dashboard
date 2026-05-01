@@ -3,11 +3,56 @@ import json
 import time
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
+from arbiter.config import settings as settings_module
 from arbiter.config.settings import ArbiterConfig
 from arbiter.execution.engine import ExecutionEngine
 from arbiter.monitor.balance import BalanceMonitor
 from arbiter.scanner.arbitrage import ArbitrageOpportunity
 from arbiter.utils.price_store import PricePoint, PriceStore
+
+
+@pytest.fixture(autouse=True)
+def confirmed_synthetic_mappings():
+    """Register synthetic execution-test markets without touching production seeds."""
+    original = dict(settings_module.MARKET_MAP)
+
+    def add_mapping(canonical_id: str) -> None:
+        settings_module.MARKET_MAP[canonical_id] = {
+            "description": f"Synthetic test mapping for {canonical_id}",
+            "status": "confirmed",
+            "allow_auto_trade": True,
+            "mapping_score": 0.9,
+            "resolution_match_status": "identical",
+        }
+
+    for canonical_id in {
+        "C",
+        "MKT1",
+        "MKT_BURST",
+        "MKT_BURST_2",
+        "MKT_CNC",
+        "MKT_DRYRUN_PARITY",
+        "MKT_REC",
+        "REJ_PER_PLATFORM",
+        "REJ_STALE",
+        "TEST_AUTO",
+        "TEST_BAD_MATH",
+        "TEST_INCIDENT",
+        "TEST_LIVE_GATE",
+        "TEST_MANUAL",
+        "TEST_MANUAL_ACTIONS",
+        "TEST_MANUAL_RELEASE",
+    }:
+        add_mapping(canonical_id)
+    for index in range(120):
+        add_mapping(f"BULK_{index}")
+
+    yield
+
+    settings_module.MARKET_MAP.clear()
+    settings_module.MARKET_MAP.update(original)
 
 
 def make_engine(price_store: PriceStore) -> ExecutionEngine:
@@ -1348,20 +1393,28 @@ def _build_live_engine_for_safe02_gap():
     return engine
 
 
+def _wire_live_depth(adapter, price: float) -> None:
+    adapter.check_depth = AsyncMock(return_value=(True, price))
+    adapter.best_executable_price = AsyncMock(return_value=(True, price))
+
+
 def test_live_burst_submitted_rejected_at_per_platform_ceiling():
-    """SAFE-02 gap closure: two live-mode 'submitted' opportunities on the
-    same platform whose combined exposure exceeds
-    SafetyConfig.max_platform_exposure_usd — the second is rejected by
-    check_trade (not dispatched to place_fok) because record_trade fires on
-    submitted (not just filled). Currently (pre-Task 1+2) this test FAILS."""
+    """SAFE-02 gap closure: live recovery still books surviving exposure.
+
+    A filled primary plus resting secondary enters recovery, cancels the
+    secondary reservation, and leaves the filled leg in per-platform accounting.
+    A later opportunity on the same platform is rejected before dispatch when
+    that surviving exposure would exceed SafetyConfig.max_platform_exposure_usd.
+    """
     from arbiter.execution.engine import Order, OrderStatus
 
     async def runner():
         engine = _build_live_engine_for_safe02_gap()
 
-        def _mk_adapter(platform: str, price: float):
+        def _mk_adapter(platform: str, price: float, status: OrderStatus, fill_qty: int):
             adapter = MagicMock()
             adapter.platform = platform
+            _wire_live_depth(adapter, price)
             adapter.place_fok = AsyncMock(
                 return_value=Order(
                     order_id=f"ARB-LIVE-{platform.upper()}",
@@ -1371,17 +1424,17 @@ def test_live_burst_submitted_rejected_at_per_platform_ceiling():
                     side="yes" if platform == "kalshi" else "no",
                     price=price,
                     quantity=400,
-                    status=OrderStatus.SUBMITTED,
-                    fill_qty=0,
-                    fill_price=0.0,
+                    status=status,
+                    fill_qty=fill_qty,
+                    fill_price=price if fill_qty else 0.0,
                     timestamp=time.time(),
                 )
             )
             adapter.cancel_order = AsyncMock(return_value=True)
             return adapter
 
-        kalshi = _mk_adapter("kalshi", 0.60)
-        poly = _mk_adapter("polymarket", 0.40)
+        kalshi = _mk_adapter("kalshi", 0.60, OrderStatus.FILLED, 400)
+        poly = _mk_adapter("polymarket", 0.30, OrderStatus.SUBMITTED, 0)
         engine.adapters = {"kalshi": kalshi, "polymarket": poly}
 
         incidents_q = engine.subscribe_incidents()
@@ -1391,18 +1444,18 @@ def test_live_burst_submitted_rejected_at_per_platform_ceiling():
             yes_platform="kalshi",
             no_platform="polymarket",
             yes_price=0.60,
-            no_price=0.40,
-            suggested_qty=400,  # Kalshi leg = 240, Poly leg = 160 — both < 300
+            no_price=0.30,
+            suggested_qty=400,  # Kalshi leg = 240, Poly leg = 120 — both < 300
         )
 
         exec1 = await engine.execute_opportunity(opp1)
         assert exec1 is not None
-        assert exec1.status == "submitted"
+        assert exec1.status == "recovering"
 
-        # NEW INVARIANT (was {} before this fix): submitted legs update
-        # per-platform accounting immediately.
+        # Recovery leaves the filled Kalshi leg booked and releases the
+        # cancelled resting Polymarket reservation.
         assert engine.risk._platform_exposures.get("kalshi") == 240.0
-        assert engine.risk._platform_exposures.get("polymarket") == 160.0
+        assert engine.risk._platform_exposures.get("polymarket", 0.0) == 0.0
 
         # Second opp on a DIFFERENT canonical_id (per-market would not
         # block), SAME platform pair. Kalshi leg = 100 → aggregate 340 > 300.
@@ -1411,7 +1464,7 @@ def test_live_burst_submitted_rejected_at_per_platform_ceiling():
             yes_platform="kalshi",
             no_platform="polymarket",
             yes_price=0.50,
-            no_price=0.50,
+            no_price=0.30,
             suggested_qty=200,
         )
 
@@ -1457,6 +1510,7 @@ def test_live_recovering_records_only_surviving_leg():
 
         kalshi = MagicMock()
         kalshi.platform = "kalshi"
+        _wire_live_depth(kalshi, 0.60)
         kalshi.place_fok = AsyncMock(
             return_value=Order(
                 order_id="ARB-REC-YES",
@@ -1476,6 +1530,7 @@ def test_live_recovering_records_only_surviving_leg():
 
         poly = MagicMock()
         poly.platform = "polymarket"
+        _wire_live_depth(poly, 0.30)
         poly.place_fok = AsyncMock(
             return_value=Order(
                 order_id="ARB-REC-NO",
@@ -1501,8 +1556,8 @@ def test_live_recovering_records_only_surviving_leg():
             yes_platform="kalshi",
             no_platform="polymarket",
             yes_price=0.60,
-            no_price=0.40,
-            suggested_qty=100,  # Kalshi $60, Polymarket $40
+            no_price=0.30,
+            suggested_qty=100,  # Kalshi $60, Polymarket $30
         )
 
         exec_result = await engine.execute_opportunity(opp)
@@ -1529,6 +1584,7 @@ def test_live_recovery_cancellation_releases_reservation():
 
         kalshi = MagicMock()
         kalshi.platform = "kalshi"
+        _wire_live_depth(kalshi, 0.60)
         kalshi.place_fok = AsyncMock(
             return_value=Order(
                 order_id="ARB-CNC-YES",
@@ -1548,6 +1604,7 @@ def test_live_recovery_cancellation_releases_reservation():
 
         poly = MagicMock()
         poly.platform = "polymarket"
+        _wire_live_depth(poly, 0.30)
         poly.place_fok = AsyncMock(
             return_value=Order(
                 order_id="ARB-CNC-NO",
@@ -1585,8 +1642,8 @@ def test_live_recovery_cancellation_releases_reservation():
             yes_platform="kalshi",
             no_platform="polymarket",
             yes_price=0.60,
-            no_price=0.40,
-            suggested_qty=100,  # Kalshi $60, Polymarket $40
+            no_price=0.30,
+            suggested_qty=100,  # Kalshi $60, Polymarket $30
         )
 
         exec_result = await engine.execute_opportunity(opp)

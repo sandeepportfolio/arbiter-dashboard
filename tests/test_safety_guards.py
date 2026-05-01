@@ -141,7 +141,7 @@ class TestAutoPromoteGate1:
     """Gate 1: AUTO_PROMOTE_ENABLED must be true."""
 
     def test_disabled_rejects(self):
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             maybe_promote(
                 _make_candidate(),
                 settings=_make_settings(AUTO_PROMOTE_ENABLED=False),
@@ -156,7 +156,7 @@ class TestAutoPromoteGate1:
         assert result.reason == "auto_promote_disabled"
 
     def test_enabled_passes(self):
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             maybe_promote(
                 _make_candidate(),
                 settings=_make_settings(AUTO_PROMOTE_ENABLED=True),
@@ -174,7 +174,7 @@ class TestAutoPromoteGate2:
     """Gate 2: score >= min_score."""
 
     def test_low_score_rejects(self):
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             maybe_promote(
                 _make_candidate(score=0.50),
                 settings=_make_settings(),
@@ -189,7 +189,7 @@ class TestAutoPromoteGate2:
         assert result.reason == "score_low"
 
     def test_exact_threshold_passes(self):
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             maybe_promote(
                 _make_candidate(score=0.85),
                 settings=_make_settings(AUTO_PROMOTE_MIN_SCORE=0.85),
@@ -207,7 +207,7 @@ class TestAutoPromoteGate3:
     """Gate 3: resolution_check must return IDENTICAL."""
 
     def test_unstructured_candidate_rejects_before_llm(self):
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             maybe_promote(
                 _make_candidate(structural_match=False),
                 settings=_make_settings(),
@@ -222,7 +222,7 @@ class TestAutoPromoteGate3:
         assert result.reason == "structural_unverified"
 
     def test_divergent_rejects(self):
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             maybe_promote(
                 _make_candidate(),
                 settings=_make_settings(),
@@ -237,7 +237,7 @@ class TestAutoPromoteGate3:
         assert result.reason == "resolution_divergent"
 
     def test_identical_passes(self):
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             maybe_promote(
                 _make_candidate(),
                 settings=_make_settings(),
@@ -252,7 +252,7 @@ class TestAutoPromoteGate3:
 
     def test_pending_with_high_score_rejects(self):
         """PENDING resolution + high score + LLM YES is still not confirmed."""
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             maybe_promote(
                 _make_candidate(score=0.95),
                 settings=_make_settings(),
@@ -268,7 +268,7 @@ class TestAutoPromoteGate3:
 
     def test_pending_with_low_score_rejects(self):
         """PENDING resolution rejects before any score-bump fallback."""
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             maybe_promote(
                 _make_candidate(score=0.86),
                 settings=_make_settings(AUTO_PROMOTE_MIN_SCORE=0.85),
@@ -287,7 +287,7 @@ class TestAutoPromoteGate4:
     """Gate 4: LLM verifier must return YES."""
 
     def test_llm_no_rejects(self):
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             maybe_promote(
                 _make_candidate(),
                 settings=_make_settings(),
@@ -303,7 +303,7 @@ class TestAutoPromoteGate4:
 
     def test_llm_maybe_with_low_score_rejects(self):
         """MAYBE is ambiguity and fails closed."""
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             maybe_promote(
                 _make_candidate(score=0.20),
                 settings=_make_settings(
@@ -325,7 +325,7 @@ class TestAutoPromoteGate5:
     """Gate 5: Both orderbooks must have depth >= PHASE5_MAX_ORDER_USD × 2."""
 
     def test_low_kalshi_depth_rejects(self):
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             maybe_promote(
                 _make_candidate(),
                 settings=_make_settings(PHASE5_MAX_ORDER_USD=50.0),
@@ -340,7 +340,7 @@ class TestAutoPromoteGate5:
         assert result.reason == "liquidity_low"
 
     def test_sufficient_depth_passes(self):
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             maybe_promote(
                 _make_candidate(),
                 settings=_make_settings(PHASE5_MAX_ORDER_USD=50.0),
@@ -358,7 +358,7 @@ class TestAutoPromoteGate6:
     """Gate 6: resolution_date within max_days (default 90)."""
 
     def test_far_future_rejects(self):
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             maybe_promote(
                 _make_candidate(resolution_date="2028-01-01"),
                 settings=_make_settings(AUTO_PROMOTE_MAX_DAYS=90),
@@ -374,7 +374,7 @@ class TestAutoPromoteGate6:
 
     def test_invalid_date_rejects(self):
         """Unparseable date → safe-fail rejection."""
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             maybe_promote(
                 _make_candidate(resolution_date="not-a-date"),
                 settings=_make_settings(),
@@ -393,7 +393,7 @@ class TestAutoPromoteGate7:
     """Gate 7: daily cap."""
 
     def test_daily_cap_exceeded_rejects(self):
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             maybe_promote(
                 _make_candidate(),
                 settings=_make_settings(AUTO_PROMOTE_DAILY_CAP=5),
@@ -412,7 +412,7 @@ class TestAutoPromoteGate8:
     """Gate 8: cooling-off period."""
 
     def test_cooling_off_rejects(self):
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             maybe_promote(
                 _make_candidate(kalshi_ticker="COOL-TICKER"),
                 settings=_make_settings(AUTO_PROMOTE_ADVISORY_SCANS=30),
@@ -427,7 +427,7 @@ class TestAutoPromoteGate8:
         assert result.reason == "cooling_off"
 
     def test_cooling_off_passed_promotes(self):
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             maybe_promote(
                 _make_candidate(kalshi_ticker="COOL-TICKER"),
                 settings=_make_settings(AUTO_PROMOTE_ADVISORY_SCANS=30),

@@ -13,8 +13,8 @@ function normalizePageId(value) {
 }
 
 function readStoredPage() {
-  const hashPage = normalizePageId(window.location.hash);
-  if (hashPage !== 'overview' || window.location.hash) return hashPage;
+  const hashPage = String(window.location.hash || '').replace(/^#\/?/, '').trim();
+  if (ARB_PAGE_IDS.includes(hashPage)) return hashPage;
   try { return normalizePageId(localStorage.getItem(ARB_PAGE_KEY)); } catch { return 'overview'; }
 }
 

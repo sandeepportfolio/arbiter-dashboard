@@ -42,6 +42,7 @@ def _make_candidate(
         "poly_question": "Will the Federal Reserve cut rates in May 2026?",
         "score": score,
         "status": "candidate",
+        "structural_match": True,
         "resolution_date": resolution_date,
         "kalshi_resolution_date": resolution_date,
         "polymarket_resolution_date": resolution_date,
