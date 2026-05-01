@@ -798,6 +798,7 @@ async def test_structural_politics_llm_verifier_receives_enriched_context():
 
     assert count == 1
     assert verify_batch.await_count == 1
+    assert verify_batch.await_args.kwargs == {}
     pairs = verify_batch.await_args.args[0]
     assert pairs and len(pairs[0]) == 2
     kalshi_prompt, poly_prompt = pairs[0]

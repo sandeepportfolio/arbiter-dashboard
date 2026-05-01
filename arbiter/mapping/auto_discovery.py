@@ -832,7 +832,7 @@ async def _apply_auto_promote(
             verdict_count = 0
             for category, items in pairs_by_category.items():
                 pairs = [pair for _, pair in items]
-                batch_results = await llm_verify_batch(pairs, category=category or None)
+                batch_results = await llm_verify_batch(pairs)
                 for pair, result in zip(pairs, batch_results):
                     llm_results[pair] = result
                     verdict_count += 1
@@ -857,7 +857,7 @@ async def _apply_auto_promote(
         result = llm_results.get(pair)
         if result is not None:
             return result
-        return await llm_verify(kalshi_q, poly_q, category=llm_categories.get(pair) or None)
+        return await llm_verify(kalshi_q, poly_q)
 
     async def _evaluate(candidate: dict[str, Any]) -> tuple[dict[str, Any], Any]:
         score = float(candidate.get("score", 0.0) or 0.0)
