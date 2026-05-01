@@ -422,6 +422,42 @@ def test_trades_endpoint_returns_complete_newest_first_expected_actual_ledger():
     asyncio.run(_run())
 
 
+def test_pnl_summary_does_not_double_subtract_deposit_adjusted_baseline():
+    async def _run():
+        from types import SimpleNamespace
+
+        from arbiter.audit.pnl_reconciler import PnLReconciler
+
+        api = await _make_rate_limit_api()
+        reconciler = PnLReconciler(log_to_disk=False)
+        reconciler.set_starting_balance("kalshi", 100.0)
+        reconciler.set_starting_balance("polymarket", 200.0)
+        reconciler.record_deposit(
+            "kalshi",
+            50.0,
+            balance_before=100.0,
+            balance_after=150.0,
+        )
+
+        api.reconciler = reconciler
+        api.monitor.current_balances = {
+            "kalshi": SimpleNamespace(balance=160.0),
+            "polymarket": SimpleNamespace(balance=200.0),
+        }
+
+        response = await api.handle_pnl_summary(None)
+        payload = json.loads(response.text)
+
+        assert payload["adjusted_starting_balances"]["kalshi"] == 150.0
+        assert payload["original_starting_balances"]["kalshi"] == 100.0
+        assert payload["total_deposits"]["kalshi"] == 50.0
+        assert payload["balance_change_by_platform"]["kalshi"] == 10.0
+        assert payload["net_cash_change"] == 10.0
+        assert payload["net_balance_change"] == 10.0
+
+    asyncio.run(_run())
+
+
 def test_discovery_status_endpoint_defaults_to_idle():
     async def _run():
         api = await _make_rate_limit_api()
@@ -506,7 +542,7 @@ def test_ops_charts_and_markets_use_live_data_sources():
     assert "Scans (24h)\" value=\"18,420\"" not in html
     assert "Annualized" not in html
     assert "totalPnl/1000" not in html
-    assert "const startingCapital = Math.max(1, totalBal - totalPnl)" in html
+    assert "const startingCapital = window.capitalBasis ? window.capitalBasis(M)" in html
     assert "Array.isArray(readiness.checks)" in html
     assert "c && c.status === 'pass'" in html
     assert "7/7 readiness gates" not in html
@@ -525,8 +561,8 @@ def test_ops_scanner_balance_and_trades_widgets_use_live_telemetry():
     assert "Audited edge samples" in html
     assert "Telemetry edge samples" in html
     assert "function BalanceLegendItem" in html
-    assert "Rows show live balance details, source share, and recorded trading P&L" in html
-    assert "Rows show live balances and source P&L" in html
+    assert "Rows show live balance details, source share, and deposit-neutral trading P&L" in html
+    assert "Rows show live balances and deposit-neutral source P&L" in html
     assert "Tap a row" not in html
     assert "Edge samples" in html
     assert "Scanner telemetry" in html

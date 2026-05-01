@@ -65,6 +65,21 @@ function evalMobileHelpers(source, context) {
   return context.__helpers;
 }
 
+function evalOpsDataHelpers() {
+  const snippet = sliceBetween(opsHtml, "function asNumber", "  // Scanner history ring buffer");
+  const context = {
+    window: {},
+    console,
+    Date,
+    Math,
+  };
+  vm.runInNewContext(
+    `${snippet}\nglobalThis.__helpers = { ensureEquityFallback, asNumber, currentTradingPnl };`,
+    context,
+  );
+  return context.__helpers;
+}
+
 describe("ops mobile row interactions", () => {
   it("opens the trade detail modal when a mobile trade card is tapped", () => {
     const body = functionBody("MobTrades");
@@ -80,6 +95,33 @@ describe("ops mobile row interactions", () => {
     expect(desktop).toContain("onRowClick={(r) => setModal({ kind:'agentValidate', payload: r })}");
     expect(mobile).toContain("const openCard = () => setModal({ kind:'agentValidate', payload: c })");
     expect(mobile).not.toContain(": setModal({ kind:'market'");
+  });
+});
+
+describe("ops P&L reconciliation helpers", () => {
+  it("builds the chart from deposit-neutral trading P&L, not raw total balance", () => {
+    const { ensureEquityFallback, currentTradingPnl } = evalOpsDataHelpers();
+    const M = {
+      balances: {
+        kalshi: { balance: 160, timestamp: 0 },
+        polymarket: { balance: 200, timestamp: 0 },
+      },
+      pnl: {
+        total_balance: 360,
+        net_balance_change: 10,
+        recorded_trading_pnl: { kalshi: 5, polymarket: 5 },
+      },
+      executions: [
+        { timestamp: 100, realized_pnl: 10, status_group: "completed" },
+      ],
+      equity: [],
+    };
+
+    expect(currentTradingPnl(M)).toBe(10);
+    ensureEquityFallback(M);
+
+    expect(M.equity.at(-1).v).toBe(10);
+    expect(M.equity.some((point) => point.v === 360)).toBe(false);
   });
 });
 

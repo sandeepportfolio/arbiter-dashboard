@@ -153,8 +153,14 @@ window.MOCK = (() => {
       total_deposits:    { kalshi: 0, polymarket: 0 },
       total_deposits_all_platforms: 0,
       recorded_trading_pnl: { kalshi: 0, polymarket: 0 },
+      balance_change_by_platform: { kalshi: 0, polymarket: 0 },
       total_balance: 0,
+      cash_balance: 0,
+      estimated_equity: 0,
+      capital_basis: 0,
+      net_cash_change: 0,
       net_balance_change: 0,
+      net_trading_pnl: 0,
       deployed_capital: 0,
       expected_settlement: 0,
       expected_profit_at_settlement: 0,
@@ -335,9 +341,15 @@ window.MOCK = (() => {
     if (pnl.current_balances)  M.pnl.current_balances  = Object.assign({}, M.pnl.current_balances,  pnl.current_balances);
     if (pnl.total_deposits)    M.pnl.total_deposits    = Object.assign({}, M.pnl.total_deposits,    pnl.total_deposits);
     if (pnl.recorded_trading_pnl) M.pnl.recorded_trading_pnl = Object.assign({}, M.pnl.recorded_trading_pnl, pnl.recorded_trading_pnl);
+    if (pnl.balance_change_by_platform) M.pnl.balance_change_by_platform = Object.assign({}, M.pnl.balance_change_by_platform, pnl.balance_change_by_platform);
     if (pnl.total_balance != null) M.pnl.total_balance = asNumber(pnl.total_balance, M.pnl.total_balance);
+    if (pnl.cash_balance != null) M.pnl.cash_balance = asNumber(pnl.cash_balance, M.pnl.cash_balance);
+    if (pnl.estimated_equity != null) M.pnl.estimated_equity = asNumber(pnl.estimated_equity, M.pnl.estimated_equity);
+    if (pnl.capital_basis != null) M.pnl.capital_basis = asNumber(pnl.capital_basis, M.pnl.capital_basis);
+    if (pnl.net_cash_change != null) M.pnl.net_cash_change = asNumber(pnl.net_cash_change, M.pnl.net_cash_change);
     if (pnl.total_deposits_all_platforms != null) M.pnl.total_deposits_all_platforms = asNumber(pnl.total_deposits_all_platforms, M.pnl.total_deposits_all_platforms);
     if (pnl.net_balance_change != null) M.pnl.net_balance_change = asNumber(pnl.net_balance_change, M.pnl.net_balance_change);
+    if (pnl.net_trading_pnl != null) M.pnl.net_trading_pnl = asNumber(pnl.net_trading_pnl, M.pnl.net_trading_pnl);
     if (pnl.deployed_capital != null) M.pnl.deployed_capital = asNumber(pnl.deployed_capital, M.pnl.deployed_capital);
     if (pnl.expected_settlement != null) M.pnl.expected_settlement = asNumber(pnl.expected_settlement, M.pnl.expected_settlement);
     if (pnl.expected_profit_at_settlement != null) M.pnl.expected_profit_at_settlement = asNumber(pnl.expected_profit_at_settlement, M.pnl.expected_profit_at_settlement);
@@ -508,6 +520,7 @@ window.MOCK = (() => {
       if (health.readiness.ready_for_live_trading != null) M.health.readiness.ready = !!health.readiness.ready_for_live_trading;
       else if (health.readiness.ready != null) M.health.readiness.ready = !!health.readiness.ready;
     }
+    if (health.series) mergeSeries(M, health.series);
   }
 
   function mergeMappings(M, rows) {
@@ -574,16 +587,75 @@ window.MOCK = (() => {
     };
   }
 
-  // Equity curve builder: backend has no historical equity store yet, so
-  // we synthesize one. On first load we walk back through executions and
-  // subtract realized_pnl in reverse to estimate the balance at each fill,
-  // anchoring the rightmost point at the current total balance. On every
-  // subsequent refresh we just append a fresh point (ring-buffered so the
-  // chart doesn't grow unbounded over a long session).
+  function currentTradingPnl(M) {
+    const pnl = M && M.pnl ? M.pnl : {};
+    const direct = Number(pnl.net_trading_pnl);
+    if (Number.isFinite(direct)) return +direct.toFixed(2);
+    const net = Number(pnl.net_balance_change);
+    if (Number.isFinite(net)) return +net.toFixed(2);
+    const cash = Number(pnl.net_cash_change);
+    if (Number.isFinite(cash)) return +cash.toFixed(2);
+    const byPlatform = pnl.balance_change_by_platform || {};
+    const platformTotal = asNumber(byPlatform.kalshi, 0) + asNumber(byPlatform.polymarket, 0);
+    if (platformTotal) return +platformTotal.toFixed(2);
+    const recorded = pnl.recorded_trading_pnl || {};
+    return +(asNumber(recorded.kalshi, 0) + asNumber(recorded.polymarket, 0)).toFixed(2);
+  }
+
+  function capitalBasis(M) {
+    const pnl = M && M.pnl ? M.pnl : {};
+    const direct = Number(pnl.capital_basis);
+    if (Number.isFinite(direct) && Math.abs(direct) > 0.005) return Math.abs(direct);
+    const starts = pnl.starting_balances || {};
+    const startTotal = asNumber(starts.kalshi, 0) + asNumber(starts.polymarket, 0);
+    if (Math.abs(startTotal) > 0.005) return Math.abs(startTotal);
+    const total = asNumber(pnl.total_balance, 0);
+    const tradePnl = currentTradingPnl(M);
+    return Math.max(1, Math.abs(total - tradePnl));
+  }
+
+  function seriesTimestamp(row, index) {
+    const raw = row && (row.t ?? row.timestamp ?? row.time);
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : index;
+  }
+
+  function normalizeSeriesPoint(row, index, valueKeys) {
+    const keys = valueKeys || ['v', 'equity', 'pnl', 'value'];
+    let value = NaN;
+    for (const key of keys) {
+      if (row && row[key] != null) {
+        value = asNumber(row[key], NaN);
+        if (Number.isFinite(value)) break;
+      }
+    }
+    if (!Number.isFinite(value)) value = 0;
+    return { t: seriesTimestamp(row || {}, index), v: +value.toFixed(4) };
+  }
+
+  function mergeSeries(M, series) {
+    if (!series || typeof series !== 'object') return;
+    if (Array.isArray(series.equity) && series.equity.length) {
+      M.equity = series.equity
+        .map((row, i) => normalizeSeriesPoint(row, i, ['v', 'equity', 'pnl', 'value']))
+        .filter((p) => Number.isFinite(p.t) && Number.isFinite(p.v))
+        .sort((a, b) => a.t - b.t);
+    }
+    if (Array.isArray(series.scanner) && series.scanner.length) {
+      M.health.scanner.history = series.scanner.map((row, i) => {
+        const ts = seriesTimestamp(row || {}, i);
+        return Object.assign({}, row, { t: ts, timestamp: ts });
+      });
+    }
+  }
+
+  // Trading P&L curve builder. The backend exposes cumulative realized P&L
+  // where possible; otherwise we synthesize it from the execution ledger.
+  // The rightmost point is always the deposit-neutral reconciled trading P&L,
+  // never raw cash balance, so deposits/withdrawals cannot pollute charts.
   const EQUITY_MAX_POINTS = 240;
   function ensureEquityFallback(M) {
-    const total = asNumber(M.pnl.total_balance, 0)
-      || asNumber(M.balances.kalshi.balance, 0) + asNumber(M.balances.polymarket.balance, 0);
+    const total = currentTradingPnl(M);
     const now = Math.floor(Date.now() / 1000);
 
     // First-time seeding: build from execution history (newest → oldest), then
@@ -591,18 +663,16 @@ window.MOCK = (() => {
     if (!Array.isArray(M.equity) || M.equity.length === 0) {
       const execs = Array.isArray(M.executions) ? [...M.executions] : [];
       execs.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
-      // Walk forward from a synthesized starting balance, accumulating P&L.
-      const totalPnlSeen = execs.reduce((s, e) => s + asNumber(e.realized_pnl, 0), 0);
-      let running = total - totalPnlSeen;
+      let running = 0;
       const seeded = [];
-      // Add a starting anchor at least 1h before the first exec (or now − 1h).
+      // Add a starting anchor at least 1m before the first exec (or now - 1h).
       const firstTs = execs.length ? (execs[0].timestamp || now) - 60 : now - 3600;
       seeded.push({ t: firstTs, v: +running.toFixed(2) });
       for (const e of execs) {
         running += asNumber(e.realized_pnl, 0);
         seeded.push({ t: asNumber(e.timestamp, now), v: +running.toFixed(2) });
       }
-      // Always cap with current balance as the rightmost point.
+      // Always cap with reconciled current trading P&L as the rightmost point.
       seeded.push({ t: now, v: +total.toFixed(2) });
       M.equity = seeded;
       return;
@@ -765,14 +835,26 @@ window.MOCK = (() => {
     mergeErrors(M, errors);
     mergePortfolio(M, portfolio);
     mergeDiscovery(M, discovery);
-    // Synthesize the time-series data the dashboard charts need but the
-    // backend doesn't yet expose: equity curve, scanner history, edge
-    // bucket histogram. Each runs every refresh to keep charts moving.
+    // Keep live chart buffers moving between backend series snapshots.
     ensureEquityFallback(M);
     appendScannerHistory(M);
     computeEdgeBuckets(M);
     M.lastFetch = Date.now();
     M.loaded = true;
+  }
+
+  async function refreshPublicStatus() {
+    const M = window.MOCK;
+    if (!M) return false;
+    const [health, balances] = await Promise.all([
+      safeJson('/api/health'),
+      safeJson('/api/balances'),
+    ]);
+    mergeHealth(M, health);
+    mergeBalances(M, balances);
+    appendScannerHistory(M);
+    M.lastFetch = Date.now();
+    return !!health;
   }
 
   async function readError(r) {
@@ -1020,6 +1102,7 @@ window.MOCK = (() => {
   }
 
   window.__arbiterRefresh = refresh;
+  window.__arbiterRefreshPublicStatus = refreshPublicStatus;
   window.__arbiterKillSwitch = killSwitch;
   window.__arbiterRetry = retryFailedTrade;
   window.__arbiterDeposit = recordDeposit;
@@ -1036,6 +1119,8 @@ window.MOCK = (() => {
   window.__arbiterAuthMe = authMe;
   window.__arbiterRememberAuthToken = rememberAuthToken;
   window.__arbiterClearAuthToken = clearAuthToken;
+  window.currentTradingPnl = currentTradingPnl;
+  window.capitalBasis = capitalBasis;
 
   // Translate UI setting keys (used by the Settings page sliders) into the
   // backend's nested settings payload. Returns null when the key isn't
@@ -2046,16 +2131,16 @@ function PageOverview() {
   const equity = Array.isArray(M.equity) && M.equity.length ? M.equity : [{ t: 0, v: 0 }];
   const equityRange = window.filterTimeSeries ? window.filterTimeSeries(equity, range) : equity;
   const totalBal = M.balances.kalshi.balance + M.balances.polymarket.balance;
-  const totalPnl = M.pnl.recorded_trading_pnl.kalshi + M.pnl.recorded_trading_pnl.polymarket;
+  const totalPnl = window.currentTradingPnl ? window.currentTradingPnl(M) : (M.pnl.recorded_trading_pnl.kalshi + M.pnl.recorded_trading_pnl.polymarket);
   const tradable = opps.filter(o => o.status === 'tradable');
   const completedStatuses = ['filled','closed','settled','simulated'];
   const last24Execs = window.filterRowsByRange ? window.filterRowsByRange(execs, '24h', 'timestamp') : execs;
   const last24Filled = last24Execs.filter(e => e.status_group === 'completed' || completedStatuses.includes(String(e.status || '').toLowerCase()));
   const last24Pnl = last24Filled.reduce((s, e) => s + (e.realized_pnl || 0), 0);
   const bestEdge = window.bestTelemetryEdge ? window.bestTelemetryEdge(M) : (opps.length ? Math.max(...opps.map(o => Number(o.net_edge_cents) || 0)) : 0);
-  const lastEquity = equityRange[equityRange.length - 1]?.v ?? totalBal;
+  const lastEquity = equityRange[equityRange.length - 1]?.v ?? totalPnl;
   const rangeDelta = window.seriesDelta ? window.seriesDelta(equityRange) : 0;
-  const rangeBase = Math.abs(Number(equityRange[0]?.v) || totalBal || 1);
+  const rangeBase = window.capitalBasis ? window.capitalBasis(M) : Math.abs(Number(equityRange[0]?.v) || totalBal || 1);
   const confirmedMappings = window.marketRowsFromMappings ? window.marketRowsFromMappings(M, 'confirmed') : (M.mappings || []).filter(r => r.status === 'confirmed');
   const latestBalanceTs = Math.max(Number(M.balances.kalshi.timestamp) || 0, Number(M.balances.polymarket.timestamp) || 0);
   const scannerHist = Array.isArray(M.health.scanner.history) ? M.health.scanner.history : [];
@@ -2077,21 +2162,21 @@ function PageOverview() {
       {/* KPI strip — sparklines fall back to a flat line at the current value
           when their underlying series has 0–1 points (handled by Sparkline). */}
       <div style={{ display:'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, marginBottom: 18 }}>
-        <KpiCard label="Total balance" value={window.fmt$(totalBal)} sub={latestBalanceTs ? `Balances updated ${window.ago(latestBalanceTs)}` : 'Waiting for live balances'} sparkData={equity.slice(-48)} sparkColor={t.accent} platformBalances={[
+        <KpiCard label="Total balance" value={window.fmt$(totalBal)} sub={latestBalanceTs ? `Balances updated ${window.ago(latestBalanceTs)}` : 'Waiting for live balances'} sparkData={[{ v: totalBal }]} sparkColor={t.accent} platformBalances={[
           { name: 'Kalshi', value: window.fmt$(M.balances.kalshi.balance), color: t.green, title: `Kalshi balance ${window.fmt$(M.balances.kalshi.balance)}` },
           { name: 'Polymarket', value: window.fmt$(M.balances.polymarket.balance), color: t.purple, title: `Polymarket balance ${window.fmt$(M.balances.polymarket.balance)}` },
         ]} />
-        <KpiCard label="Trading P&L" value={window.fmt$Sign(totalPnl)} sub="Net of fees · since inception" tone={totalPnl >= 0 ? 'green' : 'red'} sparkData={equity.slice(-48).map(d => ({ ...d, v: d.v - equity[0].v }))} sparkColor={totalPnl >= 0 ? t.green : t.red} />
+        <KpiCard label="Trading P&L" value={window.fmt$Sign(totalPnl)} sub="Deposit-neutral · since inception" tone={totalPnl >= 0 ? 'green' : 'red'} sparkData={equity.slice(-48)} sparkColor={totalPnl >= 0 ? t.green : t.red} />
         <KpiCard label="Live opportunities" value={scanTradable} sub={`${scanActive} active · ${scanPublished} published · best ${bestEdge ? window.fmtC(bestEdge) : '—'}`} tone="accent" sparkData={(M.health.scanner.history || []).slice(-30).map(h => ({ v: h.tradable || 0 }))} sparkColor={t.accent} fallbackValue={scanTradable}/>
         <KpiCard label="24h completed" value={last24Filled.length} sub={`${window.fmt$Sign(last24Pnl)} realized`} tone={last24Pnl >= 0 ? 'green' : 'red'} sparkData={equity.slice(-48)} sparkColor={t.green} />
       </div>
 
       {/* Equity + opportunities */}
       <div style={{ display: 'grid', gridTemplateColumns: '1.65fr 1fr', gap: 14, marginBottom: 18 }}>
-        <window.Card title="Equity curve" action={<TimeRange value={range} onChange={setRange}/>} padding={0}>
+        <window.Card title="Trading P&L curve" action={<TimeRange value={range} onChange={setRange}/>} padding={0}>
           <div style={{ padding: '18px 22px 8px', display:'flex', alignItems:'baseline', gap: 16 }}>
             <div>
-              <div style={{ fontSize: 28, fontWeight: 600, color: t.text, letterSpacing:'-0.02em', fontFamily: window.FONTS.mono }}>{window.fmt$(lastEquity)}</div>
+              <div style={{ fontSize: 28, fontWeight: 600, color: lastEquity >= 0 ? t.green : t.red, letterSpacing:'-0.02em', fontFamily: window.FONTS.mono }}>{window.fmt$Sign(lastEquity)}</div>
               <div style={{ fontSize: 11.5, color: rangeDelta >= 0 ? t.green : t.red, marginTop: 2 }}>{window.fmt$Sign(rangeDelta)} ({window.fmtPct(rangeDelta/rangeBase)}) · {range}</div>
             </div>
             <div style={{ marginLeft: 'auto', fontSize: 11, color: t.textMuted }}>{latestBalanceTs ? `Balances updated ${window.ago(latestBalanceTs)}` : 'Waiting for live balances'}</div>
@@ -2138,10 +2223,10 @@ function PageOverview() {
               ]} label={window.fmt$(totalBal, 0)} sublabel="TOTAL" labelColor={t.text} dimColor={t.textMuted}/>
             </div>
             <div style={{ flex: 1 }}>
-              <BalanceLegendItem dot={t.green} label="Kalshi" value={window.fmt$(M.balances.kalshi.balance)} share={`${kShare}%`} pnl={M.pnl.recorded_trading_pnl.kalshi} updated={M.balances.kalshi.timestamp} description="CFTC-regulated cash available for Kalshi ticker orders."/>
+              <BalanceLegendItem dot={t.green} label="Kalshi" value={window.fmt$(M.balances.kalshi.balance)} share={`${kShare}%`} pnl={(M.pnl.balance_change_by_platform && M.pnl.balance_change_by_platform.kalshi) ?? M.pnl.recorded_trading_pnl.kalshi} updated={M.balances.kalshi.timestamp} description="CFTC-regulated cash available for Kalshi ticker orders."/>
               <div style={{ height: 12 }}/>
-              <BalanceLegendItem dot={t.purple} label="Polymarket" value={window.fmt$(M.balances.polymarket.balance)} share={`${pShare}%`} pnl={M.pnl.recorded_trading_pnl.polymarket} updated={M.balances.polymarket.timestamp} description="Crypto wallet collateral available for Polymarket US slug orders."/>
-              <div style={{ fontSize: 10.5, color: t.textMuted, marginTop: 12, lineHeight: 1.45 }}>Rows show live balance details, source share, and recorded trading P&L.</div>
+              <BalanceLegendItem dot={t.purple} label="Polymarket" value={window.fmt$(M.balances.polymarket.balance)} share={`${pShare}%`} pnl={(M.pnl.balance_change_by_platform && M.pnl.balance_change_by_platform.polymarket) ?? M.pnl.recorded_trading_pnl.polymarket} updated={M.balances.polymarket.timestamp} description="Crypto wallet collateral available for Polymarket US slug orders."/>
+              <div style={{ fontSize: 10.5, color: t.textMuted, marginTop: 12, lineHeight: 1.45 }}>Rows show live balance details, source share, and deposit-neutral trading P&L.</div>
             </div>
           </div>
         </window.Card>
@@ -2665,11 +2750,11 @@ function PagePnL() {
   const M = window.MOCK;
   const [range, setRange] = React.useState('All');
   const totalDeposits = M.pnl.total_deposits_all_platforms ?? (M.pnl.total_deposits.kalshi + M.pnl.total_deposits.polymarket);
-  const tradingPnl = M.pnl.recorded_trading_pnl.kalshi + M.pnl.recorded_trading_pnl.polymarket;
+  const tradingPnl = window.currentTradingPnl ? window.currentTradingPnl(M) : (M.pnl.recorded_trading_pnl.kalshi + M.pnl.recorded_trading_pnl.polymarket);
   const equity = Array.isArray(M.equity) ? M.equity : [];
   const equityRange = window.filterTimeSeries ? window.filterTimeSeries(equity, range) : equity;
   const rangeDelta = window.seriesDelta ? window.seriesDelta(equityRange) : 0;
-  const startingCapital = Math.max(1, Math.abs((M.pnl.starting_balances.kalshi || 0) + (M.pnl.starting_balances.polymarket || 0)));
+  const startingCapital = window.capitalBasis ? window.capitalBasis(M) : Math.max(1, Math.abs((M.pnl.starting_balances.kalshi || 0) + (M.pnl.starting_balances.polymarket || 0)));
   const lifetimeReturn = tradingPnl / startingCapital;
 
   return (
@@ -2694,7 +2779,7 @@ function PagePnL() {
             <div style={{ fontSize: 24, fontWeight: 600, color: t.text, fontFamily: window.FONTS.mono }}>{window.fmt$(totalDeposits)}</div>
           </div>
           <div>
-            <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom: 6 }}>Selected range</div>
+            <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom: 6 }}>Selected P&L range</div>
             <div style={{ fontSize: 24, fontWeight: 600, color: rangeDelta >= 0 ? t.green : t.red, fontFamily: window.FONTS.mono }}>{window.fmt$Sign(rangeDelta)}</div>
           </div>
         </div>
@@ -2714,8 +2799,10 @@ function PagePnL() {
           <ReconRow label="Audit score" value={(M.health.audit.audit_score * 100).toFixed(2) + '%'} ok/>
           <ReconRow label="Profitability verdict" value={M.health.profitability.verdict} pillTone="amber"/>
           <ReconRow label="Cumulative pnl (audit)" value={window.fmt$Sign(M.health.profitability.cumulative_pnl)}/>
+          <ReconRow label="Cash change excl. deposits" value={window.fmt$Sign(M.pnl.net_cash_change)}/>
+          <ReconRow label="Expected open settlement" value={window.fmt$(M.pnl.expected_settlement)}/>
           <div style={{ marginTop: 16, padding: 14, background: t.bgSubtle, borderRadius: 8, fontSize: 11.5, color: t.textDim, lineHeight: 1.55 }}>
-            Trading P&L is computed as <span style={{ fontFamily: window.FONTS.mono, color: t.text }}>(current_balance − starting_balance − deposits)</span>, so deposit/withdrawal events do not pollute performance metrics.
+            Trading P&L is computed from <span style={{ fontFamily: window.FONTS.mono, color: t.text }}>estimated_equity - deposit_adjusted_starting_balance</span>. Deposit and withdrawal events shift the baseline once, then stay visible only as capital movements.
           </div>
           {M.health.reconciliation.flag_count > 0 && (
             <window.Btn variant="secondary" size="sm" hint="Reset starting balances to current actuals — clears all reconciliation drift flags" style={{ marginTop: 12, width: '100%' }} onClick={async () => {
@@ -2739,7 +2826,8 @@ function PlatformPnL({ platform, color, last }) {
   const start = M.pnl.starting_balances[platform];
   const cur = M.pnl.current_balances[platform];
   const dep = M.pnl.total_deposits[platform];
-  const pnl = M.pnl.recorded_trading_pnl[platform];
+  const balancePnl = Number(M.pnl.balance_change_by_platform && M.pnl.balance_change_by_platform[platform]);
+  const pnl = Number.isFinite(balancePnl) ? balancePnl : Number(M.pnl.recorded_trading_pnl[platform] || 0);
   return (
     <div style={{ padding: '18px 22px', borderBottom: last ? 'none' : `1px solid ${t.border}` }}>
       <div style={{ display:'flex', alignItems:'center', gap: 8, marginBottom: 12 }}>
@@ -2751,7 +2839,7 @@ function PlatformPnL({ platform, color, last }) {
         <PnlMini label="Start" value={window.fmt$(start)}/>
         <PnlMini label="Deposits" value={window.fmt$(dep)}/>
         <PnlMini label="Current" value={window.fmt$(cur)}/>
-        <PnlMini label="Δ vs start" value={window.fmt$Sign(cur - start - dep)} tone={pnl >= 0 ? 'green' : 'red'}/>
+        <PnlMini label="Δ vs adjusted start" value={window.fmt$Sign(cur - start)} tone={pnl >= 0 ? 'green' : 'red'}/>
       </div>
     </div>
   );
@@ -3204,7 +3292,7 @@ function PageDeposits() {
           { label: 'Date', w: '130px', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12, color: t.textDim }}>{window.tsDate(r.timestamp)} {window.tsTime(r.timestamp)}</span> },
           { label: 'Type', w: '110px', render: r => <window.Pill tone="blue">{r.type}</window.Pill> },
           { label: 'Platform', w: '160px', render: r => <window.PlatformChip name={r.platform}/> },
-          { label: 'Amount', align:'right', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 13, color: t.green, fontWeight: 600 }}>+{window.fmt$(r.amount)}</span> },
+          { label: 'Amount', align:'right', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 13, color: Number(r.amount || 0) >= 0 ? t.green : t.red, fontWeight: 600 }}>{window.fmt$Sign(Number(r.amount || 0))}</span> },
           { label: 'Status', w: '100px', render: r => <window.StatusBadge status="settled"/> },
         ]} rows={(M.deposits && M.deposits.deposits) || []} emptyTitle="No deposits yet" emptyHint="Deposit history will appear here once funds are added to either platform. Use the buttons above to deposit." emptyIcon="◐"/>
       </window.Card>
@@ -3218,7 +3306,9 @@ function PlatformBalCard({ platform, color }) {
   const bal = M.balances[platform].balance;
   const dep = M.pnl.total_deposits[platform];
   const start = M.pnl.starting_balances[platform];
-  const pnl = bal - start - dep;
+  const balancePnl = Number(M.pnl.balance_change_by_platform && M.pnl.balance_change_by_platform[platform]);
+  const pnl = Number.isFinite(balancePnl) ? balancePnl : bal - start;
+  const basis = Math.max(1, Math.abs(start));
   return (
     <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 24 }}>
       <div style={{ display:'flex', alignItems:'center', gap: 10, marginBottom: 18 }}>
@@ -3227,7 +3317,7 @@ function PlatformBalCard({ platform, color }) {
         <window.StatusBadge status="connected"/>
       </div>
       <div style={{ fontSize: 36, fontWeight: 600, color: t.text, fontFamily: window.FONTS.mono, letterSpacing:'-0.02em', marginBottom: 4 }}>{window.fmt$(bal)}</div>
-      <div style={{ fontSize: 12, color: pnl >= 0 ? t.green : t.red, marginBottom: 16 }}>{window.fmt$Sign(pnl)} ({window.fmtPct(pnl/start)}) since inception</div>
+      <div style={{ fontSize: 12, color: pnl >= 0 ? t.green : t.red, marginBottom: 16 }}>{window.fmt$Sign(pnl)} ({window.fmtPct(pnl/basis)}) since inception · {window.fmt$(dep)} net deposits</div>
       <div style={{ display:'flex', gap: 8 }}>
         <window.Btn variant="secondary" size="sm" hint={`Move funds INTO ${platform === 'kalshi' ? 'Kalshi' : 'Polymarket'} — increases buying power for this venue`} onClick={() => setModal({ kind: 'deposit', payload: platform })}>Deposit</window.Btn>
         <window.Btn variant="ghost" size="sm" hint={`Pull funds OUT of ${platform === 'kalshi' ? 'Kalshi' : 'Polymarket'} — reduces buying power; settles in 1–2 business days`} onClick={() => setModal({ kind: 'withdraw', payload: platform })}>Withdraw</window.Btn>
@@ -5151,7 +5241,7 @@ function MobileDashboard() {
   const [meSub, setMeSub] = mobUseState(null); // 'funds' | 'pnl' | 'health' | 'settings' | null
   const M = window.MOCK;
   const totalBal = M.balances.kalshi.balance + M.balances.polymarket.balance;
-  const totalPnl = M.pnl.recorded_trading_pnl.kalshi + M.pnl.recorded_trading_pnl.polymarket;
+  const totalPnl = window.currentTradingPnl ? window.currentTradingPnl(M) : (M.pnl.recorded_trading_pnl.kalshi + M.pnl.recorded_trading_pnl.polymarket);
 
   // When switching primary tabs, clear sub-page
   const switchTab = (k) => {
@@ -5214,7 +5304,7 @@ function MobHome({ totalBal, totalPnl }) {
   const M = window.MOCK;
   const [range, setRange] = mobUseState('24h');
   const equity = window.filterTimeSeries ? window.filterTimeSeries(M.equity, range) : M.equity;
-  const startingCapital = Math.max(1, totalBal - totalPnl);
+  const startingCapital = window.capitalBasis ? window.capitalBasis(M) : Math.max(1, totalBal - totalPnl);
   const lifetimeReturn = totalPnl / startingCapital;
   const kShareMob = totalBal ? (M.balances.kalshi.balance / totalBal * 100).toFixed(1) : '0.0';
   const pShareMob = totalBal ? (M.balances.polymarket.balance / totalBal * 100).toFixed(1) : '0.0';
@@ -5234,7 +5324,7 @@ function MobHome({ totalBal, totalPnl }) {
 
       <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: '14px 14px 4px', marginBottom: 12 }}>
         <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom: 8 }}>
-          <span style={{ fontSize: 12, fontWeight: 600 }}>Equity</span>
+          <span style={{ fontSize: 12, fontWeight: 600 }}>Trading P&L</span>
           <div style={{ display:'flex', gap: 4 }}>
             {['1h','24h','7d','All'].map(x => (
               <button key={x} onClick={() => setRange(x)} style={{ padding:'3px 6px', border:'none', borderRadius: 5, background: range === x ? t.bgSubtle : 'transparent', color: range === x ? t.text : t.textMuted, fontSize: 10.5, fontFamily: window.FONTS.mono, cursor:'pointer' }}>{x}</button>
@@ -5259,11 +5349,11 @@ function MobHome({ totalBal, totalPnl }) {
             ]} label={window.fmt$(totalBal, 0)} sublabel="TOTAL" labelColor={t.text} dimColor={t.textMuted}/>
           </div>
           <div style={{ width: '100%' }}>
-            <BalanceLegendItem dot={t.green} label="Kalshi" value={window.fmt$(M.balances.kalshi.balance)} share={`${kShareMob}%`} pnl={M.pnl.recorded_trading_pnl.kalshi} updated={M.balances.kalshi.timestamp} description="Ticker cash."/>
-            <BalanceLegendItem dot={t.purple} label="Polymarket" value={window.fmt$(M.balances.polymarket.balance)} share={`${pShareMob}%`} pnl={M.pnl.recorded_trading_pnl.polymarket} updated={M.balances.polymarket.timestamp} description="Wallet collateral."/>
+            <BalanceLegendItem dot={t.green} label="Kalshi" value={window.fmt$(M.balances.kalshi.balance)} share={`${kShareMob}%`} pnl={(M.pnl.balance_change_by_platform && M.pnl.balance_change_by_platform.kalshi) ?? M.pnl.recorded_trading_pnl.kalshi} updated={M.balances.kalshi.timestamp} description="Ticker cash."/>
+            <BalanceLegendItem dot={t.purple} label="Polymarket" value={window.fmt$(M.balances.polymarket.balance)} share={`${pShareMob}%`} pnl={(M.pnl.balance_change_by_platform && M.pnl.balance_change_by_platform.polymarket) ?? M.pnl.recorded_trading_pnl.polymarket} updated={M.balances.polymarket.timestamp} description="Wallet collateral."/>
           </div>
         </div>
-        <div style={{ fontSize: 10.5, color: t.textMuted, marginTop: 8 }}>Rows show live balances and source P&L.</div>
+        <div style={{ fontSize: 10.5, color: t.textMuted, marginTop: 8 }}>Rows show live balances and deposit-neutral source P&L.</div>
       </div>
 
       <div style={{ background: scanner ? t.greenSoft : t.bgSubtle, border: `1px solid ${scanner ? t.green + '30' : t.border}`, borderRadius: 12, padding: 14, marginBottom: 12 }}>
@@ -5437,9 +5527,11 @@ function MobFunds() {
   const M = window.MOCK;
   const total = M.balances.kalshi.balance + M.balances.polymarket.balance;
   const kBal = M.balances.kalshi.balance, pBal = M.balances.polymarket.balance;
+  const kPnl = Number(M.pnl.balance_change_by_platform && M.pnl.balance_change_by_platform.kalshi);
+  const pPnl = Number(M.pnl.balance_change_by_platform && M.pnl.balance_change_by_platform.polymarket);
   const platforms = [
-    { name: 'Kalshi', key: 'kalshi', dot: t.green, bal: kBal, pnl: M.pnl.recorded_trading_pnl.kalshi, ts: M.balances.kalshi.timestamp },
-    { name: 'Polymarket', key: 'polymarket', dot: t.purple, bal: pBal, pnl: M.pnl.recorded_trading_pnl.polymarket, ts: M.balances.polymarket.timestamp },
+    { name: 'Kalshi', key: 'kalshi', dot: t.green, bal: kBal, pnl: Number.isFinite(kPnl) ? kPnl : M.pnl.recorded_trading_pnl.kalshi, ts: M.balances.kalshi.timestamp },
+    { name: 'Polymarket', key: 'polymarket', dot: t.purple, bal: pBal, pnl: Number.isFinite(pPnl) ? pPnl : M.pnl.recorded_trading_pnl.polymarket, ts: M.balances.polymarket.timestamp },
   ];
   return (
     <div style={{ paddingTop: 8 }}>
@@ -5491,20 +5583,23 @@ function MobPnL() {
   const { t } = window.useApp();
   const M = window.MOCK;
   const [range, setRange] = mobUseState('30d');
-  const tradePnl = M.pnl.recorded_trading_pnl.kalshi + M.pnl.recorded_trading_pnl.polymarket;
+  const tradePnl = window.currentTradingPnl ? window.currentTradingPnl(M) : (M.pnl.recorded_trading_pnl.kalshi + M.pnl.recorded_trading_pnl.polymarket);
   const dep = M.pnl.total_deposits_all_platforms;
   const equity = window.filterTimeSeries ? window.filterTimeSeries(M.equity, range) : M.equity;
   const deployed = M.pnl.deployed_capital || 0;
   const execs = Array.isArray(M.executions) ? M.executions : [];
   const statusRows = (() => {
     const total = Math.max(1, execs.length);
-    const profitable = execs.filter(e => e.status === 'filled' && Number(e.realized_pnl || 0) > 0).length;
-    const breakeven = execs.filter(e => e.status === 'filled' && Number(e.realized_pnl || 0) === 0).length;
+    const isCompleted = (e) => e.status_group === 'completed' || ['filled','closed','settled','simulated'].includes(String(e.status || '').toLowerCase());
+    const profitable = execs.filter(e => isCompleted(e) && Number(e.realized_pnl || 0) > 0).length;
+    const breakeven = execs.filter(e => isCompleted(e) && Number(e.realized_pnl || 0) === 0).length;
+    const losing = execs.filter(e => isCompleted(e) && Number(e.realized_pnl || 0) < 0).length;
     const recovering = execs.filter(e => e.status === 'recovering' || e.status === 'submitted').length;
     const failed = execs.filter(e => e.status === 'failed' || e.status === 'aborted').length;
     return [
-      ['Filled & profitable', profitable, profitable / total * 100, t.green],
-      ['Filled & break-even', breakeven, breakeven / total * 100, t.textDim],
+      ['Completed profitable', profitable, profitable / total * 100, t.green],
+      ['Completed break-even', breakeven, breakeven / total * 100, t.textDim],
+      ['Completed losses', losing, losing / total * 100, t.red],
       ['Recovering / submitted', recovering, recovering / total * 100, t.amber],
       ['Failed / aborted', failed, failed / total * 100, t.red],
     ];
@@ -5514,12 +5609,12 @@ function MobPnL() {
       <div style={{ padding: '6px 4px 18px' }}>
         <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase' }}>Trading P&L</div>
         <div style={{ fontSize: 32, fontWeight: 600, fontFamily: window.FONTS.mono, letterSpacing:'-0.02em', marginTop: 4, color: tradePnl >= 0 ? t.green : t.red }}>{window.fmt$Sign(tradePnl)}</div>
-        <div style={{ fontSize: 11.5, color: t.textDim, marginTop: 4 }}>Net of fees · since inception</div>
+        <div style={{ fontSize: 11.5, color: t.textDim, marginTop: 4 }}>Deposit-neutral · since inception</div>
       </div>
 
       <div style={{ background: t.bgCard, border:`1px solid ${t.border}`, borderRadius: 12, padding: 14, marginBottom: 10 }}>
         <div style={{ display:'flex', justifyContent:'space-between', marginBottom: 10 }}>
-          <span style={{ fontSize: 12, fontWeight: 600 }}>Equity curve</span>
+          <span style={{ fontSize: 12, fontWeight: 600 }}>Trading P&L curve</span>
           <div style={{ display:'flex', gap: 4 }}>
             {['24h','7d','30d','All'].map(x => (
               <button key={x} onClick={() => setRange(x)} style={{ padding:'3px 6px', border:'none', borderRadius: 5, background: range === x ? t.bgSubtle : 'transparent', color: range === x ? t.text : t.textMuted, fontSize: 10.5, fontFamily: window.FONTS.mono, cursor:'pointer' }}>{x}</button>
@@ -5532,8 +5627,8 @@ function MobPnL() {
       </div>
 
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 8, marginBottom: 12 }}>
-        <PnLStat label="Kalshi P&L" value={M.pnl.recorded_trading_pnl.kalshi} t={t}/>
-        <PnLStat label="Polymarket P&L" value={M.pnl.recorded_trading_pnl.polymarket} t={t}/>
+        <PnLStat label="Kalshi P&L" value={(M.pnl.balance_change_by_platform && M.pnl.balance_change_by_platform.kalshi) ?? M.pnl.recorded_trading_pnl.kalshi} t={t}/>
+        <PnLStat label="Polymarket P&L" value={(M.pnl.balance_change_by_platform && M.pnl.balance_change_by_platform.polymarket) ?? M.pnl.recorded_trading_pnl.polymarket} t={t}/>
         <PnLStat label="Deposits" value={dep} t={t} neutral/>
         <PnLStat label="Deployed" value={deployed} t={t} neutral/>
       </div>
@@ -5880,7 +5975,7 @@ window.MobileDashboard = MobileDashboard;
 </script>
 <script type="text/babel" data-presets="env,react" data-filename="login.jsx">
 // Login / Connect screen
-const { useState: lUseState } = React;
+const { useState: lUseState, useEffect: lUseEffect } = React;
 function LoginScreen({ onSignIn }) {
   const { t, name, toggle } = window.useApp();
   const M = window.MOCK;
@@ -5888,6 +5983,26 @@ function LoginScreen({ onSignIn }) {
   const [password, setPassword] = lUseState('');
   const [error, setError] = lUseState('');
   const [busy, setBusy] = lUseState(false);
+  const [, setStatusTick] = lUseState(0);
+
+  lUseEffect(() => {
+    let cancelled = false;
+    const poll = async () => {
+      if (!window.__arbiterRefreshPublicStatus) return;
+      try {
+        await window.__arbiterRefreshPublicStatus();
+        if (!cancelled) setStatusTick(x => x + 1);
+      } catch (err) {
+        console.warn('public status refresh failed', err);
+      }
+    };
+    poll();
+    const id = setInterval(poll, 15000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
 
   const submit = async () => {
     if (busy) return;
@@ -5965,13 +6080,13 @@ function LoginScreen({ onSignIn }) {
       {/* Right side - status (hidden on mobile) */}
       <div style={{ flex: 1, padding: window.innerWidth <= 1023 ? '24px' : '48px 56px', display: window.innerWidth <= 1023 ? 'none' : 'flex', flexDirection:'column', justifyContent:'center' }}>
         <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.08em', textTransform:'uppercase', marginBottom: 14 }}>System status — public</div>
-        <div style={{ fontSize: 22, fontWeight: 600, color: t.text, letterSpacing:'-0.018em', marginBottom: 32 }}>All systems nominal</div>
+        <div style={{ fontSize: 22, fontWeight: 600, color: t.text, letterSpacing:'-0.018em', marginBottom: 32 }}>{M.health.status === 'ok' ? 'Live status connected' : 'Waiting for live status'}</div>
 
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 12, marginBottom: 24 }}>
-          <StatusTile ok label="Kalshi gateway" detail="API healthy · 142ms"/>
-          <StatusTile ok label="Polymarket CLOB" detail="API healthy · 188ms"/>
-          <StatusTile ok label="Scanner cluster" detail="3/3 workers live"/>
-          <StatusTile ok label="Reconciliation" detail="0 outstanding flags"/>
+          <StatusTile ok={M.health.status === 'ok'} label="Kalshi gateway" detail={M.balances.kalshi.timestamp ? `balance updated ${window.ago(M.balances.kalshi.timestamp)}` : 'awaiting public status'}/>
+          <StatusTile ok={M.health.status === 'ok'} label="Polymarket CLOB" detail={M.balances.polymarket.timestamp ? `balance updated ${window.ago(M.balances.polymarket.timestamp)}` : 'awaiting public status'}/>
+          <StatusTile ok={!M.health.scanner.paused} label="Scanner cluster" detail={`${(M.health.scanner.scan_count || 0).toLocaleString()} scans · ${M.health.scanner.tradable_opportunities || 0} tradable`}/>
+          <StatusTile ok={(M.health.reconciliation.flag_count || 0) === 0} label="Reconciliation" detail={`${M.health.reconciliation.flag_count || 0} outstanding flags`}/>
         </div>
 
         <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 22, marginBottom: 16 }}>
@@ -5986,7 +6101,7 @@ function LoginScreen({ onSignIn }) {
           <div style={{ height: 100 }}>
             <window.AreaChart data={M.health.scanner.history.map((h, i) => ({ t: i, v: h.best_edge_cents }))} stroke={t.accent} grid={t.border} currency={false} showAxis={false}/>
           </div>
-          <div style={{ fontSize: 10, color: t.textMuted, marginTop: 6, textAlign:'center' }}>Best edge — last 5 minutes</div>
+          <div style={{ fontSize: 10, color: t.textMuted, marginTop: 6, textAlign:'center' }}>Best edge — live scanner history</div>
         </div>
 
         <div style={{ display:'flex', alignItems:'center', gap: 10, padding: 14, background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 10 }}>

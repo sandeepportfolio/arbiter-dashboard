@@ -565,6 +565,13 @@ class ArbiterAPI:
                 "profitability": self._profitability_snapshot(),
                 "readiness": readiness,
                 "reconciliation": self._reconciliation_snapshot(),
+                "series": {
+                    "scanner": getattr(self.scanner, "history", []),
+                    "equity": getattr(self.engine, "equity_curve", []),
+                    "profitability": (
+                        self.profitability.history if self.profitability else []
+                    ),
+                },
             }
         )
 
@@ -1530,18 +1537,28 @@ class ArbiterAPI:
         total_deposits = recon_stats.get("total_deposits", {})
         starting_balances = recon_stats.get("starting_balances", {})
 
-        # Calculate trading P&L = current_balance - starting_balance - deposits
-        trading_pnl = {}
+        # PnLReconciler shifts starting balances whenever it records a
+        # deposit/withdrawal, so starting_balances is already the
+        # capital-flow-adjusted basis. Do not subtract deposits again here.
+        adjusted_starting_balances = {
+            platform: starting_balances.get(platform, 0.0)
+            for platform in balances
+        }
+        original_starting_balances = {
+            platform: adjusted_starting_balances.get(platform, 0.0)
+            - total_deposits.get(platform, 0.0)
+            for platform in balances
+        }
+        cash_trading_pnl = {}
         for platform in balances:
-            start = starting_balances.get(platform, 0.0)
-            deposits = total_deposits.get(platform, 0.0)
+            start = adjusted_starting_balances.get(platform, 0.0)
             current = balances[platform]
-            trading_pnl[platform] = round(current - start - deposits, 2)
+            cash_trading_pnl[platform] = round(current - start, 2)
 
         total_current = sum(balances.values())
-        total_start = sum(starting_balances.get(p, 0) for p in balances)
+        total_start = sum(adjusted_starting_balances.get(p, 0) for p in balances)
         total_dep = sum(total_deposits.get(p, 0) for p in balances)
-        net_trading_pnl = round(total_current - total_start - total_dep, 2)
+        net_cash_change = round(total_current - total_start, 2)
 
         # Calculate deployed capital (money in open/submitted positions)
         # and expected settlement value
@@ -1567,16 +1584,29 @@ class ArbiterAPI:
                     open_positions += 1
 
         expected_profit_at_settlement = round(expected_settlement - deployed_capital, 2)
+        estimated_equity = round(total_current + expected_settlement, 2)
+        net_trading_pnl = round(estimated_equity - total_start, 2)
 
         return web.json_response({
             "current_balances": {k: round(v, 2) for k, v in balances.items()},
-            "starting_balances": {k: round(v, 2) for k, v in starting_balances.items()},
+            "starting_balances": {k: round(v, 2) for k, v in adjusted_starting_balances.items()},
+            "adjusted_starting_balances": {
+                k: round(v, 2) for k, v in adjusted_starting_balances.items()
+            },
+            "original_starting_balances": {
+                k: round(v, 2) for k, v in original_starting_balances.items()
+            },
             "total_deposits": total_deposits,
             "total_deposits_all_platforms": round(total_dep, 2),
             "recorded_trading_pnl": recorded_pnl,
-            "balance_change_by_platform": trading_pnl,
+            "balance_change_by_platform": cash_trading_pnl,
             "total_balance": round(total_current, 2),
+            "cash_balance": round(total_current, 2),
+            "estimated_equity": estimated_equity,
+            "capital_basis": round(total_start, 2),
+            "net_cash_change": net_cash_change,
             "net_balance_change": net_trading_pnl,
+            "net_trading_pnl": net_trading_pnl,
             "deposit_count": recon_stats.get("deposit_count", 0),
             # New: deployed capital context
             "deployed_capital": round(deployed_capital, 2),
