@@ -882,6 +882,77 @@ class KalshiAdapter:
             log.warning("kalshi.depth.failed", market_id=market_id, err=str(exc))
             return (False, 0.0)
 
+    @staticmethod
+    def _extract_buy_levels(payload: dict, side: str) -> list[tuple[float, float]]:
+        """Return ``[(buy_price, qty), ...]`` sorted ascending by ``buy_price``.
+
+        Handles two Kalshi orderbook shapes that have been seen in the wild:
+
+        1. Current ``orderbook_fp`` shape (post-2026 dollar fixed-point):
+           ``{"orderbook_fp": {"yes_dollars": [["0.80","100"], ...],
+                                "no_dollars":  [["0.15","250"], ...]}}``
+           Each side is a list of *bids* for that side (highest bid is best),
+           prices are dollars as strings, qty is contracts. To BUY ``side`` we
+           must walk the OPPOSITE side's bids and convert each level via
+           ``buy_price = 1 - opposite_bid_price`` (because selling YES at $X
+           is matched against someone bidding NO at $1-X).
+
+        2. Legacy ``orderbook`` shape (cents-based, asks on same side):
+           ``{"orderbook": {"yes": [[55, 5], [56, 10]], "no": [[...]]}}``
+           Prices in integer cents, qty in contracts. The same side is asks,
+           so the cheapest entry is best.
+
+        Returns ``[]`` if the payload is empty or unparseable.
+        """
+        opposite = "no" if side == "yes" else "yes"
+
+        fp = payload.get("orderbook_fp")
+        if isinstance(fp, dict):
+            opp_levels = (
+                fp.get(f"{opposite}_dollars")
+                or fp.get(opposite)
+                or []
+            )
+            if opp_levels:
+                converted: list[tuple[float, float]] = []
+                for raw in opp_levels:
+                    try:
+                        opp_bid = float(raw[0])
+                        qty = float(raw[1])
+                    except (IndexError, TypeError, ValueError):
+                        continue
+                    if opp_bid <= 0 or qty <= 0:
+                        continue
+                    if opp_bid > 1.0:
+                        # tolerate cents-as-string under the _dollars key
+                        opp_bid /= 100.0
+                    buy_price = round(1.0 - opp_bid, 4)
+                    if buy_price <= 0 or buy_price >= 1.0:
+                        continue
+                    converted.append((buy_price, qty))
+                return sorted(converted, key=lambda lvl: lvl[0])
+
+        legacy = payload.get("orderbook")
+        if isinstance(legacy, dict):
+            legacy_levels = legacy.get(side, []) or []
+            if legacy_levels:
+                converted = []
+                for raw in legacy_levels:
+                    try:
+                        price_raw = float(raw[0])
+                        qty = float(raw[1])
+                    except (IndexError, TypeError, ValueError):
+                        continue
+                    if price_raw <= 0 or qty <= 0:
+                        continue
+                    buy_price = price_raw / 100.0 if price_raw > 1.0 else price_raw
+                    if buy_price <= 0 or buy_price >= 1.0:
+                        continue
+                    converted.append((buy_price, qty))
+                return sorted(converted, key=lambda lvl: lvl[0])
+
+        return []
+
     @transient_retry()
     async def _fetch_depth(
         self, market_id: str, side: str, required_qty: int,
@@ -892,30 +963,24 @@ class KalshiAdapter:
             if response.status != 200:
                 return (False, 0.0)
             payload = await response.text()
-        data = json.loads(payload)
-
-        # Kalshi orderbook shape:
-        #   {"orderbook": {"yes": [[price_cents, qty], ...], "no": [[...]]}}
-        # Buying YES consumes asks on the YES side; same for NO.
-        orderbook = data.get("orderbook", {}) or {}
-        levels = orderbook.get(side, []) or []
-        if not levels:
-            return (False, 0.0)
-
         try:
-            sorted_levels = sorted(levels, key=lambda lvl: lvl[0])
-            best_price_cents = float(sorted_levels[0][0])
-            cumulative = 0.0
-            for level in sorted_levels:
-                cumulative += float(level[1])
-                if cumulative >= float(required_qty):
-                    return (True, best_price_cents / 100.0)
-            return (False, best_price_cents / 100.0)
-        except (IndexError, TypeError, KeyError) as exc:
+            data = json.loads(payload)
+        except (ValueError, TypeError) as exc:
             log.warning(
                 "kalshi.depth.parse_failed", market_id=market_id, err=str(exc),
             )
             return (False, 0.0)
+
+        levels = self._extract_buy_levels(data, side)
+        if not levels:
+            return (False, 0.0)
+        best_price = levels[0][0]
+        cumulative = 0.0
+        for _, qty in levels:
+            cumulative += qty
+            if cumulative >= float(required_qty):
+                return (True, best_price)
+        return (False, best_price)
 
     # ─── best_executable_price ────────────────────────────────────────────
 
@@ -944,31 +1009,24 @@ class KalshiAdapter:
             if response.status != 200:
                 return (False, 0.0)
             payload = await response.text()
-        data = json.loads(payload)
-        orderbook = data.get("orderbook", {}) or {}
-        levels = orderbook.get(side, []) or []
-        if not levels:
-            return (False, 0.0)
-
         try:
-            sorted_levels = sorted(levels, key=lambda lvl: lvl[0])
-            cumulative = 0.0
-            for level in sorted_levels:
-                cumulative += float(level[1])
-                level_price_cents = float(level[0])
-                if cumulative >= float(required_qty):
-                    # Found the level that absorbs the full required_qty.
-                    return (True, level_price_cents / 100.0)
-            # Walked the whole book; depth insufficient. Return the deepest
-            # price seen so callers can still log a useful number.
-            deepest_price = float(sorted_levels[-1][0])
-            return (False, deepest_price / 100.0)
-        except (IndexError, TypeError, KeyError) as exc:
+            data = json.loads(payload)
+        except (ValueError, TypeError) as exc:
             log.warning(
                 "kalshi.executable_price.parse_failed",
                 market_id=market_id, err=str(exc),
             )
             return (False, 0.0)
+
+        levels = self._extract_buy_levels(data, side)
+        if not levels:
+            return (False, 0.0)
+        cumulative = 0.0
+        for price, qty in levels:
+            cumulative += qty
+            if cumulative >= float(required_qty):
+                return (True, price)
+        return (False, levels[-1][0])
 
     # ─── get_order ────────────────────────────────────────────────────────
 

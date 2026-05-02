@@ -254,13 +254,19 @@ class OperationalReadiness:
         snapshot = self.profitability.get_snapshot()
 
         # B-1 Q6: Phase 5 bootstrap override (chicken-and-egg resolution).
-        # When PHASE5_BOOTSTRAP_TRADES is set to an int in [1, 5] AND the
-        # completed-execution count is below that threshold, bypass the
-        # profitability gate for the first N trades. Once the Nth trade
-        # completes, this branch no longer fires and the normal logic below
-        # re-engages. Unset env = existing behaviour (Phase 4 + dev unchanged).
-        # Out-of-range / unparseable values fall through silently (preflight
-        # check #8 is the second belt that catches invalid values).
+        # When PHASE5_BOOTSTRAP_TRADES is set AND the completed-execution count
+        # is below that threshold, bypass the profitability gate for the first
+        # N trades. Once the Nth trade completes, this branch no longer fires
+        # and the normal logic below re-engages. Unset env = existing behaviour
+        # (Phase 4 + dev unchanged). Out-of-range / unparseable values fall
+        # through silently (preflight check #8 is the second belt that catches
+        # invalid values).  The cap was originally 5 but the profitability gate
+        # downstream needs ``min_completed_executions`` (default 10) before it
+        # can possibly flip to ``validated_profitable``, so the bootstrap window
+        # MUST be at least that large or the system gets stuck in
+        # ``collecting_evidence`` once the historical count reaches the
+        # original cap.  Cap raised to 50 to leave operator headroom for tuning
+        # ``min_profitable_execution_ratio`` evidence.
         # This bootstrap short-circuits BEFORE the validated_profitable and
         # blocked branches: operator setting the env var = accepting the
         # override (05-RESEARCH.md Open Question #6).
@@ -270,7 +276,7 @@ class OperationalReadiness:
                 bootstrap_limit = int(bootstrap_raw)
             except ValueError:
                 bootstrap_limit = 0
-            if 1 <= bootstrap_limit <= 5:
+            if 1 <= bootstrap_limit <= 50:
                 completed = int(getattr(snapshot, "completed_executions", 0) or 0)
                 if completed < bootstrap_limit:
                     remaining = bootstrap_limit - completed

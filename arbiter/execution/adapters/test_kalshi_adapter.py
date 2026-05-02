@@ -370,6 +370,137 @@ async def test_best_executable_price_non_200_returns_false():
     assert price == 0.0
 
 
+# ─── orderbook_fp (current Kalshi shape) ──────────────────────────────────
+#
+# Live Kalshi (post-2026 fixed-point migration) returns
+# ``{"orderbook_fp": {"yes_dollars": [...], "no_dollars": [...]}}`` where
+# each side is a list of BIDS for that side (highest price = best bid).
+# To buy YES we walk the NO bids: yes_ask_price = 1 - no_bid_price, with
+# liquidity = qty at that NO bid.  These tests pin the new semantics so the
+# scanner→executor pipeline never silently regresses to ``best_price=0.0``.
+
+
+def _orderbook_fp_body(yes_dollars=None, no_dollars=None):
+    """Construct the live ``orderbook_fp`` payload shape Kalshi returns."""
+    return json.dumps({
+        "orderbook_fp": {
+            "yes_dollars": yes_dollars or [],
+            "no_dollars": no_dollars or [],
+        }
+    })
+
+
+@pytest.mark.asyncio
+async def test_check_depth_orderbook_fp_buying_yes_walks_no_bids():
+    # NO bids at $0.15 (250 ct), $0.16 (300 ct), $0.17 (1000 ct).
+    # Best NO bid = $0.17 → YES ask = 1 - 0.17 = $0.83.
+    # Required qty 200: top NO bid alone (1000 ct) suffices.
+    body = _orderbook_fp_body(no_dollars=[
+        ["0.15", "250"],
+        ["0.16", "300"],
+        ["0.17", "1000"],
+    ])
+    adapter = _make_adapter(_session_with_get(200, body))
+    sufficient, best = await adapter.check_depth("T", "yes", required_qty=200)
+    assert sufficient is True
+    assert abs(best - 0.83) < 1e-9
+
+
+@pytest.mark.asyncio
+async def test_check_depth_orderbook_fp_buying_no_walks_yes_bids():
+    # YES bids at $0.80 (50 ct), $0.81 (60 ct), $0.82 (70 ct).
+    # Best YES bid = $0.82 → NO ask = 1 - 0.82 = $0.18.
+    body = _orderbook_fp_body(yes_dollars=[
+        ["0.80", "50"],
+        ["0.81", "60"],
+        ["0.82", "70"],
+    ])
+    adapter = _make_adapter(_session_with_get(200, body))
+    sufficient, best = await adapter.check_depth("T", "no", required_qty=70)
+    assert sufficient is True
+    assert abs(best - 0.18) < 1e-9
+
+
+@pytest.mark.asyncio
+async def test_check_depth_orderbook_fp_insufficient_returns_best_price():
+    # Top NO bid is $0.17 with only 100 ct, plus $0.16 with 50 ct.
+    # 150 ct total < required 500 → insufficient, but best YES ask
+    # ($0.83) must still be reported so the caller logs a useful number.
+    body = _orderbook_fp_body(no_dollars=[
+        ["0.16", "50"],
+        ["0.17", "100"],
+    ])
+    adapter = _make_adapter(_session_with_get(200, body))
+    sufficient, best = await adapter.check_depth("T", "yes", required_qty=500)
+    assert sufficient is False
+    assert abs(best - 0.83) < 1e-9
+
+
+@pytest.mark.asyncio
+async def test_check_depth_orderbook_fp_empty_opposite_book():
+    # YES has bids but NO does not — to BUY YES we need NO bids, so we must
+    # report (False, 0.0).  Regression for the ``orderbook_fp`` path that
+    # wrongly returned legacy-format zero when the new keys were present.
+    body = _orderbook_fp_body(yes_dollars=[["0.80", "100"]], no_dollars=[])
+    adapter = _make_adapter(_session_with_get(200, body))
+    sufficient, best = await adapter.check_depth("T", "yes", required_qty=10)
+    assert sufficient is False
+    assert best == 0.0
+
+
+@pytest.mark.asyncio
+async def test_best_executable_price_orderbook_fp_walks_to_required_qty():
+    # NO bids at $0.17 (40 ct), $0.16 (50 ct), $0.15 (200 ct).
+    # Required 80 ct → must walk to the $0.16 level (40+50=90 ≥ 80),
+    # so we'd pay YES ask = 1 - 0.16 = $0.84 to absorb the full size.
+    body = _orderbook_fp_body(no_dollars=[
+        ["0.15", "200"],
+        ["0.16", "50"],
+        ["0.17", "40"],
+    ])
+    adapter = _make_adapter(_session_with_get(200, body))
+    fillable, price = await adapter.best_executable_price("T", "yes", required_qty=80)
+    assert fillable is True
+    assert abs(price - 0.84) < 1e-9
+
+
+@pytest.mark.asyncio
+async def test_best_executable_price_orderbook_fp_top_level_sufficient():
+    body = _orderbook_fp_body(no_dollars=[["0.17", "500"]])
+    adapter = _make_adapter(_session_with_get(200, body))
+    fillable, price = await adapter.best_executable_price("T", "yes", required_qty=100)
+    assert fillable is True
+    assert abs(price - 0.83) < 1e-9
+
+
+@pytest.mark.asyncio
+async def test_check_depth_orderbook_fp_real_world_payload():
+    # Verbatim payload captured from production Kalshi (CONTROLH-2026-D)
+    # to lock in that the helper survives whitespace, decimal-point qty,
+    # and full ten-level depth without regression.
+    body = json.dumps({"orderbook_fp": {
+        "no_dollars": [
+            ["0.0800", "1440.00"], ["0.0900", "1000.00"],
+            ["0.1000", "2931.00"], ["0.1100", "3700.00"],
+            ["0.1200", "1860.00"], ["0.1300", "2368.00"],
+            ["0.1400", "49126.03"], ["0.1500", "16934.00"],
+            ["0.1600", "9096.87"], ["0.1700", "64259.19"],
+        ],
+        "yes_dollars": [
+            ["0.4900", "10000.00"], ["0.5900", "10000.00"],
+            ["0.6000", "100.00"], ["0.6500", "150.00"],
+            ["0.7700", "10000.00"], ["0.7800", "5767.00"],
+            ["0.7900", "2215.00"], ["0.8000", "113994.06"],
+            ["0.8100", "108516.81"], ["0.8200", "45334.76"],
+        ],
+    }})
+    adapter = _make_adapter(_session_with_get(200, body))
+    sufficient, best = await adapter.check_depth("CONTROLH-2026-D", "yes", required_qty=100)
+    assert sufficient is True
+    # Top NO bid is $0.17 → YES ask $0.83
+    assert abs(best - 0.83) < 1e-9
+
+
 # ─── place_unwind_sell ──────────────────────────────────────────────────
 
 @pytest.mark.asyncio
