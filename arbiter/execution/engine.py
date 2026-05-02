@@ -1819,26 +1819,35 @@ class ExecutionEngine:
         # Case 2 is what the Polymarket-IOC switch unlocks: previously the
         # secondary either filled-in-full or killed-in-full, so case 2 was
         # impossible.
+        # Determine the unhedged exposure across THREE possible patterns:
+        #   1. One leg FILLED, other CANCELLED/FAILED  → unwind all of FILLED
+        #   2. Both legs have partial-or-full fills with mismatched qty
+        #      (the IOC partial-fill pattern)           → unwind only the diff
+        #   3. Both legs filled with matching qty       → no exposure to unwind
+        # Pattern 2 is unreachable until we wired IOC; FOK either filled or
+        # killed entirely so the qty was always 0 or full.
         unhedged_leg = None
         unhedged_qty = 0
-        unhedged_paired_price = 0.0  # the secondary's fill price at the time, for PnL accounting
-        if yes_filled ^ no_filled:
-            unhedged_leg = leg_yes if yes_filled else leg_no
-            unhedged_qty = int(unhedged_leg.fill_qty or 0)
-            unhedged_paired_price = 0.0
-        elif yes_filled and no_filled:
+        # Treat both FILLED and PARTIAL as "has fills" — IOC reports PARTIAL
+        # when only some of the order matched, with fill_qty < quantity.
+        any_yes_fill = leg_yes.status in {OrderStatus.FILLED, OrderStatus.PARTIAL} and float(leg_yes.fill_qty or 0) > 0
+        any_no_fill = leg_no.status in {OrderStatus.FILLED, OrderStatus.PARTIAL} and float(leg_no.fill_qty or 0) > 0
+        if any_yes_fill and not any_no_fill:
+            unhedged_leg = leg_yes
+            unhedged_qty = int(leg_yes.fill_qty or 0)
+        elif any_no_fill and not any_yes_fill:
+            unhedged_leg = leg_no
+            unhedged_qty = int(leg_no.fill_qty or 0)
+        elif any_yes_fill and any_no_fill:
             yes_qty = int(leg_yes.fill_qty or 0)
             no_qty = int(leg_no.fill_qty or 0)
             if yes_qty != no_qty:
-                # Whichever side over-filled is the one that needs unwinding.
                 if yes_qty > no_qty:
                     unhedged_leg = leg_yes
                     unhedged_qty = yes_qty - no_qty
-                    unhedged_paired_price = float(leg_no.fill_price)
                 else:
                     unhedged_leg = leg_no
                     unhedged_qty = no_qty - yes_qty
-                    unhedged_paired_price = float(leg_yes.fill_price)
                 logger.info(
                     "  ⚖ Secondary IOC partial-fill detected: "
                     "yes=%d no=%d → unwinding %d %s on %s",
