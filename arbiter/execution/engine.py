@@ -1142,24 +1142,28 @@ class ExecutionEngine:
                     primary_platform, secondary_side.upper(),
                 )
 
-                # Inter-leg delay — give the secondary venue's order book a
-                # chance to refresh after the cross-venue print from the
-                # primary leg. Default 500ms; tune via INTER_LEG_DELAY_MS.
+                # No inter-leg delay — every millisecond between primary fill
+                # and secondary submit is a window for the secondary book to
+                # move past our limit price and turn the IOC into a non-
+                # marketable order that Polymarket REJECTS outright.  Live
+                # logs show a 500ms delay producing 5-10¢ book shifts on
+                # fast-settling sports markets, which is enough to make the
+                # secondary IOC reject and strand the primary as naked.
+                # Skip the delay entirely; the recovery loop is the safety
+                # net if the secondary still moves under us.
                 if self._inter_leg_delay_ms > 0:
                     await asyncio.sleep(self._inter_leg_delay_ms / 1000.0)
 
-                # Walk the secondary book and price the IOC at the most
-                # generous limit we can afford while still preserving a 1¢
-                # floor of edge.  Using the walked price exactly was the
-                # source of every soft-naked-leg event observed in production
-                # — by the time the order arrived at the secondary venue the
-                # top level had moved by a tick or two and the FOK / IOC
-                # killed against a thinner book than we'd seen.  Now we
-                # always pay UP TO ``max_affordable_secondary`` (the price at
-                # which our edge collapses) and the venue fills us at limit-
-                # or-better, so a 1-2¢ shift between detection and submit
-                # gets absorbed by the slippage budget instead of leaving us
-                # with a one-leg position.
+                # Walk the secondary book IMMEDIATELY before submit — the
+                # walk-to-submit latency was the single biggest source of
+                # rejected secondaries (Polymarket's IOC requires the limit
+                # to be marketable on receipt, and a 500ms-stale walk often
+                # priced us BELOW the live ASK after the book moved up).
+                # Place the IOC at the walked price exactly: walked is the
+                # WORST price needed to absorb effective_qty given the book
+                # we just observed, so submitting AT walked corresponds to
+                # the most aggressive marketable limit we can place without
+                # paying through the spread.
                 secondary_fok_price = secondary_price
                 secondary_adapter = self.adapters.get(secondary_platform)
                 walked_exec_price = None
@@ -1221,20 +1225,19 @@ class ExecutionEngine:
                     0.0,
                 )
 
-                # IOC fills at limit-or-better.  We want enough headroom to
-                # absorb a sub-second shift between walk and submit, but NOT
-                # so much that Polymarket rejects the order as "too far from
-                # market" (Polymarket has a price-band guard that
-                # ORDER_STATE_REJECTs SELL limits more than ~2¢ below best
-                # YES bid — equivalent to NO buy limits more than ~2¢ above
-                # NO ask).  1¢ buffer keeps us inside the band while still
-                # absorbing a single-tick book shift.  Cap at max-affordable
-                # so we never knowingly cross our edge floor; if the walked
-                # price already exceeds max-affordable the trade is
-                # unprofitable on the secondary side — we ABORT here rather
-                # than place a guaranteed-loss order.
-                slippage_buffer_cents = 1.0
-                slippage_buffer = slippage_buffer_cents / 100.0
+                # IOC fills at limit-or-better.  Polymarket's price-band
+                # guard ORDER_STATE_REJECTs orders that put a SELL limit
+                # strictly below the best bid (which is what a BUY_SHORT at
+                # NO=walked+buffer translates to once the engine converts
+                # via 1 - no_price).  Verified empirically with 1¢ AND 3¢
+                # buffers above walked — both rejected.  Walking the book
+                # for ``effective_qty`` already returns the WORST price we
+                # need to absorb the full size, so submitting AT the walked
+                # price corresponds to a SELL exactly at the top of book —
+                # which Polymarket DOES accept.  Cap at max-affordable so a
+                # stale walk that has slipped past the edge floor never
+                # turns into a guaranteed-loss order; abort instead.
+                slippage_buffer = 0.0
                 abort_secondary = secondary_fok_price > max_affordable_secondary
                 buffered_limit = min(
                     secondary_fok_price + slippage_buffer,
