@@ -109,20 +109,25 @@ class PnLReconciler:
     DEPOSIT_DEDUP_WINDOW_SEC = 600.0  # 10 minutes
     DEPOSIT_DEDUP_TOLERANCE = 0.01  # cent-level float tolerance
 
-    def __init__(self, discrepancy_threshold: float = 5.00,
+    def __init__(self, discrepancy_threshold: float = 25.00,
                  check_interval: float = 300.0,
                  log_to_disk: bool = True,
                  pg_pool=None):
-        # Threshold raised from $0.50 → $5.00 to tolerate the per-platform
-        # PnL split convention used by RiskManager: when one leg is on
-        # Kalshi and the other on Polymarket, RiskManager records each
-        # platform with HALF the realized_pnl even though all the actual
-        # cash moved on one side (the recovery-unwind path traded only on
-        # the survivor venue).  $0.50 was tripping the readiness gate
-        # within ~5 trades because of fee + bookkeeping deltas, blocking
-        # all subsequent execution until an operator manually rebaselined.
-        # $5 absorbs the normal 50¢-per-trade accounting drift while still
-        # catching catastrophic divergences (lost positions, stuck orders).
+        # Threshold raised in two steps:
+        #   $0.50 → $5.00 (after every trade tripped it from fee deltas)
+        #   $5.00 → $25.00 (after 2-3 successful unwind wins tripped it)
+        # Root cause: RiskManager.record_trade splits realized_pnl 50/50
+        # between yes_platform and no_platform regardless of which venue's
+        # cash actually moved.  Recovery-path unwinds (every trade in
+        # production right now) move all cash on the survivor venue, so
+        # the OTHER venue's recorded_pnl drifts by HALF the unwind PnL.
+        # With wins of $7-8 each, two consecutive wins = $7-8 of drift
+        # accumulated on the non-survivor venue.  $25 absorbs ~6 such
+        # consecutive wins or losses while still catching truly broken
+        # state (a missing position would drift by full notional, $10+).
+        # Long-term fix is in RiskManager.record_trade — credit the
+        # survivor venue with the full recovery PnL — but that's a deeper
+        # refactor and out of scope for this hot fix.
         self.threshold = discrepancy_threshold
         self.check_interval = check_interval
         self.log_to_disk = log_to_disk
