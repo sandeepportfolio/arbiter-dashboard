@@ -431,6 +431,60 @@ class BalanceMonitor:
         msg = _format_arb_alert(opp)
         await self.notifier.send(msg, dedup_key=key)
 
+    async def alert_execution_result(
+        self,
+        arb_id: str,
+        opp: ArbitrageOpportunity,
+        status: str,
+        leg_yes: "Order",
+        leg_no: "Order",
+        realized_pnl: float = 0.0,
+    ):
+        """Send Telegram alert with trade execution result."""
+        if status == "filled":
+            emoji = "✅"
+            header = "TRADE FILLED"
+        elif status == "partial":
+            emoji = "⚠️"
+            header = "PARTIAL FILL"
+        elif status in ("failed", "aborted"):
+            emoji = "❌"
+            header = f"TRADE {status.upper()}"
+        elif status == "unwound":
+            emoji = "🔄"
+            header = "TRADE UNWOUND"
+        else:
+            emoji = "📋"
+            header = f"TRADE {status.upper()}"
+
+        pnl_emoji = "📈" if realized_pnl >= 0 else "📉"
+
+        yes_status = leg_yes.status.value if hasattr(leg_yes.status, "value") else str(leg_yes.status)
+        no_status = leg_no.status.value if hasattr(leg_no.status, "value") else str(leg_no.status)
+
+        msg = (
+            f"{emoji} <b>{header}</b>\n"
+            f"<code>{arb_id}</code> — {opp.description[:80]}\n"
+            f"\n"
+            f"<b>{opp.yes_platform.upper()}</b> YES: "
+            f"limit ${leg_yes.price:.3f} → fill ${leg_yes.fill_price:.3f} "
+            f"x{leg_yes.fill_qty} [{yes_status}]\n"
+            f"<b>{opp.no_platform.upper()}</b> NO: "
+            f"limit ${leg_no.price:.3f} → fill ${leg_no.fill_price:.3f} "
+            f"x{leg_no.fill_qty} [{no_status}]\n"
+            f"\n"
+            f"Edge: {opp.net_edge_cents:.1f}¢ net | Qty: {opp.suggested_qty}\n"
+            f"{pnl_emoji} Realized P&L: <b>${realized_pnl:+.2f}</b>"
+        )
+
+        if leg_yes.error:
+            msg += f"\n⚠️ YES error: {leg_yes.error[:100]}"
+        if leg_no.error:
+            msg += f"\n⚠️ NO error: {leg_no.error[:100]}"
+
+        await self.notifier.send(msg, dedup_key=f"exec_{arb_id}")
+        logger.info("Execution alert sent for %s: %s pnl=$%.2f", arb_id, status, realized_pnl)
+
     async def send_daily_summary(self):
         """Send daily summary of balances and activity."""
         lines = ["📊 <b>ARBITER DAILY SUMMARY</b>\n"]
