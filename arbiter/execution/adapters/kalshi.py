@@ -65,7 +65,30 @@ class KalshiAdapter:
         self.rate_limiter = rate_limiter
         self.circuit = circuit
 
-    # ─── place_fok ────────────────────────────────────────────────────────
+    # ─── place_fok / place_ioc ────────────────────────────────────────────
+
+    async def place_ioc(
+        self,
+        arb_id: str,
+        market_id: str,
+        canonical_id: str,
+        side: str,
+        price: float,
+        qty: int,
+    ) -> Order:
+        """Submit a Kalshi immediate-or-cancel limit order.
+
+        Same semantics as ``place_fok`` (synchronous, terminal-state response,
+        never raises across the boundary) but uses ``time_in_force=immediate_or_cancel``
+        so a partial fill is accepted instead of killing the whole order.
+        Used by the engine for the secondary leg of a cross-venue arb so
+        a stale top-of-book on the secondary doesn't strand the primary in
+        a naked position — IOC will at least take what's actually there.
+        """
+        return await self.place_fok(
+            arb_id, market_id, canonical_id, side, price, qty,
+            time_in_force="immediate_or_cancel",
+        )
 
     async def place_fok(
         self,
@@ -75,8 +98,13 @@ class KalshiAdapter:
         side: str,
         price: float,
         qty: int,
+        *,
+        time_in_force: str = "fill_or_kill",
     ) -> Order:
-        """Submit a Kalshi FOK limit order. Returns ``Order`` in a terminal state.
+        """Submit a Kalshi limit order with the given time-in-force.
+
+        Defaults to ``fill_or_kill``.  ``immediate_or_cancel`` is also valid
+        (see ``place_ioc``).  Returns ``Order`` in a terminal state.
 
         Always returns an ``Order``; never raises across this boundary.
         """
@@ -162,7 +190,7 @@ class KalshiAdapter:
             "side": side,
             "type": "limit",
             "count_fp": f"{float(qty):.2f}",
-            "time_in_force": "fill_or_kill",   # ← EXEC-01: critical FOK directive
+            "time_in_force": time_in_force,
         }
         if side == "yes":
             order_body["yes_price_dollars"] = f"{price:.4f}"

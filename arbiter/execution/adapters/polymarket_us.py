@@ -136,10 +136,18 @@ class PolymarketUSAdapter:
         side: str,
         price: float,
         qty: int,
+        tif: str = "FILL_OR_KILL",
     ) -> Order:
         """Build the order body, call the client, and map the response to Order.
 
         ``market_id`` is used as the Polymarket US market slug.
+
+        ``tif`` defaults to ``FILL_OR_KILL`` for backwards compatibility with
+        ``place_fok``.  ``place_ioc`` overrides to ``IMMEDIATE_OR_CANCEL``,
+        which is what cross-venue arb actually wants for the secondary leg —
+        FOK rejects the entire order if even one contract can't fill at the
+        limit, while IOC fills what's available and the engine then unwinds
+        the unfilled excess on the primary venue.
         """
         intent, request_price = self._us_order_params(side, price)
         response = await self._client.place_order(
@@ -147,10 +155,89 @@ class PolymarketUSAdapter:
             intent=intent,
             price=request_price,
             qty=qty,
-            tif="FILL_OR_KILL",
+            tif=tif,
         )
-        return self._order_from_response(
+        order = self._order_from_response(
             response, arb_id, market_id, canonical_id, side, price, qty
+        )
+        # Make the wire-level response inspectable from the engine's logs.
+        # Without this, a Polymarket TIME_IN_FORCE_KILLED reply is invisible
+        # because the response dict lives only in the local closure.
+        if isinstance(response, dict):
+            api_status = str(
+                response.get(
+                    "state",
+                    response.get(
+                        "status",
+                        (response.get("executions") or [{}])[0].get("order", {}).get(
+                            "state",
+                            (response.get("executions") or [{}])[0].get("order", {}).get("status", ""),
+                        )
+                        if response.get("executions") else "",
+                    ),
+                )
+            )
+            logger.info(
+                "polymarket_us.order.placed",
+                arb_id=arb_id,
+                slug=market_id,
+                side=side,
+                tif=tif,
+                qty=qty,
+                limit_price=price,
+                api_status=api_status,
+                order_status=order.status.value,
+                fill_qty=order.fill_qty,
+                fill_price=order.fill_price,
+            )
+        return order
+
+    # ─── place_ioc ────────────────────────────────────────────────────────
+
+    async def place_ioc(
+        self,
+        arb_id: str,
+        market_id: str,
+        canonical_id: str,
+        side: str,
+        price: float,
+        qty: int,
+    ) -> Order:
+        """Submit an immediate-or-cancel order.
+
+        Same hard-lock gates as ``place_fok`` (PHASE4, PHASE5, supervisor).
+        Differs only in TIF: IOC fills what is available at the limit (or
+        better) and cancels the rest, rather than killing the whole order if
+        even one contract can't fill.  Used by the engine on the SECONDARY
+        leg so a stale book doesn't strand the PRIMARY in a naked position.
+        """
+        notional = float(price) * float(qty)
+
+        if self._phase4_max_usd is not None and notional > self._phase4_max_usd:
+            logger.warning(
+                "polymarket_us.phase4_hardlock.rejected",
+                arb_id=arb_id, notional=notional, max=self._phase4_max_usd, op="place_ioc",
+            )
+            raise OrderRejected(
+                f"PHASE4 hard-lock: notional ${notional:.2f} > ${self._phase4_max_usd:.2f}"
+            )
+        if self._phase5_max_usd is not None and notional > self._phase5_max_usd:
+            logger.warning(
+                "polymarket_us.phase5_hardlock.rejected",
+                arb_id=arb_id, notional=notional, max=self._phase5_max_usd, op="place_ioc",
+            )
+            raise OrderRejected(
+                f"PHASE5 hard-lock: notional ${notional:.2f} > ${self._phase5_max_usd:.2f}"
+            )
+        if self._supervisor is not None and self._supervisor.is_armed:
+            logger.warning(
+                "polymarket_us.supervisor_armed.rejected", arb_id=arb_id, op="place_ioc",
+            )
+            raise OrderRejected("supervisor armed")
+
+        return await self._sign_and_send(
+            arb_id, market_id, canonical_id, side, price, qty,
+            tif="IMMEDIATE_OR_CANCEL",
         )
 
     # ─── get_order_status ─────────────────────────────────────────────────
@@ -345,18 +432,39 @@ class PolymarketUSAdapter:
 
     @staticmethod
     def _map_status(api_status: str, default: OrderStatus) -> OrderStatus:
+        """Map Polymarket US wire-status strings to internal OrderStatus.
+
+        Critical: FOK/IOC ``KILLED`` and ``EXPIRED`` were previously falling
+        through to the SUBMITTED default, which made the engine treat a
+        kill-on-no-fill response as a resting order — and trigger the soft-
+        naked recovery path even though the order had already terminated.
+        Now they map to CANCELLED, and unknown statuses default to FAILED so
+        a future Polymarket schema change cannot silently re-introduce the
+        same bug.
+        """
         normalized = api_status.upper()
-        if "PARTIALLY_FILLED" in normalized:
+        if "PARTIALLY_FILLED" in normalized or "PARTIAL" in normalized:
             return OrderStatus.PARTIAL
         if normalized in {"FILLED", "MATCHED", "EXECUTED", "ORDER_STATE_FILLED"}:
             return OrderStatus.FILLED
-        if normalized in {"CANCELED", "CANCELLED", "ORDER_STATE_CANCELED", "ORDER_STATE_CANCELLED"}:
+        if normalized in {
+            "CANCELED", "CANCELLED",
+            "ORDER_STATE_CANCELED", "ORDER_STATE_CANCELLED",
+            "KILLED", "ORDER_STATE_KILLED",
+            "EXPIRED", "ORDER_STATE_EXPIRED",
+            "ORDER_STATE_UNFILLED",  # FOK/IOC reply when nothing matched
+        }:
             return OrderStatus.CANCELLED
         if normalized in {"REJECTED", "ORDER_STATE_REJECTED"}:
             return OrderStatus.FAILED
         if normalized in {"LIVE", "OPEN", "ORDER_STATE_OPEN", "ORDER_STATE_LIVE"}:
             return OrderStatus.SUBMITTED
-        return default
+        # Unknown status from a wire format we have not seen before.  Fail
+        # loud rather than fall through to ``default`` (which used to be
+        # SUBMITTED) — the engine treats SUBMITTED as a still-open order
+        # holding live exposure, which is the wrong call for an unknown
+        # state from a FOK/IOC reply.
+        return OrderStatus.FAILED if default == OrderStatus.SUBMITTED else default
 
     def _order_from_response(
         self,

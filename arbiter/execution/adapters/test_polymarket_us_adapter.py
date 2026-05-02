@@ -155,3 +155,112 @@ async def test_order_id_threaded_from_api_response(monkeypatch):
     adapter = _make_adapter(client=client)
     order = await adapter.place_fok("ARB-6", "mkt-slug", "CAN-6", "yes", 0.50, 10)
     assert order.order_id == "ord-xyz"
+
+
+# ─── place_ioc + tif=IOC + status mapping ────────────────────────────────────
+#
+# The cross-venue arb pivot replaces FOK with IOC for the SECONDARY leg.
+# These tests pin the new behaviour and the status-mapping fixes that
+# stop the engine from treating Polymarket KILL responses as live orders.
+
+
+async def test_place_ioc_routes_immediate_or_cancel_tif(monkeypatch):
+    """place_ioc must request TIME_IN_FORCE_IMMEDIATE_OR_CANCEL, not FOK."""
+    monkeypatch.delenv("PHASE4_MAX_ORDER_USD", raising=False)
+    monkeypatch.delenv("PHASE5_MAX_ORDER_USD", raising=False)
+    client = _make_client()
+    client.place_order = AsyncMock(
+        return_value={"orderId": "ord-ioc", "status": "FILLED"}
+    )
+    adapter = _make_adapter(client=client)
+
+    await adapter.place_ioc("ARB-IOC", "mkt-slug", "CAN-1", "yes", 0.50, 10)
+
+    assert client.place_order.await_count == 1
+    kwargs = client.place_order.await_args.kwargs
+    assert kwargs["tif"] == "IMMEDIATE_OR_CANCEL"
+    # Same-shape arguments as place_fok otherwise.
+    assert kwargs["slug"] == "mkt-slug"
+    assert kwargs["qty"] == 10
+
+
+async def test_place_ioc_runs_phase_gates_before_signing(monkeypatch):
+    """IOC must enforce PHASE4 / PHASE5 / supervisor gates before touching the wire."""
+    adapter = _make_adapter(
+        phase4_max_usd=4.0, phase5_max_usd=10.0,
+        supervisor=_make_supervisor(is_armed=False),
+    )
+    sign_mock = AsyncMock(return_value=MagicMock(status=OrderStatus.FILLED))
+    adapter._sign_and_send = sign_mock
+
+    with pytest.raises(OrderRejected) as exc:
+        # 0.50 * 10 = $5 > $4 PHASE4 cap
+        await adapter.place_ioc("ARB-IOC2", "mkt", "CAN", "yes", 0.50, 10)
+    assert "PHASE4" in str(exc.value)
+    assert sign_mock.call_count == 0, "PHASE4 must fire BEFORE _sign_and_send"
+
+
+async def test_killed_status_maps_to_cancelled(monkeypatch):
+    """ORDER_STATE_KILLED must map to CANCELLED so the engine triggers recovery
+    instead of treating the order as still-open SUBMITTED.
+
+    This is the regression that produced every soft-naked-leg event observed
+    in production: Polymarket replied KILLED, the previous mapping fell through
+    to the SUBMITTED default, and the engine waited for a fill that would
+    never come while the primary leg sat naked on Kalshi.
+    """
+    client = _make_client()
+    client.place_order = AsyncMock(
+        return_value={"orderId": "ord-killed", "state": "ORDER_STATE_KILLED"}
+    )
+    adapter = _make_adapter(client=client)
+    order = await adapter.place_fok("ARB-K", "mkt", "CAN", "yes", 0.50, 10)
+    assert order.status == OrderStatus.CANCELLED
+
+
+async def test_expired_status_maps_to_cancelled(monkeypatch):
+    """ORDER_STATE_EXPIRED (typical IOC reply when nothing matched) → CANCELLED."""
+    client = _make_client()
+    client.place_order = AsyncMock(
+        return_value={"orderId": "ord-exp", "state": "ORDER_STATE_EXPIRED"}
+    )
+    adapter = _make_adapter(client=client)
+    order = await adapter.place_ioc("ARB-E", "mkt", "CAN", "yes", 0.50, 10)
+    assert order.status == OrderStatus.CANCELLED
+
+
+async def test_unknown_status_defaults_to_failed(monkeypatch):
+    """Unknown wire status from Polymarket must default to FAILED.
+
+    Previously fell through to SUBMITTED, causing the engine to hold a
+    "still-resting" order in memory that the venue had already terminated.
+    """
+    client = _make_client()
+    client.place_order = AsyncMock(
+        return_value={"orderId": "ord-unk", "state": "WHATEVER_NEW_STATE"}
+    )
+    adapter = _make_adapter(client=client)
+    order = await adapter.place_fok("ARB-U", "mkt", "CAN", "yes", 0.50, 10)
+    assert order.status == OrderStatus.FAILED
+
+
+async def test_partially_filled_status_maps_to_partial(monkeypatch):
+    """PARTIAL with executions[].order.cumQuantity carries the fill qty
+    so the engine can compute the unhedged excess to unwind."""
+    client = _make_client()
+    client.place_order = AsyncMock(
+        return_value={
+            "orderId": "ord-part",
+            "state": "ORDER_STATE_PARTIALLY_FILLED",
+            "executions": [{
+                "order": {
+                    "cumQuantity": "7",
+                    "avgPx": {"value": "0.50", "currency": "USD"},
+                }
+            }],
+        }
+    )
+    adapter = _make_adapter(client=client)
+    order = await adapter.place_ioc("ARB-PF", "mkt", "CAN", "yes", 0.50, 10)
+    assert order.status == OrderStatus.PARTIAL
+    assert order.fill_qty == 7.0

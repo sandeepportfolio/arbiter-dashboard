@@ -501,6 +501,65 @@ async def test_check_depth_orderbook_fp_real_world_payload():
     assert abs(best - 0.83) < 1e-9
 
 
+# ─── place_ioc (IOC time-in-force for secondary leg) ─────────────────────
+
+
+@pytest.mark.asyncio
+async def test_place_ioc_sends_immediate_or_cancel_tif():
+    """Secondary-leg IOC must request time_in_force=immediate_or_cancel.
+
+    Without this the engine cannot route the secondary leg as IOC and falls
+    back to FOK — recreating the soft-naked-leg pattern from production
+    where a stale-by-one-tick book killed the entire order instead of
+    accepting the partial fill we'd actually take.
+    """
+    body = json.dumps({"order": {
+        "order_id": "K-IOC-1", "status": "executed",
+        "fill_count_fp": "10.00", "yes_price_dollars": "0.5500",
+    }})
+    session = _session_with_post(200, body)
+    adapter = _make_adapter(session)
+    order = await adapter.place_ioc("ARB-IOC", "TICKER", "CAN", "yes", 0.55, 10)
+
+    posted = session.post.call_args.kwargs["json"]
+    assert posted["time_in_force"] == "immediate_or_cancel"
+    assert posted["yes_price_dollars"] == "0.5500"
+    assert posted["count_fp"] == "10.00"
+    assert order.status == OrderStatus.FILLED
+
+
+@pytest.mark.asyncio
+async def test_place_fok_default_tif_unchanged():
+    """Existing place_fok callers must keep getting FOK (regression test for
+    the time_in_force kwarg refactor)."""
+    body = json.dumps({"order": {
+        "order_id": "K-FOK-1", "status": "executed",
+        "fill_count_fp": "10.00", "yes_price_dollars": "0.5500",
+    }})
+    session = _session_with_post(200, body)
+    adapter = _make_adapter(session)
+    await adapter.place_fok("ARB-FOK", "TICKER", "CAN", "yes", 0.55, 10)
+    posted = session.post.call_args.kwargs["json"]
+    assert posted["time_in_force"] == "fill_or_kill"
+
+
+@pytest.mark.asyncio
+async def test_place_fok_explicit_tif_override_accepted():
+    """A caller can pass time_in_force=immediate_or_cancel directly to place_fok."""
+    body = json.dumps({"order": {
+        "order_id": "K-X-1", "status": "executed",
+        "fill_count_fp": "5.00", "no_price_dollars": "0.4500",
+    }})
+    session = _session_with_post(200, body)
+    adapter = _make_adapter(session)
+    await adapter.place_fok(
+        "ARB-X", "TICKER", "CAN", "no", 0.45, 5,
+        time_in_force="immediate_or_cancel",
+    )
+    posted = session.post.call_args.kwargs["json"]
+    assert posted["time_in_force"] == "immediate_or_cancel"
+
+
 # ─── place_unwind_sell ──────────────────────────────────────────────────
 
 @pytest.mark.asyncio

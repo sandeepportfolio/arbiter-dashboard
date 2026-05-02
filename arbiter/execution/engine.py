@@ -1148,13 +1148,21 @@ class ExecutionEngine:
                 if self._inter_leg_delay_ms > 0:
                     await asyncio.sleep(self._inter_leg_delay_ms / 1000.0)
 
-                # Walk the secondary book too — same FOK-pricing fix as the
-                # primary leg. If the secondary's executable price now exceeds
-                # the quoted secondary price by more than our remaining edge,
-                # bail before placing the secondary (we'd rather take a single
-                # naked-leg-recovery path than two losing legs).
+                # Walk the secondary book and price the IOC at the most
+                # generous limit we can afford while still preserving a 1¢
+                # floor of edge.  Using the walked price exactly was the
+                # source of every soft-naked-leg event observed in production
+                # — by the time the order arrived at the secondary venue the
+                # top level had moved by a tick or two and the FOK / IOC
+                # killed against a thinner book than we'd seen.  Now we
+                # always pay UP TO ``max_affordable_secondary`` (the price at
+                # which our edge collapses) and the venue fills us at limit-
+                # or-better, so a 1-2¢ shift between detection and submit
+                # gets absorbed by the slippage budget instead of leaving us
+                # with a one-leg position.
                 secondary_fok_price = secondary_price
                 secondary_adapter = self.adapters.get(secondary_platform)
+                walked_exec_price = None
                 if secondary_adapter is not None and hasattr(
                     secondary_adapter, "best_executable_price",
                 ):
@@ -1162,36 +1170,106 @@ class ExecutionEngine:
                         secondary_market, secondary_side, effective_qty,
                     )
                     if s_fillable and s_exec > 0:
+                        walked_exec_price = s_exec
                         secondary_fok_price = s_exec
-                        if s_exec > secondary_price:
-                            actual_yes_price = (
-                                primary_leg.fill_price if primary_side == "yes"
-                                else s_exec
-                            )
-                            actual_no_price = (
-                                primary_leg.fill_price if primary_side == "no"
-                                else s_exec
-                            )
-                            actual_total = actual_yes_price + actual_no_price
-                            actual_gross = 1.0 - actual_total
-                            actual_yes_fee = compute_fee(
-                                opp.yes_platform, actual_yes_price,
-                                effective_qty, opp.yes_fee_rate,
-                            ) / max(effective_qty, 1)
-                            actual_no_fee = compute_fee(
-                                opp.no_platform, actual_no_price,
-                                effective_qty, opp.no_fee_rate,
-                            ) / max(effective_qty, 1)
-                            actual_net = actual_gross - actual_yes_fee - actual_no_fee
-                            logger.info(
-                                "  ↑ Secondary FOK price walked %.4f→%.4f; "
-                                "post-walk net edge %.2f¢",
-                                secondary_price, s_exec, actual_net * 100,
-                            )
+
+                # Compute the absolute most we can pay on the secondary while
+                # still booking AT LEAST ``MIN_NET_EDGE_CENTS`` of net edge
+                # against the primary's actual fill price.  This is the IOC
+                # limit ceiling — anything above and the trade is unprofitable
+                # so we'd rather take the naked-leg recovery path than fill at
+                # a guaranteed loss.
+                primary_fill_price = float(primary_leg.fill_price)
+                primary_yes_price = (
+                    primary_fill_price if primary_side == "yes" else 0.0
+                )
+                primary_no_price = (
+                    primary_fill_price if primary_side == "no" else 0.0
+                )
+                # Re-derive fees per unit at the qty we actually filled.
+                primary_fee_per = (
+                    compute_fee(
+                        opp.yes_platform if primary_side == "yes" else opp.no_platform,
+                        primary_fill_price,
+                        int(primary_leg.fill_qty) or effective_qty,
+                        opp.yes_fee_rate if primary_side == "yes" else opp.no_fee_rate,
+                    )
+                    / max(int(primary_leg.fill_qty) or effective_qty, 1)
+                )
+                # Worst price we'd take on the secondary at exactly break-even,
+                # before any safety margin.  Solve:
+                #   1 - primary - secondary - primary_fee - secondary_fee >= MIN_EDGE/100
+                # Approximating secondary_fee at the walked/quoted price (the
+                # fee curve is shallow over the small slippage window we
+                # tolerate, so this approximation is fine).
+                approx_sec_fee_per = (
+                    compute_fee(
+                        secondary_platform,
+                        secondary_fok_price,
+                        effective_qty,
+                        opp.yes_fee_rate if secondary_side == "yes" else opp.no_fee_rate,
+                    )
+                    / max(effective_qty, 1)
+                )
+                edge_floor = MIN_NET_EDGE_CENTS / 100.0
+                max_affordable_secondary = max(
+                    1.0
+                    - primary_fill_price
+                    - primary_fee_per
+                    - approx_sec_fee_per
+                    - edge_floor,
+                    0.0,
+                )
+
+                # IOC fills at limit-or-better, so the optimal limit is
+                # ``max_affordable_secondary`` — we never pay more than the
+                # book actually shows but we can absorb a 1-3¢ shift between
+                # walk and submit without leaving a naked leg.  Floor at the
+                # walked price so a stale walk (e.g., max_affordable lower
+                # than the visible-book executable price) doesn't underbid
+                # the actual market.
+                buffered_limit = (
+                    max_affordable_secondary
+                    if max_affordable_secondary > secondary_fok_price
+                    else secondary_fok_price
+                )
+
+                logger.info(
+                    "  Secondary IOC limit: walked=%.4f buffered=%.4f "
+                    "max_affordable=%.4f primary_fill=%.4f",
+                    secondary_fok_price, buffered_limit,
+                    max_affordable_secondary, primary_fill_price,
+                )
+
+                # Recompute the actual post-walk net edge for visibility.
+                if walked_exec_price is not None and walked_exec_price > secondary_price:
+                    actual_yes_price = (
+                        primary_fill_price if primary_side == "yes" else walked_exec_price
+                    )
+                    actual_no_price = (
+                        primary_fill_price if primary_side == "no" else walked_exec_price
+                    )
+                    actual_total = actual_yes_price + actual_no_price
+                    actual_gross = 1.0 - actual_total
+                    actual_yes_fee = compute_fee(
+                        opp.yes_platform, actual_yes_price,
+                        effective_qty, opp.yes_fee_rate,
+                    ) / max(effective_qty, 1)
+                    actual_no_fee = compute_fee(
+                        opp.no_platform, actual_no_price,
+                        effective_qty, opp.no_fee_rate,
+                    ) / max(effective_qty, 1)
+                    actual_net = actual_gross - actual_yes_fee - actual_no_fee
+                    logger.info(
+                        "  ↑ Secondary price walked %.4f→%.4f; "
+                        "post-walk net edge %.2f¢",
+                        secondary_price, walked_exec_price, actual_net * 100,
+                    )
 
                 secondary_leg = await self._place_order_for_leg(
                     arb_id, secondary_platform, secondary_market,
-                    opp.canonical_id, secondary_side, secondary_fok_price, effective_qty,
+                    opp.canonical_id, secondary_side, buffered_limit, effective_qty,
+                    use_ioc=True,
                 )
 
                 if secondary_leg.status not in {OrderStatus.FILLED, OrderStatus.SUBMITTED, OrderStatus.PARTIAL}:
@@ -1457,11 +1535,19 @@ class ExecutionEngine:
         side: str,
         price: float,
         qty: int,
+        *,
+        use_ioc: bool = False,
     ) -> Order:
         """Dispatch a leg through self.adapters[platform], wrapped in asyncio.wait_for (EXEC-05).
 
         On local timeout, best-effort cancel through the same adapter.
         Every state transition is persisted via self.store.upsert_order (EXEC-02 / D-16).
+
+        ``use_ioc=True`` selects ``place_ioc`` (immediate-or-cancel) instead
+        of ``place_fok``.  Used by the secondary leg of a cross-venue arb so
+        a stale book on the secondary doesn't trigger an FOK reject and
+        leave the primary naked — IOC accepts a partial fill and the engine
+        unwinds the unfilled excess on the primary.
         """
         adapter = self.adapters.get(platform)
         if adapter is None:
@@ -1478,9 +1564,24 @@ class ExecutionEngine:
                 error=f"No adapter configured for platform: {platform}",
             )
 
+        # Pick the placement method: IOC for the secondary leg of a
+        # cross-venue arb, FOK by default.  Adapters that don't expose an
+        # async place_ioc fall back to place_fok (legacy polymarket and
+        # MagicMock-based test adapters land here — MagicMock auto-creates
+        # any attribute name so a plain ``hasattr`` check would route to a
+        # synchronous mock and crash on await).
+        import inspect as _inspect
+        candidate_ioc = getattr(adapter, "place_ioc", None) if use_ioc else None
+        place = (
+            candidate_ioc
+            if candidate_ioc is not None
+               and _inspect.iscoroutinefunction(candidate_ioc)
+            else adapter.place_fok
+        )
+
         try:
             order = await asyncio.wait_for(
-                adapter.place_fok(arb_id, market_id, canonical_id, side, price, qty),
+                place(arb_id, market_id, canonical_id, side, price, qty),
                 timeout=self.execution_timeout_s,
             )
         except asyncio.TimeoutError:
@@ -1705,16 +1806,51 @@ class ExecutionEngine:
                             platform=leg.platform,
                         )
 
-        # Reverse-order unwind on the filled leg (best-effort). Closes the
-        # naked position created when one leg confirmed FILLED while the
-        # hedge never filled (the soft-naked pattern that 3/10 production
-        # trades hit). The cancel loop above already removed the resting
-        # hedge so this SELL faces no race against a late hedge fill.
+        # Reverse-order unwind on the over-filled leg (best-effort). Closes
+        # whatever portion of the primary is unhedged after the secondary
+        # came back.  Three cases:
+        #   1. yes_filled XOR no_filled  → secondary CANCELLED entirely:
+        #      unwind ALL of the primary's filled qty.
+        #   2. both filled, qty mismatch → secondary IOC partially filled:
+        #      unwind only the diff (primary.fill_qty - secondary.fill_qty)
+        #      so the matched portion stays paired and only the un-paired
+        #      excess gets sold.
+        #   3. both filled, qty equal    → no naked exposure, skip unwind.
+        # Case 2 is what the Polymarket-IOC switch unlocks: previously the
+        # secondary either filled-in-full or killed-in-full, so case 2 was
+        # impossible.
+        unhedged_leg = None
+        unhedged_qty = 0
+        unhedged_paired_price = 0.0  # the secondary's fill price at the time, for PnL accounting
         if yes_filled ^ no_filled:
-            filled_leg = leg_yes if yes_filled else leg_no
+            unhedged_leg = leg_yes if yes_filled else leg_no
+            unhedged_qty = int(unhedged_leg.fill_qty or 0)
+            unhedged_paired_price = 0.0
+        elif yes_filled and no_filled:
+            yes_qty = int(leg_yes.fill_qty or 0)
+            no_qty = int(leg_no.fill_qty or 0)
+            if yes_qty != no_qty:
+                # Whichever side over-filled is the one that needs unwinding.
+                if yes_qty > no_qty:
+                    unhedged_leg = leg_yes
+                    unhedged_qty = yes_qty - no_qty
+                    unhedged_paired_price = float(leg_no.fill_price)
+                else:
+                    unhedged_leg = leg_no
+                    unhedged_qty = no_qty - yes_qty
+                    unhedged_paired_price = float(leg_yes.fill_price)
+                logger.info(
+                    "  ⚖ Secondary IOC partial-fill detected: "
+                    "yes=%d no=%d → unwinding %d %s on %s",
+                    yes_qty, no_qty, unhedged_qty,
+                    unhedged_leg.side.upper(), unhedged_leg.platform,
+                )
+
+        if unhedged_leg is not None and unhedged_qty > 0:
+            filled_leg = unhedged_leg
             adapter = self.adapters.get(filled_leg.platform)
             if adapter is not None and hasattr(adapter, "place_unwind_sell"):
-                unwind_target = max(int(filled_leg.fill_qty), 0)
+                unwind_target = unhedged_qty
                 if unwind_target > 0:
                     try:
                         unwind_order = await adapter.place_unwind_sell(
@@ -1772,7 +1908,76 @@ class ExecutionEngine:
                                 logger.warning(
                                     "auto_unwind incident emit failed: %s", exc,
                                 )
+
+                            # Auto-resolve the open critical incidents this arb
+                            # raised at one-leg-exposure detection time so the
+                            # readiness gate doesn't keep trading frozen on an
+                            # exposure that no longer exists.  We only resolve
+                            # incidents whose metadata.event_type is one of
+                            # the recovery-pair types — never blanket-resolve
+                            # by arb_id (a future audit-flagged incident on
+                            # the same arb stays open for human review).
+                            await self._auto_resolve_recovery_incidents(
+                                arb_id,
+                                unwound_qty=unwound_qty,
+                                unwind_target=unwind_target,
+                            )
         return notes, unwind_pnl
+
+    async def _auto_resolve_recovery_incidents(
+        self,
+        arb_id: str,
+        *,
+        unwound_qty: float,
+        unwind_target: int,
+    ) -> None:
+        """Mark soft-naked / one-leg-exposure incidents resolved after unwind.
+
+        Called from ``_recover_one_leg_risk`` once an auto-unwind has reduced
+        the naked exposure to zero (or to a value the operator can review at
+        leisure rather than treating as a live emergency).  Without this the
+        readiness gate's ``_check_incidents`` keeps the venue frozen because
+        of incidents that describe past — already-recovered — exposure, and
+        the auto-executor stops attempting new trades.
+
+        Only auto-resolves recovery-related event types.  Audit, drift, and
+        other operator-actionable incidents stay open even if they share
+        ``arb_id`` with a recovered position.
+        """
+        if unwound_qty <= 0:
+            return
+        recovery_event_types = {
+            "one_leg_exposure",
+            "soft_naked_leg",
+            "auto_unwind",
+        }
+        unwind_complete = unwound_qty >= unwind_target * 0.99
+        note = (
+            f"Auto-resolved: unwind closed {unwound_qty:.0f}/{unwind_target} "
+            "contracts; naked exposure cleared."
+            if unwind_complete
+            else f"Auto-resolved: partial unwind closed {unwound_qty:.0f}/"
+                 f"{unwind_target}; remaining exposure logged separately."
+        )
+        for incident in list(self._incidents):
+            if incident.arb_id != arb_id:
+                continue
+            if incident.status == "resolved":
+                continue
+            event_type = ""
+            if isinstance(incident.metadata, dict):
+                event_type = str(
+                    incident.metadata.get("event_type", "")
+                ).lower()
+            if event_type not in recovery_event_types:
+                continue
+            try:
+                await self.resolve_incident(incident.incident_id, note=note)
+            except Exception as exc:
+                logger.warning(
+                    "auto-resolve incident %s failed: %s",
+                    incident.incident_id, exc,
+                )
 
     async def _cancel_order(self, order: Order, arb_id: Optional[str] = None) -> bool:
         """Dispatch cancel through self.adapters[order.platform]. Platform-agnostic.
