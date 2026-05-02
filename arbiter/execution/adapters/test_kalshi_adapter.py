@@ -560,6 +560,101 @@ async def test_place_fok_explicit_tif_override_accepted():
     assert posted["time_in_force"] == "immediate_or_cancel"
 
 
+# ─── fill_price extraction (regression: NO orders mis-priced as 1-no_price) ─
+
+
+@pytest.mark.asyncio
+async def test_no_order_fill_price_uses_no_price_dollars_not_yes():
+    """A NO buy that fills at $0.10 must report fill_price=$0.10, NOT $0.90.
+
+    Kalshi returns BOTH yes_price_dollars (1 - no_price) and no_price_dollars
+    on every order response.  The previous parser read yes_price_dollars
+    first regardless of side, which mis-reported every NO fill onto the YES
+    scale and silently caused the engine to think it had paid 9x more cash
+    than it actually did — poisoning max_affordable_secondary calc and
+    sending the IOC at a useless limit.
+    """
+    body = json.dumps({"order": {
+        "order_id": "K-NO-1",
+        "client_order_id": "ARB-X-NO-abc",
+        "status": "executed",
+        "fill_count_fp": "10.00",
+        "no_price_dollars": "0.1000",       # actual fill price
+        "yes_price_dollars": "0.9000",      # YES-scale equivalent (= 1 - 0.10)
+        "taker_fill_cost_dollars": "1.00",  # cash actually spent
+        "taker_fees_dollars": "0.07",
+    }})
+    session = _session_with_post(200, body)
+    adapter = _make_adapter(session)
+    order = await adapter.place_fok("ARB-X", "TICKER", "CAN", "no", 0.10, 10)
+    # taker_fill_cost ($1.00) / fill_qty (10) = $0.10
+    assert order.status == OrderStatus.FILLED
+    assert abs(order.fill_price - 0.10) < 1e-9, (
+        f"NO order fill_price should be $0.10 (taker_fill_cost/qty), "
+        f"got {order.fill_price}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_yes_order_fill_price_uses_yes_price_dollars():
+    """Mirror of the NO test: YES orders must read yes_price_dollars and
+    return the actual fill price, not the NO-scale equivalent."""
+    body = json.dumps({"order": {
+        "order_id": "K-YES-1",
+        "status": "executed",
+        "fill_count_fp": "10.00",
+        "yes_price_dollars": "0.5500",
+        "no_price_dollars": "0.4500",
+        "taker_fill_cost_dollars": "5.50",
+    }})
+    session = _session_with_post(200, body)
+    adapter = _make_adapter(session)
+    order = await adapter.place_fok("ARB-Y", "TICKER", "CAN", "yes", 0.55, 10)
+    assert abs(order.fill_price - 0.55) < 1e-9
+
+
+@pytest.mark.asyncio
+async def test_fill_price_prefers_taker_fill_cost_over_limit_fields():
+    """taker_fill_cost_dollars / fill_count_fp is the most accurate fill
+    price (it's the actual cash that left our account).  When present, it
+    must override the limit-price echo fields, which only reflect what we
+    SENT not what we got."""
+    # Limit was $0.20 but actually filled at $0.15 average (cheaper levels in book).
+    body = json.dumps({"order": {
+        "order_id": "K-AVG-1",
+        "status": "executed",
+        "fill_count_fp": "10.00",
+        "no_price_dollars": "0.2000",        # limit (not actual)
+        "yes_price_dollars": "0.8000",       # mirror of limit
+        "taker_fill_cost_dollars": "1.50",   # actual cash → avg $0.15
+    }})
+    session = _session_with_post(200, body)
+    adapter = _make_adapter(session)
+    order = await adapter.place_fok("ARB-A", "TICKER", "CAN", "no", 0.20, 10)
+    assert abs(order.fill_price - 0.15) < 1e-9, (
+        f"fill_price should be taker_fill_cost/qty ($0.15), got {order.fill_price}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_fill_price_falls_back_to_side_correct_field_when_no_taker_cost():
+    """If taker_fill_cost_dollars is absent (older Kalshi formats), fall
+    back to the side-correct *_price_dollars field, NOT the opposite-side
+    field.  This is the core regression."""
+    body = json.dumps({"order": {
+        "order_id": "K-NO-2",
+        "status": "executed",
+        "fill_count_fp": "5.00",
+        "no_price_dollars": "0.0700",
+        "yes_price_dollars": "0.9300",
+        # taker_fill_cost_dollars deliberately absent
+    }})
+    session = _session_with_post(200, body)
+    adapter = _make_adapter(session)
+    order = await adapter.place_fok("ARB-B", "TICKER", "CAN", "no", 0.10, 5)
+    assert abs(order.fill_price - 0.07) < 1e-9
+
+
 # ─── place_unwind_sell ──────────────────────────────────────────────────
 
 @pytest.mark.asyncio

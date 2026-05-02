@@ -268,17 +268,7 @@ class KalshiAdapter:
         fill_qty = float(
             order_data.get("fill_count_fp", order_data.get("count_filled", "0")) or "0"
         )
-        fill_price_raw = order_data.get(
-            "yes_price_dollars",
-            order_data.get(
-                "no_price_dollars",
-                order_data.get("avg_price", str(price)),
-            ),
-        )
-        try:
-            fill_price = float(fill_price_raw) if fill_price_raw is not None else price
-        except (TypeError, ValueError):
-            fill_price = price
+        fill_price = self._extract_fill_price(order_data, side, fill_qty, price)
 
         return Order(
             order_id=str(order_data.get("order_id", client_order_id)),
@@ -413,17 +403,7 @@ class KalshiAdapter:
         fill_qty = float(
             order_data.get("fill_count_fp", order_data.get("count_filled", "0")) or "0"
         )
-        fill_price_raw = order_data.get(
-            "yes_price_dollars",
-            order_data.get(
-                "no_price_dollars",
-                order_data.get("avg_price", str(panic_price)),
-            ),
-        )
-        try:
-            fill_price = float(fill_price_raw) if fill_price_raw is not None else panic_price
-        except (TypeError, ValueError):
-            fill_price = panic_price
+        fill_price = self._extract_fill_price(order_data, side, fill_qty, panic_price)
 
         log.info(
             "kalshi.unwind.placed",
@@ -432,6 +412,7 @@ class KalshiAdapter:
             status=api_status,
             fill_qty=fill_qty,
             target_qty=qty,
+            fill_price=fill_price,
         )
 
         return Order(
@@ -640,17 +621,7 @@ class KalshiAdapter:
         fill_qty = float(
             order_data.get("fill_count_fp", order_data.get("count_filled", "0")) or "0"
         )
-        fill_price_raw = order_data.get(
-            "yes_price_dollars",
-            order_data.get(
-                "no_price_dollars",
-                order_data.get("avg_price", str(price)),
-            ),
-        )
-        try:
-            fill_price = float(fill_price_raw) if fill_price_raw is not None else price
-        except (TypeError, ValueError):
-            fill_price = price
+        fill_price = self._extract_fill_price(order_data, side, fill_qty, price)
 
         return Order(
             order_id=str(order_data.get("order_id", client_order_id)),
@@ -1205,9 +1176,68 @@ class KalshiAdapter:
             error=error,
         )
 
+    @staticmethod
+    def _extract_fill_price(
+        order_data: dict, side: str, fill_qty: float, fallback: float,
+    ) -> float:
+        """Extract the actual average fill price from a Kalshi order response.
+
+        Kalshi returns BOTH ``yes_price_dollars`` and ``no_price_dollars`` on
+        every order regardless of which side was traded — they are mirror
+        images (yes_price + no_price == 1.0).  For a NO buy at $0.10 the
+        response is ``{"no_price_dollars":"0.10","yes_price_dollars":"0.90"}``
+        — reading ``yes_price_dollars`` first (as the previous parser did)
+        flipped every NO fill onto the YES scale, so a NO order that filled
+        for $1 of cash got reported as if we had spent $9.  That bookkeeping
+        error then poisoned the engine's max-affordable-secondary calc and
+        caused soft-naked recoveries to silently lose money.
+
+        Preferred source: ``taker_fill_cost_dollars / fill_count_fp`` —
+        the actual cash that left our account divided by the number of
+        contracts that filled.  This is unambiguous regardless of side.
+
+        Fallback: the side-correct ``*_price_dollars`` field (no_price for
+        NO orders, yes_price for YES orders).  Last-resort: ``avg_price``
+        or the limit price.
+        """
+        # 1. Most accurate: actual cash / contracts.
+        cost_raw = order_data.get("taker_fill_cost_dollars")
+        if cost_raw is not None and fill_qty > 0:
+            try:
+                cost = float(cost_raw)
+                if cost > 0:
+                    return cost / float(fill_qty)
+            except (TypeError, ValueError):
+                pass
+
+        # 2. Side-correct price field.
+        side_key = "no_price_dollars" if str(side).lower() == "no" else "yes_price_dollars"
+        side_price_raw = order_data.get(side_key)
+        if side_price_raw is not None:
+            try:
+                return float(side_price_raw)
+            except (TypeError, ValueError):
+                pass
+
+        # 3. avg_price (older Kalshi format).
+        avg_raw = order_data.get("avg_price")
+        if avg_raw is not None:
+            try:
+                return float(avg_raw)
+            except (TypeError, ValueError):
+                pass
+
+        # 4. Last resort: caller-supplied fallback (typically the limit).
+        return float(fallback)
+
     def _order_data_to_order(self, od: dict) -> Order:
         api_status = od.get("status", "resting")
-        price_raw = od.get("yes_price_dollars", od.get("no_price_dollars", "0")) or "0"
+        side = str(od.get("side", "")).lower()
+        # Side-aware: a NO order's true price field is no_price_dollars
+        # (yes_price_dollars on a NO order is the YES-scale equivalent
+        # 1 - no_price, NOT the actual fill price).
+        price_key = "no_price_dollars" if side == "no" else "yes_price_dollars"
+        price_raw = od.get(price_key, od.get("yes_price_dollars", od.get("no_price_dollars", "0"))) or "0"
         try:
             price = float(price_raw)
         except (TypeError, ValueError):
@@ -1217,13 +1247,10 @@ class KalshiAdapter:
         except (TypeError, ValueError):
             quantity = 0
         try:
-            fill_price = float(od.get("avg_price", "0") or "0")
-        except (TypeError, ValueError):
-            fill_price = 0.0
-        try:
             fill_qty = float(od.get("fill_count_fp", "0") or "0")
         except (TypeError, ValueError):
             fill_qty = 0.0
+        fill_price = self._extract_fill_price(od, side, fill_qty, price)
         # CR-02: surface the engine-chosen client_order_id so callers
         # (e.g. timeout-recovery in engine._place_order_for_leg) can
         # propagate it back into the persistence layer.
