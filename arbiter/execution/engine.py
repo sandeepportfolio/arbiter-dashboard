@@ -1222,15 +1222,18 @@ class ExecutionEngine:
                 )
 
                 # IOC fills at limit-or-better.  We want enough headroom to
-                # absorb a 1-3¢ shift between walk and submit, but NOT so
-                # much that Polymarket rejects the order as "too far above
-                # market" (api_status=ORDER_STATE_REJECTED).  Cap at the
-                # walked price + slippage_buffer, then clamp by the
-                # max-affordable price so we never knowingly cross our edge
-                # floor.  If the walked price already exceeds max-affordable
-                # the trade is unprofitable on the secondary side — we
-                # ABORT here rather than place a guaranteed-loss order.
-                slippage_buffer_cents = 3.0
+                # absorb a sub-second shift between walk and submit, but NOT
+                # so much that Polymarket rejects the order as "too far from
+                # market" (Polymarket has a price-band guard that
+                # ORDER_STATE_REJECTs SELL limits more than ~2¢ below best
+                # YES bid — equivalent to NO buy limits more than ~2¢ above
+                # NO ask).  1¢ buffer keeps us inside the band while still
+                # absorbing a single-tick book shift.  Cap at max-affordable
+                # so we never knowingly cross our edge floor; if the walked
+                # price already exceeds max-affordable the trade is
+                # unprofitable on the secondary side — we ABORT here rather
+                # than place a guaranteed-loss order.
+                slippage_buffer_cents = 1.0
                 slippage_buffer = slippage_buffer_cents / 100.0
                 abort_secondary = secondary_fok_price > max_affordable_secondary
                 buffered_limit = min(
