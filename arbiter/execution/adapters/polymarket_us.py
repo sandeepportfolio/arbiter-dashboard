@@ -453,6 +453,17 @@ class PolymarketUSAdapter:
             "KILLED", "ORDER_STATE_KILLED",
             "EXPIRED", "ORDER_STATE_EXPIRED",
             "ORDER_STATE_UNFILLED",  # FOK/IOC reply when nothing matched
+            # ORDER_STATE_NEW arrives synchronously when Polymarket's matching
+            # engine has accepted the IOC but not yet completed processing
+            # within ``maxBlockTime``.  Verified empirically (order
+            # 9RPY2RKG00YX, 2026-05-02): a synchronous NEW reply with
+            # fill_qty=0 transitions to ORDER_STATE_EXPIRED moments later
+            # because the IOC didn't match the live book.  Treating it as
+            # CANCELLED here matches the eventual terminal state and routes
+            # the trade through soft-naked recovery so the primary leg gets
+            # unwound promptly instead of sitting exposed waiting for a
+            # delayed terminal callback that may never fire.
+            "NEW", "ORDER_STATE_NEW",
         }:
             return OrderStatus.CANCELLED
         if normalized in {"REJECTED", "ORDER_STATE_REJECTED"}:
