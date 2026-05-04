@@ -252,7 +252,22 @@ class PnLReconciler:
 
     @staticmethod
     def _pnl_by_platform(executions) -> Dict[str, float]:
-        """Return ledger P&L split across the two platforms for each arb."""
+        """Return ledger P&L split across the two platforms for each arb.
+
+        For TWO-LEG-FILLED arbs (status="filled") cash moves on both venues
+        roughly equally, so the historical 50/50 split matches reality.
+
+        For RECOVERY-PATH arbs (status="recovering") only one leg actually
+        filled — the other was cancelled/aborted/failed.  All cash from the
+        original buy AND the subsequent panic-sell unwind moves on the
+        SURVIVOR venue.  Splitting the realized_pnl 50/50 in this case
+        attributes phantom cash flow to the venue that didn't trade,
+        accumulating drift proportional to trade count and tripping the
+        readiness gate after only ~6 wins.  Now we credit the full realized
+        PnL to the survivor venue when we can identify one.
+        """
+        from ..execution.engine import OrderStatus
+
         pnl_by_platform: Dict[str, float] = {}
         for execution in executions or []:
             pnl = float(getattr(execution, "realized_pnl", 0.0) or 0.0)
@@ -262,9 +277,36 @@ class PnLReconciler:
             if pnl == 0.0 or not yes_platform or not no_platform:
                 continue
 
-            split_pnl = pnl / 2.0
-            pnl_by_platform[yes_platform] = pnl_by_platform.get(yes_platform, 0.0) + split_pnl
-            pnl_by_platform[no_platform] = pnl_by_platform.get(no_platform, 0.0) + split_pnl
+            # Identify the venue that actually moved cash by inspecting
+            # which leg ended up FILLED.  Cancelled/Aborted/Failed legs
+            # didn't transfer cash; only the FILLED leg (and its unwind
+            # on the same venue) did.
+            leg_yes = getattr(execution, "leg_yes", None)
+            leg_no = getattr(execution, "leg_no", None)
+            yes_status = getattr(leg_yes, "status", None) if leg_yes else None
+            no_status = getattr(leg_no, "status", None) if leg_no else None
+            yes_filled = yes_status == OrderStatus.FILLED
+            no_filled = no_status == OrderStatus.FILLED
+
+            if yes_filled and not no_filled:
+                pnl_by_platform[yes_platform] = (
+                    pnl_by_platform.get(yes_platform, 0.0) + pnl
+                )
+            elif no_filled and not yes_filled:
+                pnl_by_platform[no_platform] = (
+                    pnl_by_platform.get(no_platform, 0.0) + pnl
+                )
+            else:
+                # Both filled (or neither identifiable) — fall back to the
+                # 50/50 split.  For genuine two-leg-filled arbs the cash
+                # really did move on both venues.
+                split_pnl = pnl / 2.0
+                pnl_by_platform[yes_platform] = (
+                    pnl_by_platform.get(yes_platform, 0.0) + split_pnl
+                )
+                pnl_by_platform[no_platform] = (
+                    pnl_by_platform.get(no_platform, 0.0) + split_pnl
+                )
         return pnl_by_platform
 
     async def rebaseline(self, current_balances: dict, executions=None):
