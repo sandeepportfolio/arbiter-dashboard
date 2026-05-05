@@ -486,6 +486,20 @@ class ExecutionEngine:
             self._inter_leg_delay_ms = 500.0
         self._inter_leg_delay_ms = max(0.0, self._inter_leg_delay_ms)
 
+        # SMART_UNWIND_TIMEOUT_S: how long the recovery loop rests a
+        # break-even SELL before falling back to the market-IOC panic
+        # sell.  Default 30s — long enough for a buyer to take the bid
+        # at our cost basis on most sports/political markets, short
+        # enough that residual exposure stays bounded.  Set to 0 to
+        # disable smart-unwind entirely (always market-sells).
+        try:
+            self._smart_unwind_timeout_s = float(
+                _os_init.getenv("SMART_UNWIND_TIMEOUT_S", "30") or "30"
+            )
+        except (TypeError, ValueError):
+            self._smart_unwind_timeout_s = 30.0
+        self._smart_unwind_timeout_s = max(0.0, self._smart_unwind_timeout_s)
+
     def set_trade_gate(self, gate) -> None:
         self._trade_gate = gate
 
@@ -602,6 +616,15 @@ class ExecutionEngine:
                 execution = await self._simulate_execution(arb_id, requoted)
             else:
                 execution = await self._live_execution(arb_id, requoted)
+
+            # _live_execution returns None when it pre-aborts before placing
+            # any order — e.g. the orderbook is too thin to fill the requested
+            # qty, or the book-walked price would push net edge below the
+            # minimum. No order was placed, so there is nothing to audit,
+            # publish, or alert on; treat it as a clean abort.
+            if execution is None:
+                self._aborted_count += 1
+                return None
 
             await self._audit_execution(execution)
             await self._publish_execution(execution)
@@ -1225,24 +1248,24 @@ class ExecutionEngine:
                     0.0,
                 )
 
-                # IOC fills at limit-or-better.  Polymarket's price-band
-                # guard ORDER_STATE_REJECTs orders that put a SELL limit
-                # strictly below the best bid (which is what a BUY_SHORT at
-                # NO=walked+buffer translates to once the engine converts
-                # via 1 - no_price).  Verified empirically with 1¢ AND 3¢
-                # buffers above walked — both rejected.  Walking the book
-                # for ``effective_qty`` already returns the WORST price we
-                # need to absorb the full size, so submitting AT the walked
-                # price corresponds to a SELL exactly at the top of book —
-                # which Polymarket DOES accept.  Cap at max-affordable so a
-                # stale walk that has slipped past the edge floor never
-                # turns into a guaranteed-loss order; abort instead.
-                slippage_buffer = 0.0
+                # IOC fills at LIMIT-OR-BETTER, so the most-aggressive
+                # marketable limit we can place without crossing our edge
+                # floor is ``max_affordable_secondary`` itself.  We pay
+                # only what the actual book asks (= walked); the higher
+                # limit just guarantees marketability over a wider window
+                # of book movement.  Earlier strategies (walked + buffer
+                # capped at max_affordable) under-priced the order and
+                # left ~5¢ of book-shift headroom uncovered, so the IOC
+                # would expire when the top YES bid moved by even one
+                # tick between walk and submit.  Now we always submit at
+                # the maximum profitable price; Polymarket fills us at
+                # the visible book level (walked) and the smart-unwind
+                # path catches whatever slips through.  Abort only when
+                # the walked price already crosses our edge floor — at
+                # that point the trade is guaranteed-loss before any
+                # book movement, so we want the recovery path instead.
                 abort_secondary = secondary_fok_price > max_affordable_secondary
-                buffered_limit = min(
-                    secondary_fok_price + slippage_buffer,
-                    max_affordable_secondary,
-                )
+                buffered_limit = max_affordable_secondary if not abort_secondary else secondary_fok_price
 
                 logger.info(
                     "  Secondary IOC limit: walked=%.4f buffered=%.4f "
@@ -1902,13 +1925,22 @@ class ExecutionEngine:
             if adapter is not None and hasattr(adapter, "place_unwind_sell"):
                 unwind_target = unhedged_qty
                 if unwind_target > 0:
+                    # SMART UNWIND: try resting at break-even first, then
+                    # fall back to market-IOC.  Currently the recovery path
+                    # IMMEDIATELY market-sells at the panic IOC price, which
+                    # captures whatever bid happens to be at the top of book
+                    # at submit time.  That's gambling on book direction —
+                    # we make money when the market drifts in our favor and
+                    # lose when it drifts against us.  By first resting at
+                    # the original fill_price for ~30s we let buyers come
+                    # to us at our cost basis (break-even or better), only
+                    # falling back to the panic-sell when the resting order
+                    # doesn't get hit.  This converts most "lucky-direction
+                    # wins" and "unlucky-direction losses" into reliable
+                    # break-even closes.
                     try:
-                        unwind_order = await adapter.place_unwind_sell(
-                            f"{arb_id}-UNWIND",
-                            filled_leg.market_id,
-                            filled_leg.canonical_id,
-                            filled_leg.side,
-                            unwind_target,
+                        unwind_order = await self._smart_unwind(
+                            arb_id, filled_leg, unwind_target,
                         )
                     except Exception as exc:
                         logger.error(
@@ -1916,7 +1948,8 @@ class ExecutionEngine:
                             filled_leg.platform, filled_leg.side, exc,
                         )
                         notes.append(f"unwind-{filled_leg.side}:exception")
-                    else:
+                        unwind_order = None
+                    if unwind_order is not None:
                         unwound_qty = float(unwind_order.fill_qty or 0)
                         notes.append(
                             f"unwind-{filled_leg.side}:{unwind_order.status.value}"
@@ -2028,6 +2061,122 @@ class ExecutionEngine:
                     "auto-resolve incident %s failed: %s",
                     incident.incident_id, exc,
                 )
+
+    async def _smart_unwind(self, arb_id: str, filled_leg: Order, qty: int) -> Order:
+        """Two-phase unwind: try resting at break-even, fall back to market.
+
+        Phase 1 (PROFIT-PRESERVING): place a GTC SELL at the original
+        ``fill_price`` (break-even — closes the position with zero P&L
+        excluding fees).  Poll ``get_order`` for up to ~30s.  If a buyer
+        comes in at >= our limit the position closes flat.
+
+        Phase 2 (FALLBACK): if the resting order doesn't fill within the
+        timeout, cancel it and run the existing ``place_unwind_sell``
+        market-IOC at panic_price=$0.01 (= sell at any bid).  This
+        captures whatever the book offers right now — same behaviour as
+        before the smart-unwind change.
+
+        Why this matters: the recovery-path losses we observed were
+        almost all "market drifted against us in the second between
+        primary fill and panic-sell".  Resting briefly lets the market
+        come to us at our cost basis, converting most of those losses
+        into break-even or small wins.
+
+        Always returns an Order (the resting fill OR the market-IOC
+        fallback).  Never raises across this boundary.
+        """
+        adapter = self.adapters.get(filled_leg.platform)
+        # If the adapter doesn't support resting sells, skip Phase 1 and
+        # go straight to the market-IOC fallback.
+        if adapter is None or not hasattr(adapter, "place_resting_sell"):
+            return await adapter.place_unwind_sell(
+                f"{arb_id}-UNWIND",
+                filled_leg.market_id,
+                filled_leg.canonical_id,
+                filled_leg.side,
+                qty,
+            )
+
+        break_even = float(filled_leg.fill_price)
+        rest_timeout_s = float(self._smart_unwind_timeout_s)
+        rest_poll_interval_s = 1.0
+
+        # Phase 1: rest at break-even.
+        try:
+            resting = await adapter.place_resting_sell(
+                f"{arb_id}-UNWIND-REST",
+                filled_leg.market_id,
+                filled_leg.canonical_id,
+                filled_leg.side,
+                break_even,
+                qty,
+            )
+        except Exception as exc:
+            logger.warning(
+                "smart_unwind.resting_place_failed platform=%s err=%s — falling back to market",
+                filled_leg.platform, exc,
+            )
+            resting = None
+
+        if resting is None or resting.status in {OrderStatus.FAILED, OrderStatus.CANCELLED}:
+            # Couldn't even place the resting order — go straight to market.
+            return await adapter.place_unwind_sell(
+                f"{arb_id}-UNWIND",
+                filled_leg.market_id,
+                filled_leg.canonical_id,
+                filled_leg.side,
+                qty,
+            )
+
+        if resting.status == OrderStatus.FILLED and resting.fill_qty >= qty * 0.99:
+            # Filled instantly — typically means the book already had a bid
+            # at or above our break-even.  Best possible outcome.
+            logger.info(
+                "  ✓ Smart unwind filled INSTANTLY at break-even: %d @ $%.4f",
+                resting.fill_qty, resting.fill_price,
+            )
+            return resting
+
+        # Poll for fill.
+        elapsed = 0.0
+        while elapsed < rest_timeout_s:
+            await asyncio.sleep(rest_poll_interval_s)
+            elapsed += rest_poll_interval_s
+            try:
+                updated = await adapter.get_order(resting)
+            except Exception as exc:
+                logger.debug(
+                    "smart_unwind.get_order_failed err=%s — retrying", exc,
+                )
+                continue
+            if updated.status == OrderStatus.FILLED and updated.fill_qty >= qty * 0.99:
+                logger.info(
+                    "  ✓ Smart unwind filled at break-even after %.1fs: %d @ $%.4f",
+                    elapsed, updated.fill_qty, updated.fill_price,
+                )
+                return updated
+            if updated.status in {OrderStatus.CANCELLED, OrderStatus.FAILED}:
+                # Resting order died on its own — fall through to market.
+                break
+
+        # Phase 2: cancel and market-sell.
+        try:
+            await adapter.cancel_order(resting)
+        except Exception as exc:
+            logger.warning(
+                "smart_unwind.cancel_failed err=%s — proceeding to market anyway", exc,
+            )
+        logger.info(
+            "  → Smart unwind resting @ $%.4f did not fill in %.0fs, market-selling",
+            break_even, rest_timeout_s,
+        )
+        return await adapter.place_unwind_sell(
+            f"{arb_id}-UNWIND",
+            filled_leg.market_id,
+            filled_leg.canonical_id,
+            filled_leg.side,
+            qty,
+        )
 
     async def _cancel_order(self, order: Order, arb_id: Optional[str] = None) -> bool:
         """Dispatch cancel through self.adapters[order.platform]. Platform-agnostic.

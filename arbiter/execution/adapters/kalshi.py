@@ -430,6 +430,125 @@ class KalshiAdapter:
             external_client_order_id=client_order_id,
         )
 
+    # ─── place_resting_sell (smart-unwind helper) ─────────────────────────
+
+    async def place_resting_sell(
+        self,
+        arb_id: str,
+        market_id: str,
+        canonical_id: str,
+        side: str,
+        price: float,
+        qty: int,
+    ) -> Order:
+        """Place a resting GTC SELL limit order at ``price`` per contract.
+
+        Used by the engine's smart-unwind path: when the secondary leg of
+        an arb fails and we'd otherwise market-sell the primary at a panic
+        price, we first try to rest a SELL at break-even (the original
+        fill_price).  If a buyer comes in at >= our limit within ~30s the
+        position closes flat instead of taking the bid-ask haircut.  If
+        nothing matches, the engine cancels and falls back to the
+        existing place_unwind_sell market-IOC.
+
+        Like place_resting_limit, omits ``time_in_force`` so Kalshi treats
+        it as GTC (rests until cancelled or filled).  Returns the Order
+        with status SUBMITTED on success; caller must poll get_order or
+        cancel_order to drive the lifecycle.
+
+        ``side`` is the side originally bought (we held YES → sell YES;
+        held NO → sell NO).  Always returns an Order; never raises.
+        """
+        now = time.time()
+        if not self.auth or not getattr(self.auth, "is_authenticated", False):
+            return self._failed_order(
+                arb_id, market_id, canonical_id, side, price, qty, now,
+                "Kalshi auth not configured for resting sell",
+            )
+        if not self.circuit.can_execute():
+            return self._failed_order(
+                arb_id, market_id, canonical_id, side, price, qty, now,
+                "kalshi circuit open",
+            )
+
+        client_order_id = f"{arb_id}-{side.upper()}-RESTSELL-{uuid.uuid4().hex[:8]}"
+        order_body: dict[str, Any] = {
+            "ticker": market_id,
+            "client_order_id": client_order_id,
+            "action": "sell",
+            "side": side,
+            "type": "limit",
+            "count_fp": f"{float(qty):.2f}",
+            # No time_in_force = GTC.  Engine cancels if not filled within
+            # the smart-unwind timeout.
+        }
+        if side == "yes":
+            order_body["yes_price_dollars"] = f"{price:.4f}"
+        else:
+            order_body["no_price_dollars"] = f"{price:.4f}"
+
+        try:
+            response_status, payload, _ = await self._post_order(order_body)
+        except Exception as exc:
+            self.circuit.record_failure()
+            return self._failed_order(
+                arb_id, market_id, canonical_id, side, price, qty, now,
+                f"Kalshi resting sell exception: {exc}",
+            )
+
+        if response_status not in (200, 201):
+            log.warning(
+                "kalshi.resting_sell.rejected",
+                status=response_status,
+                body=payload[:200],
+                client_order_id=client_order_id,
+            )
+            return self._failed_order(
+                arb_id, market_id, canonical_id, side, price, qty, now,
+                f"Kalshi resting sell {response_status}: {payload[:200]}",
+            )
+
+        try:
+            data = json.loads(payload)
+        except Exception as exc:
+            return self._failed_order(
+                arb_id, market_id, canonical_id, side, price, qty, now,
+                f"Kalshi resting sell parse: {exc}",
+            )
+
+        order_data = data.get("order", data) if isinstance(data, dict) else {}
+        api_status = order_data.get("status", "resting")
+        mapped_status = _RESTING_STATUS_MAP.get(api_status, OrderStatus.SUBMITTED)
+        fill_qty = float(
+            order_data.get("fill_count_fp", order_data.get("count_filled", "0")) or "0"
+        )
+        fill_price = self._extract_fill_price(order_data, side, fill_qty, price)
+
+        log.info(
+            "kalshi.resting_sell.placed",
+            arb_id=arb_id,
+            client_order_id=client_order_id,
+            status=api_status,
+            fill_qty=fill_qty,
+            target_qty=qty,
+            limit_price=price,
+        )
+
+        return Order(
+            order_id=str(order_data.get("order_id", client_order_id)),
+            platform="kalshi",
+            market_id=market_id,
+            canonical_id=canonical_id,
+            side=side,
+            price=price,
+            quantity=qty,
+            status=mapped_status,
+            fill_price=fill_price,
+            fill_qty=fill_qty,
+            timestamp=now,
+            external_client_order_id=client_order_id,
+        )
+
     # ─── place_resting_limit (Plan 04-02.1 scope expansion) ──────────────
 
     async def place_resting_limit(
