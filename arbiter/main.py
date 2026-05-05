@@ -760,6 +760,32 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
         except Exception as exc:
             logger.warning("Failed to rehydrate execution history: %s", exc)
 
+    # Seed engine._execution_count from the highest arb_id in the DB so
+    # newly-minted ARB-NNN identifiers don't collide with persisted rows
+    # from prior container sessions.  Without this, every restart re-uses
+    # the same low ARB-000001..ARB-000020 ids, and execution_orders ends
+    # up with multiple rows for the same arb_id from different trades
+    # entirely.  Rehydration then mis-attributes leg statuses, which
+    # poisoned the reconciler's survivor-credit logic and re-introduced
+    # the drift block this fix is meant to resolve.
+    if store is not None:
+        try:
+            async with store._pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT MAX(arb_id) AS max_id FROM execution_arbs WHERE arb_id LIKE 'ARB-%'"
+                )
+                max_id = (row["max_id"] if row else None) or "ARB-000000"
+                try:
+                    engine._execution_count = int(max_id.split("-")[1])
+                    logger.info(
+                        "Seeded engine._execution_count=%d from DB max %s",
+                        engine._execution_count, max_id,
+                    )
+                except (IndexError, ValueError):
+                    pass
+        except Exception as exc:
+            logger.warning("Failed to seed _execution_count from DB: %s", exc)
+
     # ── AutoExecutor (Phase 6 Plan 06-01) ──────────────────────
     # Subscribes to scanner, executes on opportunities that pass all 7 policy
     # gates (enabled, is_armed, requires_manual, allow_auto_trade, duplicate,

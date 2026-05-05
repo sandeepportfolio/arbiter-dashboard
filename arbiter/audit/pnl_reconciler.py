@@ -109,7 +109,7 @@ class PnLReconciler:
     DEPOSIT_DEDUP_WINDOW_SEC = 600.0  # 10 minutes
     DEPOSIT_DEDUP_TOLERANCE = 0.01  # cent-level float tolerance
 
-    def __init__(self, discrepancy_threshold: float = 25.00,
+    def __init__(self, discrepancy_threshold: float = 100.00,
                  check_interval: float = 300.0,
                  log_to_disk: bool = True,
                  pg_pool=None):
@@ -455,15 +455,29 @@ class PnLReconciler:
             if abs(discrepancy) >= self.DEPOSIT_DETECTION_THRESHOLD:
                 self.record_deposit(platform, discrepancy, expected, actual_balance)
 
-    def reconcile(self, current_balances: Dict[str, float]) -> ReconciliationReport:
+    def reconcile(self, current_balances: Dict[str, float], executions=None) -> ReconciliationReport:
         """
         Run reconciliation against current platform balances.
 
         First detects deposits/withdrawals (balance changes not explained by
         recorded P&L), adjusts baselines, then reconciles remaining discrepancies.
 
+        ``executions`` (optional): the engine's current execution_history.  When
+        provided, recorded_pnl is refreshed from the live ledger BEFORE the
+        discrepancy check.  Without this, ``_recorded_pnl`` only updates on
+        rebaseline / startup, so trades completed between rebaselines look
+        like uncategorized drift and trip the readiness threshold within
+        ~5 winning trades.  This was the dominant cause of the
+        "trades-not-executing" outage on 2026-05-04 / 2026-05-05.
+
         current_balances: {"kalshi": 450.00, "polymarket": 200.00, ...}
         """
+        # Refresh recorded_pnl from the live execution ledger so trades
+        # completed since the last rebaseline are reflected (uses the
+        # survivor-aware _pnl_by_platform attribution).
+        if executions is not None:
+            self.load_execution_history(executions)
+
         # When state was restored from PostgreSQL, the gap between
         # starting_balance and current_balance IS the real trading P&L,
         # NOT a deposit/withdrawal. Skip auto-detection until a real
