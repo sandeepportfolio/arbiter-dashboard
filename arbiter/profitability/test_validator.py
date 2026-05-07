@@ -260,3 +260,18 @@ def test_validator_blocks_when_audit_or_critical_incidents_fail():
     assert snapshot.verdict == "blocked"
     assert snapshot.is_determined is True
     assert any("Audit pass rate" in reason for reason in snapshot.reasons)
+
+
+def test_min_profitable_ratio_env_override(monkeypatch):
+    monkeypatch.setenv("ARBITER_MIN_PROFITABLE_RATIO", "0.50")
+    config = ProfitabilityConfig()
+    assert config.min_profitable_execution_ratio == 0.50
+
+    monkeypatch.setenv("ARBITER_MIN_PROFITABLE_RATIO", "1.5")
+    assert ProfitabilityConfig().min_profitable_execution_ratio == 0.65
+
+    monkeypatch.setenv("ARBITER_MIN_PROFITABLE_RATIO", "not-a-number")
+    assert ProfitabilityConfig().min_profitable_execution_ratio == 0.65
+
+    monkeypatch.delenv("ARBITER_MIN_PROFITABLE_RATIO", raising=False)
+    assert ProfitabilityConfig().min_profitable_execution_ratio == 0.65
