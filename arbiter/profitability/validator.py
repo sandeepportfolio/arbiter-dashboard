@@ -142,7 +142,18 @@ class ProfitabilityValidator:
         scanner_stats = self.scanner.stats
         engine_stats = self.engine.stats
         executions = list(self.engine.execution_history)
-        incidents = list(self.engine.incidents)
+        all_incidents = list(self.engine.incidents)
+        # Match readiness._check_incidents semantics: only unresolved incidents
+        # represent active issues. Also drop "Trade gate blocked execution:
+        # Profitability verdict is blocked" warnings — those are a downstream
+        # symptom of this verdict and would create a self-reinforcing block.
+        incidents = [
+            incident
+            for incident in all_incidents
+            if str(getattr(incident, "status", "open")).lower() != "resolved"
+            and "Trade gate blocked execution: Profitability verdict"
+            not in str(getattr(incident, "message", ""))
+        ]
         current_opportunities = list(self.scanner.current_opportunities)
 
         completed = self._completed_executions(executions)
@@ -175,10 +186,16 @@ class ProfitabilityValidator:
             1 for incident in incidents if str(incident.severity).lower() == "critical"
         )
         total_executions = max(engine_stats.get("total_executions", len(executions)), 0)
+        # Use opportunity-evaluations (executions + aborted attempts) as the
+        # denominator. The engine aborts opportunities for many legitimate
+        # reasons (thin edge, gate denial, missing quotes); using only
+        # successful entries inflates the rate by ignoring routine rejections.
+        aborted_attempts = max(int(engine_stats.get("aborted", 0)), 0)
+        evaluation_denominator = total_executions + aborted_attempts
         incident_count = len(incidents)
         incident_rate = (
-            incident_count / total_executions
-            if total_executions > 0
+            incident_count / evaluation_denominator
+            if evaluation_denominator > 0
             else float(incident_count > 0)
         )
         audit_pass_rate = float(engine_stats.get("audit", {}).get("pass_rate", 1.0))
