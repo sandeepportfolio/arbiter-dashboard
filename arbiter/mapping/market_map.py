@@ -410,6 +410,35 @@ class MarketMappingStore:
         finally:
             await self._pool.release(conn)
 
+    async def disable_auto_trade(
+        self, canonical_id: str, reason: str
+    ) -> bool:
+        """Flip ``allow_auto_trade`` to FALSE and append the reason to notes.
+
+        Used by AutoExecutor's loss-streak kill-switch — when a mapping bleeds
+        N consecutive losing trades we disable it in-place rather than waiting
+        for an operator to notice. Returns True when a row was updated.
+        """
+        conn = await self.acquire()
+        try:
+            row = await conn.fetchrow(
+                """
+                UPDATE market_mappings
+                   SET allow_auto_trade = FALSE,
+                       updated_at = NOW(),
+                       notes = COALESCE(notes, '') ||
+                               E'\n[auto-disabled ' || NOW()::text ||
+                               ': ' || $2 || ']'
+                 WHERE canonical_id = $1 AND allow_auto_trade = TRUE
+              RETURNING canonical_id
+                """,
+                canonical_id,
+                reason,
+            )
+            return row is not None
+        finally:
+            await self._pool.release(conn)
+
     async def upsert(self, mapping: MarketMapping) -> MarketMapping:
         """Insert or update a mapping."""
         _enforce_auto_trade_safety(mapping)

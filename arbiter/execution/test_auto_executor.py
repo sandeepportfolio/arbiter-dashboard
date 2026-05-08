@@ -430,3 +430,156 @@ async def test_require_mapping_confirmed_passes_confirmed():
     )
     await ae._consider_opportunity(_make_opportunity())
     engine.execute_opportunity.assert_awaited_once()
+
+
+# ── Cooldown coverage ─────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_cooldown_set_after_recovering_result():
+    """Recovering trades (one-leg unwind) must trigger the same cooldown as
+    failed trades. Without this, a market whose secondary venue persistently
+    rejects orders generates back-to-back naked positions every ~30s — the
+    DEM_HOUSE_2026 cascade on 2026-05-08 lost 22 trades / -$105.80 because
+    'recovering' fell through both branches of the post-execute switch.
+    """
+    ae, engine = _make_components()
+    engine.execute_opportunity = AsyncMock(
+        return_value=SimpleNamespace(
+            arb_id="ARB-1", realized_pnl=-4.7, status="recovering"
+        )
+    )
+    await ae._consider_opportunity(_make_opportunity())
+    # Cooldown bucket must be populated so the next opportunity skips
+    assert "TEST-MKT" in ae._failed_cooldown
+    assert ae._failed_count.get("TEST-MKT", 0) == 1
+
+
+@pytest.mark.asyncio
+async def test_cooldown_not_set_after_filled_result():
+    ae, engine = _make_components()
+    engine.execute_opportunity = AsyncMock(
+        return_value=SimpleNamespace(
+            arb_id="ARB-1", realized_pnl=0.05, status="filled"
+        )
+    )
+    await ae._consider_opportunity(_make_opportunity())
+    assert "TEST-MKT" not in ae._failed_cooldown
+
+
+@pytest.mark.asyncio
+async def test_cooldown_blocks_subsequent_recovering_attempt():
+    """After a recovering trade, the next opportunity on the same canonical
+    must be skipped until the cooldown expires.
+    """
+    ae, engine = _make_components()
+    engine.execute_opportunity = AsyncMock(
+        return_value=SimpleNamespace(
+            arb_id="ARB-1", realized_pnl=-4.7, status="recovering"
+        )
+    )
+    await ae._consider_opportunity(_make_opportunity())
+    assert engine.execute_opportunity.await_count == 1
+
+    # Second opportunity on same canonical 1s later should be skipped
+    await ae._consider_opportunity(_make_opportunity())
+    assert engine.execute_opportunity.await_count == 1  # still 1, not 2
+    assert ae.stats.skipped_failed_cooldown == 1
+
+
+# ── Per-canonical loss-streak auto-disable ────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_loss_streak_disables_mapping_after_threshold():
+    """After N consecutive losing trades on the same canonical, the executor
+    must disable auto-trade on that mapping so it can't keep bleeding.
+    """
+
+    class _RecordingMappingStore(_FakeMappingStore):
+        def __init__(self, mapping):
+            super().__init__(mapping)
+            self.disabled_canonicals: list[str] = []
+
+        async def disable_auto_trade(self, canonical_id: str, reason: str) -> None:
+            self.disabled_canonicals.append(canonical_id)
+            if self._mapping is not None:
+                self._mapping.allow_auto_trade = False
+
+    mapping = _FakeMapping(allow_auto_trade=True)
+    store = _RecordingMappingStore(mapping)
+    scanner = _FakeScanner()
+    engine = SimpleNamespace(
+        execute_opportunity=AsyncMock(
+            return_value=SimpleNamespace(
+                arb_id="ARB-LOSS", realized_pnl=-4.5, status="recovering"
+            )
+        )
+    )
+    supervisor = SimpleNamespace(is_armed=False, armed_by=None)
+    cfg = AutoExecutorConfig(
+        enabled=True,
+        max_position_usd=100.0,
+        bootstrap_trades=None,
+        dedup_window_seconds=0,  # disable dedup so we can fire repeatedly
+        loss_streak_disable_threshold=3,
+    )
+    ae = AutoExecutor(
+        scanner=scanner,
+        engine=engine,
+        supervisor=supervisor,
+        mapping_store=store,
+        config=cfg,
+    )
+
+    # Clear cooldown + dedup between calls so each iteration actually fires
+    for i in range(3):
+        await ae._consider_opportunity(_make_opportunity(canonical_id="LOSS-MKT"))
+        ae._failed_cooldown.clear()
+        ae._seen_dedup_keys.clear()
+
+    assert store.disabled_canonicals == ["LOSS-MKT"]
+    assert mapping.allow_auto_trade is False
+
+
+@pytest.mark.asyncio
+async def test_loss_streak_resets_on_profitable_trade():
+    """A profitable trade resets the loss-streak counter so a single bad day
+    doesn't permanently disable a healthy market.
+    """
+    mapping = _FakeMapping(allow_auto_trade=True)
+    store = _FakeMappingStore(mapping)
+    scanner = _FakeScanner()
+
+    # Alternate losing and profitable results
+    results = [
+        SimpleNamespace(arb_id="A1", realized_pnl=-4.5, status="recovering"),
+        SimpleNamespace(arb_id="A2", realized_pnl=-4.5, status="recovering"),
+        SimpleNamespace(arb_id="A3", realized_pnl=0.30, status="filled"),
+        SimpleNamespace(arb_id="A4", realized_pnl=-4.5, status="recovering"),
+        SimpleNamespace(arb_id="A5", realized_pnl=-4.5, status="recovering"),
+    ]
+    engine = SimpleNamespace(execute_opportunity=AsyncMock(side_effect=results))
+    supervisor = SimpleNamespace(is_armed=False, armed_by=None)
+    cfg = AutoExecutorConfig(
+        enabled=True,
+        max_position_usd=100.0,
+        bootstrap_trades=None,
+        dedup_window_seconds=0,
+        loss_streak_disable_threshold=3,
+    )
+    ae = AutoExecutor(
+        scanner=scanner,
+        engine=engine,
+        supervisor=supervisor,
+        mapping_store=store,
+        config=cfg,
+    )
+
+    for _ in range(5):
+        await ae._consider_opportunity(_make_opportunity(canonical_id="MIX-MKT"))
+        ae._failed_cooldown.clear()
+        ae._seen_dedup_keys.clear()
+
+    # Streak was 2, then reset by profit, then 2 more losses — never hit 3
+    assert mapping.allow_auto_trade is True

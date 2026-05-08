@@ -177,8 +177,27 @@ class PolymarketUSAdapter:
                     ),
                 )
             )
-            logger.info(
-                "polymarket_us.order.placed",
+            # Capture rejection diagnostics. The execution adapter previously
+            # logged only ``api_status`` so REJECTED responses left no trail
+            # of WHY (min-size? geographic restriction? market suspended?).
+            # Pull common Polymarket error fields from the top-level response
+            # AND the first execution's order so we can diagnose patterns
+            # like the DEM_HOUSE_2026 cascade where one slug always rejects.
+            execution_order = (
+                (response.get("executions") or [{}])[0].get("order") or {}
+                if response.get("executions") else {}
+            )
+            rejection_reason = (
+                response.get("rejectionReason")
+                or response.get("errorMessage")
+                or response.get("errorMsg")
+                or response.get("error")
+                or response.get("message")
+                or execution_order.get("rejectionReason")
+                or execution_order.get("statusReason")
+                or execution_order.get("errorMessage")
+            )
+            log_payload = dict(
                 arb_id=arb_id,
                 slug=market_id,
                 side=side,
@@ -190,6 +209,20 @@ class PolymarketUSAdapter:
                 fill_qty=order.fill_qty,
                 fill_price=order.fill_price,
             )
+            if rejection_reason:
+                log_payload["rejection_reason"] = str(rejection_reason)[:300]
+            if "REJECTED" in api_status.upper() or "KILLED" in api_status.upper():
+                # Echo the full response (capped) so we can mine it later for
+                # whatever field the API actually used.
+                import json as _json
+                try:
+                    raw = _json.dumps(response, default=str)[:1500]
+                except Exception:
+                    raw = str(response)[:1500]
+                log_payload["raw_response"] = raw
+                logger.warning("polymarket_us.order.rejected", **log_payload)
+            else:
+                logger.info("polymarket_us.order.placed", **log_payload)
         return order
 
     # ─── place_ioc ────────────────────────────────────────────────────────

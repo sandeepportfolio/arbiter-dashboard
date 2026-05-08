@@ -597,6 +597,11 @@ class ScannerConfig:
     max_quote_age_seconds: float = 120.0
     min_liquidity: float = 25.0
     slippage_tolerance: float = 0.01
+    # Reject opportunities where either venue's bid-ask spread (in cents)
+    # exceeds this threshold on the side we'd buy. The DEM_HOUSE_2026 cascade
+    # of 2026-05-08 lost $105 because kalshi quoted YES at 27¢/74¢ — every
+    # forced unwind locked in the 47¢ spread as a loss. Set to 0 to disable.
+    max_bid_ask_spread_cents: float = 15.0
     dry_run: bool = field(default_factory=lambda: os.getenv("DRY_RUN", "true").lower() != "false")
 
 

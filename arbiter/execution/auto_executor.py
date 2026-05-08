@@ -50,6 +50,11 @@ class AutoExecutorConfig:
     min_depth_usd: float = 25.0
     min_edge_cents_preflight: float = 3.0
     require_mapping_confirmed: bool = False  # opt-in stricter mapping gate
+    # Auto-disable a mapping after this many consecutive losing recoveries.
+    # Catches markets like DEM_HOUSE_2026 (2026-05-08 cascade: 22 trades /
+    # -$105.80) where the secondary venue persistently rejects orders and
+    # every primary fill turns into a forced unwind.
+    loss_streak_disable_threshold: int = 3
 
 
 @dataclass
@@ -67,6 +72,8 @@ class AutoExecutorStats:
     skipped_stale_quote: int = 0
     skipped_edge_collapsed: int = 0
     skipped_depth_low: int = 0
+    skipped_failed_cooldown: int = 0
+    auto_disabled_loss_streak: int = 0
     failures: int = 0
     last_considered_ts: float = 0.0
     last_executed_ts: float = 0.0
@@ -86,6 +93,8 @@ class AutoExecutorStats:
             "skipped_stale_quote": self.skipped_stale_quote,
             "skipped_edge_collapsed": self.skipped_edge_collapsed,
             "skipped_depth_low": self.skipped_depth_low,
+            "skipped_failed_cooldown": self.skipped_failed_cooldown,
+            "auto_disabled_loss_streak": self.auto_disabled_loss_streak,
             "failures": self.failures,
             "last_considered_ts": self.last_considered_ts,
             "last_executed_ts": self.last_executed_ts,
@@ -121,6 +130,7 @@ class AutoExecutor:
         self._seen_dedup_keys: dict[str, float] = {}
         self._failed_cooldown: dict[str, float] = {}  # canonical_id -> cooldown_until
         self._failed_count: dict[str, int] = {}  # canonical_id -> consecutive failure count
+        self._loss_streak: dict[str, int] = {}  # canonical_id -> consecutive losing trades
         self.stats = AutoExecutorStats()
 
     async def start(self) -> None:
@@ -216,6 +226,7 @@ class AutoExecutor:
         # Cooldown after failed fill-or-kill (avoid spamming thin orderbooks)
         cooldown_until = self._failed_cooldown.get(opp.canonical_id, 0.0)
         if now < cooldown_until:
+            self.stats.skipped_failed_cooldown += 1
             log.info(
                 "auto_executor.skip.failed_cooldown",
                 canonical_id=opp.canonical_id,
@@ -322,7 +333,16 @@ class AutoExecutor:
             )
             return
 
-        if result is None or getattr(result, "status", "") == "failed":
+        result_status = getattr(result, "status", "") if result is not None else ""
+        result_pnl = float(getattr(result, "realized_pnl", 0.0) or 0.0) if result is not None else 0.0
+        # "recovering" means one leg filled and the other was unwound — from a
+        # system-correctness standpoint that is a failure even when the unwind
+        # happens to capture profit. Before this fix only status="failed" or
+        # result=None set cooldown, so the DEM_HOUSE_2026 cascade fired 22
+        # times in 15 minutes despite the 5-min backoff.
+        is_failure = result is None or result_status in ("failed", "recovering")
+        is_clean_fill = result_status in ("filled", "submitted") and result_pnl >= 0
+        if is_failure:
             # Exponential backoff: 5m, 10m, 20m, 40m, capped at 60m
             count = self._failed_count.get(opp.canonical_id, 0) + 1
             self._failed_count[opp.canonical_id] = count
@@ -333,20 +353,77 @@ class AutoExecutor:
                 canonical_id=opp.canonical_id,
                 attempt=count,
                 backoff_minutes=round(backoff_s / 60, 1),
+                result_status=result_status or "no_result",
+                realized_pnl=result_pnl,
             )
         if result is not None:
             self.stats.executed += 1
             self.stats.last_executed_ts = time.time()
-            # Reset failure counter on successful execution
-            if getattr(result, "status", "") in ("filled", "submitted"):
+            if is_clean_fill:
+                # Reset failure + loss-streak counters on a clean profitable fill
                 self._failed_count.pop(opp.canonical_id, None)
                 self._failed_cooldown.pop(opp.canonical_id, None)
+                if result_pnl > 0:
+                    self._loss_streak.pop(opp.canonical_id, None)
+            if is_failure and result_pnl < 0:
+                # Track consecutive losses per canonical and auto-disable when
+                # we cross the threshold. This is the kill-switch the
+                # DEM_HOUSE_2026 cascade needed.
+                streak = self._loss_streak.get(opp.canonical_id, 0) + 1
+                self._loss_streak[opp.canonical_id] = streak
+                threshold = self._config.loss_streak_disable_threshold
+                if threshold > 0 and streak >= threshold:
+                    await self._auto_disable_mapping(
+                        opp.canonical_id,
+                        reason=f"auto-disabled after {streak} consecutive losing trades",
+                    )
             log.info(
                 "auto_executor.execute.complete",
                 canonical_id=opp.canonical_id,
                 arb_id=getattr(result, "arb_id", None),
-                realized_pnl=getattr(result, "realized_pnl", None),
+                realized_pnl=result_pnl,
+                status=result_status,
+                loss_streak=self._loss_streak.get(opp.canonical_id, 0),
             )
+
+    async def _auto_disable_mapping(self, canonical_id: str, *, reason: str) -> None:
+        """Disable auto-trade on a mapping that's bleeding capital.
+
+        Tries the mapping_store's ``disable_auto_trade(canonical_id, reason)``
+        if it exposes one (DB-backed stores), and otherwise falls back to
+        toggling ``allow_auto_trade`` on the cached mapping object so the
+        in-memory adapter's next ``get()`` reflects the change.
+        """
+        log.warning(
+            "auto_executor.mapping.auto_disabled",
+            canonical_id=canonical_id,
+            reason=reason,
+        )
+        self.stats.auto_disabled_loss_streak += 1
+        # Reset the loss streak so a re-enabled mapping starts fresh
+        self._loss_streak.pop(canonical_id, None)
+        store_disable = getattr(self._mapping_store, "disable_auto_trade", None)
+        if callable(store_disable):
+            try:
+                await store_disable(canonical_id, reason)
+                return
+            except Exception as exc:  # noqa: BLE001
+                log.error(
+                    "auto_executor.mapping.auto_disable_failed",
+                    canonical_id=canonical_id,
+                    err=str(exc),
+                )
+        # Fallback: mutate the cached mapping object so subsequent
+        # ``mapping_store.get()`` calls see allow_auto_trade=False.
+        try:
+            cached = await self._mapping_store.get(canonical_id)
+        except Exception:
+            cached = None
+        if cached is not None and hasattr(cached, "allow_auto_trade"):
+            try:
+                setattr(cached, "allow_auto_trade", False)
+            except Exception:  # noqa: BLE001
+                pass
 
     # ─── pre-flight ───────────────────────────────────────────────────────
 
@@ -551,6 +628,18 @@ class _SettingsMappingAdapter:
                 entry.get("resolution_match_status", "pending_operator_review")
             ),
         )
+
+    async def disable_auto_trade(self, canonical_id: str, reason: str) -> bool:
+        """Mirror the DB-backed store's signature for the in-memory map so
+        AutoExecutor's loss-streak kill-switch works in dev/test contexts too.
+        """
+        entry = self._market_map.get(canonical_id)
+        if entry is None or not entry.get("allow_auto_trade"):
+            return False
+        entry["allow_auto_trade"] = False
+        existing_notes = str(entry.get("notes", "") or "")
+        entry["notes"] = f"{existing_notes}\n[auto-disabled: {reason}]".strip()
+        return True
 
 
 @dataclass

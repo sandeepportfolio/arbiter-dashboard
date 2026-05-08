@@ -379,6 +379,42 @@ class ArbitrageScanner:
         if gross_edge <= 0:
             return None
 
+        # ── Wide bid-ask spread guard ────────────────────────────────────
+        # If either venue's bid-ask spread on the side we'd buy is wider than
+        # the configured threshold, we cannot recover from a one-leg failure.
+        # Real example: DEM_HOUSE_2026 on 2026-05-08 had kalshi YES quoted at
+        # bid=$0.27 / ask=$0.74. Every secondary-leg rejection forced a unwind
+        # at the BID, locking in -$4.80 per trade across 22 consecutive
+        # opportunities before the operator intervened.
+        max_spread_cents = float(getattr(self.config, "max_bid_ask_spread_cents", 0.0) or 0.0)
+        if max_spread_cents > 0:
+            yes_spread_cents = (yes_price_point.yes_ask - yes_price_point.yes_bid) * 100.0
+            no_spread_cents = (no_price_point.no_ask - no_price_point.no_bid) * 100.0
+            if (
+                yes_price_point.yes_bid > 0
+                and yes_price_point.yes_ask > 0
+                and yes_spread_cents > max_spread_cents
+            ):
+                logger.debug(
+                    "Wide-spread skip: %s %s YES bid=$%.2f ask=$%.2f spread=%.1f¢ > %.1f¢",
+                    canonical_id, yes_price_point.platform,
+                    yes_price_point.yes_bid, yes_price_point.yes_ask,
+                    yes_spread_cents, max_spread_cents,
+                )
+                return None
+            if (
+                no_price_point.no_bid > 0
+                and no_price_point.no_ask > 0
+                and no_spread_cents > max_spread_cents
+            ):
+                logger.debug(
+                    "Wide-spread skip: %s %s NO bid=$%.2f ask=$%.2f spread=%.1f¢ > %.1f¢",
+                    canonical_id, no_price_point.platform,
+                    no_price_point.no_bid, no_price_point.no_ask,
+                    no_spread_cents, max_spread_cents,
+                )
+                return None
+
         suggested_qty = self._compute_position_size(yes_price_point, no_price_point, yes_price, no_price)
         if suggested_qty <= 0:
             return None
