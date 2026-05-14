@@ -500,6 +500,22 @@ class ExecutionEngine:
             self._smart_unwind_timeout_s = 30.0
         self._smart_unwind_timeout_s = max(0.0, self._smart_unwind_timeout_s)
 
+        # C2 — POST-SUBMIT POLL:
+        # When ``_place_order_for_leg`` returns SUBMITTED (order accepted
+        # onto the venue book but unfilled), poll ``adapter.get_order``
+        # until the order reaches a terminal status or this hard timeout
+        # fires.  Without this, a venue that fills the order later leaves
+        # the engine's DB row + RiskManager exposure pegged to SUBMITTED
+        # forever — silent divergence from venue reality.
+        try:
+            self._submit_poll_timeout_s = float(
+                _os_init.getenv("SUBMIT_POLL_TIMEOUT_S", "10") or "10"
+            )
+        except (TypeError, ValueError):
+            self._submit_poll_timeout_s = 10.0
+        self._submit_poll_timeout_s = max(0.0, self._submit_poll_timeout_s)
+        self._submit_poll_interval_s = 0.5
+
     def set_trade_gate(self, gate) -> None:
         self._trade_gate = gate
 
@@ -1875,6 +1891,16 @@ class ExecutionEngine:
                 )
             order = partial
 
+        # C2 — POST-SUBMIT POLL:
+        # If place returned SUBMITTED (accepted onto the book, not yet
+        # matched), poll the venue until the order reaches a terminal
+        # status or the hard timeout fires.  Otherwise the engine
+        # records SUBMITTED as the final state and never re-checks — if
+        # the venue fills the order seconds later, the DB row + risk
+        # exposure drift away from venue reality forever.
+        if order.status == OrderStatus.SUBMITTED:
+            order = await self._poll_submitted_to_terminal(adapter, order, arb_id)
+
         # EXEC-02 / D-16: persist every state transition. Store is optional
         # (dev mode without Postgres) — failures here MUST NOT break execution.
         if self.store is not None:
@@ -1886,6 +1912,67 @@ class ExecutionEngine:
             except Exception as exc:
                 logger.warning("ExecutionStore upsert_order failed: %s", exc)
         return order
+
+    async def _poll_submitted_to_terminal(
+        self,
+        adapter: "PlatformAdapter",
+        order: Order,
+        arb_id: str,
+    ) -> Order:
+        """C2: bounded poll of a SUBMITTED order until terminal or timeout.
+
+        Returns the latest ``Order`` seen.  If the adapter doesn't expose
+        an async ``get_order`` (legacy / mock adapters), silently no-ops
+        and returns ``order`` unchanged — the legacy SUBMITTED-flows-
+        through-to-recovery path is preserved for those adapters.
+
+        Transient ``get_order`` exceptions are swallowed and the poll
+        loop retries on the next interval; only a terminal status or the
+        hard timeout exits the loop.
+        """
+        timeout = float(getattr(self, "_submit_poll_timeout_s", 10.0))
+        if timeout <= 0:
+            return order
+        import inspect as _inspect
+        candidate = getattr(adapter, "get_order", None)
+        if candidate is None or not _inspect.iscoroutinefunction(candidate):
+            return order
+
+        interval = float(getattr(self, "_submit_poll_interval_s", 0.5))
+        # Defensive: a zero/negative interval would spin forever.
+        if interval <= 0:
+            interval = 0.5
+
+        terminal_statuses = {
+            OrderStatus.FILLED,
+            OrderStatus.PARTIAL,
+            OrderStatus.CANCELLED,
+            OrderStatus.FAILED,
+            OrderStatus.ABORTED,
+        }
+        elapsed = 0.0
+        current = order
+        while elapsed < timeout:
+            await asyncio.sleep(interval)
+            elapsed += interval
+            try:
+                updated = await adapter.get_order(current)
+            except Exception as exc:
+                logger.debug(
+                    "post_submit_poll.get_order_failed arb=%s err=%s",
+                    arb_id, exc,
+                )
+                continue
+            # Carry forward the freshest venue snapshot — even still-
+            # SUBMITTED updates may contain a refined fill_qty/price.
+            current = updated
+            if current.status in terminal_statuses:
+                return current
+        logger.warning(
+            "post_submit_poll.timeout arb=%s order=%s — leg still SUBMITTED after %.1fs",
+            arb_id, current.order_id, timeout,
+        )
+        return current
 
     @staticmethod
     def _derive_client_order_id(order: Order) -> Optional[str]:
@@ -2317,23 +2404,93 @@ class ExecutionEngine:
                 break
 
         # Phase 2: cancel and market-sell.
+        #
+        # C1 race protection: between the last successful poll and the
+        # cancel landing on the venue, the resting order may have filled
+        # (the poll only catches state changes between calls — a fill
+        # that arrives while the cancel is in flight is invisible until
+        # we re-read). If we blindly market-sell ``qty`` after cancel,
+        # the position closes twice — once flat via the late resting
+        # fill, once at panic price via the market-IOC — and the engine
+        # ends up net SHORT by ``qty``. Mandatory: re-read state once
+        # more AFTER cancel and only market-sell the truly unfilled
+        # remainder.
         try:
             await adapter.cancel_order(resting)
         except Exception as exc:
             logger.warning(
-                "smart_unwind.cancel_failed err=%s — proceeding to market anyway", exc,
+                "smart_unwind.cancel_failed err=%s — re-checking resting state before market-sell", exc,
             )
-        logger.info(
-            "  → Smart unwind resting @ $%.4f did not fill in %.0fs, market-selling",
-            break_even, rest_timeout_s,
-        )
-        return await adapter.place_unwind_sell(
+
+        # Single mandatory post-cancel state read. On adapter failure,
+        # fall back to the last-known resting state from the poll loop
+        # (``resting`` is the placed-order snapshot if no poll completed,
+        # otherwise the last ``updated``).
+        post_cancel_state = resting
+        try:
+            post_cancel_state = await adapter.get_order(resting)
+        except Exception as exc:
+            logger.warning(
+                "smart_unwind.post_cancel_get_failed err=%s — using last-known resting state",
+                exc,
+            )
+
+        rest_filled_qty = int(post_cancel_state.fill_qty or 0)
+        # Full close raced through — resting fully filled in the window.
+        # Do NOT send the market-IOC; the position is already flat.
+        if (
+            post_cancel_state.status == OrderStatus.FILLED
+            or rest_filled_qty >= qty
+        ):
+            logger.info(
+                "  ✓ Smart unwind raced cancel — resting filled %d/%d @ $%.4f, "
+                "skipping market-IOC",
+                rest_filled_qty, qty, float(post_cancel_state.fill_price or 0.0),
+            )
+            return post_cancel_state
+
+        remaining_qty = qty - rest_filled_qty
+        if remaining_qty <= 0:
+            return post_cancel_state
+
+        if rest_filled_qty > 0:
+            logger.info(
+                "  → Smart unwind resting partially filled %d/%d @ $%.4f; "
+                "market-selling remainder %d",
+                rest_filled_qty, qty,
+                float(post_cancel_state.fill_price or 0.0),
+                remaining_qty,
+            )
+        else:
+            logger.info(
+                "  → Smart unwind resting @ $%.4f did not fill in %.0fs, market-selling %d",
+                break_even, rest_timeout_s, remaining_qty,
+            )
+
+        market_order = await adapter.place_unwind_sell(
             f"{arb_id}-UNWIND",
             filled_leg.market_id,
             filled_leg.canonical_id,
             filled_leg.side,
-            qty,
+            remaining_qty,
         )
+
+        # If the resting order also delivered fills before the cancel,
+        # blend the two fills into one Order so realized-P&L accounting
+        # reflects BOTH legs of the close (break-even portion + panic-
+        # price portion) at a quantity-weighted average price.
+        if rest_filled_qty > 0 and int(market_order.fill_qty or 0) > 0:
+            market_filled_qty = int(market_order.fill_qty)
+            total_filled = rest_filled_qty + market_filled_qty
+            blended_price = (
+                rest_filled_qty * float(post_cancel_state.fill_price or 0.0)
+                + market_filled_qty * float(market_order.fill_price or 0.0)
+            ) / max(total_filled, 1)
+            market_order.fill_qty = total_filled
+            market_order.fill_price = blended_price
+            market_order.quantity = qty
+
+        return market_order
 
     async def _cancel_order(self, order: Order, arb_id: Optional[str] = None) -> bool:
         """Dispatch cancel through self.adapters[order.platform]. Platform-agnostic.

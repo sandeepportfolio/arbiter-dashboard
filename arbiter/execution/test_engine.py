@@ -1725,3 +1725,394 @@ def test_dry_run_record_trade_unchanged_after_fix():
         assert engine.risk._open_positions.get(opp.canonical_id) == expected_total
 
     asyncio.run(runner())
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# C2: Bounded post-submit poll for SUBMITTED legs
+#
+# Bug: when ``_place_order_for_leg`` returns ``OrderStatus.SUBMITTED``
+# (order accepted onto the venue book but not immediately matched), the
+# engine recorded the leg and moved on with no follow-up.  If the venue
+# eventually filled or cancelled the order, the engine's DB row and
+# RiskManager exposure stayed pegged to SUBMITTED forever — silent
+# divergence from venue reality.
+#
+# Fix: after place returns SUBMITTED, poll ``adapter.get_order`` on a
+# bounded loop (default 10s) until the order reaches a terminal status
+# or the timeout fires.  Persist the final state via store.upsert_order.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_post_submit_poll_transitions_submitted_to_filled():
+    """C2 regression: when place_fok returns SUBMITTED and the venue
+    later fills the order, the post-submit poll detects the FILLED state
+    and returns it — instead of stopping at SUBMITTED forever.
+    """
+    from arbiter.execution.engine import Order, OrderStatus
+
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        engine._submit_poll_timeout_s = 0.3
+        engine._submit_poll_interval_s = 0.02
+
+        submitted = Order(
+            order_id="KALSHI-OPEN-1",
+            platform="kalshi",
+            market_id="K-YES",
+            canonical_id="C",
+            side="yes",
+            price=0.55,
+            quantity=10,
+            status=OrderStatus.SUBMITTED,
+            external_client_order_id="ARB-1-YES-deadbeef",
+        )
+        filled = Order(
+            order_id="KALSHI-OPEN-1",
+            platform="kalshi",
+            market_id="K-YES",
+            canonical_id="C",
+            side="yes",
+            price=0.55,
+            quantity=10,
+            status=OrderStatus.FILLED,
+            fill_qty=10,
+            fill_price=0.55,
+            external_client_order_id="ARB-1-YES-deadbeef",
+        )
+
+        adapter = MagicMock()
+        adapter.platform = "kalshi"
+        adapter.place_fok = AsyncMock(return_value=submitted)
+        # First two polls still SUBMITTED, third poll returns FILLED.
+        adapter.get_order = AsyncMock(side_effect=[submitted, submitted, filled])
+
+        engine.adapters = {"kalshi": adapter}
+
+        result = await engine._place_order_for_leg(
+            arb_id="ARB-1", platform="kalshi",
+            market_id="K-YES", canonical_id="C", side="yes",
+            price=0.55, qty=10,
+        )
+
+        # Engine waited for the venue to converge — does NOT return SUBMITTED.
+        assert result.status == OrderStatus.FILLED, (
+            f"expected FILLED after post-submit poll, got {result.status.value}"
+        )
+        assert result.fill_qty == 10
+        assert result.fill_price == 0.55
+        assert adapter.get_order.await_count == 3
+
+    asyncio.run(runner())
+
+
+def test_post_submit_poll_returns_submitted_after_timeout():
+    """C2: if the venue never reaches a terminal state, the poll loop
+    must give up after the hard timeout and return the SUBMITTED order
+    (so the caller's recovery / soft-naked path can kick in)."""
+    from arbiter.execution.engine import Order, OrderStatus
+
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        engine._submit_poll_timeout_s = 0.06
+        engine._submit_poll_interval_s = 0.02
+
+        submitted = Order(
+            order_id="POLY-OPEN-7",
+            platform="polymarket",
+            market_id="P-NO",
+            canonical_id="C",
+            side="no",
+            price=0.40,
+            quantity=10,
+            status=OrderStatus.SUBMITTED,
+        )
+
+        adapter = MagicMock()
+        adapter.platform = "polymarket"
+        adapter.place_fok = AsyncMock(return_value=submitted)
+        adapter.get_order = AsyncMock(return_value=submitted)
+
+        engine.adapters = {"polymarket": adapter}
+
+        result = await engine._place_order_for_leg(
+            arb_id="ARB-7", platform="polymarket",
+            market_id="P-NO", canonical_id="C", side="no",
+            price=0.40, qty=10,
+        )
+
+        assert result.status == OrderStatus.SUBMITTED
+        # Polled at least once before giving up.
+        assert adapter.get_order.await_count >= 1
+
+    asyncio.run(runner())
+
+
+def test_post_submit_poll_detects_cancellation():
+    """C2: if the venue cancels the order (e.g. self-trade prevention,
+    user manually killed it), the poll should pick up the CANCELLED
+    status and return it instead of staying on SUBMITTED."""
+    from arbiter.execution.engine import Order, OrderStatus
+
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        engine._submit_poll_timeout_s = 0.3
+        engine._submit_poll_interval_s = 0.02
+
+        submitted = Order(
+            order_id="KALSHI-OPEN-2",
+            platform="kalshi",
+            market_id="K-YES",
+            canonical_id="C",
+            side="yes",
+            price=0.55,
+            quantity=10,
+            status=OrderStatus.SUBMITTED,
+        )
+        cancelled = Order(
+            order_id="KALSHI-OPEN-2",
+            platform="kalshi",
+            market_id="K-YES",
+            canonical_id="C",
+            side="yes",
+            price=0.55,
+            quantity=10,
+            status=OrderStatus.CANCELLED,
+            fill_qty=0,
+        )
+
+        adapter = MagicMock()
+        adapter.platform = "kalshi"
+        adapter.place_fok = AsyncMock(return_value=submitted)
+        adapter.get_order = AsyncMock(side_effect=[submitted, cancelled])
+
+        engine.adapters = {"kalshi": adapter}
+
+        result = await engine._place_order_for_leg(
+            arb_id="ARB-2", platform="kalshi",
+            market_id="K-YES", canonical_id="C", side="yes",
+            price=0.55, qty=10,
+        )
+
+        assert result.status == OrderStatus.CANCELLED
+
+    asyncio.run(runner())
+
+
+def test_post_submit_poll_skipped_when_status_already_terminal():
+    """C2: terminal statuses (FILLED, PARTIAL, FAILED, CANCELLED) MUST
+    NOT trigger the poll loop — calling get_order on a fresh FOK fill
+    would be pure waste and could mis-fire if the adapter doesn't
+    support get_order for completed orders.
+    """
+    from arbiter.execution.engine import Order, OrderStatus
+
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        engine._submit_poll_timeout_s = 1.0
+        engine._submit_poll_interval_s = 0.01
+
+        filled = Order(
+            order_id="KALSHI-OPEN-3",
+            platform="kalshi",
+            market_id="K-YES",
+            canonical_id="C",
+            side="yes",
+            price=0.55,
+            quantity=10,
+            status=OrderStatus.FILLED,
+            fill_qty=10,
+            fill_price=0.55,
+        )
+
+        adapter = MagicMock()
+        adapter.platform = "kalshi"
+        adapter.place_fok = AsyncMock(return_value=filled)
+        adapter.get_order = AsyncMock()
+
+        engine.adapters = {"kalshi": adapter}
+
+        result = await engine._place_order_for_leg(
+            arb_id="ARB-3", platform="kalshi",
+            market_id="K-YES", canonical_id="C", side="yes",
+            price=0.55, qty=10,
+        )
+
+        assert result.status == OrderStatus.FILLED
+        adapter.get_order.assert_not_called()
+
+    asyncio.run(runner())
+
+
+def test_post_submit_poll_persists_final_status_to_store():
+    """C2: the resolved final status must be upserted to ExecutionStore
+    — otherwise the DB row stays SUBMITTED forever (the bug).  The
+    engine writes the FINAL state, not the place-call intermediate.
+    """
+    from arbiter.execution.engine import Order, OrderStatus
+
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        engine._submit_poll_timeout_s = 0.3
+        engine._submit_poll_interval_s = 0.02
+
+        submitted = Order(
+            order_id="POLY-OPEN-9",
+            platform="polymarket",
+            market_id="P-NO",
+            canonical_id="C",
+            side="no",
+            price=0.40,
+            quantity=10,
+            status=OrderStatus.SUBMITTED,
+        )
+        filled = Order(
+            order_id="POLY-OPEN-9",
+            platform="polymarket",
+            market_id="P-NO",
+            canonical_id="C",
+            side="no",
+            price=0.40,
+            quantity=10,
+            status=OrderStatus.FILLED,
+            fill_qty=10,
+            fill_price=0.40,
+        )
+
+        adapter = MagicMock()
+        adapter.platform = "polymarket"
+        adapter.place_fok = AsyncMock(return_value=submitted)
+        adapter.get_order = AsyncMock(side_effect=[submitted, filled])
+
+        engine.adapters = {"polymarket": adapter}
+        engine.store = AsyncMock()
+
+        result = await engine._place_order_for_leg(
+            arb_id="ARB-9", platform="polymarket",
+            market_id="P-NO", canonical_id="C", side="no",
+            price=0.40, qty=10,
+        )
+
+        assert result.status == OrderStatus.FILLED
+
+        # The store must see the FILLED state at least once.  Any
+        # intermediate writes are fine, but the LAST upsert call must
+        # carry the terminal status — otherwise the DB stays SUBMITTED.
+        upserts = engine.store.upsert_order.await_args_list
+        assert len(upserts) >= 1
+        last_order = upserts[-1].args[0]
+        assert last_order.status == OrderStatus.FILLED, (
+            f"expected last store upsert to carry FILLED, got "
+            f"{last_order.status.value}"
+        )
+
+    asyncio.run(runner())
+
+
+def test_post_submit_poll_tolerates_transient_get_order_errors():
+    """C2: a transient get_order failure mid-poll must not abort the
+    whole poll loop — keep retrying.  If subsequent polls reach a
+    terminal status, return that."""
+    from arbiter.execution.engine import Order, OrderStatus
+
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        engine._submit_poll_timeout_s = 0.4
+        engine._submit_poll_interval_s = 0.02
+
+        submitted = Order(
+            order_id="KALSHI-OPEN-4",
+            platform="kalshi",
+            market_id="K-YES",
+            canonical_id="C",
+            side="yes",
+            price=0.55,
+            quantity=10,
+            status=OrderStatus.SUBMITTED,
+        )
+        filled = Order(
+            order_id="KALSHI-OPEN-4",
+            platform="kalshi",
+            market_id="K-YES",
+            canonical_id="C",
+            side="yes",
+            price=0.55,
+            quantity=10,
+            status=OrderStatus.FILLED,
+            fill_qty=10,
+            fill_price=0.55,
+        )
+
+        adapter = MagicMock()
+        adapter.platform = "kalshi"
+        adapter.place_fok = AsyncMock(return_value=submitted)
+        adapter.get_order = AsyncMock(side_effect=[
+            RuntimeError("transient 503"),
+            submitted,
+            filled,
+        ])
+
+        engine.adapters = {"kalshi": adapter}
+
+        result = await engine._place_order_for_leg(
+            arb_id="ARB-4", platform="kalshi",
+            market_id="K-YES", canonical_id="C", side="yes",
+            price=0.55, qty=10,
+        )
+
+        assert result.status == OrderStatus.FILLED
+        # Retried after the transient error.
+        assert adapter.get_order.await_count == 3
+
+    asyncio.run(runner())
+
+
+def test_post_submit_poll_skipped_when_adapter_has_no_get_order():
+    """C2: adapters that don't expose an async get_order must continue
+    to work — the poll silently no-ops and the SUBMITTED order is
+    returned as-is (preserving the legacy soft-naked recovery path).
+    """
+    from arbiter.execution.engine import Order, OrderStatus
+
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        engine._submit_poll_timeout_s = 0.5
+        engine._submit_poll_interval_s = 0.02
+
+        submitted = Order(
+            order_id="POLY-OPEN-5",
+            platform="polymarket",
+            market_id="P-NO",
+            canonical_id="C",
+            side="no",
+            price=0.40,
+            quantity=10,
+            status=OrderStatus.SUBMITTED,
+        )
+
+        # Plain MagicMock means get_order is auto-created as a non-async
+        # MagicMock — must not be awaited.
+        adapter = MagicMock()
+        adapter.platform = "polymarket"
+        adapter.place_fok = AsyncMock(return_value=submitted)
+        # NOTE: get_order intentionally NOT set to AsyncMock.
+
+        engine.adapters = {"polymarket": adapter}
+
+        result = await engine._place_order_for_leg(
+            arb_id="ARB-5", platform="polymarket",
+            market_id="P-NO", canonical_id="C", side="no",
+            price=0.40, qty=10,
+        )
+
+        # Returns the original SUBMITTED — engine didn't try to poll a
+        # non-async get_order (which would crash on await).
+        assert result.status == OrderStatus.SUBMITTED
+
+    asyncio.run(runner())
