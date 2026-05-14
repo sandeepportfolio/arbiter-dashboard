@@ -127,6 +127,14 @@ class Order:
     # ExecutionStore.upsert_order(client_order_id=...) so the DB column
     # holds the real idempotency key, not the platform-assigned order_id.
     external_client_order_id: Optional[str] = None
+    # C3: when True, the engine timed out on this leg and could NOT obtain
+    # positive proof that the order did not fill at the platform (lookup
+    # raised, lookup found orphans that we cancelled, cancel itself failed,
+    # or lookup returned empty without a verified no-fill check). The
+    # fallback chain in ``_execute_with_fallbacks`` MUST refuse to retry
+    # with a new client_order_id when this flag is set — a racing fill
+    # would stack with the retry and produce double exposure.
+    idempotency_ambiguous: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -475,6 +483,11 @@ class ExecutionEngine:
         # Plan 03-01: late-injected reference to SafetySupervisor for the
         # one-leg hook (plan 03-03) and shutdown trip (plan 03-05).
         self._safety: Optional["SafetySupervisor"] = safety
+        # C4.2: when any ExecutionStore write raises, _handle_db_failure
+        # sets this flag and trips the SafetySupervisor. While True the
+        # engine refuses to place new orders — a live trade with no
+        # audit trail is worse than a missed opportunity.
+        self._db_write_failed: bool = False
         # INTER_LEG_DELAY_MS: pause between primary fill and secondary
         # placement so the second venue's orderbook can stabilize after
         # the first leg moves the cross-venue price. Default 500ms.
@@ -797,7 +810,12 @@ class ExecutionEngine:
                 try:
                     await self.store.insert_incident(updated)
                 except Exception as exc:
-                    logger.warning("ExecutionStore insert_incident (resolve) failed: %s", exc)
+                    await self._handle_db_failure(
+                        op="insert_incident_resolve",
+                        arb_id=getattr(updated, "arb_id", None),
+                        canonical_id=getattr(updated, "canonical_id", None),
+                        exc=exc,
+                    )
             return updated
         return None
 
@@ -977,7 +995,12 @@ class ExecutionEngine:
                     net_edge=getattr(opp, "net_edge", None),
                 )
             except Exception as exc:
-                logger.warning("ExecutionStore record_arb_stub failed: %s", exc)
+                await self._handle_db_failure(
+                    op="record_arb_stub",
+                    arb_id=arb_id,
+                    canonical_id=opp.canonical_id,
+                    exc=exc,
+                )
 
         # ── Sequential leg execution (naked-position prevention) ─────
         # Execute legs SEQUENTIALLY instead of concurrently to prevent
@@ -1669,7 +1692,12 @@ class ExecutionEngine:
             try:
                 await self.store.record_arb(execution)
             except Exception as exc:
-                logger.warning("ExecutionStore record_arb failed: %s", exc)
+                await self._handle_db_failure(
+                    op="record_arb",
+                    arb_id=arb_id,
+                    canonical_id=getattr(opp, "canonical_id", None),
+                    exc=exc,
+                )
         return execution
 
     async def _execute_with_fallbacks(
@@ -1707,6 +1735,21 @@ class ExecutionEngine:
                 "  ✓ FALLBACK-1 (IOC at walked): %s filled %d/%d @ %.4f",
                 secondary_side.upper(), order.fill_qty, qty, order.fill_price,
             )
+            return order
+
+        # C3: fail-closed gate. When the timeout-recovery path could not
+        # prove the platform never received (or never filled) attempt 1's
+        # order, firing attempt 2 with a fresh client_order_id risks
+        # stacking new exposure on top of a latent fill from attempt 1.
+        # Refuse the retry; the operator must reconcile manually.
+        if order.idempotency_ambiguous:
+            logger.error(
+                "  ✗ FALLBACK SKIPPED: attempt 1 returned idempotency_ambiguous=True"
+                " for %s on %s (status=%s). Refusing retry to avoid double-submit."
+                " Manual reconciliation required.",
+                secondary_side.upper(), secondary_platform, order.status.value,
+            )
+            order.error += "; fallback retry suppressed - idempotency unproven"
             return order
 
         # Attempt 2: IOC at max affordable price (widest profitable limit)
@@ -1801,6 +1844,27 @@ class ExecutionEngine:
                 error=f"No adapter configured for platform: {platform}",
             )
 
+        # C4.2: refuse to send orders to the platform once a prior store
+        # write has failed — placing live orders without an audit trail
+        # is worse than a missed opportunity. The kill switch is already
+        # armed; an operator must reset before trading resumes.
+        if self._db_write_failed:
+            logger.critical(
+                "_place_order_for_leg blocked: db_write_failed flag is set",
+            )
+            return Order(
+                order_id=f"{arb_id}-{side.upper()}-DBFAIL",
+                platform=platform,
+                market_id=market_id,
+                canonical_id=canonical_id,
+                side=side,
+                price=price,
+                quantity=qty,
+                status=OrderStatus.ABORTED,
+                timestamp=time.time(),
+                error="DB write previously failed -- execution blocked by safety gate",
+            )
+
         # Pick the placement method: IOC for the secondary leg of a
         # cross-venue arb, FOK by default.  Adapters that don't expose an
         # async place_ioc fall back to place_fok (legacy polymarket and
@@ -1830,6 +1894,17 @@ class ExecutionEngine:
             # passed to adapter.cancel_order (CR-01: that always 404s on
             # Kalshi). The new code calls list_open_orders_by_client_id
             # first, then cancel_order on each REAL order returned.
+            #
+            # C3: every timeout exit sets ``idempotency_ambiguous=True``
+            # so ``_execute_with_fallbacks`` refuses to retry with a new
+            # client_order_id. Until we add a true "filled-by-client-id"
+            # query to the adapter Protocol, ``list_open_orders_by_client_id``
+            # cannot prove "no fill" by itself: Kalshi's open-orders endpoint
+            # only returns RESTING orders, so an empty result is consistent
+            # with both "platform never received" AND "filled and reaped".
+            # The cancel-after-timeout path is also ambiguous: a cancel
+            # returning success does not guarantee that a partial fill
+            # didn't race ahead of it. Fail-closed across the board.
             partial = Order(
                 order_id=f"{arb_id}-{side.upper()}-{platform.upper()}",
                 platform=platform,
@@ -1841,6 +1916,7 @@ class ExecutionEngine:
                 status=OrderStatus.PENDING,
                 timestamp=time.time(),
                 error=f"local timeout after {self.execution_timeout_s}s",
+                idempotency_ambiguous=True,
             )
             cancelled_any = False
             prefix = f"{arb_id}-{side.upper()}-"
@@ -1888,6 +1964,7 @@ class ExecutionEngine:
                 partial.error += (
                     "; no matching open order found"
                     " - platform may have rejected or never received"
+                    " - retry blocked: idempotency unproven"
                 )
             order = partial
 
@@ -1902,7 +1979,8 @@ class ExecutionEngine:
             order = await self._poll_submitted_to_terminal(adapter, order, arb_id)
 
         # EXEC-02 / D-16: persist every state transition. Store is optional
-        # (dev mode without Postgres) — failures here MUST NOT break execution.
+        # (dev mode without Postgres) — failures escalate to _handle_db_failure
+        # which arms the kill switch and blocks further placements (C4.2).
         if self.store is not None:
             try:
                 client_order_id = self._derive_client_order_id(order)
@@ -1910,7 +1988,12 @@ class ExecutionEngine:
                     order, arb_id=arb_id, client_order_id=client_order_id,
                 )
             except Exception as exc:
-                logger.warning("ExecutionStore upsert_order failed: %s", exc)
+                await self._handle_db_failure(
+                    op="upsert_order",
+                    arb_id=arb_id,
+                    canonical_id=canonical_id,
+                    exc=exc,
+                )
         return order
 
     async def _poll_submitted_to_terminal(
@@ -2514,7 +2597,12 @@ class ExecutionEngine:
             try:
                 await self.store.upsert_order(order, arb_id=resolved_arb_id)
             except Exception as exc:
-                logger.warning("ExecutionStore cancel-upsert failed: %s", exc)
+                await self._handle_db_failure(
+                    op="upsert_order_cancel",
+                    arb_id=resolved_arb_id,
+                    canonical_id=getattr(order, "canonical_id", None),
+                    exc=exc,
+                )
         return cancelled
 
     async def _publish_execution(self, execution: ArbExecution):
@@ -2554,8 +2642,79 @@ class ExecutionEngine:
             try:
                 await self.store.insert_incident(incident)
             except Exception as exc:
-                logger.warning("ExecutionStore insert_incident failed: %s", exc)
+                await self._handle_db_failure(
+                    op="insert_incident",
+                    arb_id=arb_id,
+                    canonical_id=canonical_id,
+                    exc=exc,
+                )
         return incident
+
+    async def _handle_db_failure(
+        self,
+        *,
+        op: str,
+        arb_id: Optional[str],
+        canonical_id: Optional[str],
+        exc: BaseException,
+    ) -> None:
+        """C4.2: escalate a swallowed ``ExecutionStore.*`` failure.
+
+        Before this hook every `try/except: logger.warning(...)` around a
+        store write would silently drop the audit trail and let the engine
+        keep placing live orders. That meant a Postgres bounce could leave
+        real money moving with no record of it. This method:
+
+          * logs critical (not warning) — the operator MUST see this;
+          * sets ``self._db_write_failed = True`` so ``_place_order_for_leg``
+            refuses new placements until the kill switch is reset;
+          * broadcasts a critical ``db_write_failure`` incident on the
+            in-memory deque (no DB write — the store is broken);
+          * trips ``SafetySupervisor`` so adapters cancel every open order
+            and the dashboard surfaces the kill state.
+
+        Idempotent: repeat calls log but skip the broadcast / trip so a
+        burst of follow-on failures doesn't spam the deque or recurse into
+        ``trip_kill``. The ``op="insert_incident"`` case never recurses
+        into ``record_incident`` because the incident here is appended
+        directly to the deque rather than going through that path.
+        """
+        logger.critical(
+            "ExecutionStore.%s failed -- BLOCKING further execution: %s",
+            op, exc,
+        )
+        already_blocked = self._db_write_failed
+        self._db_write_failed = True
+        if already_blocked:
+            return
+
+        incident = ExecutionIncident(
+            incident_id=f"INC-DB-{uuid.uuid4().hex[:8]}",
+            arb_id=arb_id or "DB-FAILURE",
+            canonical_id=canonical_id or "",
+            severity="critical",
+            message=f"ExecutionStore.{op} failed: {exc!s}",
+            timestamp=time.time(),
+            metadata={"event_type": "db_write_failure", "op": op},
+        )
+        self._incidents.appendleft(incident)
+        for subscriber in list(self._incident_subscribers):
+            try:
+                subscriber.put_nowait(incident)
+            except asyncio.QueueFull:
+                logger.debug("Skipping slow incident subscriber on db_failure")
+
+        if self._safety is not None:
+            try:
+                await self._safety.trip_kill(
+                    by="execution_engine:db_failure",
+                    reason=f"ExecutionStore.{op} write failed",
+                )
+            except Exception as sup_exc:
+                logger.critical(
+                    "SafetySupervisor.trip_kill after db_failure raised: %s",
+                    sup_exc,
+                )
 
     async def _record_incident(
         self,

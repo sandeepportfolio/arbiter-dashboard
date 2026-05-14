@@ -33,14 +33,43 @@ def test_derive_arb_id_returns_none_for_unknown():
 # ─── MockPool / MockConn ───────────────────────────────────────────────────
 
 class MockConn:
-    """Records every execute/fetch/fetchrow call. Configurable responses."""
+    """Records every execute/fetch/fetchrow call. Configurable responses.
 
-    def __init__(self, fetch_response: Any = None, fetchrow_response: Any = None):
+    Also tracks `conn.transaction()` usage so tests can verify that multi-write
+    operations are wrapped in a single transaction (C4.1).
+    """
+
+    def __init__(
+        self,
+        fetch_response: Any = None,
+        fetchrow_response: Any = None,
+        fail_on_execute_index: Optional[int] = None,
+    ):
         self.calls: List[Tuple[str, str, tuple]] = []  # (method, sql, args)
         self._fetch_response = fetch_response if fetch_response is not None else []
         self._fetchrow_response = fetchrow_response
+        # Transaction tracking
+        self._txn_depth = 0
+        self.transactions_started = 0
+        self.transactions_committed = 0
+        self.transactions_rolled_back = 0
+        self.executes_inside_txn = 0
+        # Inject failure on the N-th execute() call (0-indexed). Used to test
+        # transaction rollback on intermediate failure.
+        self._fail_on_execute_index = fail_on_execute_index
+        self._execute_call_index = 0
 
     async def execute(self, sql: str, *args) -> str:
+        idx = self._execute_call_index
+        self._execute_call_index += 1
+        if self._txn_depth > 0:
+            self.executes_inside_txn += 1
+        if self._fail_on_execute_index is not None and idx == self._fail_on_execute_index:
+            self.calls.append(("execute", sql, args))
+            import asyncpg
+            raise asyncpg.PostgresError(
+                f"simulated execute failure at call index {idx}",
+            )
         self.calls.append(("execute", sql, args))
         return "OK"
 
@@ -51,6 +80,26 @@ class MockConn:
     async def fetchrow(self, sql: str, *args) -> Optional[Any]:
         self.calls.append(("fetchrow", sql, args))
         return self._fetchrow_response
+
+    def transaction(self):
+        """Mimic asyncpg.Connection.transaction() context manager."""
+        conn = self
+
+        class _Tx:
+            async def __aenter__(self_tx):
+                conn._txn_depth += 1
+                conn.transactions_started += 1
+                return self_tx
+
+            async def __aexit__(self_tx, exc_type, exc, tb):
+                conn._txn_depth -= 1
+                if exc_type is None:
+                    conn.transactions_committed += 1
+                else:
+                    conn.transactions_rolled_back += 1
+                return False  # don't suppress
+
+        return _Tx()
 
     async def __aenter__(self):
         return self
@@ -190,6 +239,144 @@ async def test_upsert_order_raises_when_arb_id_underivable(mock_pool):
     )
     with pytest.raises(ValueError, match="arb_id"):
         await store.upsert_order(order)
+
+
+# ─── C4.1: record_arb transactional wrapping ─────────────────────────────
+
+
+def _build_arb_execution(arb_id: str = "ARB-000099", canonical_id: str = "TEST_TXN"):
+    """Build a minimal in-memory ArbExecution for record_arb tests."""
+    from arbiter.execution.engine import ArbExecution
+    from arbiter.scanner.arbitrage import ArbitrageOpportunity
+
+    opp = ArbitrageOpportunity(
+        canonical_id=canonical_id,
+        description="d",
+        yes_platform="kalshi",
+        yes_price=0.50, yes_fee=0.0,
+        yes_market_id="K-1",
+        no_platform="polymarket",
+        no_price=0.50, no_fee=0.0,
+        no_market_id="P-1",
+        gross_edge=0.0, total_fees=0.0,
+        net_edge=0.05, net_edge_cents=5.0,
+        suggested_qty=1, max_profit_usd=0.05,
+        timestamp=time.time(),
+    )
+    leg_yes = Order(
+        order_id=f"{arb_id}-YES-aaaa",
+        platform="kalshi", market_id="K-1", canonical_id=canonical_id,
+        side="yes", price=0.50, quantity=1,
+        status=OrderStatus.FILLED, fill_price=0.50, fill_qty=1,
+    )
+    leg_no = Order(
+        order_id=f"{arb_id}-NO-bbbb",
+        platform="polymarket", market_id="P-1", canonical_id=canonical_id,
+        side="no", price=0.50, quantity=1,
+        status=OrderStatus.FILLED, fill_price=0.50, fill_qty=1,
+    )
+    return ArbExecution(
+        arb_id=arb_id, opportunity=opp,
+        leg_yes=leg_yes, leg_no=leg_no,
+        status="filled", realized_pnl=0.05, timestamp=time.time(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_record_arb_wraps_all_three_writes_in_single_transaction(mock_pool):
+    """C4.1: record_arb + both leg upserts must execute inside a single
+    `conn.transaction()` block on the SAME connection. If Postgres bounces
+    mid-write the three rows must roll back together — no orphaned arb row
+    with no legs, no legs with no parent arb row."""
+    store = ExecutionStore(database_url="postgres://mock/mock")
+    await store.connect()
+    arb = _build_arb_execution()
+    await store.record_arb(arb)
+
+    # Exactly one transaction opened.
+    assert mock_pool.conn.transactions_started == 1, (
+        f"expected exactly 1 transaction; got {mock_pool.conn.transactions_started}"
+    )
+    assert mock_pool.conn.transactions_committed == 1
+    assert mock_pool.conn.transactions_rolled_back == 0
+    # All three writes (arb INSERT + 2 leg upserts) inside the transaction.
+    assert mock_pool.conn.executes_inside_txn == 3, (
+        f"expected 3 executes inside the transaction; "
+        f"got {mock_pool.conn.executes_inside_txn}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_record_arb_rolls_back_when_leg_upsert_fails(mock_pool, monkeypatch):
+    """C4.1: if the SECOND leg upsert raises, the transaction must roll back
+    so the execution_arbs INSERT and the first leg upsert are undone
+    together. The exception propagates so the engine sees the failure and
+    can escalate (C4.2)."""
+    import asyncpg
+
+    # Fail on the third execute call (arb INSERT = 0, leg_yes = 1, leg_no = 2)
+    mock_pool.conn._fail_on_execute_index = 2
+
+    store = ExecutionStore(database_url="postgres://mock/mock")
+    await store.connect()
+    arb = _build_arb_execution()
+
+    with pytest.raises(asyncpg.PostgresError):
+        await store.record_arb(arb)
+
+    assert mock_pool.conn.transactions_started == 1
+    assert mock_pool.conn.transactions_committed == 0
+    assert mock_pool.conn.transactions_rolled_back == 1, (
+        "transaction must roll back on intermediate failure"
+    )
+
+
+@pytest.mark.asyncio
+async def test_record_arb_rolls_back_when_arb_insert_fails(mock_pool):
+    """C4.1: if the arb INSERT itself fails (first write), the transaction
+    rolls back and neither leg upsert is attempted."""
+    import asyncpg
+
+    mock_pool.conn._fail_on_execute_index = 0  # first execute fails
+
+    store = ExecutionStore(database_url="postgres://mock/mock")
+    await store.connect()
+    arb = _build_arb_execution()
+
+    with pytest.raises(asyncpg.PostgresError):
+        await store.record_arb(arb)
+
+    # Transaction opened and rolled back
+    assert mock_pool.conn.transactions_started == 1
+    assert mock_pool.conn.transactions_rolled_back == 1
+    # Only the arb INSERT was attempted; the leg upserts never ran.
+    assert mock_pool.conn.executes_inside_txn == 1
+
+
+# ─── C4.3: UNIQUE(client_order_id) migration shape ────────────────────────
+
+
+def test_migration_005_replaces_nonunique_index_with_unique_partial():
+    """C4.3: migration 005 drops the non-unique partial index on
+    execution_orders.client_order_id (added by 001) and replaces it with
+    a UNIQUE partial index that excludes NULLs. NULL exclusion is
+    mandatory because Polymarket orders have no client_order_id and would
+    otherwise collide on a single shared NULL row constraint."""
+    from pathlib import Path
+    migration_dir = (
+        Path(__file__).resolve().parent.parent / "sql" / "migrations"
+    )
+    migration_path = migration_dir / "005_unique_client_order_id.sql"
+    assert migration_path.exists(), (
+        f"missing migration: {migration_path}"
+    )
+    sql = migration_path.read_text()
+    # drops the prior non-unique index
+    assert "DROP INDEX IF EXISTS idx_execution_orders_client_id" in sql
+    # adds a UNIQUE partial index
+    assert "CREATE UNIQUE INDEX" in sql
+    assert "client_order_id" in sql
+    assert "WHERE client_order_id IS NOT NULL" in sql
 
 
 # ─── Incident persistence ─────────────────────────────────────────────────
