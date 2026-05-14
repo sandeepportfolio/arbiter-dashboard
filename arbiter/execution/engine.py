@@ -974,8 +974,8 @@ class ExecutionEngine:
 
         # ── Pre-execution profitability gate ─────
         # Verify the arb is genuinely profitable after ALL fees before
-        # risking any capital. Require at least 0.5¢ net edge after fees.
-        MIN_NET_EDGE_CENTS = 0.5
+        # risking any capital. Require at least 2.0¢ net edge after fees.
+        MIN_NET_EDGE_CENTS = 2.0
         total_cost = opp.yes_price + opp.no_price
         gross_edge = 1.0 - total_cost
         qty = max(1, int(opp.suggested_qty or 1))
