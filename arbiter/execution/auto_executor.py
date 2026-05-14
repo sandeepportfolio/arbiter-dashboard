@@ -49,7 +49,11 @@ class AutoExecutorConfig:
     max_quote_age_s: float = 30.0
     min_depth_usd: float = 25.0
     min_edge_cents_preflight: float = 3.0
-    require_mapping_confirmed: bool = False  # opt-in stricter mapping gate
+    # Fail-closed default: unconfirmed mappings are EXCLUDED unless an operator
+    # explicitly opts in by setting PREFLIGHT_REQUIRE_MAPPING_CONFIRMED=false.
+    # Confirmed mappings have been audited end-to-end; unconfirmed ones are
+    # exactly the candidates that drove the 2026-05-08 cascade losses.
+    require_mapping_confirmed: bool = True
     # Auto-disable a mapping after this many consecutive losing recoveries.
     # Catches markets like DEM_HOUSE_2026 (2026-05-08 cascade: 22 trades /
     # -$105.80) where the secondary venue persistently rejects orders and
@@ -524,7 +528,24 @@ class AutoExecutor:
         ):
             adapter = adapters.get(platform)
             if adapter is None or not hasattr(adapter, "check_depth"):
-                continue
+                # H16: depth check is the only signal we have for "is the
+                # secondary venue actually going to fill this size?". Silently
+                # skipping when an adapter is missing check_depth has the same
+                # observable result as a green-light, which is what drove the
+                # 2026-05-08 cascade. Fail closed instead.
+                self.stats.skipped_depth_low += 1
+                log.warning(
+                    "auto_executor.skip.preflight.depth_unavailable",
+                    canonical_id=opp.canonical_id,
+                    platform=platform,
+                    side=side,
+                    reason=(
+                        "adapter_missing"
+                        if adapter is None
+                        else "adapter_lacks_check_depth"
+                    ),
+                )
+                return None
             required_qty_for_depth = max(
                 qty,
                 int((self._config.min_depth_usd / max(price, 0.01)) + 0.5),
@@ -697,7 +718,7 @@ def make_auto_executor_from_env(
             config_env.get("PREFLIGHT_MIN_EDGE_CENTS"), 3.0,
         ),
         require_mapping_confirmed=_bool(
-            config_env.get("PREFLIGHT_REQUIRE_MAPPING_CONFIRMED"), default=False,
+            config_env.get("PREFLIGHT_REQUIRE_MAPPING_CONFIRMED"), default=True,
         ),
     )
     return AutoExecutor(

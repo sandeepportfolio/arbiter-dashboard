@@ -102,6 +102,10 @@ def _make_components(
         max_position_usd=max_position_usd,
         bootstrap_trades=bootstrap_trades,
         dedup_window_seconds=5,
+        # H15 default flipped require_mapping_confirmed to True for prod
+        # safety; these gate-isolation tests must opt out so they exercise
+        # the gate under test instead of the new confirmation gate.
+        require_mapping_confirmed=False,
     )
     ae = AutoExecutor(
         scanner=scanner,
@@ -523,6 +527,7 @@ async def test_loss_streak_disables_mapping_after_threshold():
         bootstrap_trades=None,
         dedup_window_seconds=0,  # disable dedup so we can fire repeatedly
         loss_streak_disable_threshold=3,
+        require_mapping_confirmed=False,  # H15 default flipped — opt out for gate-isolation
     )
     ae = AutoExecutor(
         scanner=scanner,
@@ -567,6 +572,7 @@ async def test_loss_streak_resets_on_profitable_trade():
         bootstrap_trades=None,
         dedup_window_seconds=0,
         loss_streak_disable_threshold=3,
+        require_mapping_confirmed=False,  # H15 default flipped — opt out for gate-isolation
     )
     ae = AutoExecutor(
         scanner=scanner,

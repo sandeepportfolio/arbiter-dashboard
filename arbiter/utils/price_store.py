@@ -113,12 +113,19 @@ class PriceStore:
         return result
 
     async def get_all_prices(self) -> Dict[str, PricePoint]:
+        """Return all in-memory prices that are still within the freshness window.
+
+        Previous behaviour used ``ttl * 6`` as the window, which combined with a
+        120s TTL admitted 12-minute-stale quotes into downstream callers. The
+        bulk getter now uses the same TTL as the per-key ``get`` so the bar for
+        "still fresh" is identical no matter which path the caller takes.
+        """
         async with self._lock:
             now = time.time()
             return {
                 key: value
                 for key, value in self._mem.items()
-                if (now - value.timestamp) < self._ttl * 6
+                if (now - value.timestamp) < self._ttl
             }
 
     async def get_market_history(self, canonical_id: str, limit: int = 180) -> List[dict]:

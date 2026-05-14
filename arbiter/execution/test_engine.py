@@ -1398,6 +1398,40 @@ def _wire_live_depth(adapter, price: float) -> None:
     adapter.best_executable_price = AsyncMock(return_value=(True, price))
 
 
+def _wire_unwind_failed(adapter) -> None:
+    """Wire smart-unwind methods to a no-op FAILED Order.
+
+    The SAFE-02 gap tests must reach the post-recovery exposure-tracking
+    asserts; without this helper the MagicMock adapter has no awaitable
+    ``place_resting_sell`` / ``place_unwind_sell``, smart_unwind raises,
+    and the H7 try/finally releases the surviving leg's reservation —
+    which is correct in production but not what those tests are
+    measuring. Returning a non-raising FAILED order keeps the naked
+    exposure tracked exactly as in the SAFE-02 design.
+    """
+    from arbiter.execution.engine import Order, OrderStatus
+
+    def _failed_order(prefix: str = "UNWIND") -> Order:
+        return Order(
+            order_id=f"{prefix}-NOOP",
+            platform=getattr(adapter, "platform", "test"),
+            market_id="UNWIND-MKT",
+            canonical_id="UNWIND-CAN",
+            side="yes",
+            price=0.0,
+            quantity=0,
+            status=OrderStatus.FAILED,
+            fill_price=0.0,
+            fill_qty=0,
+            timestamp=time.time(),
+            error="unwind unavailable in test fixture",
+        )
+
+    adapter.place_resting_sell = AsyncMock(return_value=_failed_order("REST"))
+    adapter.place_unwind_sell = AsyncMock(return_value=_failed_order("MKT"))
+    adapter.get_order = AsyncMock(return_value=_failed_order("GET"))
+
+
 def test_live_burst_submitted_rejected_at_per_platform_ceiling():
     import os as _os_test
     _old_exec_order = _os_test.environ.get("EXECUTION_ORDER")
@@ -1438,6 +1472,8 @@ def test_live_burst_submitted_rejected_at_per_platform_ceiling():
 
         kalshi = _mk_adapter("kalshi", 0.60, OrderStatus.FILLED, 400)
         poly = _mk_adapter("polymarket", 0.30, OrderStatus.SUBMITTED, 0)
+        _wire_unwind_failed(kalshi)
+        _wire_unwind_failed(poly)
         engine.adapters = {"kalshi": kalshi, "polymarket": poly}
 
         incidents_q = engine.subscribe_incidents()
@@ -1558,6 +1594,8 @@ def test_live_recovering_records_only_surviving_leg():
             )
         )
         poly.cancel_order = AsyncMock(return_value=True)
+        _wire_unwind_failed(kalshi)
+        _wire_unwind_failed(poly)
 
         engine.adapters = {"kalshi": kalshi, "polymarket": poly}
 

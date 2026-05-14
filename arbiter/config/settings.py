@@ -587,9 +587,19 @@ class AlertConfig:
     cooldown: float = 300.0
 
 
+def _resolve_min_edge_cents() -> float:
+    raw = os.getenv("MIN_EDGE_CENTS", "").strip()
+    if not raw:
+        return 3.0
+    try:
+        return float(raw)
+    except ValueError:
+        return 3.0
+
+
 @dataclass
 class ScannerConfig:
-    min_edge_cents: float = 3.0
+    min_edge_cents: float = field(default_factory=_resolve_min_edge_cents)
     max_position_usd: float = 100.0
     scan_interval: float = 1.0
     confidence_threshold: float = 0.5

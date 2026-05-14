@@ -1,7 +1,15 @@
 import asyncio
 import inspect
+import os
 
 import pytest
+
+
+# UI_SESSION_SECRET is now hard-required at runtime (H19 fix). Tests that
+# exercise the auth helpers must have a non-empty value present, so we set
+# a deterministic test-only secret here unless one was explicitly exported
+# by the operator.
+os.environ.setdefault("UI_SESSION_SECRET", "pytest-fixture-secret-do-not-use-in-prod")
 
 
 # Moved to root conftest — pytest 8+ deprecates pytest_plugins in non-top-level conftests.

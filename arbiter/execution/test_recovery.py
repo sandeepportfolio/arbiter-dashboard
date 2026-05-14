@@ -120,12 +120,19 @@ async def test_reconcile_no_op_when_status_unchanged():
 
 
 @pytest.mark.asyncio
-async def test_reconcile_continues_when_list_non_terminal_raises():
+async def test_reconcile_raises_when_list_non_terminal_fails():
+    """H21: a failure to enumerate prior-state orders MUST surface to the
+    caller. The previous return-[] behaviour let the engine start with no
+    idea what was open on the platform — exactly the ghost-position
+    scenario this module exists to prevent.
+    """
+    from arbiter.execution.recovery import RecoveryInitError
+
     store = MagicMock()
     store.list_non_terminal_orders = AsyncMock(side_effect=RuntimeError("DB down"))
     adapters = {"kalshi": _make_adapter()}
-    result = await reconcile_non_terminal_orders(store, adapters)
-    assert result == []  # graceful empty return; no exception propagated
+    with pytest.raises(RecoveryInitError):
+        await reconcile_non_terminal_orders(store, adapters)
 
 
 @pytest.mark.asyncio

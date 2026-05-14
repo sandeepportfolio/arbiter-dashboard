@@ -20,6 +20,16 @@ from .store import ExecutionStore
 logger = logging.getLogger("arbiter.execution.recovery")
 
 
+class RecoveryInitError(RuntimeError):
+    """Raised when restart reconciliation cannot enumerate prior state.
+
+    A clean startup MUST know which orders the platform considers open; we
+    cannot infer that from a missing DB connection or a half-built schema.
+    Callers are expected to either refuse to start the engine or arm the
+    SafetySupervisor (no new trades) and surface an operator-facing alert.
+    """
+
+
 async def reconcile_non_terminal_orders(
     store: ExecutionStore,
     adapters: Dict[str, PlatformAdapter],
@@ -38,8 +48,18 @@ async def reconcile_non_terminal_orders(
     try:
         orders = await store.list_non_terminal_orders()
     except Exception as exc:
-        logger.error("recovery: failed to list non-terminal orders: %s", exc)
-        return []
+        # CRITICAL: a silent return-[] here lets the engine start with no
+        # idea of what's actually open on the platform — exactly the ghost-
+        # position scenario this module exists to prevent. Re-raise so the
+        # caller (arbiter/main.py) refuses to start the engine, or — at the
+        # operator's discretion — arms SafetySupervisor before any trade.
+        logger.critical(
+            "recovery: failed to list non-terminal orders — aborting startup: %s",
+            exc,
+        )
+        raise RecoveryInitError(
+            f"failed to enumerate non-terminal orders during recovery: {exc}"
+        ) from exc
 
     if not orders:
         logger.info("recovery: no non-terminal orders to reconcile")
