@@ -1013,16 +1013,11 @@ class ExecutionEngine:
 
         # ── Pre-execution profitability gate ─────
         # Verify the arb is genuinely profitable after ALL fees before
-        # risking any capital. Default 7¢ matches the 2026-05 forensic audit
-        # (median Poly adverse move 3.66¢); ``MIN_EDGE_CENTS`` env override
-        # keeps scanner, AutoExecutor preflight, and engine gate aligned.
-        import os as _os_min_edge
-        try:
-            MIN_NET_EDGE_CENTS = float(
-                _os_min_edge.environ.get("MIN_EDGE_CENTS", "7.0")
-            )
-        except (TypeError, ValueError):
-            MIN_NET_EDGE_CENTS = 7.0
+        # risking any capital. Reads through scanner_config.min_edge_cents
+        # so the engine, scanner, and AutoExecutor preflight all share the
+        # MIN_EDGE_CENTS env var (default 7.0 per 2026-05 forensic audit:
+        # median Poly adverse move 3.66¢).
+        MIN_NET_EDGE_CENTS = float(self.scanner_config.min_edge_cents)
         total_cost = opp.yes_price + opp.no_price
         gross_edge = 1.0 - total_cost
         qty = max(1, int(opp.suggested_qty or 1))
@@ -2273,17 +2268,59 @@ class ExecutionEngine:
                     # doesn't get hit.  This converts most "lucky-direction
                     # wins" and "unlucky-direction losses" into reliable
                     # break-even closes.
+                    unwind_order = None
+                    smart_unwind_raised = False
                     try:
                         unwind_order = await self._smart_unwind(
                             arb_id, filled_leg, unwind_target,
                         )
                     except Exception as exc:
-                        logger.error(
-                            "auto_unwind.exception platform=%s side=%s err=%s",
+                        smart_unwind_raised = True
+                        logger.critical(
+                            "auto_unwind.exception platform=%s side=%s err=%s — "
+                            "releasing reservation; position becomes a manual-"
+                            "review incident",
                             filled_leg.platform, filled_leg.side, exc,
                         )
                         notes.append(f"unwind-{filled_leg.side}:exception")
-                        unwind_order = None
+                    finally:
+                        # H7: ensure release_trade runs even when _smart_unwind
+                        # raises so the per-platform exposure budget cannot
+                        # leak indefinitely.  Without this, a single adapter
+                        # contract violation would lock new trading on the
+                        # surviving platform until manual intervention.  The
+                        # underlying naked position is preserved as a CRITICAL
+                        # incident so operators can reconcile it.
+                        if smart_unwind_raised:
+                            try:
+                                self.risk.release_trade(
+                                    opp.canonical_id,
+                                    unwind_target * float(filled_leg.fill_price),
+                                    platform=filled_leg.platform,
+                                )
+                            except Exception as rel_exc:  # noqa: BLE001
+                                logger.error(
+                                    "auto_unwind.release_trade_failed err=%s",
+                                    rel_exc,
+                                )
+                            try:
+                                await self._record_incident(
+                                    arb_id, opp, "critical",
+                                    f"Smart-unwind raised on {filled_leg.platform} "
+                                    f"{filled_leg.side.upper()} — manual review required",
+                                    metadata={
+                                        "event_type": "auto_unwind_exception",
+                                        "platform": filled_leg.platform,
+                                        "side": filled_leg.side,
+                                        "target_qty": unwind_target,
+                                        "fill_price": float(filled_leg.fill_price),
+                                    },
+                                )
+                            except Exception as inc_exc:  # noqa: BLE001
+                                logger.warning(
+                                    "auto_unwind_exception incident emit failed: %s",
+                                    inc_exc,
+                                )
                     if unwind_order is not None:
                         unwound_qty = float(unwind_order.fill_qty or 0)
                         notes.append(

@@ -76,14 +76,24 @@ def _build_allowed_users() -> Dict[str, str]:
 UI_ALLOWED_USERS = _build_allowed_users()
 
 
+class MissingSessionSecretError(RuntimeError):
+    """Raised when UI_SESSION_SECRET is not configured.
+
+    Falling back to a hard-coded default would let anyone forge session
+    cookies — the previous "insecure default" warning was logged once at
+    startup and easy to miss. Failing loudly forces operators to set the
+    env var before any authenticated request is processed.
+    """
+
+
 def _get_secret() -> str:
-    if not UI_SESSION_SECRET:
-        logger.warning(
-            "UI_SESSION_SECRET not set! Using insecure default. "
-            "Generate one with: openssl rand -hex 32"
+    secret = os.getenv("UI_SESSION_SECRET", "").strip()
+    if not secret:
+        raise MissingSessionSecretError(
+            "UI_SESSION_SECRET is not set. Generate one with "
+            "`openssl rand -hex 32` and export it before starting the API."
         )
-        return "INSECURE_DEFAULT_CHANGE_ME"
-    return UI_SESSION_SECRET
+    return secret
 
 
 def _request_is_secure(request: web.Request) -> bool:
@@ -361,6 +371,9 @@ class ArbiterAPI:
         self.retry_scheduler = retry_scheduler
 
     async def serve(self):
+        # Fail loudly at startup if the session secret is missing — a
+        # silent insecure default would let anyone forge auth cookies.
+        _get_secret()
         app = web.Application(middlewares=[self._cors_middleware])
         app.router.add_get("/", self.handle_site_index)
         app.router.add_get("/health", self.handle_liveness)

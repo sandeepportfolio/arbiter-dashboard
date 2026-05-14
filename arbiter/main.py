@@ -30,7 +30,7 @@ from .scanner.arbitrage import ArbitrageScanner
 from .monitor.balance import BalanceMonitor, BalanceSnapshot
 from .execution.engine import ExecutionEngine
 from .execution.adapters import KalshiAdapter, PolymarketAdapter
-from .execution.recovery import reconcile_non_terminal_orders
+from .execution.recovery import RecoveryInitError, reconcile_non_terminal_orders
 from .execution.store import ExecutionStore
 from .portfolio import PortfolioConfig, PortfolioMonitor
 from .profitability import ProfitabilityConfig, ProfitabilityValidator
@@ -111,6 +111,42 @@ def _float_env(name: str) -> Optional[float]:
         return float(raw)
     except ValueError:
         return 0.0
+
+
+async def _build_redis_client(logger: logging.Logger):
+    """Build an async Redis client when REDIS_URL is set, else return None.
+
+    Returning None keeps PriceStore in pure-in-memory mode — the rest of the
+    system tolerates that, but cross-restart persistence is lost.
+    """
+    redis_url = os.getenv("REDIS_URL", "").strip()
+    if not redis_url:
+        logger.info("REDIS_URL not set — running PriceStore in-memory only")
+        return None
+
+    try:
+        import redis.asyncio as redis_async  # type: ignore[import-not-found]
+    except ImportError:
+        logger.warning(
+            "REDIS_URL=%s set but redis package is not installed — falling back "
+            "to in-memory PriceStore",
+            redis_url,
+        )
+        return None
+
+    try:
+        client = redis_async.from_url(redis_url, decode_responses=True)
+        # Verify connectivity up-front so failures surface during startup
+        # rather than mid-trade.
+        await client.ping()
+        logger.info("Redis connected: %s", redis_url)
+        return client
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "Redis connection failed for %s: %s — falling back to in-memory PriceStore",
+            redis_url, exc,
+        )
+        return None
 
 
 def build_polymarket_collector(config: ArbiterConfig, price_store: PriceStore):
@@ -497,7 +533,14 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     trade_logger = TradeLogger()
 
     # ── Core infrastructure ────────────────────────────────────
-    price_store = PriceStore(redis_client=None, ttl=120)
+    # Connect to Redis when REDIS_URL is configured so PriceStore survives
+    # process restarts. Failure to connect is non-fatal — the store works
+    # in-memory only — but is logged loudly so operators notice.
+    redis_client = await _build_redis_client(logger)
+    # TTL=30s matches the scanner's max_quote_age window (15s) plus a small
+    # buffer. The previous 120s TTL combined with the get_all_prices ttl*6
+    # window let 12-minute-stale quotes flow through downstream consumers.
+    price_store = PriceStore(redis_client=redis_client, ttl=30)
 
     # Shared aiohttp session for adapter HTTP calls. Engine keeps its own
     # internal session for legacy paths; Phase 3 can consolidate.
@@ -728,7 +771,30 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
 
     # ── Restart reconciliation (Pitfall 5 / D-17) ──────────────
     if store is not None:
-        orphaned = await reconcile_non_terminal_orders(store, adapters)
+        try:
+            orphaned = await reconcile_non_terminal_orders(store, adapters)
+        except RecoveryInitError as exc:
+            # Cannot trust the in-memory engine state — arm SafetySupervisor
+            # so no new trades are submitted until an operator clears the
+            # underlying problem. Keep the API/dashboard up so they can
+            # diagnose. We intentionally do NOT exit the process here so
+            # the operator retains visibility into what state is on the
+            # platform vs what we knew about.
+            logger.critical(
+                "Restart reconciliation failed (%s) — arming SafetySupervisor",
+                exc,
+            )
+            try:
+                await safety.trip_kill(
+                    by="system:recovery",
+                    reason=f"recovery_init_failed: {exc}",
+                )
+            except Exception as arm_exc:  # noqa: BLE001
+                logger.error(
+                    "Failed to arm SafetySupervisor after recovery error: %s",
+                    arm_exc,
+                )
+            orphaned = []
         for o in orphaned:
             try:
                 parts = o.order_id.split("-")
