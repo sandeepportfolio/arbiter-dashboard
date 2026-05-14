@@ -748,6 +748,208 @@ class MarketMappingStore:
         finally:
             await self._pool.release(conn)
 
+    async def compute_metrics(
+        self,
+        *,
+        category_limit: int = 12,
+        include_trade_accuracy: bool = True,
+    ) -> Dict[str, Any]:
+        """Aggregate mapping metrics for the operator dashboard.
+
+        Returns a dashboard-ready payload covering status counts, quality
+        scores, criteria-match breakdown, category distribution (from the
+        ``tags`` array), platform coverage, and (optionally) trade accuracy
+        joined against ``execution_arbs``.
+
+        All counts are computed in SQL so the call stays cheap even on the
+        full mapping universe (~35k rows in production).
+        """
+        active_states = ("confirmed", "candidate", "review")
+        conn = await self.acquire()
+        try:
+            status_rows = await conn.fetch(
+                """
+                SELECT status, COUNT(*) AS total
+                FROM market_mappings
+                GROUP BY status
+                """
+            )
+            status_counts = {str(r["status"]): int(r["total"]) for r in status_rows}
+
+            quality_row = await conn.fetchrow(
+                """
+                SELECT
+                  COUNT(*)                                          AS total,
+                  COUNT(*) FILTER (WHERE mapping_score >= 0.9)      AS excellent,
+                  COUNT(*) FILTER (WHERE mapping_score >= 0.7
+                                    AND mapping_score <  0.9)       AS good,
+                  COUNT(*) FILTER (WHERE mapping_score >= 0.5
+                                    AND mapping_score <  0.7)       AS moderate,
+                  COUNT(*) FILTER (WHERE mapping_score <  0.5)      AS low,
+                  AVG(mapping_score)                                AS avg_score,
+                  AVG(confidence)                                   AS avg_confidence,
+                  COUNT(*) FILTER (WHERE allow_auto_trade)          AS auto_trade,
+                  COUNT(DISTINCT NULLIF(kalshi_market_id, ''))      AS kalshi_markets,
+                  COUNT(DISTINCT NULLIF(polymarket_slug, ''))       AS poly_markets
+                FROM market_mappings
+                WHERE status = ANY($1::text[])
+                """,
+                list(active_states),
+            )
+
+            criteria_rows = await conn.fetch(
+                """
+                SELECT
+                  COALESCE(NULLIF(resolution_match_status, ''),
+                           'pending_operator_review') AS match_status,
+                  COUNT(*) AS total
+                FROM market_mappings
+                WHERE status = ANY($1::text[])
+                GROUP BY 1
+                """,
+                list(active_states),
+            )
+            criteria_counts = {
+                str(r["match_status"]): int(r["total"]) for r in criteria_rows
+            }
+
+            category_rows = await conn.fetch(
+                """
+                SELECT tag,
+                       COUNT(*) AS total,
+                       COUNT(*) FILTER (WHERE status = 'confirmed') AS confirmed,
+                       COUNT(*) FILTER (WHERE status IN ('candidate','review')) AS pending
+                FROM (
+                    SELECT UNNEST(tags) AS tag, status
+                    FROM market_mappings
+                    WHERE status = ANY($1::text[])
+                      AND tags IS NOT NULL
+                      AND CARDINALITY(tags) > 0
+                ) t
+                WHERE tag IS NOT NULL AND tag <> ''
+                GROUP BY tag
+                ORDER BY total DESC
+                LIMIT $2
+                """,
+                list(active_states),
+                int(category_limit),
+            )
+            categories = [
+                {
+                    "name": str(r["tag"]),
+                    "count": int(r["total"]),
+                    "confirmed": int(r["confirmed"]),
+                    "pending": int(r["pending"]),
+                }
+                for r in category_rows
+            ]
+
+            confirmed = int(status_counts.get("confirmed", 0))
+            rejected = int(status_counts.get("rejected", 0))
+            expired = int(status_counts.get("expired", 0))
+            review_backlog = int(status_counts.get("candidate", 0)) + int(
+                status_counts.get("review", 0)
+            )
+            # Confirmation rate measures operator decisions: of mappings the
+            # operator has explicitly accepted or rejected, what fraction was
+            # confirmed? Expired rows are excluded — they represent rolling
+            # auto-discovery churn (~34k stale candidates in production), not
+            # quality signal, and would otherwise drown the metric to ~1%.
+            decided = confirmed + rejected
+            confirmation_rate = (confirmed / decided) if decided else None
+
+            active_total = sum(int(status_counts.get(s, 0)) for s in active_states)
+            auto_trade_count = int(quality_row["auto_trade"] or 0) if quality_row else 0
+
+            quality = {
+                "active_total": active_total,
+                "avg_score": float(quality_row["avg_score"] or 0.0)
+                if quality_row else 0.0,
+                "avg_confidence": float(quality_row["avg_confidence"] or 0.0)
+                if quality_row else 0.0,
+                "buckets": [
+                    {"label": "Excellent", "range": "0.90 – 1.00",
+                     "count": int(quality_row["excellent"] or 0) if quality_row else 0},
+                    {"label": "Good",      "range": "0.70 – 0.90",
+                     "count": int(quality_row["good"] or 0) if quality_row else 0},
+                    {"label": "Moderate",  "range": "0.50 – 0.70",
+                     "count": int(quality_row["moderate"] or 0) if quality_row else 0},
+                    {"label": "Low",       "range": "< 0.50",
+                     "count": int(quality_row["low"] or 0) if quality_row else 0},
+                ],
+            }
+
+            platform_coverage = {
+                "kalshi_markets": int(quality_row["kalshi_markets"] or 0)
+                if quality_row else 0,
+                "polymarket_markets": int(quality_row["poly_markets"] or 0)
+                if quality_row else 0,
+            }
+
+            trade_accuracy: Optional[Dict[str, Any]] = None
+            if include_trade_accuracy:
+                try:
+                    has_arbs = await conn.fetchval(
+                        "SELECT to_regclass('public.execution_arbs') IS NOT NULL"
+                    )
+                except Exception:
+                    has_arbs = False
+                if has_arbs:
+                    arb_row = await conn.fetchrow(
+                        """
+                        SELECT
+                          COUNT(DISTINCT canonical_id)                       AS mapped_canonicals,
+                          COUNT(*)                                            AS total_arbs,
+                          COUNT(*) FILTER (WHERE realized_pnl > 0)            AS profitable,
+                          COUNT(*) FILTER (WHERE realized_pnl < 0)            AS losing,
+                          COALESCE(SUM(realized_pnl), 0)                      AS realized_pnl,
+                          COUNT(*) FILTER (WHERE is_simulation IS NOT TRUE)   AS live_arbs
+                        FROM execution_arbs
+                        """
+                    )
+                    total = int(arb_row["total_arbs"] or 0) if arb_row else 0
+                    profitable = int(arb_row["profitable"] or 0) if arb_row else 0
+                    losing = int(arb_row["losing"] or 0) if arb_row else 0
+                    # Profitable rate is hit-rate among settled arbs only:
+                    # most rows sit at exactly $0 realized_pnl while pending
+                    # or before settlement, so dividing by total_arbs would
+                    # report ~9% even when the strategy is winning. The
+                    # operator wants "of decided arbs, how many won?".
+                    decided_arbs = profitable + losing
+                    trade_accuracy = {
+                        "mappings_traded": int(arb_row["mapped_canonicals"] or 0)
+                        if arb_row else 0,
+                        "total_arbs": total,
+                        "live_arbs": int(arb_row["live_arbs"] or 0) if arb_row else 0,
+                        "profitable": profitable,
+                        "losing": losing,
+                        "decided_arbs": decided_arbs,
+                        "profitable_rate": (profitable / decided_arbs)
+                        if decided_arbs else None,
+                        "realized_pnl": float(arb_row["realized_pnl"] or 0.0)
+                        if arb_row else 0.0,
+                    }
+
+            return {
+                "total": sum(status_counts.values()),
+                "active_total": active_total,
+                "status_counts": status_counts,
+                "review_backlog": review_backlog,
+                "auto_trade": {
+                    "enabled": auto_trade_count,
+                    "eligible": confirmed,
+                    "rate": (auto_trade_count / confirmed) if confirmed else None,
+                },
+                "confirmation_rate": confirmation_rate,
+                "quality": quality,
+                "criteria_match": criteria_counts,
+                "categories": categories,
+                "platform_coverage": platform_coverage,
+                "trade_accuracy": trade_accuracy,
+            }
+        finally:
+            await self._pool.release(conn)
+
     async def write_candidates(self, candidates: List[Dict[str, Any]]) -> int:
         """Upsert discovery candidates into the canonical market_mappings table.
 

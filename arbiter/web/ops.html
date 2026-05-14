@@ -209,6 +209,11 @@ window.MOCK = (() => {
     // Market mappings ─ /api/mappings
     mappings: [],
 
+    // Aggregate mapping metrics ─ /api/mappings/metrics. Null until first
+    // successful fetch so PageMappings can render a sentinel ("—") instead
+    // of fake zeros while the request is in flight.
+    mappingMetrics: null,
+
     // Discovery/refetch status ─ /api/discovery/status
     discovery: {
       status: 'idle',
@@ -540,6 +545,11 @@ window.MOCK = (() => {
     M.mappings = rows;
   }
 
+  function mergeMappingMetrics(M, metrics) {
+    if (!metrics || typeof metrics !== 'object') return;
+    M.mappingMetrics = metrics;
+  }
+
   function mergeDiscovery(M, discovery) {
     if (!discovery || typeof discovery !== 'object') return;
     M.discovery = Object.assign({}, M.discovery || {}, discovery);
@@ -804,6 +814,7 @@ window.MOCK = (() => {
     if (!M) return;
     const [health, balances, opps, execs, pnl, deposits,
            confirmedMappings, candidateMappings, reviewMappings, rejectedMappings, expiredMappings,
+           mappingMetrics,
            settings, reconciliation, readiness, profitability,
            failedTrades, errors, portfolio, discovery] = await Promise.all([
       safeJson('/api/health'),
@@ -817,6 +828,7 @@ window.MOCK = (() => {
       safeJson('/api/mappings?status=review&limit=5000'),
       safeJson('/api/mappings?status=rejected&limit=200'),
       safeJson('/api/mappings?status=expired&limit=200'),
+      safeJson('/api/mappings/metrics'),
       safeJson('/api/settings'),
       safeJson('/api/reconciliation'),
       safeJson('/api/readiness'),
@@ -839,6 +851,7 @@ window.MOCK = (() => {
       ...(Array.isArray(rejectedMappings) ? rejectedMappings : []),
       ...(Array.isArray(expiredMappings) ? expiredMappings : []),
     ]);
+    mergeMappingMetrics(M, mappingMetrics);
     mergeSettings(M, settings);
     mergeReconciliation(M, reconciliation);
     mergeReadiness(M, readiness);
@@ -3046,6 +3059,17 @@ function PageMappings() {
   const { t, setModal, toast } = window.useApp();
   const [mappingFilter, setMappingFilter] = React.useState('all');
   const M = window.MOCK;
+  const metrics = (M && typeof M.mappingMetrics === 'object' && M.mappingMetrics) || null;
+  const metricsLoading = !metrics;
+  const fmtPct = (v) => (v == null || !Number.isFinite(Number(v))) ? '—' : `${(Number(v) * 100).toFixed(1)}%`;
+  const fmtNum = (v) => (v == null || !Number.isFinite(Number(v))) ? '—' : Number(v).toLocaleString();
+  const fmtScore = (v) => (v == null || !Number.isFinite(Number(v))) ? '—' : Number(v).toFixed(3);
+  const fmtUsd = (v) => {
+    if (v == null || !Number.isFinite(Number(v))) return '—';
+    const n = Number(v);
+    const sign = n < 0 ? '-' : '';
+    return `${sign}$${Math.abs(n).toFixed(2)}`;
+  };
   const rows = Array.isArray(M.mappings) ? M.mappings : [];
   const candidates = rows.map((r) => ({
     raw: r,
@@ -3113,11 +3137,153 @@ function PageMappings() {
         }}>Validate all pending</window.Btn>
       </window.PageHeader>
 
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap: 14, marginBottom: 18 }}>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap: 14, marginBottom: 14 }}>
         <StatButton active={mappingFilter === 'confirmed'} onClick={() => setMappingFilter('confirmed')}><window.Card padding={18}><window.Stat label="Confirmed" value={confirmedCount.toLocaleString()} tone="green" sub={`${candidates.filter(c => c.auto).length.toLocaleString()} auto-trade`} mono/></window.Card></StatButton>
         <StatButton active={mappingFilter === 'pending'} onClick={() => setMappingFilter('pending')}><window.Card padding={18}><window.Stat label="Pending review" value={reviewable.length.toLocaleString()} tone="amber" sub="Candidate + review queue" mono/></window.Card></StatButton>
         <StatButton active={mappingFilter === 'live'} onClick={() => setMappingFilter('live')}><window.Card padding={18}><window.Stat label="Live mappings" value={liveCount.toLocaleString()} tone="accent" sub="Confirmed + identical + auto-trade" mono/></window.Card></StatButton>
         <StatButton onClick={() => setModal({ kind:'refetchMappings', payload:{ title:'Discovery history', inspectOnly:true, autoPromote:false } })}><window.Card padding={18}><window.Stat label="Last refetch" value={lastRefetchValue} sub={lastRefetchSub} mono/></window.Card></StatButton>
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap: 14, marginBottom: 18 }}>
+        <window.Card padding={18}><window.Stat
+          label="Confirmation rate"
+          value={metrics ? fmtPct(metrics.confirmation_rate) : (metricsLoading ? '…' : '—')}
+          sub={metrics ? `confirmed ÷ (confirmed + rejected); expired excluded` : 'awaiting /api/mappings/metrics'}
+          tone={metrics && metrics.confirmation_rate != null && metrics.confirmation_rate >= 0.5 ? 'green' : 'amber'}
+          mono/></window.Card>
+        <window.Card padding={18}><window.Stat
+          label="Avg quality score"
+          value={metrics ? fmtScore(metrics.quality && metrics.quality.avg_score) : (metricsLoading ? '…' : '—')}
+          sub={metrics ? `${fmtNum(metrics.active_total)} active mappings · ${fmtScore(metrics.quality && metrics.quality.avg_confidence)} avg confidence` : 'awaiting /api/mappings/metrics'}
+          mono/></window.Card>
+        <window.Card padding={18}><window.Stat
+          label="Platform coverage"
+          value={metrics ? `${fmtNum(metrics.platform_coverage && metrics.platform_coverage.kalshi_markets)} K · ${fmtNum(metrics.platform_coverage && metrics.platform_coverage.polymarket_markets)} P` : (metricsLoading ? '…' : '—')}
+          sub={metrics ? 'distinct venue IDs across active mappings' : 'awaiting /api/mappings/metrics'}
+          mono/></window.Card>
+        <window.Card padding={18}><window.Stat
+          label="Auto-trade enabled"
+          value={metrics ? fmtNum(metrics.auto_trade && metrics.auto_trade.enabled) : (metricsLoading ? '…' : '—')}
+          sub={metrics ? `${fmtPct(metrics.auto_trade && metrics.auto_trade.rate)} of confirmed (${fmtNum(metrics.auto_trade && metrics.auto_trade.eligible)})` : 'awaiting /api/mappings/metrics'}
+          tone="accent"
+          mono/></window.Card>
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 14, marginBottom: 18 }}>
+        <window.Card title="Quality distribution" padding={18} action={metrics ? <span style={{ fontSize: 11, color: t.textMuted }}>{fmtNum(metrics.active_total)} active</span> : null}>
+          {metrics && metrics.quality && Array.isArray(metrics.quality.buckets) && metrics.quality.buckets.length ? (
+            <div style={{ display:'flex', flexDirection:'column', gap: 10, marginTop: 6 }}>
+              {(() => {
+                const buckets = metrics.quality.buckets;
+                const max = Math.max(1, ...buckets.map(b => Number(b.count) || 0));
+                const palette = { 'Excellent': t.green, 'Good': t.accent, 'Moderate': t.amber, 'Low': t.red };
+                return buckets.map((b, idx) => {
+                  const pct = ((Number(b.count) || 0) / max) * 100;
+                  const color = palette[b.label] || t.accent;
+                  return (
+                    <div key={idx} style={{ display:'grid', gridTemplateColumns:'80px 1fr 60px', alignItems:'center', gap: 8 }}>
+                      <span style={{ fontSize: 11.5, color: t.textDim }}>{b.label}</span>
+                      <div style={{ height: 8, background: t.bgSubtle, borderRadius: 4, overflow:'hidden' }}>
+                        <div style={{ width: `${pct}%`, height:'100%', background: color, transition:'width 0.3s ease' }}/>
+                      </div>
+                      <span style={{ fontFamily: window.FONTS.mono, fontSize: 11, color: t.text, textAlign:'right' }}>
+                        {fmtNum(b.count)}
+                      </span>
+                    </div>
+                  );
+                });
+              })()}
+              <div style={{ fontSize: 10.5, color: t.textMuted, fontFamily: window.FONTS.mono, marginTop: 4 }}>
+                {metrics.quality.buckets.map(b => `${b.label} ${b.range}`).join(' · ')}
+              </div>
+            </div>
+          ) : (
+            <div style={{ fontSize: 12, color: t.textMuted, padding:'12px 0' }}>
+              {metricsLoading ? 'Loading quality buckets…' : 'No active mappings to score.'}
+            </div>
+          )}
+        </window.Card>
+
+        <window.Card title="Criteria match" padding={18} action={<span style={{ fontSize: 11, color: t.textMuted }}>resolution_match_status</span>}>
+          {metrics && metrics.criteria_match && Object.keys(metrics.criteria_match).length ? (
+            <div style={{ display:'flex', flexDirection:'column', gap: 10, marginTop: 6 }}>
+              {(() => {
+                const entries = Object.entries(metrics.criteria_match).sort((a, b) => b[1] - a[1]);
+                const total = entries.reduce((s, [, v]) => s + (Number(v) || 0), 0) || 1;
+                const palette = { identical: t.green, similar: t.accent, divergent: t.red, pending_operator_review: t.amber, expired: t.textMuted };
+                return entries.map(([key, count]) => {
+                  const pct = ((Number(count) || 0) / total) * 100;
+                  const color = palette[key] || t.textDim;
+                  return (
+                    <div key={key} style={{ display:'grid', gridTemplateColumns:'160px 1fr 80px', alignItems:'center', gap: 8 }}>
+                      <span style={{ fontSize: 11.5, color: t.textDim, fontFamily: window.FONTS.mono }}>{key}</span>
+                      <div style={{ height: 8, background: t.bgSubtle, borderRadius: 4, overflow:'hidden' }}>
+                        <div style={{ width: `${pct}%`, height:'100%', background: color, transition:'width 0.3s ease' }}/>
+                      </div>
+                      <span style={{ fontFamily: window.FONTS.mono, fontSize: 11, color: t.text, textAlign:'right' }}>
+                        {fmtNum(count)} <span style={{ color: t.textMuted }}>· {pct.toFixed(0)}%</span>
+                      </span>
+                    </div>
+                  );
+                });
+              })()}
+            </div>
+          ) : (
+            <div style={{ fontSize: 12, color: t.textMuted, padding:'12px 0' }}>
+              {metricsLoading ? 'Loading criteria breakdown…' : 'No criteria-match data yet.'}
+            </div>
+          )}
+        </window.Card>
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 14, marginBottom: 18 }}>
+        <window.Card title="Top categories" padding={18} action={<span style={{ fontSize: 11, color: t.textMuted }}>active mappings · top 12</span>}>
+          {metrics && Array.isArray(metrics.categories) && metrics.categories.length ? (
+            <div style={{ display:'flex', flexDirection:'column', gap: 8, marginTop: 6 }}>
+              {(() => {
+                const max = Math.max(1, ...metrics.categories.map(c => Number(c.count) || 0));
+                return metrics.categories.map((c) => {
+                  const pct = ((Number(c.count) || 0) / max) * 100;
+                  const confirmedPct = ((Number(c.confirmed) || 0) / Math.max(1, Number(c.count) || 0)) * 100;
+                  return (
+                    <div key={c.name} style={{ display:'grid', gridTemplateColumns:'140px 1fr 110px', alignItems:'center', gap: 8 }}>
+                      <span style={{ fontSize: 11.5, color: t.text, fontFamily: window.FONTS.mono }}>{c.name}</span>
+                      <div style={{ height: 8, background: t.bgSubtle, borderRadius: 4, overflow:'hidden', position:'relative' }}>
+                        <div style={{ width: `${pct}%`, height:'100%', background: t.accent, opacity: 0.35 }}/>
+                        <div style={{ width: `${pct * (confirmedPct/100)}%`, height:'100%', background: t.green, position:'absolute', top: 0, left: 0 }}/>
+                      </div>
+                      <span style={{ fontFamily: window.FONTS.mono, fontSize: 11, color: t.text, textAlign:'right' }}>
+                        {fmtNum(c.count)} <span style={{ color: t.green }}>·{fmtNum(c.confirmed)}</span>
+                      </span>
+                    </div>
+                  );
+                });
+              })()}
+              <div style={{ fontSize: 10.5, color: t.textMuted, marginTop: 4 }}>
+                <span style={{ color: t.green }}>■</span> confirmed · <span style={{ color: t.accent }}>■</span> total
+              </div>
+            </div>
+          ) : (
+            <div style={{ fontSize: 12, color: t.textMuted, padding:'12px 0' }}>
+              {metricsLoading ? 'Loading categories…' : 'No category tags found on active mappings.'}
+            </div>
+          )}
+        </window.Card>
+
+        <window.Card title="Trade accuracy" padding={18} action={<span style={{ fontSize: 11, color: t.textMuted }}>execution_arbs join</span>}>
+          {metrics && metrics.trade_accuracy ? (
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 14, marginTop: 6 }}>
+              <window.Stat label="Mappings traded" value={fmtNum(metrics.trade_accuracy.mappings_traded)} sub={`across ${fmtNum(metrics.trade_accuracy.total_arbs)} arbs`} mono/>
+              <window.Stat label="Profitable rate" value={fmtPct(metrics.trade_accuracy.profitable_rate)} sub={`${fmtNum(metrics.trade_accuracy.profitable)} won · ${fmtNum(metrics.trade_accuracy.losing)} lost · ${fmtNum(metrics.trade_accuracy.decided_arbs)} settled`} tone={metrics.trade_accuracy.profitable_rate != null && metrics.trade_accuracy.profitable_rate >= 0.5 ? 'green' : 'amber'} mono/>
+              <window.Stat label="Realized P&L" value={fmtUsd(metrics.trade_accuracy.realized_pnl)} sub="sum across all arbs" tone={Number(metrics.trade_accuracy.realized_pnl || 0) >= 0 ? 'green' : 'red'} mono/>
+              <window.Stat label="Live arbs" value={fmtNum(metrics.trade_accuracy.live_arbs)} sub="non-simulation" mono/>
+            </div>
+          ) : (
+            <div style={{ fontSize: 12, color: t.textMuted, padding:'12px 0' }}>
+              {metricsLoading ? 'Loading trade accuracy…' : 'No executed arbs joined to confirmed mappings yet.'}
+            </div>
+          )}
+        </window.Card>
       </div>
 
       <div style={{ display:'flex', alignItems:'center', gap: 8, flexWrap:'wrap', marginBottom: 14 }}>

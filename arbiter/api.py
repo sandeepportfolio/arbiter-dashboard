@@ -12,6 +12,7 @@ import os
 import secrets
 import socket
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -398,6 +399,8 @@ class ArbiterAPI:
         app.router.add_get("/api/stats", self.handle_system)
         app.router.add_get("/api/markets", self.handle_market_mappings)
         app.router.add_get("/api/mappings", self.handle_market_mappings)
+        app.router.add_get("/api/mappings/metrics", self.handle_market_mappings_metrics)
+        app.router.add_get("/api/market-mappings/metrics", self.handle_market_mappings_metrics)
         app.router.add_get("/api/market-mappings", self.handle_market_mappings)
         app.router.add_post("/api/market-mappings/{canonical_id}", self.handle_market_mapping_action)
         app.router.add_get("/api/market-mappings/{canonical_id}/audit", self.handle_market_mapping_audit)
@@ -1015,6 +1018,150 @@ class ArbiterAPI:
             row.setdefault("resolution_criteria", None)
             row.setdefault("resolution_match_status", "pending_operator_review")
 
+        return web.json_response(payload)
+
+    def _mapping_metrics_from_runtime(self) -> dict[str, Any]:
+        """Fallback metrics computed from the in-process MARKET_MAP cache.
+
+        Used when the durable mapping store is unavailable (dev mode, store
+        outage) so the dashboard still shows a non-empty payload. Mirrors the
+        shape returned by MarketMappingStore.compute_metrics.
+        """
+        rows = []
+        for canonical_id, mapping in MARKET_MAP.items():
+            row = {"canonical_id": canonical_id}
+            row.update(mapping)
+            rows.append(row)
+
+        status_counts: dict[str, int] = {}
+        criteria_counts: dict[str, int] = {}
+        category_totals: dict[str, dict[str, int]] = {}
+        scores: list[float] = []
+        confidences: list[float] = []
+        excellent = good = moderate = low = 0
+        auto_trade = 0
+        kalshi_ids: set[str] = set()
+        poly_ids: set[str] = set()
+        active_states = {"confirmed", "candidate", "review"}
+
+        for row in rows:
+            status = str(row.get("status") or "candidate")
+            status_counts[status] = status_counts.get(status, 0) + 1
+            if status not in active_states:
+                continue
+            score = float(row.get("mapping_score") or row.get("confidence") or 0.0)
+            scores.append(score)
+            confidences.append(
+                float(row.get("confidence") or row.get("mapping_score") or 0.0)
+            )
+            if score >= 0.9:
+                excellent += 1
+            elif score >= 0.7:
+                good += 1
+            elif score >= 0.5:
+                moderate += 1
+            else:
+                low += 1
+            if row.get("allow_auto_trade"):
+                auto_trade += 1
+            match = str(
+                row.get("resolution_match_status") or "pending_operator_review"
+            )
+            criteria_counts[match] = criteria_counts.get(match, 0) + 1
+            kid = str(row.get("kalshi_market_id") or row.get("kalshi") or "")
+            pid = str(row.get("polymarket_slug") or row.get("polymarket") or "")
+            if kid:
+                kalshi_ids.add(kid)
+            if pid:
+                poly_ids.add(pid)
+            for tag in row.get("tags") or []:
+                tag = str(tag or "").strip()
+                if not tag:
+                    continue
+                bucket = category_totals.setdefault(
+                    tag, {"count": 0, "confirmed": 0, "pending": 0}
+                )
+                bucket["count"] += 1
+                if status == "confirmed":
+                    bucket["confirmed"] += 1
+                elif status in ("candidate", "review"):
+                    bucket["pending"] += 1
+
+        confirmed = int(status_counts.get("confirmed", 0))
+        rejected = int(status_counts.get("rejected", 0))
+        active_total = sum(int(status_counts.get(s, 0)) for s in active_states)
+        review_backlog = int(status_counts.get("candidate", 0)) + int(
+            status_counts.get("review", 0)
+        )
+        # Confirmation rate over decided rows only — see compute_metrics in
+        # market_map.py for the rationale (expired rows would otherwise dilute
+        # the metric to near-zero in production).
+        decided = confirmed + rejected
+        confirmation_rate = (confirmed / decided) if decided else None
+        avg_score = (sum(scores) / len(scores)) if scores else 0.0
+        avg_confidence = (sum(confidences) / len(confidences)) if confidences else 0.0
+        categories = sorted(
+            (
+                {"name": name, **stats}
+                for name, stats in category_totals.items()
+            ),
+            key=lambda c: c["count"],
+            reverse=True,
+        )[:12]
+
+        return {
+            "total": sum(status_counts.values()),
+            "active_total": active_total,
+            "status_counts": status_counts,
+            "review_backlog": review_backlog,
+            "auto_trade": {
+                "enabled": auto_trade,
+                "eligible": confirmed,
+                "rate": (auto_trade / confirmed) if confirmed else None,
+            },
+            "confirmation_rate": confirmation_rate,
+            "quality": {
+                "active_total": active_total,
+                "avg_score": avg_score,
+                "avg_confidence": avg_confidence,
+                "buckets": [
+                    {"label": "Excellent", "range": "0.90 – 1.00", "count": excellent},
+                    {"label": "Good",      "range": "0.70 – 0.90", "count": good},
+                    {"label": "Moderate",  "range": "0.50 – 0.70", "count": moderate},
+                    {"label": "Low",       "range": "< 0.50",      "count": low},
+                ],
+            },
+            "criteria_match": criteria_counts,
+            "categories": categories,
+            "platform_coverage": {
+                "kalshi_markets": len(kalshi_ids),
+                "polymarket_markets": len(poly_ids),
+            },
+            "trade_accuracy": None,
+        }
+
+    async def handle_market_mappings_metrics(self, request):
+        """Aggregate mapping metrics for the operator dashboard.
+
+        Returns status counts, quality buckets, criteria-match breakdown,
+        top categories, platform coverage, and trade accuracy. Falls back
+        to the in-process MARKET_MAP cache if the durable store is offline.
+        """
+        payload: Optional[dict[str, Any]] = None
+        if self.mapping_store is not None:
+            compute = getattr(self.mapping_store, "compute_metrics", None)
+            if callable(compute):
+                try:
+                    payload = await compute()
+                except Exception as exc:
+                    logger.warning(
+                        "compute_metrics failed, falling back to runtime cache: %s",
+                        exc,
+                    )
+                    payload = None
+        if payload is None:
+            payload = self._mapping_metrics_from_runtime()
+        payload["generated_at"] = datetime.now(timezone.utc).isoformat()
         return web.json_response(payload)
 
     @staticmethod
