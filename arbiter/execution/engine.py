@@ -1663,6 +1663,7 @@ class ExecutionEngine:
 
         # Recovery runs AFTER recording so Task 2's release_trade hook
         # can free the survivor's reservation if its cancel succeeds.
+        unwind_pnl: float = 0.0
         if needs_recovery:
             recovery_notes, unwind_pnl = await self._recover_one_leg_risk(
                 arb_id, opp, leg_yes, leg_no,
@@ -1679,6 +1680,12 @@ class ExecutionEngine:
                     "ARB %s realized_pnl updated by unwind: $%.4f (total now $%.4f)",
                     arb_id, unwind_pnl, execution.realized_pnl,
                 )
+
+        # Daily-loss kill switch: roll the unwind loss into RiskManager's
+        # daily P&L (record_trade already booked the entry pnl) and trip
+        # SafetySupervisor when cumulative loss crosses the configured
+        # ceiling. Halts the system, not just this trade.
+        await self._maybe_halt_on_daily_loss(unwind_pnl=unwind_pnl)
 
         # Generate a deterministic markdown post-mortem so every arb — win,
         # loss, naked recovery, or gate-blocked — has a human-readable
@@ -2058,6 +2065,45 @@ class ExecutionEngine:
             "post_submit_poll.timeout arb=%s order=%s — leg still SUBMITTED after %.1fs",
             arb_id, current.order_id, timeout,
         )
+        # Cancel the still-SUBMITTED order so it doesn't fill later while
+        # the engine has moved on. If cancel returns False or raises we
+        # have no proof the order is dead — mark ambiguous so the fallback
+        # chain refuses to retry. Either way, re-poll get_order: a race
+        # between fill and cancel can leave the order FILLED, and the
+        # downstream accounting must see the real fill, not a phantom
+        # cancel.
+        try:
+            cancel_ok = await adapter.cancel_order(current)
+        except Exception as exc:
+            logger.warning(
+                "post_submit_poll.cancel_raised arb=%s order=%s err=%s",
+                arb_id, current.order_id, exc,
+            )
+            cancel_ok = False
+
+        # Re-poll once to learn the post-cancel reality (CANCELLED, FILLED
+        # if the order filled in the race window, or still SUBMITTED if
+        # the venue dropped the cancel on the floor).
+        try:
+            refreshed = await adapter.get_order(current)
+            current = refreshed
+        except Exception as exc:
+            logger.debug(
+                "post_submit_poll.recheck_failed arb=%s err=%s",
+                arb_id, exc,
+            )
+
+        # Fail-closed: if the order is still not in a terminal state OR
+        # the cancel call itself failed, treat as idempotency-ambiguous.
+        # A FILLED re-poll (real proof of fill) is positive evidence and
+        # clears ambiguity.
+        if current.status not in terminal_statuses or not cancel_ok:
+            if current.status != OrderStatus.FILLED:
+                current.idempotency_ambiguous = True
+                logger.warning(
+                    "post_submit_poll.ambiguous arb=%s order=%s status=%s cancel_ok=%s",
+                    arb_id, current.order_id, current.status.value, cancel_ok,
+                )
         return current
 
     @staticmethod
@@ -2835,6 +2881,42 @@ class ExecutionEngine:
             message=f"Order rejected: {reason}",
             metadata=metadata,
         )
+
+    async def _maybe_halt_on_daily_loss(self, unwind_pnl: float = 0.0) -> None:
+        """Trip the kill switch when cumulative daily loss crosses the limit.
+
+        ``RiskManager.check_trade`` already refuses individual trades when the
+        threshold is crossed, but rejecting one opportunity is not the same as
+        *halting*: the engine keeps picking the next opportunity off the
+        scanner queue and grinding through them. This method closes the gap
+        by tripping the SafetySupervisor — which cancels every open order
+        and refuses execution until an operator resets — once the limit is
+        breached.
+
+        Also books unwind P&L (from one-leg recovery sells) into
+        ``RiskManager._daily_pnl`` so the check sees the real cumulative
+        loss; without this step the unwind cost lands only on
+        ``execution.realized_pnl`` and the daily-loss kill is blind to it.
+        """
+        if unwind_pnl:
+            self.risk._daily_pnl += float(unwind_pnl)
+        if self.risk._daily_pnl > self.risk._max_daily_loss:
+            return
+        safety = self._safety
+        if safety is None:
+            return
+        if getattr(safety, "is_armed", False):
+            return
+        reason = (
+            f"Daily loss limit reached: ${self.risk._daily_pnl:.2f} "
+            f"<= ${self.risk._max_daily_loss:.2f}"
+        )
+        try:
+            await safety.trip_kill(by="system:daily_loss", reason=reason)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.critical(
+                "engine: daily-loss trip_kill failed: %s", exc,
+            )
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._own_session is None or self._own_session.closed:

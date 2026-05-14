@@ -1844,10 +1844,13 @@ def test_post_submit_poll_transitions_submitted_to_filled():
     asyncio.run(runner())
 
 
-def test_post_submit_poll_returns_submitted_after_timeout():
-    """C2: if the venue never reaches a terminal state, the poll loop
-    must give up after the hard timeout and return the SUBMITTED order
-    (so the caller's recovery / soft-naked path can kick in)."""
+def test_post_submit_poll_cancels_order_on_timeout():
+    """When the SUBMITTED poll times out, the engine must NOT leave the
+    order resting on the venue book with no further action. Without an
+    explicit cancel a stuck order can fill later — meanwhile the engine
+    moved on, leaving real exposure with no recovery path. The fix:
+    fire cancel_order, re-poll to confirm, return the resulting state.
+    """
     from arbiter.execution.engine import Order, OrderStatus
 
     async def runner():
@@ -1866,11 +1869,23 @@ def test_post_submit_poll_returns_submitted_after_timeout():
             quantity=10,
             status=OrderStatus.SUBMITTED,
         )
+        cancelled = Order(
+            order_id="POLY-OPEN-7",
+            platform="polymarket",
+            market_id="P-NO",
+            canonical_id="C",
+            side="no",
+            price=0.40,
+            quantity=10,
+            status=OrderStatus.CANCELLED,
+            fill_qty=0,
+        )
 
         adapter = MagicMock()
         adapter.platform = "polymarket"
         adapter.place_fok = AsyncMock(return_value=submitted)
-        adapter.get_order = AsyncMock(return_value=submitted)
+        adapter.get_order = AsyncMock(side_effect=[submitted, submitted, submitted, cancelled])
+        adapter.cancel_order = AsyncMock(return_value=True)
 
         engine.adapters = {"polymarket": adapter}
 
@@ -1880,9 +1895,162 @@ def test_post_submit_poll_returns_submitted_after_timeout():
             price=0.40, qty=10,
         )
 
-        assert result.status == OrderStatus.SUBMITTED
-        # Polled at least once before giving up.
-        assert adapter.get_order.await_count >= 1
+        # cancel was attempted exactly once on timeout
+        adapter.cancel_order.assert_awaited_once()
+        # final status reflects the confirmed cancellation, NOT SUBMITTED
+        assert result.status == OrderStatus.CANCELLED
+        # not ambiguous because we got positive proof of cancellation
+        assert result.idempotency_ambiguous is False
+
+    asyncio.run(runner())
+
+
+def test_post_submit_poll_marks_ambiguous_when_cancel_fails():
+    """If the post-timeout cancel call returns False (venue refused) or
+    raises, we have no proof the order is dead — it may still fill. The
+    order must be marked idempotency_ambiguous so the fallback chain
+    refuses to retry with a new client_order_id and stack a second leg
+    on top of a possibly-live one."""
+    from arbiter.execution.engine import Order, OrderStatus
+
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        engine._submit_poll_timeout_s = 0.06
+        engine._submit_poll_interval_s = 0.02
+
+        submitted = Order(
+            order_id="KALSHI-OPEN-9",
+            platform="kalshi",
+            market_id="K-YES",
+            canonical_id="C",
+            side="yes",
+            price=0.55,
+            quantity=10,
+            status=OrderStatus.SUBMITTED,
+        )
+
+        adapter = MagicMock()
+        adapter.platform = "kalshi"
+        adapter.place_fok = AsyncMock(return_value=submitted)
+        adapter.get_order = AsyncMock(return_value=submitted)
+        adapter.cancel_order = AsyncMock(return_value=False)
+
+        engine.adapters = {"kalshi": adapter}
+
+        result = await engine._place_order_for_leg(
+            arb_id="ARB-9", platform="kalshi",
+            market_id="K-YES", canonical_id="C", side="yes",
+            price=0.55, qty=10,
+        )
+
+        adapter.cancel_order.assert_awaited_once()
+        # Cancel failed — order still SUBMITTED on the venue book.
+        # Status stays SUBMITTED (we can't claim it's cancelled), but
+        # idempotency_ambiguous must be True so retries are blocked.
+        assert result.idempotency_ambiguous is True
+
+    asyncio.run(runner())
+
+
+def test_post_submit_poll_marks_ambiguous_when_cancel_raises():
+    """A cancel that raises is just as ambiguous as one that returns
+    False — same fail-closed treatment."""
+    from arbiter.execution.engine import Order, OrderStatus
+
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        engine._submit_poll_timeout_s = 0.06
+        engine._submit_poll_interval_s = 0.02
+
+        submitted = Order(
+            order_id="KALSHI-OPEN-10",
+            platform="kalshi",
+            market_id="K-YES",
+            canonical_id="C",
+            side="yes",
+            price=0.55,
+            quantity=10,
+            status=OrderStatus.SUBMITTED,
+        )
+
+        adapter = MagicMock()
+        adapter.platform = "kalshi"
+        adapter.place_fok = AsyncMock(return_value=submitted)
+        adapter.get_order = AsyncMock(return_value=submitted)
+        adapter.cancel_order = AsyncMock(side_effect=RuntimeError("venue down"))
+
+        engine.adapters = {"kalshi": adapter}
+
+        result = await engine._place_order_for_leg(
+            arb_id="ARB-10", platform="kalshi",
+            market_id="K-YES", canonical_id="C", side="yes",
+            price=0.55, qty=10,
+        )
+
+        adapter.cancel_order.assert_awaited_once()
+        assert result.idempotency_ambiguous is True
+
+    asyncio.run(runner())
+
+
+def test_post_submit_poll_repoll_detects_late_fill_after_cancel():
+    """Race: the venue fills our order in the same window we issue cancel.
+    The re-poll after cancel must see the FILLED status and return it so
+    downstream accounting books the real fill — never a phantom cancel."""
+    from arbiter.execution.engine import Order, OrderStatus
+
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        engine._submit_poll_timeout_s = 0.06
+        engine._submit_poll_interval_s = 0.02
+
+        submitted = Order(
+            order_id="POLY-OPEN-11",
+            platform="polymarket",
+            market_id="P-NO",
+            canonical_id="C",
+            side="no",
+            price=0.40,
+            quantity=10,
+            status=OrderStatus.SUBMITTED,
+        )
+        filled = Order(
+            order_id="POLY-OPEN-11",
+            platform="polymarket",
+            market_id="P-NO",
+            canonical_id="C",
+            side="no",
+            price=0.40,
+            quantity=10,
+            status=OrderStatus.FILLED,
+            fill_qty=10,
+            fill_price=0.40,
+        )
+
+        adapter = MagicMock()
+        adapter.platform = "polymarket"
+        adapter.place_fok = AsyncMock(return_value=submitted)
+        # Poll loop sees submitted; re-poll after cancel sees FILLED.
+        adapter.get_order = AsyncMock(side_effect=[submitted, submitted, submitted, filled])
+        # Cancel raced with fill — venue says nothing to cancel (returns False).
+        adapter.cancel_order = AsyncMock(return_value=False)
+
+        engine.adapters = {"polymarket": adapter}
+
+        result = await engine._place_order_for_leg(
+            arb_id="ARB-11", platform="polymarket",
+            market_id="P-NO", canonical_id="C", side="no",
+            price=0.40, qty=10,
+        )
+
+        # Real fill takes precedence over the cancel attempt; no longer ambiguous
+        # because we have positive proof from the re-poll.
+        assert result.status == OrderStatus.FILLED
+        assert result.fill_qty == 10
+        assert result.idempotency_ambiguous is False
 
     asyncio.run(runner())
 
@@ -2672,5 +2840,113 @@ def test_handle_db_failure_records_critical_incident_and_trips_safety():
         ]
         assert len(critical) == 1, "expected exactly one critical db incident"
         assert critical[0].metadata.get("op") == "record_arb"
+
+    asyncio.run(runner())
+
+
+def _fake_supervisor():
+    """AsyncMock supervisor with realistic is_armed/trip_kill semantics.
+
+    The default ``AsyncMock`` auto-creates a truthy ``is_armed`` attribute
+    which makes the engine's "already armed → skip" guard trigger on every
+    call. We mimic the real supervisor by flipping ``is_armed`` to True
+    only after ``trip_kill`` is awaited.
+    """
+    safety = AsyncMock()
+    safety.is_armed = False
+
+    async def _trip_kill(*args, **kwargs):
+        safety.is_armed = True
+        return None
+
+    safety.trip_kill = AsyncMock(side_effect=_trip_kill)
+    return safety
+
+
+def test_daily_loss_does_not_trip_below_limit():
+    """Sanity guard: when cumulative daily loss is still inside the limit,
+    the kill switch must NOT be tripped — that would halt trading on noise."""
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        engine.risk._max_daily_loss = -50.0
+        engine._safety = _fake_supervisor()
+
+        # Two trades that don't combine to exceed the limit.
+        engine.risk.record_trade("M1", 10.0, -20.0)
+        await engine._maybe_halt_on_daily_loss()
+        engine._safety.trip_kill.assert_not_awaited()
+
+        engine.risk.record_trade("M2", 10.0, -15.0)
+        await engine._maybe_halt_on_daily_loss()
+        engine._safety.trip_kill.assert_not_awaited()
+
+    asyncio.run(runner())
+
+
+def test_daily_loss_trips_kill_switch_when_exceeded():
+    """Cumulative daily losses crossing _max_daily_loss must trip the
+    kill switch so the system HALTS — not merely reject the next trade.
+
+    Otherwise normal-looking opportunities continue to be picked up
+    until the limit is breached on every one, burning capital."""
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        engine.risk._max_daily_loss = -50.0
+        engine._safety = _fake_supervisor()
+
+        # Two trades that combine to cross the -$50 threshold.
+        engine.risk.record_trade("M1", 10.0, -30.0)
+        await engine._maybe_halt_on_daily_loss()
+        engine._safety.trip_kill.assert_not_awaited()
+
+        engine.risk.record_trade("M2", 10.0, -25.0)  # cumulative -$55
+        await engine._maybe_halt_on_daily_loss()
+        engine._safety.trip_kill.assert_awaited_once()
+        call_kwargs = engine._safety.trip_kill.await_args.kwargs
+        assert call_kwargs.get("by") == "system:daily_loss"
+        assert "daily loss" in call_kwargs.get("reason", "").lower()
+
+    asyncio.run(runner())
+
+
+def test_daily_loss_unwind_pnl_booked_into_risk_manager():
+    """Unwind realised loss must roll into RiskManager._daily_pnl so the
+    daily-loss check sees the real cumulative loss, not just the entry
+    edge. Before this fix, unwind losses landed only on
+    execution.realized_pnl and the daily-loss kill switch was blind to them."""
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        engine.risk._max_daily_loss = -50.0
+        engine._safety = _fake_supervisor()
+
+        starting_pnl = engine.risk._daily_pnl
+        # Book a large unwind loss directly (simulates the path where
+        # _recover_one_leg_risk returns a negative unwind_pnl).
+        await engine._maybe_halt_on_daily_loss(unwind_pnl=-75.0)
+        assert engine.risk._daily_pnl == pytest.approx(starting_pnl - 75.0)
+        engine._safety.trip_kill.assert_awaited_once()
+
+    asyncio.run(runner())
+
+
+def test_daily_loss_trip_kill_is_idempotent():
+    """Multiple breaches in a row must not spam trip_kill — once is enough
+    (the supervisor itself is idempotent, but the engine should also
+    avoid unnecessary calls)."""
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        engine.risk._max_daily_loss = -50.0
+        engine._safety = _fake_supervisor()
+
+        engine.risk.record_trade("M1", 10.0, -80.0)
+        await engine._maybe_halt_on_daily_loss()
+        await engine._maybe_halt_on_daily_loss()
+        # Once is_armed flips True after the first trip_kill, subsequent
+        # calls must short-circuit.
+        assert engine._safety.trip_kill.await_count == 1
 
     asyncio.run(runner())

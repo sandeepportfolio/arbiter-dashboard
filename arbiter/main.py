@@ -35,7 +35,7 @@ from .execution.store import ExecutionStore
 from .portfolio import PortfolioConfig, PortfolioMonitor
 from .profitability import ProfitabilityConfig, ProfitabilityValidator
 from .readiness import OperationalReadiness
-from .safety.persistence import SafetyEventStore
+from .safety.persistence import RedisStateShim, SafetyEventStore
 from .safety.supervisor import SafetySupervisor
 from .utils.retry import CircuitBreaker, RateLimiter
 from .mapping.auto_discovery import discover as discover_market_mappings
@@ -111,6 +111,20 @@ def _float_env(name: str) -> Optional[float]:
         return float(raw)
     except ValueError:
         return 0.0
+
+
+def _build_shared_session() -> aiohttp.ClientSession:
+    """Build the shared aiohttp session used by every platform adapter.
+
+    Without an explicit timeout, aiohttp defaults to 300s total — far too
+    generous for a trading hot path where a stuck request can pin engine
+    state on SUBMITTED while real money is on the venue's books. The 30s
+    total / 10s connect budget mirrors the per-leg execution timeout in
+    ``run_system`` so a single request cannot exceed the engine's
+    own deadlines.
+    """
+    timeout = aiohttp.ClientTimeout(total=30.0, connect=10.0)
+    return aiohttp.ClientSession(timeout=timeout)
 
 
 async def _build_redis_client(logger: logging.Logger):
@@ -544,7 +558,7 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
 
     # Shared aiohttp session for adapter HTTP calls. Engine keeps its own
     # internal session for legacy paths; Phase 3 can consolidate.
-    shared_session = aiohttp.ClientSession()
+    shared_session = _build_shared_session()
 
     kalshi_circuit = CircuitBreaker(
         name="kalshi-exec", failure_threshold=5, recovery_timeout=30.0,
@@ -670,16 +684,21 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     safety_events_store = SafetyEventStore(
         pool=store._pool if store is not None else None
     )
+    # Redis-backed kill-switch persistence: when the boolean is set in
+    # Redis we restore the armed state on startup so a kill switch armed
+    # before a container restart stays armed until an operator resets it.
+    safety_redis = RedisStateShim(redis_client=redis_client) if redis_client is not None else None
     safety = SafetySupervisor(
         config=config.safety,
         engine=engine,
         adapters=adapters,
         notifier=monitor.notifier,  # reuse the single BalanceMonitor-owned Telegram client
-        redis=None,                 # optional; wire a RedisStateShim in plan 03-05 if needed
+        redis=safety_redis,
         store=store,
         safety_store=safety_events_store,
     )
     engine._safety = safety  # late injection for plan 03-03 one-leg hook
+    await safety.restore_from_redis()
 
     # Apply safety_events DDL when a Postgres pool is available. Additionally
     # re-run init.sql idempotently so schema migrations (SAFE-06 ALTER TABLE

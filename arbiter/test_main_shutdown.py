@@ -203,3 +203,26 @@ async def test_critical_task_watch_triggers_shutdown_on_crash(caplog):
         "Critical task api-server crashed" in record.message
         for record in caplog.records
     ), [record.message for record in caplog.records]
+
+
+async def test_shared_session_has_explicit_timeout():
+    """``aiohttp.ClientSession()`` defaults to a 300s total timeout which
+    means a stuck Kalshi/Polymarket request can hold engine state on
+    SUBMITTED for five minutes while real money is on the venue's book.
+    The shared adapter session must carry an explicit, tight timeout."""
+    from arbiter.main import _build_shared_session
+
+    session = _build_shared_session()
+    try:
+        timeout = session.timeout
+        assert timeout.total is not None, "total timeout must be set"
+        assert timeout.total <= 60.0, (
+            f"total timeout {timeout.total}s is too generous; the engine's "
+            f"own per-leg deadline is much tighter"
+        )
+        assert timeout.connect is not None, "connect timeout must be set"
+        assert timeout.connect <= 30.0, (
+            f"connect timeout {timeout.connect}s is too generous"
+        )
+    finally:
+        await session.close()

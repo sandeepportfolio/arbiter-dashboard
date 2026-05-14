@@ -276,6 +276,26 @@ class SafetySupervisor:
                             exc,
                         )
 
+                # Clear the engine's db-write-failed block (C4.2). The flag
+                # is set by ExecutionEngine._handle_db_failure on a Postgres
+                # write failure and refuses every subsequent order
+                # placement; without clearing it here a successful operator
+                # reset leaves the engine permanently muted even after the
+                # DB recovers. Best-effort: stub engines used in tests may
+                # lack the attribute, and a getattr/setattr dance keeps us
+                # from coupling the supervisor to ExecutionEngine internals.
+                if getattr(self.engine, "_db_write_failed", False):
+                    try:
+                        self.engine._db_write_failed = False
+                        logger.info(
+                            "safety.supervisor: cleared engine._db_write_failed on reset",
+                        )
+                    except Exception as exc:  # pragma: no cover - defensive
+                        logger.warning(
+                            "safety.supervisor: clearing _db_write_failed failed: %s",
+                            exc,
+                        )
+
                 logger.info(
                     "safety.supervisor: kill switch RESET by=%s note=%s", by, note,
                 )
@@ -285,6 +305,54 @@ class SafetySupervisor:
                 return self._state
         finally:
             clear_contextvars()
+
+    # ─── restore_from_redis (post-restart kill-switch persistence) ──────
+
+    async def restore_from_redis(self) -> None:
+        """Restore armed state from Redis on startup.
+
+        Why: the supervisor boots disarmed; without this, a kill-switch
+        armed before a container restart silently re-enables trading on
+        the next deploy. ``trip_kill`` writes the boolean to Redis on
+        arm, so a True reading here means the previous instance was
+        armed and we must come back up armed too.
+
+        Cancels are intentionally skipped (the orders that triggered the
+        trip have long since been cancelled or settled); we only need
+        ``allow_execution`` to keep refusing trades until an operator
+        resets via the dashboard. No Telegram alert either — the alert
+        already fired when the supervisor first armed.
+        """
+        if self.redis is None:
+            return
+        try:
+            armed = await self.redis.is_armed()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(
+                "safety.supervisor: redis is_armed read failed on restore: %s",
+                exc,
+            )
+            return
+        if not armed:
+            return
+        async with self._state_lock:
+            if self._state.armed:
+                return
+            now = time.time()
+            self._state = SafetyState(
+                armed=True,
+                armed_by="system:redis_restore",
+                armed_at=now,
+                armed_reason="kill switch restored from persisted state",
+                cooldown_until=now + float(self.config.min_cooldown_seconds),
+            )
+            logger.warning(
+                "safety.supervisor: KILL SWITCH RESTORED from Redis "
+                "(previous instance left it armed)",
+            )
+            await self._publish(
+                {"type": "kill_switch", "payload": self._state.to_dict()}
+            )
 
     # ─── prepare_shutdown (SAFE-05, plan 03-05) ─────────────────────────
 

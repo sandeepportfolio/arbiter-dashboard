@@ -190,3 +190,140 @@ async def test_handle_one_leg_exposure_sends_telegram_and_publishes(
     assert event["type"] == "one_leg_exposure"
     payload = event.get("payload", {})
     assert payload.get("canonical_id") == "MKT1"
+
+
+async def test_restore_from_redis_arms_when_persisted(fake_notifier, fake_adapter_factory):
+    """Kill-switch state must survive container restart: if Redis says
+    the switch was armed before the crash, the supervisor must come back
+    up armed so no trades execute until an operator resets it.
+    """
+    from arbiter.safety.persistence import RedisStateShim
+
+    class _StubRedis:
+        def __init__(self, value):
+            self._value = value
+
+        async def get(self, key):
+            return self._value
+
+        async def set(self, key, value):
+            self._value = value
+
+        async def delete(self, key):
+            self._value = None
+
+    shim = RedisStateShim(redis_client=_StubRedis("armed"))
+    adapters = {"kalshi": fake_adapter_factory("kalshi", [])}
+    supervisor = SafetySupervisor(
+        config=SafetyConfig(),
+        engine=SimpleNamespace(),
+        adapters=adapters,
+        notifier=fake_notifier,
+        redis=shim,
+        store=None,
+        safety_store=None,
+    )
+    await supervisor.restore_from_redis()
+    assert supervisor.is_armed is True
+    assert supervisor.armed_by == "system:redis_restore"
+
+
+async def test_restore_from_redis_noop_when_not_armed(fake_notifier, fake_adapter_factory):
+    """If Redis says not armed (or no Redis at all), supervisor stays disarmed."""
+    from arbiter.safety.persistence import RedisStateShim
+
+    class _StubRedis:
+        async def get(self, key):
+            return None
+
+    shim = RedisStateShim(redis_client=_StubRedis())
+    adapters = {"kalshi": fake_adapter_factory("kalshi", [])}
+    supervisor = SafetySupervisor(
+        config=SafetyConfig(),
+        engine=SimpleNamespace(),
+        adapters=adapters,
+        notifier=fake_notifier,
+        redis=shim,
+        store=None,
+        safety_store=None,
+    )
+    await supervisor.restore_from_redis()
+    assert supervisor.is_armed is False
+
+
+async def test_restore_from_redis_no_shim_is_safe(fake_notifier, fake_adapter_factory):
+    """Calling restore_from_redis with no Redis configured must not raise."""
+    adapters = {"kalshi": fake_adapter_factory("kalshi", [])}
+    supervisor = SafetySupervisor(
+        config=SafetyConfig(),
+        engine=SimpleNamespace(),
+        adapters=adapters,
+        notifier=fake_notifier,
+        redis=None,
+        store=None,
+        safety_store=None,
+    )
+    await supervisor.restore_from_redis()
+    assert supervisor.is_armed is False
+
+
+async def test_reset_kill_clears_engine_db_write_failed(
+    fake_notifier, fake_adapter_factory, monkeypatch,
+):
+    """An ExecutionStore failure during live trading sets
+    ``engine._db_write_failed = True`` and trips the kill switch via
+    ``trip_kill``. Once the operator fixes the DB and resets the switch,
+    the engine must come back online — but it stays blocked forever
+    unless ``reset_kill`` also clears the flag. This regression test
+    pins that contract."""
+    adapters = {"kalshi": fake_adapter_factory("kalshi", [])}
+    engine = SimpleNamespace(_db_write_failed=True)
+
+    cfg = SafetyConfig()
+    cfg.min_cooldown_seconds = 10.0
+    supervisor = SafetySupervisor(
+        config=cfg,
+        engine=engine,
+        adapters=adapters,
+        notifier=fake_notifier,
+        redis=None,
+        store=None,
+        safety_store=None,
+    )
+
+    base = time.time()
+    monkeypatch.setattr("arbiter.safety.supervisor.time.time", lambda: base)
+    await supervisor.trip_kill(by="execution_engine:db_failure", reason="pg down")
+    assert engine._db_write_failed is True  # trip leaves the flag alone
+
+    monkeypatch.setattr("arbiter.safety.supervisor.time.time", lambda: base + 60.0)
+    await supervisor.reset_kill(by="operator:test", note="db recovered")
+    assert engine._db_write_failed is False
+
+
+async def test_reset_kill_safe_when_engine_lacks_flag(
+    fake_notifier, fake_adapter_factory, monkeypatch,
+):
+    """Some test scenarios construct a stub engine without
+    ``_db_write_failed`` (e.g. plain SimpleNamespace). ``reset_kill``
+    must not raise AttributeError in that case."""
+    adapters = {"kalshi": fake_adapter_factory("kalshi", [])}
+    engine = SimpleNamespace()  # no _db_write_failed attribute
+
+    cfg = SafetyConfig()
+    cfg.min_cooldown_seconds = 10.0
+    supervisor = SafetySupervisor(
+        config=cfg,
+        engine=engine,
+        adapters=adapters,
+        notifier=fake_notifier,
+        redis=None,
+        store=None,
+        safety_store=None,
+    )
+    base = time.time()
+    monkeypatch.setattr("arbiter.safety.supervisor.time.time", lambda: base)
+    await supervisor.trip_kill(by="operator:test", reason="manual")
+    monkeypatch.setattr("arbiter.safety.supervisor.time.time", lambda: base + 60.0)
+    # Must not raise.
+    await supervisor.reset_kill(by="operator:test", note="ok")
