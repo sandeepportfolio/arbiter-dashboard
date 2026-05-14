@@ -2,6 +2,7 @@
 Tests for MarketMappingStore.
 """
 import asyncio
+import json
 import sys
 import os
 from datetime import datetime, timezone
@@ -535,6 +536,52 @@ async def test_write_candidates_preserves_auto_promoted_mapping_state(mock_pool,
 
 
 @pytest.mark.asyncio
+async def test_write_candidates_does_not_revive_mapping_under_review(mock_pool, monkeypatch):
+    store = MarketMappingStore("postgres://mock/mock")
+    await store.connect()
+
+    await store.upsert(MarketMapping(
+        canonical_id="DEM_HOUSE_2026",
+        description="Democrats win House 2026 midterms",
+        status=MappingStatus.REVIEW,
+        allow_auto_trade=False,
+        kalshi_market_id="CONTROLH-2026-D",
+        polymarket_slug="paccc-usho-midterms-2026-11-03-dem",
+        review_note="Manual hold: repeated/open trade risk.",
+        resolution_match_status="identical",
+    ))
+
+    await store.write_candidates([
+        {
+            "canonical_id": "DEM_HOUSE_2026",
+            "kalshi_ticker": "CONTROLH-2026-D",
+            "kalshi_title": "Will Democrats win the House in 2026?",
+            "poly_slug": "paccc-usho-midterms-2026-11-03-dem",
+            "poly_question": "Will Democrats win the House in 2026?",
+            "score": 0.99,
+            "status": "confirmed",
+            "allow_auto_trade": True,
+            "resolution_match_status": "identical",
+            "resolution_criteria": {
+                "kalshi": {"source": "AP", "rule": None, "settlement_date": "2027-02-01"},
+                "polymarket": {"source": "AP", "rule": None, "settlement_date": "2027-02-01"},
+                "criteria_match": "identical",
+            },
+            "review_note": "",
+        }
+    ])
+
+    mapping = await store.get("DEM_HOUSE_2026")
+    assert mapping is not None
+    assert mapping.status == MappingStatus.REVIEW
+    assert mapping.allow_auto_trade is False
+    assert mapping.review_note == "Manual hold: repeated/open trade risk."
+    assert mapping.mapping_score == 0.99
+
+    await store.disconnect()
+
+
+@pytest.mark.asyncio
 async def test_write_candidates_refuses_confirmed_without_resolution_criteria(mock_pool, monkeypatch):
     store = MarketMappingStore("postgres://mock/mock")
     await store.connect()
@@ -558,6 +605,39 @@ async def test_write_candidates_refuses_confirmed_without_resolution_criteria(mo
     assert mapping.status == MappingStatus.REVIEW
     assert mapping.allow_auto_trade is False
     assert mapping.resolution_match_status == "pending_operator_review"
+
+    await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_sports_auto_trade_requires_structured_settlement_dates(mock_pool, monkeypatch):
+    store = MarketMappingStore("postgres://mock/mock")
+    await store.connect()
+
+    mapping = MarketMapping(
+        canonical_id="SPORTS-MISSING-DATE",
+        description="Team A vs Team B",
+        status=MappingStatus.CONFIRMED,
+        allow_auto_trade=True,
+        tags=("sports", "game-winner"),
+        kalshi_market_id="KXGAME-TEAM-A",
+        polymarket_slug="team-a-team-b-team-a",
+        resolution_match_status="identical",
+        resolution_criteria_json=json.dumps(
+            {
+                "kalshi": {"rule": "sports:winner:moneyline:team-a"},
+                "polymarket": {"rule": "sports:winner:moneyline:team-a"},
+                "polarity": "same",
+                "criteria_match": "identical",
+            }
+        ),
+    )
+
+    await store.upsert(mapping)
+
+    stored = await store.get("SPORTS-MISSING-DATE")
+    assert stored is not None
+    assert stored.allow_auto_trade is False
 
     await store.disconnect()
 

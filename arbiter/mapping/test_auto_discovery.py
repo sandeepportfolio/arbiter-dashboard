@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from datetime import date, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -602,12 +603,15 @@ def test_synthetic_kalshi_orderbook_does_not_treat_volume_as_executable_depth():
 async def test_structural_sports_auto_promote_normalizes_binary_outcome_set():
     """Exact sports fingerprints are YES/NO contracts even when venue metadata
     labels the displayed outcomes with team names."""
+    event_date = date.today() + timedelta(days=30)
+    kalshi_date = event_date.strftime("%y%b%d").upper()
+    poly_date = event_date.isoformat()
     kalshi = _make_kalshi_client([
         {
-            "ticker": "KXMLBGAME-26MAY012145KCSEA-KC",
+            "ticker": f"KXMLBGAME-{kalshi_date}2145KCSEA-KC",
             "title": "Kansas City vs Seattle Winner?",
             "category": "sports",
-            "close_time": "2026-05-01T21:45:00Z",
+            "close_time": f"{poly_date}T21:45:00Z",
             "status": "open",
             "yes_bid": 55,
             "yes_bid_size_fp": 500,
@@ -615,10 +619,10 @@ async def test_structural_sports_auto_promote_normalizes_binary_outcome_set():
     ])
     poly = _make_poly_client([
         {
-            "slug": "aec-mlb-kc-sea-2026-05-01",
-            "question": "MLB: KC wins on 2026-05-01",
+            "slug": f"aec-mlb-kc-sea-{poly_date}",
+            "question": f"MLB: KC wins on {poly_date}",
             "category": "sports",
-            "endDate": "2026-05-01",
+            "endDate": poly_date,
             "outcomes": ["KC", "SEA"],
         },
     ])

@@ -2217,6 +2217,15 @@ class ArbiterAPI:
                 actor=actor,
                 **update_kwargs,
             )
+        elif action == "expire":
+            mapping = update_market_mapping(
+                canonical_id,
+                status="expired",
+                allow_auto_trade=False,
+                note=note or "Expired from the operator desk.",
+                actor=actor,
+                **update_kwargs,
+            )
         elif action == "enable_auto_trade":
             if str(current_mapping.get("status", "candidate")).lower() != "confirmed":
                 return web.json_response(
@@ -3419,11 +3428,14 @@ class ArbiterAPI:
                 "latest_report": None,
             }
         stats = self.reconciler.stats
+        latest_report = stats.get("latest_report")
         return {
             "configured": True,
             "summary": (
-                "PnL reconciliation is healthy"
-                if stats.get("latest_report")
+                "PnL reconciliation drift is flagged"
+                if isinstance(latest_report, dict) and latest_report.get("has_flags")
+                else "PnL reconciliation is healthy"
+                if latest_report
                 else "PnL reconciliation is collecting its first report"
             ),
             **stats,

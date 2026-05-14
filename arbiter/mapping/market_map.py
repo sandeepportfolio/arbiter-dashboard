@@ -188,16 +188,33 @@ def _enforce_auto_trade_safety(mapping: MarketMapping) -> None:
         return
 
     polarity = ""
+    kalshi_settlement_date = ""
+    poly_settlement_date = ""
     if mapping.resolution_criteria_json:
         try:
             criteria = json.loads(mapping.resolution_criteria_json)
             if isinstance(criteria, dict):
                 polarity = str(criteria.get("polarity") or "").lower()
+                kalshi_criteria = criteria.get("kalshi") if isinstance(criteria.get("kalshi"), dict) else {}
+                poly_criteria = (
+                    criteria.get("polymarket")
+                    if isinstance(criteria.get("polymarket"), dict)
+                    else {}
+                )
+                kalshi_settlement_date = str(kalshi_criteria.get("settlement_date") or "")
+                poly_settlement_date = str(poly_criteria.get("settlement_date") or "")
         except (TypeError, ValueError):
             polarity = ""
     if polarity != "same":
         logger.warning(
             "Sports mapping %s requested allow_auto_trade without confirmed same polarity; disabling auto-trade",
+            mapping.canonical_id,
+        )
+        mapping.allow_auto_trade = False
+        return
+    if not kalshi_settlement_date or kalshi_settlement_date != poly_settlement_date:
+        logger.warning(
+            "Sports mapping %s requested allow_auto_trade without matching structured settlement dates; disabling auto-trade",
             mapping.canonical_id,
         )
         mapping.allow_auto_trade = False
@@ -1306,6 +1323,13 @@ class MarketMappingStore:
                 polymarket_slug=poly_slug,
             )
 
+        protected_status = existing.status in {
+            MappingStatus.REVIEW,
+            MappingStatus.REJECTED,
+            MappingStatus.EXPIRED,
+        }
+        original_status = existing.status
+        original_review_note = existing.review_note
         score = float(candidate.get("score", 0.0) or 0.0)
         candidate_status = _coerce_status(candidate.get("status", MappingStatus.CANDIDATE.value))
         candidate_allow_auto = bool(candidate.get("allow_auto_trade", False))
@@ -1335,7 +1359,9 @@ class MarketMappingStore:
         existing.confidence = score
         existing.notes = str(candidate.get("notes", "") or existing.notes or "Auto-discovered candidate mapping.")
         if "review_note" in candidate:
-            existing.review_note = str(candidate.get("review_note") or "")
+            incoming_review_note = str(candidate.get("review_note") or "")
+            if not protected_status or not original_review_note:
+                existing.review_note = incoming_review_note
         elif candidate_status == MappingStatus.CONFIRMED and str(existing.review_note or "").startswith("Expired"):
             existing.review_note = ""
         if criteria is not None:
@@ -1346,7 +1372,12 @@ class MarketMappingStore:
         )
         if candidate_status == MappingStatus.REVIEW and criteria is None and not existing.resolution_criteria_json:
             existing.resolution_match_status = "pending_operator_review"
-        if existing.status == MappingStatus.CONFIRMED:
+        if protected_status:
+            existing.status = original_status
+            existing.allow_auto_trade = False
+            if original_review_note:
+                existing.review_note = original_review_note
+        elif existing.status == MappingStatus.CONFIRMED:
             existing.allow_auto_trade = existing.allow_auto_trade
         elif candidate_status == MappingStatus.CONFIRMED:
             existing.status = MappingStatus.CONFIRMED

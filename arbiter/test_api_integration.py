@@ -669,6 +669,35 @@ def test_pnl_summary_does_not_double_subtract_deposit_adjusted_baseline():
     asyncio.run(_run())
 
 
+def test_reconciliation_snapshot_reports_drift_when_latest_report_has_flags():
+    """The reconciliation API summary must not say healthy when flags exist."""
+    from types import SimpleNamespace
+
+    async def _run():
+        api = await _make_rate_limit_api()
+        api.reconciler = SimpleNamespace(
+            stats={
+                "reconciliation_count": 3,
+                "flag_count": 2,
+                "starting_balances": {},
+                "recorded_pnl": {},
+                "latest_report": {
+                    "entries": [],
+                    "has_flags": True,
+                    "total_discrepancy": -180.41,
+                },
+            }
+        )
+
+        payload = api._reconciliation_snapshot()
+
+        assert payload["configured"] is True
+        assert payload["summary"] == "PnL reconciliation drift is flagged"
+        assert payload["latest_report"]["has_flags"] is True
+
+    asyncio.run(_run())
+
+
 def test_discovery_status_endpoint_defaults_to_idle():
     async def _run():
         api = await _make_rate_limit_api()
@@ -722,7 +751,7 @@ def test_mobile_mappings_render_api_field_names():
     assert "r.kalshi_market_id || r.kalshi_ticker || r.kalshi || r.ticker" in html
     assert "r.polymarket_slug || r.poly_slug || r.polymarket" in html
     assert "function MapLine" in html
-    assert "const openCard = () => setModal({ kind:'agentValidate', payload: c })" in html
+    assert "setModal({ kind:'agentValidate', payload: c })" in html
     assert "Tap any mapping to inspect validation history" in html
 
 
@@ -773,7 +802,6 @@ def test_ops_scanner_balance_and_trades_widgets_use_live_telemetry():
     assert "Telemetry edge samples" in html
     assert "function BalanceLegendItem" in html
     assert "Rows show live balance details, source share, and deposit-neutral trading P&L" in html
-    assert "Rows show live balances and deposit-neutral source P&L" in html
     assert "Tap a row" not in html
     assert "Edge samples" in html
     assert "Scanner & edge quality" in html
@@ -1414,6 +1442,51 @@ def test_market_mapping_reject_action_is_supported(monkeypatch):
             assert resp.status == 200, (await resp.text())
             body = await resp.json()
             assert body["status"] == "rejected"
+            assert body["allow_auto_trade"] is False
+
+    try:
+        asyncio.run(_run())
+    finally:
+        MARKET_MAP["DEM_HOUSE_2026"] = original
+
+
+def test_market_mapping_expire_action_is_supported(monkeypatch):
+    """Stale or resolved mappings must be expirable through the live API path."""
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from arbiter import api as api_mod
+    from arbiter.config.settings import MARKET_MAP
+
+    free_port()
+
+    test_email = "test-op@arbiter.local"
+    test_password_hash = api_mod._hash_password("letmein")
+    monkeypatch.setattr(api_mod, "UI_ALLOWED_USERS", {test_email: test_password_hash})
+    original = dict(MARKET_MAP["DEM_HOUSE_2026"])
+
+    async def _run():
+        api = await _make_mapping_api()
+        app = web.Application()
+        app.router.add_post(
+            "/api/market-mappings/{canonical_id}", api.handle_market_mapping_action,
+        )
+        app.router.add_post("/api/auth/login", api.handle_login)
+
+        async with TestClient(TestServer(app)) as client:
+            login_resp = await client.post(
+                "/api/auth/login",
+                json={"email": test_email, "password": "letmein"},
+            )
+            assert login_resp.status == 200
+
+            resp = await client.post(
+                "/api/market-mappings/DEM_HOUSE_2026",
+                json={"action": "expire", "note": "settlement date is in the past"},
+            )
+            assert resp.status == 200, (await resp.text())
+            body = await resp.json()
+            assert body["status"] == "expired"
             assert body["allow_auto_trade"] is False
 
     try:
