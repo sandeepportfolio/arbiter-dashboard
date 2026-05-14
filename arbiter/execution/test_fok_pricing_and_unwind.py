@@ -297,3 +297,302 @@ def test_recover_one_leg_risk_releases_exposure_on_successful_unwind():
         assert engine.risk._platform_exposures.get("kalshi", 0.0) == 0.0
 
     asyncio.run(runner())
+
+
+# ─── C1: smart-unwind double-sell race ──────────────────────────────────
+#
+# Bug: after the poll loop times out without seeing a fill, the original
+# code unconditionally market-sells the full qty after cancelling the
+# resting order.  If the resting order fills in the window between the
+# last poll and the cancel, the position closes flat at break-even on
+# the resting fill AND ALSO sells at panic price on the market-IOC —
+# leaving the engine net SHORT by ``qty`` at a worse-than-break-even
+# price.  The fix re-reads the resting order one more time after cancel
+# and only market-sells the truly unfilled remainder.
+
+
+def _make_resting_order(qty: int = 10, price: float = 0.55,
+                        status: OrderStatus = OrderStatus.SUBMITTED,
+                        fill_qty: int = 0,
+                        fill_price: float = 0.0) -> Order:
+    return Order(
+        order_id="ARB-1-UNWIND-REST",
+        platform="kalshi",
+        market_id="K-YES",
+        canonical_id="MKT",
+        side="yes",
+        price=price,
+        quantity=qty,
+        status=status,
+        fill_qty=fill_qty,
+        fill_price=fill_price,
+    )
+
+
+def _make_filled_leg(qty: int = 10, price: float = 0.55) -> Order:
+    return _filled_order("yes", "kalshi", "K-YES", qty=qty, price=price)
+
+
+def test_smart_unwind_race_resting_fills_before_cancel_skips_market_sell():
+    """C1 regression: resting fills in the gap between last poll and
+    cancel.  Engine must detect the post-cancel FILLED state via
+    ``get_order`` and skip the market-IOC entirely — otherwise it sells
+    the position twice (once via the late resting fill, once via the
+    fallback IOC) and ends up net SHORT.
+    """
+    async def runner():
+        engine = _make_engine()
+        engine._smart_unwind_timeout_s = 0.05  # tiny — force fall-through
+
+        adapter = MagicMock()
+        adapter.platform = "kalshi"
+
+        resting_unfilled = _make_resting_order(qty=10, price=0.55)
+        adapter.place_resting_sell = AsyncMock(return_value=resting_unfilled)
+
+        # Poll never sees a fill.
+        adapter.get_order = AsyncMock(side_effect=[
+            _make_resting_order(qty=10, price=0.55,
+                                status=OrderStatus.SUBMITTED),
+            # POST-CANCEL recheck — resting actually filled in the race window.
+            _make_resting_order(qty=10, price=0.55,
+                                status=OrderStatus.FILLED,
+                                fill_qty=10, fill_price=0.55),
+        ])
+        adapter.cancel_order = AsyncMock(return_value=True)
+        adapter.place_unwind_sell = AsyncMock(
+            return_value=_make_resting_order(
+                qty=10, price=0.01,
+                status=OrderStatus.FILLED,
+                fill_qty=10, fill_price=0.30,
+            )
+        )
+
+        engine.adapters = {"kalshi": adapter}
+
+        filled_leg = _make_filled_leg(qty=10, price=0.55)
+        result = await engine._smart_unwind("ARB-1", filled_leg, 10)
+
+        # CRITICAL: the market-IOC must NOT have been called — the
+        # resting order already closed the position when cancel raced.
+        adapter.place_unwind_sell.assert_not_awaited()
+        # The returned order is the (raced) resting fill.
+        assert result.status == OrderStatus.FILLED
+        assert result.fill_qty == 10
+        assert result.fill_price == 0.55
+
+    asyncio.run(runner())
+
+
+def test_smart_unwind_race_resting_partially_filled_market_sells_only_remainder():
+    """C1 regression: resting partially filled before cancel.  The
+    market-IOC must close only the unfilled remainder, never the full
+    qty.  The returned Order reports the combined fill (partial-rest +
+    market) at a quantity-weighted blended price.
+    """
+    async def runner():
+        engine = _make_engine()
+        engine._smart_unwind_timeout_s = 0.05
+
+        adapter = MagicMock()
+        adapter.platform = "kalshi"
+
+        resting_unfilled = _make_resting_order(qty=10, price=0.55)
+        adapter.place_resting_sell = AsyncMock(return_value=resting_unfilled)
+
+        adapter.get_order = AsyncMock(side_effect=[
+            _make_resting_order(qty=10, status=OrderStatus.SUBMITTED),
+            # POST-CANCEL recheck — venue partially filled (3 of 10)
+            # before the cancel landed.
+            _make_resting_order(qty=10, status=OrderStatus.CANCELLED,
+                                fill_qty=3, fill_price=0.55),
+        ])
+        adapter.cancel_order = AsyncMock(return_value=True)
+        # Market-IOC should be called for ONLY the 7 unfilled contracts.
+        adapter.place_unwind_sell = AsyncMock(
+            return_value=Order(
+                order_id="ARB-1-UNWIND",
+                platform="kalshi",
+                market_id="K-YES",
+                canonical_id="MKT",
+                side="yes",
+                price=0.01,
+                quantity=7,
+                status=OrderStatus.FILLED,
+                fill_qty=7,
+                fill_price=0.30,
+            )
+        )
+
+        engine.adapters = {"kalshi": adapter}
+
+        filled_leg = _make_filled_leg(qty=10, price=0.55)
+        result = await engine._smart_unwind("ARB-1", filled_leg, 10)
+
+        # Market-IOC called once, for qty=7 not 10.
+        adapter.place_unwind_sell.assert_awaited_once()
+        call_args = adapter.place_unwind_sell.await_args
+        # signature: (arb_id, market_id, canonical_id, side, qty)
+        assert call_args.args[4] == 7, (
+            f"market-IOC must close only remainder qty=7, got {call_args.args[4]}"
+        )
+
+        # Returned order must reflect TOTAL close: 3 at $0.55 + 7 at $0.30
+        # = 10 contracts at average $0.375.
+        assert result.fill_qty == 10
+        expected_blended = (3 * 0.55 + 7 * 0.30) / 10
+        assert abs(result.fill_price - expected_blended) < 1e-6, (
+            f"blended fill_price should be {expected_blended:.4f}, got {result.fill_price:.4f}"
+        )
+
+    asyncio.run(runner())
+
+
+def test_smart_unwind_no_race_market_sells_full_qty_after_cancel():
+    """C1 baseline: when the resting order genuinely had no fills before
+    cancel (the normal timeout case), the market-IOC closes the full
+    quantity — same behavior as before the fix.
+    """
+    async def runner():
+        engine = _make_engine()
+        engine._smart_unwind_timeout_s = 0.05
+
+        adapter = MagicMock()
+        adapter.platform = "kalshi"
+
+        resting_unfilled = _make_resting_order(qty=10, price=0.55)
+        adapter.place_resting_sell = AsyncMock(return_value=resting_unfilled)
+
+        adapter.get_order = AsyncMock(side_effect=[
+            _make_resting_order(qty=10, status=OrderStatus.SUBMITTED),
+            # POST-CANCEL recheck — cleanly cancelled, no race.
+            _make_resting_order(qty=10, status=OrderStatus.CANCELLED,
+                                fill_qty=0),
+        ])
+        adapter.cancel_order = AsyncMock(return_value=True)
+        adapter.place_unwind_sell = AsyncMock(
+            return_value=Order(
+                order_id="ARB-1-UNWIND",
+                platform="kalshi",
+                market_id="K-YES",
+                canonical_id="MKT",
+                side="yes",
+                price=0.01,
+                quantity=10,
+                status=OrderStatus.FILLED,
+                fill_qty=10,
+                fill_price=0.30,
+            )
+        )
+
+        engine.adapters = {"kalshi": adapter}
+
+        filled_leg = _make_filled_leg(qty=10, price=0.55)
+        result = await engine._smart_unwind("ARB-1", filled_leg, 10)
+
+        # Market-IOC closes the full 10 contracts.
+        adapter.place_unwind_sell.assert_awaited_once()
+        call_args = adapter.place_unwind_sell.await_args
+        assert call_args.args[4] == 10
+
+        assert result.fill_qty == 10
+        assert result.fill_price == 0.30
+
+    asyncio.run(runner())
+
+
+def test_smart_unwind_post_cancel_get_order_failure_falls_back_safely():
+    """C1 defensive: if ``get_order`` raises after cancel (transient
+    venue error), we must NOT panic-sell on stale knowledge of the
+    resting state — we use the last-known state from the poll loop.
+    If the last poll showed zero fills, the market-IOC closes the full
+    qty (safe fallback).
+    """
+    async def runner():
+        engine = _make_engine()
+        engine._smart_unwind_timeout_s = 0.05
+
+        adapter = MagicMock()
+        adapter.platform = "kalshi"
+
+        resting_unfilled = _make_resting_order(qty=10, price=0.55)
+        adapter.place_resting_sell = AsyncMock(return_value=resting_unfilled)
+
+        adapter.get_order = AsyncMock(side_effect=[
+            _make_resting_order(qty=10, status=OrderStatus.SUBMITTED),
+            RuntimeError("venue 502"),  # post-cancel recheck fails
+        ])
+        adapter.cancel_order = AsyncMock(return_value=True)
+        adapter.place_unwind_sell = AsyncMock(
+            return_value=Order(
+                order_id="ARB-1-UNWIND",
+                platform="kalshi",
+                market_id="K-YES",
+                canonical_id="MKT",
+                side="yes",
+                price=0.01,
+                quantity=10,
+                status=OrderStatus.FILLED,
+                fill_qty=10,
+                fill_price=0.30,
+            )
+        )
+
+        engine.adapters = {"kalshi": adapter}
+
+        filled_leg = _make_filled_leg(qty=10, price=0.55)
+        result = await engine._smart_unwind("ARB-1", filled_leg, 10)
+
+        # Last-known state from the poll loop was 0 fills, so market
+        # sells the full qty.
+        adapter.place_unwind_sell.assert_awaited_once()
+        call_args = adapter.place_unwind_sell.await_args
+        assert call_args.args[4] == 10
+        assert result.fill_qty == 10
+
+    asyncio.run(runner())
+
+
+def test_smart_unwind_cancel_failure_still_rechecks_resting_state():
+    """C1 defensive: cancel itself failing is the SCARIEST scenario —
+    the resting order is still live on the venue and may fill any
+    moment.  We must still call ``get_order`` once to see the latest
+    state before deciding to market-sell.  If the live resting order
+    has already filled (cancel failed because order was already done),
+    skip the market-IOC.
+    """
+    async def runner():
+        engine = _make_engine()
+        engine._smart_unwind_timeout_s = 0.05
+
+        adapter = MagicMock()
+        adapter.platform = "kalshi"
+
+        resting_unfilled = _make_resting_order(qty=10, price=0.55)
+        adapter.place_resting_sell = AsyncMock(return_value=resting_unfilled)
+
+        adapter.get_order = AsyncMock(side_effect=[
+            _make_resting_order(qty=10, status=OrderStatus.SUBMITTED),
+            # POST-CANCEL recheck (after cancel failed) — order had
+            # already filled, that's why cancel reported failure.
+            _make_resting_order(qty=10, status=OrderStatus.FILLED,
+                                fill_qty=10, fill_price=0.55),
+        ])
+        adapter.cancel_order = AsyncMock(
+            side_effect=RuntimeError("order already in terminal state"),
+        )
+        adapter.place_unwind_sell = AsyncMock()
+
+        engine.adapters = {"kalshi": adapter}
+
+        filled_leg = _make_filled_leg(qty=10, price=0.55)
+        result = await engine._smart_unwind("ARB-1", filled_leg, 10)
+
+        # Critical: even with cancel failing, we re-checked and saw the
+        # resting order was already FILLED — no market-IOC sent.
+        adapter.place_unwind_sell.assert_not_awaited()
+        assert result.status == OrderStatus.FILLED
+        assert result.fill_qty == 10
+        assert result.fill_price == 0.55
+
+    asyncio.run(runner())
