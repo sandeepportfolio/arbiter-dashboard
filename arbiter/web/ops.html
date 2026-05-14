@@ -6,7 +6,7 @@
 <title>Arbiter — Operator desk</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Inter+Tight:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   html, body { margin: 0; padding: 0; background: #FAFAF9; font-family: "Inter", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
   html, body, #root { height: 100%; }
@@ -18,6 +18,31 @@
   @keyframes spin { to { transform: rotate(360deg); } }
   @keyframes cliBlink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
   @keyframes toastIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  /* Mobile premium motion */
+  @keyframes mobFloatIn { from { opacity: 0; transform: translateY(14px) scale(0.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
+  @keyframes mobHeroIn { from { opacity: 0; transform: translateY(8px); letter-spacing: 0.02em; } to { opacity: 1; transform: translateY(0); letter-spacing: -0.035em; } }
+  @keyframes mobGlowPulse { 0%, 100% { opacity: 0.55; transform: scale(1); } 50% { opacity: 0.85; transform: scale(1.04); } }
+  @keyframes mobShimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+  @keyframes mobDonutDraw { from { stroke-dashoffset: var(--circ); } to { stroke-dashoffset: var(--dashoff); } }
+  @keyframes mobTabPop { 0% { transform: scale(0.7); } 60% { transform: scale(1.15); } 100% { transform: scale(1); } }
+  .mob-stagger > * { opacity: 0; animation: mobFloatIn 0.55s cubic-bezier(0.22, 1, 0.36, 1) forwards; }
+  .mob-stagger > *:nth-child(1) { animation-delay: 40ms; }
+  .mob-stagger > *:nth-child(2) { animation-delay: 110ms; }
+  .mob-stagger > *:nth-child(3) { animation-delay: 180ms; }
+  .mob-stagger > *:nth-child(4) { animation-delay: 250ms; }
+  .mob-stagger > *:nth-child(5) { animation-delay: 320ms; }
+  .mob-stagger > *:nth-child(6) { animation-delay: 390ms; }
+  .mob-stagger > *:nth-child(7) { animation-delay: 460ms; }
+  .mob-stagger > *:nth-child(n+8) { animation-delay: 520ms; }
+  .mob-hero-num { animation: mobHeroIn 0.7s cubic-bezier(0.16, 1, 0.3, 1) both; }
+  .mob-card-press { transition: transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1), background 0.2s ease; }
+  .mob-card-press:active { transform: scale(0.985); }
+  .mob-tap { transition: transform 0.15s ease, opacity 0.15s ease; }
+  .mob-tap:active { transform: scale(0.96); opacity: 0.85; }
+  /* Tap highlight off on mobile chrome */
+  @media (max-width: 1023px) {
+    * { -webkit-tap-highlight-color: transparent; }
+  }
   ::-webkit-scrollbar { width: 8px; height: 8px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: rgba(127,127,127,0.28); border-radius: 99px; }
@@ -78,9 +103,8 @@
 (function () {
   try {
     var saved = localStorage.getItem('arbiter-theme');
-    var name = saved === 'light' || saved === 'dark'
-      ? saved
-      : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    // Dark is the default Arbiter aesthetic; only honor an explicit light pick.
+    var name = saved === 'light' ? 'light' : 'dark';
     document.documentElement.setAttribute('data-theme', name);
   } catch (_) { /* localStorage may be blocked; fall back to media query CSS */ }
 })();
@@ -115,16 +139,16 @@ window.THEMES = {
   },
   dark: {
     name: 'dark',
-    bg: '#0B0C10', bgCard: '#13151B', bgSubtle: '#191C24', bgHover: '#1F2230',
-    border: '#22262F', borderBright: '#2E323D',
+    bg: '#0A0A0F', bgCard: '#12121A', bgSubtle: '#191A25', bgHover: '#1F2030',
+    border: '#22232E', borderBright: '#2E303D',
     text: '#E8ECF1', textDim: '#8B92A0', textMuted: '#5E6472',
-    accent: '#8B8DF5', accentSoft: '#1E1F3A',
-    green: '#5EE6A8', greenSoft: '#0E2B1E',
-    red: '#FF6B7A', redSoft: '#2C1418',
-    amber: '#FFB948', amberSoft: '#2C1F08',
-    blue: '#6BB6FF', blueSoft: '#0E1E2E',
-    purple: '#B49BFF', purpleSoft: '#1E1830',
-    overlay: 'rgba(0,0,0,0.55)',
+    accent: '#6366F1', accentSoft: '#1B1B36',
+    green: '#34D399', greenSoft: '#0E2B1E',
+    red: '#F87171', redSoft: '#2C1418',
+    amber: '#FBBF24', amberSoft: '#2C1F08',
+    blue: '#60A5FA', blueSoft: '#0E1E2E',
+    purple: '#A78BFA', purpleSoft: '#1E1830',
+    overlay: 'rgba(0,0,0,0.62)',
     shadow: '0 1px 2px rgba(0,0,0,0.30), 0 1px 3px rgba(0,0,0,0.20)',
     shadowLg: '0 16px 40px rgba(0,0,0,0.50), 0 4px 12px rgba(0,0,0,0.30)',
   },
@@ -1787,7 +1811,8 @@ function useTheme() {
   const [name, setName] = useS(() => {
     const saved = localStorage.getItem('arbiter-theme');
     if (saved === 'light' || saved === 'dark') return saved;
-    return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    // Dark is the default Arbiter aesthetic; honor only an explicit light pick.
+    return 'dark';
   });
   useE(() => {
     localStorage.setItem('arbiter-theme', name);
@@ -5445,10 +5470,59 @@ window.RefetchMappingsModal = RefetchMappingsModal;
 
 </script>
 <script type="text/babel" data-presets="env,react" data-filename="mobile.jsx">
-// Mobile dashboard — single-screen tab bar + key views.
-const { useState: mobUseState } = React;
+// Mobile dashboard — premium fintech aesthetic. Bottom-nav shell + key views.
+const { useState: mobUseState, useRef: mobUseRef, useEffect: mobUseEffect } = React;
 const ARB_MOBILE_TAB_KEY = 'arbiter-mobile-tab';
 const ARB_MOBILE_TABS = ['home', 'opps', 'trades', 'maps', 'me'];
+const FONT_DISPLAY = '"Inter Tight", "Inter", system-ui, sans-serif';
+
+// Hairline-stroke SVG icons. Two paths/groups: an outline (always shown) and
+// a soft-filled variant rendered when the tab is active to give a tactile
+// "engaged" state without resorting to filled glyphs.
+function NavIcon({ kind, active, color }) {
+  const sw = 1.6;
+  const props = { fill: 'none', stroke: color, strokeWidth: sw, strokeLinecap: 'round', strokeLinejoin: 'round' };
+  switch (kind) {
+    case 'home': return (
+      <svg viewBox="0 0 24 24" width={22} height={22} aria-hidden="true">
+        <path {...props} d="M4 11.2L12 4.5l8 6.7V19a1.5 1.5 0 0 1-1.5 1.5h-3.2v-5.2a1.5 1.5 0 0 0-1.5-1.5h-3.6a1.5 1.5 0 0 0-1.5 1.5v5.2H5.5A1.5 1.5 0 0 1 4 19v-7.8z"/>
+        {active && <path d="M4 11.2L12 4.5l8 6.7V19a1.5 1.5 0 0 1-1.5 1.5h-3.2v-5.2a1.5 1.5 0 0 0-1.5-1.5h-3.6a1.5 1.5 0 0 0-1.5 1.5v5.2H5.5A1.5 1.5 0 0 1 4 19v-7.8z" fill={color} opacity="0.16"/>}
+      </svg>
+    );
+    case 'edge': return (
+      <svg viewBox="0 0 24 24" width={22} height={22} aria-hidden="true">
+        {active && <path d="M3.5 17.2l4.6-5.2 3.6 3.2 3.5-5.4 5.3 4.1V20H3.5z" fill={color} opacity="0.18"/>}
+        <path {...props} d="M3.5 17.2l4.6-5.2 3.6 3.2 3.5-5.4 5.3 4.1"/>
+        <path {...props} d="M14.5 6.5h5v5"/>
+        <path {...props} d="M19.5 6.5L13 13"/>
+      </svg>
+    );
+    case 'trades': return (
+      <svg viewBox="0 0 24 24" width={22} height={22} aria-hidden="true">
+        <path {...props} d="M5 15l4-4 3 3 7-7"/>
+        <path {...props} d="M14 7h5v5"/>
+        {active && <circle cx="12" cy="12" r="9.3" fill={color} opacity="0.08"/>}
+      </svg>
+    );
+    case 'maps': return (
+      <svg viewBox="0 0 24 24" width={22} height={22} aria-hidden="true">
+        {active && <rect x="3.5" y="6" width="17" height="12" rx="3" fill={color} opacity="0.12"/>}
+        <path {...props} d="M7 8h11"/>
+        <path {...props} d="M16 5l3 3-3 3"/>
+        <path {...props} d="M17 16H6"/>
+        <path {...props} d="M8 19l-3-3 3-3"/>
+      </svg>
+    );
+    case 'me': return (
+      <svg viewBox="0 0 24 24" width={22} height={22} aria-hidden="true">
+        {active && <circle cx="12" cy="12" r="9" fill={color} opacity="0.14"/>}
+        <circle {...props} cx="12" cy="9.5" r="3.3"/>
+        <path {...props} d="M5.5 19.5c1.3-3.1 3.8-4.7 6.5-4.7s5.2 1.6 6.5 4.7"/>
+      </svg>
+    );
+    default: return null;
+  }
+}
 
 function readStoredMobileTab() {
   try {
@@ -5464,11 +5538,20 @@ function persistMobileTab(tab) {
   try { localStorage.setItem(ARB_MOBILE_TAB_KEY, tab); } catch {}
 }
 
+const MOB_TABS_META = [
+  { k: 'home',   l: 'Home' },
+  { k: 'opps',   l: 'Edge' },
+  { k: 'trades', l: 'Trades' },
+  { k: 'maps',   l: 'Maps' },
+  { k: 'me',     l: 'You' },
+];
+
 function MobileDashboard() {
-  const { t, scanner, setScanner, tradingMode } = window.useApp();
+  const { t, name: themeName, scanner, setScanner, tradingMode } = window.useApp();
   const [tab, setTab] = mobUseState(readStoredMobileTab);
   const [meSub, setMeSub] = mobUseState(null); // 'funds' | 'pnl' | 'health' | 'settings' | null
   const M = window.MOCK;
+  const isDark = themeName === 'dark';
   const totalBal = M.balances.kalshi.balance + M.balances.polymarket.balance;
   const totalPnl = window.currentTradingPnl ? window.currentTradingPnl(M) : (M.pnl.recorded_trading_pnl.kalshi + M.pnl.recorded_trading_pnl.polymarket);
 
@@ -5483,22 +5566,55 @@ function MobileDashboard() {
     }, 0);
   };
 
+  // Atmosphere: two slow-moving ambient gradient blobs that bleed faint accent
+  // and green light through the dark canvas. Adds depth without distraction.
+  const ambient = isDark ? (
+    <div aria-hidden="true" style={{ position:'absolute', inset: 0, pointerEvents:'none', overflow:'hidden', zIndex: 0 }}>
+      <div style={{ position:'absolute', top: -120, right: -80, width: 320, height: 320, borderRadius:'50%', background: `radial-gradient(circle at center, ${t.accent}38 0%, ${t.accent}00 70%)`, filter: 'blur(28px)', animation: 'mobGlowPulse 9s ease-in-out infinite' }}/>
+      <div style={{ position:'absolute', top: 220, left: -100, width: 280, height: 280, borderRadius:'50%', background: `radial-gradient(circle at center, ${t.green}26 0%, ${t.green}00 70%)`, filter: 'blur(36px)', animation: 'mobGlowPulse 11s ease-in-out infinite reverse' }}/>
+    </div>
+  ) : null;
+
+  // Compute active index for the sliding nav indicator.
+  const activeIdx = !meSub ? Math.max(0, ARB_MOBILE_TABS.indexOf(tab)) : -1;
+  const NAV_TABS = MOB_TABS_META.length;
+
+  const headerTitle = meSub
+    ? ({ funds:'Funds & Deposits', pnl:'P&L', health:'System Health', settings:'Settings' })[meSub]
+    : ({ home:'Arbiter', opps:'Opportunities', trades:'Trades', maps:'Mappings', me:'Account' })[tab];
+
+  const liveDot = tradingMode === 'live' ? t.green : t.amber;
+  const liveTone = tradingMode === 'live' ? t.green : t.amber;
+  const liveSoft = tradingMode === 'live' ? t.greenSoft : t.amberSoft;
+  const liveText = tradingMode === 'live' ? 'LIVE' : (tradingMode === 'paper' ? 'PAPER' : 'STANDBY');
+
   return (
-    <div style={{ position:'relative', width: '100%', height: '100%', background: t.bg, color: t.text, fontFamily: window.FONTS.sans, display:'flex', flexDirection:'column', overflow:'hidden' }}>
-      <div style={{ padding: '14px 14px 12px', display:'flex', alignItems:'center', gap: 6 }}>
+    <div style={{ position:'relative', width:'100%', height:'100%', background: t.bg, color: t.text, fontFamily: window.FONTS.sans, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+      {ambient}
+
+      {/* Header */}
+      <div style={{ position:'relative', zIndex: 2, padding: '14px 18px 10px', display:'flex', alignItems:'center', gap: 10 }}>
         {meSub ? (
-          <button onClick={() => setMeSub(null)} aria-label="Back" style={{ background:'none', border:'none', color: t.text, fontSize: 22, cursor:'pointer', padding: 0, marginLeft: -8, width: 44, height: 44, display:'flex', alignItems:'center', justifyContent:'center', flexShrink: 0 }}>‹</button>
+          <button onClick={() => setMeSub(null)} aria-label="Back" className="mob-tap" style={{ background: t.bgCard, border:`1px solid ${t.border}`, color: t.text, cursor:'pointer', padding: 0, width: 38, height: 38, borderRadius: 12, display:'flex', alignItems:'center', justifyContent:'center', flexShrink: 0 }}>
+            <svg viewBox="0 0 24 24" width={18} height={18} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
         ) : (
-          <div style={{ width: 26, height: 26, borderRadius: 7, background: t.text, color: t.bgCard, display:'flex', alignItems:'center', justifyContent:'center', fontSize: 12, fontWeight: 700, marginLeft: 4 }}>A</div>
+          <div style={{ width: 38, height: 38, borderRadius: 12, background: `linear-gradient(140deg, ${t.accent} 0%, ${t.purple || t.accent} 100%)`, color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', fontSize: 15, fontWeight: 800, fontFamily: FONT_DISPLAY, letterSpacing:'-0.02em', boxShadow: `0 8px 22px -8px ${t.accent}80` }}>A</div>
         )}
-        <div style={{ fontSize: 13, fontWeight: 600, marginLeft: meSub ? 0 : 4 }}>{meSub ? ({ funds:'Funds & Deposits', pnl:'P&L', health:'System Health', settings:'Settings' }[meSub]) : 'Arbiter'}</div>
-        <div style={{ marginLeft:'auto', display:'flex', alignItems:'center', gap: 4, padding: '3px 8px', background: tradingMode === 'live' ? t.greenSoft : t.amberSoft, color: tradingMode === 'live' ? t.green : t.amber, borderRadius: 99, fontSize: 10.5, fontWeight: 600 }}>
-          <span style={{ width: 5, height: 5, borderRadius:'50%', background: tradingMode === 'live' ? t.green : t.amber, animation: 'pulse 2s infinite' }}/>
-          {tradingMode === 'live' ? 'LIVE' : 'STANDBY'}
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: 10.5, color: t.textMuted, letterSpacing:'0.14em', textTransform:'uppercase', fontWeight: 600 }}>Operator</div>
+          <div style={{ fontSize: 16, fontWeight: 700, fontFamily: FONT_DISPLAY, letterSpacing:'-0.02em', color: t.text, lineHeight: 1.1, marginTop: 1 }}>{headerTitle}</div>
+        </div>
+        <div style={{ display:'flex', alignItems:'center', gap: 6, padding: '5px 11px 5px 9px', background: liveSoft, border: `1px solid ${liveTone}38`, color: liveTone, borderRadius: 99, fontSize: 10.5, fontWeight: 700, letterSpacing:'0.08em', position:'relative' }}>
+          <span style={{ position:'relative', width: 7, height: 7 }}>
+            <span style={{ position:'absolute', inset: 0, borderRadius:'50%', background: liveDot, animation: 'pulse 1.8s infinite' }}/>
+            <span style={{ position:'absolute', inset: -3, borderRadius:'50%', background: liveDot, opacity: 0.32, animation: 'mobGlowPulse 1.8s infinite' }}/>
+          </span>
+          {liveText}
         </div>
       </div>
 
-      <div data-mobile-scroll="true" style={{ flex: 1, overflow:'auto', padding: '0 16px', paddingBottom: 'calc(80px + env(safe-area-inset-bottom, 0px))', WebkitOverflowScrolling:'touch' }}>
+      <div data-mobile-scroll="true" style={{ position:'relative', zIndex: 1, flex: 1, overflow:'auto', padding: '4px 16px 0', paddingBottom: 'calc(96px + env(safe-area-inset-bottom, 0px))', WebkitOverflowScrolling:'touch' }}>
         {meSub === 'funds' && <MobFunds/>}
         {meSub === 'pnl' && <MobPnL/>}
         {meSub === 'health' && <MobHealth/>}
@@ -5510,26 +5626,173 @@ function MobileDashboard() {
         {!meSub && tab === 'me' && <MobMe onSub={setMeSub}/>}
       </div>
 
-      {/* Tab bar */}
-      <div style={{ position:'absolute', bottom: 0, left: 0, right: 0, padding: '6px 8px calc(10px + env(safe-area-inset-bottom, 14px))', background: t.bgCard, borderTop: `1px solid ${t.border}`, display:'flex', justifyContent:'space-around' }}>
-        {[
-          ['home','Home','⌂'],['opps','Edge','◇'],['trades','Trades','↗'],['maps','Maps','⇄'],['me','Account','◐'],
-        ].map(([k, l, ic]) => {
-          const active = tab === k && !meSub;
-          return (
-            <button key={k} onClick={() => switchTab(k)} aria-label={l} aria-pressed={active} style={{ flex: 1, minHeight: 48, padding: '6px 4px', background:'none', border:'none', cursor:'pointer', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap: 2, color: active ? t.accent : t.textMuted, fontSize: 10, transition:'color 0.15s' }}>
-              <span style={{ fontSize: 18, fontFamily: window.FONTS.mono }}>{ic}</span>
-              <span style={{ fontWeight: active ? 600 : 400 }}>{l}</span>
-            </button>
-          );
-        })}
+      {/* Tab bar — frosted, with sliding indicator */}
+      <div style={{
+        position:'absolute', bottom: 0, left: 0, right: 0,
+        padding: '10px 12px calc(14px + env(safe-area-inset-bottom, 14px))',
+        background: isDark ? 'rgba(10, 10, 15, 0.72)' : 'rgba(255, 255, 255, 0.78)',
+        WebkitBackdropFilter: 'blur(22px) saturate(160%)',
+        backdropFilter: 'blur(22px) saturate(160%)',
+        borderTop: `1px solid ${isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.06)'}`,
+        zIndex: 5,
+      }}>
+        <div style={{ position:'relative', display:'flex', justifyContent:'space-around', alignItems:'stretch' }}>
+          {/* Sliding indicator */}
+          {activeIdx >= 0 && (
+            <div aria-hidden="true" style={{
+              position:'absolute', top: 2, height: 4, width: `${100 / NAV_TABS * 0.36}%`,
+              left: `${(activeIdx + 0.5) / NAV_TABS * 100}%`,
+              transform: 'translateX(-50%)',
+              background: t.accent,
+              borderRadius: 99,
+              boxShadow: `0 0 14px ${t.accent}88, 0 0 4px ${t.accent}cc`,
+              transition: 'left 0.42s cubic-bezier(0.34, 1.56, 0.64, 1)',
+            }}/>
+          )}
+          {MOB_TABS_META.map(({ k, l }) => {
+            const active = tab === k && !meSub;
+            return (
+              <button key={k} onClick={() => switchTab(k)} aria-label={l} aria-pressed={active} className="mob-tap" style={{ flex: 1, minHeight: 52, padding: '10px 4px 4px', background:'none', border:'none', cursor:'pointer', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap: 3, color: active ? t.accent : t.textMuted, transition:'color 0.2s ease' }}>
+                <span style={{ display:'inline-flex', animation: active ? 'mobTabPop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1)' : 'none' }}>
+                  <NavIcon kind={k === 'opps' ? 'edge' : k} active={active} color={active ? t.accent : t.textMuted}/>
+                </span>
+                <span style={{ fontSize: 10, fontWeight: active ? 700 : 500, letterSpacing: active ? '0.04em' : '0.02em' }}>{l}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
 }
 
+// ── Premium primitives ─────────────────────────────────────────────
+// Frosted-glass card with a hairline gradient highlight on the top edge.
+function PremiumCard({ children, padding = 16, style = {}, glow, onClick, role, ariaLabel }) {
+  const { t, name } = window.useApp();
+  const isDark = name === 'dark';
+  const surface = isDark
+    ? `linear-gradient(180deg, rgba(255,255,255,0.045) 0%, rgba(255,255,255,0.012) 100%), ${t.bgCard}`
+    : `linear-gradient(180deg, #FFFFFF 0%, #FBFBFA 100%)`;
+  const ring = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.06)';
+  const Tag = onClick ? 'button' : 'div';
+  return (
+    <Tag onClick={onClick} role={role} aria-label={ariaLabel} type={onClick ? 'button' : undefined} className={onClick ? 'mob-card-press' : ''} style={{
+      position: 'relative',
+      width: '100%',
+      textAlign: 'left',
+      background: surface,
+      border: `1px solid ${ring}`,
+      borderRadius: 18,
+      padding,
+      color: t.text,
+      cursor: onClick ? 'pointer' : 'default',
+      boxShadow: isDark ? '0 1px 0 rgba(255,255,255,0.04) inset, 0 18px 40px -22px rgba(0,0,0,0.6)' : '0 1px 0 rgba(255,255,255,0.6) inset, 0 8px 24px -12px rgba(0,0,0,0.10)',
+      overflow: 'hidden',
+      ...style,
+    }}>
+      {/* Top hairline highlight */}
+      <span aria-hidden="true" style={{ position:'absolute', top: 0, left: 16, right: 16, height: 1, background: isDark ? 'linear-gradient(90deg, transparent, rgba(255,255,255,0.18), transparent)' : 'linear-gradient(90deg, transparent, rgba(0,0,0,0.06), transparent)' }}/>
+      {glow && (
+        <span aria-hidden="true" style={{ position:'absolute', top: -40, right: -40, width: 160, height: 160, borderRadius:'50%', background: `radial-gradient(circle at center, ${glow}55 0%, ${glow}00 70%)`, pointerEvents:'none' }}/>
+      )}
+      <div style={{ position:'relative', zIndex: 1 }}>{children}</div>
+    </Tag>
+  );
+}
+
+// Small sparkline-ish delta chip for the hero
+function DeltaChip({ value, pct, t }) {
+  const up = value >= 0;
+  const tone = up ? t.green : t.red;
+  const soft = up ? t.greenSoft : t.redSoft;
+  return (
+    <span style={{ display:'inline-flex', alignItems:'center', gap: 5, padding:'4px 9px 4px 7px', background: soft, color: tone, border:`1px solid ${tone}30`, borderRadius: 99, fontSize: 11.5, fontWeight: 700, fontFamily: window.FONTS.mono, letterSpacing:'-0.01em' }}>
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{ transform: up ? 'none' : 'rotate(180deg)' }}>
+        <polyline points="6 14 12 8 18 14"/>
+      </svg>
+      {window.fmt$Sign(value)} <span style={{ opacity: 0.65, fontWeight: 600 }}>· {window.fmtPct(pct)}</span>
+    </span>
+  );
+}
+
+// Premium donut with gradient strokes and entrance animation.
+function PremiumDonut({ size = 168, thickness = 14, slices, total, t, name }) {
+  const r = (size - thickness) / 2;
+  const c = size / 2;
+  const circ = 2 * Math.PI * r;
+  const safeSlices = (slices || []).filter(s => (s.value || 0) > 0);
+  const totalVal = total || safeSlices.reduce((a, s) => a + s.value, 0);
+  let acc = 0;
+  const isDark = name === 'dark';
+  return (
+    <div style={{ position:'relative', width: size, height: size }}>
+      {/* Outer glow */}
+      <div style={{ position:'absolute', inset: -8, borderRadius:'50%', background: `radial-gradient(circle at center, ${t.accent}1a 0%, transparent 65%)`, filter:'blur(8px)' }}/>
+      <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size} style={{ position:'relative', zIndex: 1 }}>
+        <defs>
+          {safeSlices.map((s, i) => (
+            <linearGradient key={i} id={`mob-donut-${i}`} x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stopColor={s.color} stopOpacity="1"/>
+              <stop offset="100%" stopColor={s.color} stopOpacity="0.65"/>
+            </linearGradient>
+          ))}
+        </defs>
+        {/* Track */}
+        <circle cx={c} cy={c} r={r} fill="none" stroke={isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'} strokeWidth={thickness}/>
+        {totalVal > 0 && safeSlices.map((s, i) => {
+          const len = (s.value / totalVal) * circ;
+          const dash = `${len} ${circ - len}`;
+          const offset = -acc;
+          acc += len;
+          return (
+            <circle
+              key={i}
+              cx={c}
+              cy={c}
+              r={r}
+              fill="none"
+              stroke={`url(#mob-donut-${i})`}
+              strokeWidth={thickness}
+              strokeDasharray={dash}
+              strokeDashoffset={offset}
+              transform={`rotate(-90 ${c} ${c})`}
+              strokeLinecap="round"
+              style={{
+                filter: `drop-shadow(0 0 8px ${s.color}66)`,
+                transition: 'stroke-dasharray 0.8s cubic-bezier(0.22, 1, 0.36, 1)',
+              }}
+            />
+          );
+        })}
+        <text x={c} y={c - 4} textAnchor="middle" fontFamily="Inter Tight, Inter, sans-serif" fontSize={size * 0.18} fontWeight="700" fill={t.text} letterSpacing="-0.04em">{window.fmt$(totalVal, 0)}</text>
+        <text x={c} y={c + 18} textAnchor="middle" fontSize="9.5" fill={t.textMuted} letterSpacing="0.22em" fontWeight="600">TOTAL</text>
+      </svg>
+    </div>
+  );
+}
+
+function PlatformBalanceRow({ name, badge, bal, share, pnl, t }) {
+  const up = (pnl || 0) >= 0;
+  return (
+    <div style={{ display:'flex', alignItems:'center', gap: 12, padding: '11px 2px' }}>
+      <div style={{ position:'relative', width: 32, height: 32, borderRadius: 10, background: `linear-gradient(135deg, ${badge} 0%, ${badge}88 100%)`, display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontSize: 13, fontWeight: 800, fontFamily: FONT_DISPLAY, boxShadow:`0 6px 16px -6px ${badge}80`, flexShrink: 0 }}>
+        {name.charAt(0)}
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display:'flex', alignItems:'baseline', gap: 6 }}>
+          <span style={{ fontSize: 13.5, fontWeight: 600, color: t.text, letterSpacing:'-0.01em' }}>{name}</span>
+          <span style={{ fontSize: 10.5, color: t.textMuted, fontFamily: window.FONTS.mono }}>{share}</span>
+        </div>
+        <div style={{ fontSize: 11, color: up ? t.green : t.red, fontFamily: window.FONTS.mono, marginTop: 1 }}>{window.fmt$Sign(pnl || 0)}</div>
+      </div>
+      <div style={{ fontSize: 15, fontWeight: 700, color: t.text, fontFamily: window.FONTS.mono, letterSpacing:'-0.01em' }}>{window.fmt$(bal)}</div>
+    </div>
+  );
+}
+
 function MobHome({ totalBal, totalPnl }) {
-  const { t, setScanner, scanner } = window.useApp();
+  const { t, name, setScanner, scanner } = window.useApp();
   const M = window.MOCK;
   const [range, setRange] = mobUseState('24h');
   const equity = window.filterTimeSeries ? window.filterTimeSeries(M.equity, range) : M.equity;
@@ -5537,179 +5800,220 @@ function MobHome({ totalBal, totalPnl }) {
   const lifetimeReturn = totalPnl / startingCapital;
   const kShareMob = totalBal ? (M.balances.kalshi.balance / totalBal * 100).toFixed(1) : '0.0';
   const pShareMob = totalBal ? (M.balances.polymarket.balance / totalBal * 100).toFixed(1) : '0.0';
+  const kPnlMob = (M.pnl.balance_change_by_platform && M.pnl.balance_change_by_platform.kalshi) ?? M.pnl.recorded_trading_pnl.kalshi;
+  const pPnlMob = (M.pnl.balance_change_by_platform && M.pnl.balance_change_by_platform.polymarket) ?? M.pnl.recorded_trading_pnl.polymarket;
   const activeMob = Number(M.health.scanner.active_opportunities || 0) || (Array.isArray(M.opportunities) ? M.opportunities.length : 0);
   const tradableMob = Number(M.health.scanner.tradable_opportunities || 0) || (Array.isArray(M.opportunities) ? M.opportunities.filter(o => o.status === 'tradable').length : 0);
   const manualMob = Number(M.health.scanner.manual_opportunities || 0);
   const publishedMob = Number(M.health.scanner.published || M.health.profitability.published_opportunities || 0);
   const bestMob = window.bestTelemetryEdge ? window.bestTelemetryEdge(M) : Number(M.health.scanner.best_edge_cents || 0);
   const edgeLabelMob = M.edgeBucketSource === 'active' ? 'Active edges' : M.edgeBucketSource === 'audit' ? 'Audited edge samples' : M.edgeBucketSource === 'telemetry' ? 'Telemetry edge samples' : 'Awaiting edges';
+  const heroPositive = totalPnl >= 0;
   return (
-    <div>
-      <div style={{ padding: '12px 4px 18px' }}>
-        <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase' }}>Total balance</div>
-        <div style={{ fontSize: 36, fontWeight: 600, color: t.text, fontFamily: window.FONTS.mono, letterSpacing:'-0.02em', marginTop: 4 }}>{window.fmt$(totalBal)}</div>
-        <div style={{ fontSize: 13, color: totalPnl >= 0 ? t.green : t.red, marginTop: 4 }}>{window.fmt$Sign(totalPnl)} ({window.fmtPct(lifetimeReturn)}) since inception</div>
+    <div className="mob-stagger">
+      {/* HERO BALANCE */}
+      <div style={{ position:'relative', padding: '18px 2px 22px' }}>
+        <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.2em', textTransform:'uppercase', fontWeight: 600 }}>Total balance</div>
+        <div className="mob-hero-num" style={{ fontSize: 52, fontWeight: 700, color: t.text, fontFamily: FONT_DISPLAY, letterSpacing:'-0.035em', marginTop: 6, lineHeight: 1, display:'flex', alignItems:'baseline', gap: 6 }}>
+          <span style={{ color: t.textMuted, fontSize: 28, fontWeight: 600 }}>$</span>
+          <span>{Math.floor(totalBal).toLocaleString()}</span>
+          <span style={{ color: t.textMuted, fontSize: 28, fontWeight: 500 }}>.{(totalBal % 1).toFixed(2).slice(2)}</span>
+        </div>
+        <div style={{ display:'flex', alignItems:'center', gap: 8, marginTop: 12 }}>
+          <DeltaChip value={totalPnl} pct={lifetimeReturn} t={t}/>
+          <span style={{ fontSize: 11, color: t.textMuted }}>since inception</span>
+        </div>
       </div>
 
-      <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: '14px 14px 4px', marginBottom: 12 }}>
-        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom: 8 }}>
-          <span style={{ fontSize: 12, fontWeight: 600 }}>Trading P&L</span>
-          <div style={{ display:'flex', gap: 4 }}>
+      {/* P&L CHART */}
+      <PremiumCard padding={16} style={{ marginBottom: 12 }} glow={heroPositive ? t.green : t.red}>
+        <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom: 12 }}>
+          <div>
+            <div style={{ fontSize: 10.5, color: t.textMuted, letterSpacing:'0.14em', textTransform:'uppercase', fontWeight: 600 }}>Trading P&L</div>
+            <div style={{ fontSize: 22, fontWeight: 700, fontFamily: FONT_DISPLAY, letterSpacing:'-0.025em', color: heroPositive ? t.green : t.red, marginTop: 4 }}>{window.fmt$Sign(totalPnl)}</div>
+          </div>
+          <div style={{ display:'flex', gap: 2, padding: 3, background: name === 'dark' ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)', borderRadius: 10 }}>
             {['1h','24h','7d','All'].map(x => (
-              <button key={x} onClick={() => setRange(x)} style={{ padding:'3px 6px', border:'none', borderRadius: 5, background: range === x ? t.bgSubtle : 'transparent', color: range === x ? t.text : t.textMuted, fontSize: 10.5, fontFamily: window.FONTS.mono, cursor:'pointer' }}>{x}</button>
+              <button key={x} onClick={() => setRange(x)} className="mob-tap" style={{ padding:'5px 9px', border:'none', borderRadius: 7, background: range === x ? t.bgCard : 'transparent', color: range === x ? t.text : t.textMuted, fontSize: 10.5, fontFamily: window.FONTS.mono, fontWeight: range === x ? 700 : 500, cursor:'pointer', boxShadow: range === x ? '0 2px 6px rgba(0,0,0,0.18)' : 'none', transition:'all 0.18s ease' }}>{x}</button>
             ))}
           </div>
         </div>
-        <div style={{ height: 100 }}>
+        <div style={{ height: 124, margin: '0 -6px' }}>
           <window.AreaChart data={equity} stroke={t.accent} grid={t.border} showAxis={false}/>
         </div>
-      </div>
+      </PremiumCard>
 
-      <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 14, marginBottom: 12 }}>
-        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom: 10 }}>
-          <span style={{ fontSize: 12, fontWeight: 600 }}>Balance composition</span>
-          <span style={{ fontSize: 10.5, color: t.textMuted }}>{window.fmt$(totalBal)}</span>
-        </div>
-        <div style={{ display:'flex', flexDirection:'column', alignItems:'stretch', gap: 10 }}>
-          <div style={{ display:'flex', justifyContent:'center' }}>
-            <window.Donut size={88} thickness={12} slices={[
-              { value: M.balances.kalshi.balance, color: t.green },
-              { value: M.balances.polymarket.balance, color: t.purple },
-            ]} label={window.fmt$(totalBal, 0)} sublabel="TOTAL" labelColor={t.text} dimColor={t.textMuted}/>
-          </div>
-          <div style={{ width: '100%' }}>
-            <BalanceLegendItem dot={t.green} label="Kalshi" value={window.fmt$(M.balances.kalshi.balance)} share={`${kShareMob}%`} pnl={(M.pnl.balance_change_by_platform && M.pnl.balance_change_by_platform.kalshi) ?? M.pnl.recorded_trading_pnl.kalshi} updated={M.balances.kalshi.timestamp} description="Ticker cash."/>
-            <BalanceLegendItem dot={t.purple} label="Polymarket" value={window.fmt$(M.balances.polymarket.balance)} share={`${pShareMob}%`} pnl={(M.pnl.balance_change_by_platform && M.pnl.balance_change_by_platform.polymarket) ?? M.pnl.recorded_trading_pnl.polymarket} updated={M.balances.polymarket.timestamp} description="Wallet collateral."/>
+      {/* BALANCE COMPOSITION */}
+      <PremiumCard padding={18} style={{ marginBottom: 12 }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom: 16 }}>
+          <div>
+            <div style={{ fontSize: 10.5, color: t.textMuted, letterSpacing:'0.14em', textTransform:'uppercase', fontWeight: 600 }}>Composition</div>
+            <div style={{ fontSize: 15, fontWeight: 700, fontFamily: FONT_DISPLAY, letterSpacing:'-0.02em', marginTop: 2 }}>How capital splits</div>
           </div>
         </div>
-        <div style={{ fontSize: 10.5, color: t.textMuted, marginTop: 8 }}>Rows show live balances and deposit-neutral source P&L.</div>
-      </div>
+        <div style={{ display:'flex', justifyContent:'center', padding: '4px 0 14px' }}>
+          <PremiumDonut size={172} thickness={16} t={t} name={name} slices={[
+            { value: M.balances.kalshi.balance, color: t.green },
+            { value: M.balances.polymarket.balance, color: t.purple },
+          ]}/>
+        </div>
+        <div style={{ display:'flex', flexDirection:'column', gap: 2 }}>
+          <PlatformBalanceRow name="Kalshi" badge={t.green} bal={M.balances.kalshi.balance} share={`${kShareMob}%`} pnl={kPnlMob} t={t}/>
+          <div style={{ height: 1, background: name === 'dark' ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.05)' }}/>
+          <PlatformBalanceRow name="Polymarket" badge={t.purple} bal={M.balances.polymarket.balance} share={`${pShareMob}%`} pnl={pPnlMob} t={t}/>
+        </div>
+      </PremiumCard>
 
-      <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 14, marginBottom: 12 }}>
-        <div style={{ display:'flex', alignItems:'flex-start', gap: 10, marginBottom: 12 }}>
-          <span style={{ width: 8, height: 8, borderRadius:'50%', background: scanner ? t.green : t.textMuted, animation: scanner ? 'pulse 2s infinite' : 'none', marginTop: 5, flexShrink: 0 }}/>
+      {/* SCANNER TELEMETRY */}
+      <PremiumCard padding={18} style={{ marginBottom: 12 }} glow={scanner ? t.accent : undefined}>
+        <div style={{ display:'flex', alignItems:'center', gap: 10, marginBottom: 14 }}>
+          <span style={{ position:'relative', width: 10, height: 10, flexShrink: 0 }}>
+            <span style={{ position:'absolute', inset: 0, borderRadius:'50%', background: scanner ? t.green : t.textMuted, animation: scanner ? 'pulse 2s infinite' : 'none' }}/>
+            {scanner && <span style={{ position:'absolute', inset: -4, borderRadius:'50%', background: t.green, opacity: 0.25, animation: 'mobGlowPulse 2s infinite' }}/>}
+          </span>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap: 8 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: t.text }}>Scanner telemetry</div>
-              <span style={{ padding:'3px 7px', borderRadius: 99, background: scanner ? t.greenSoft : t.bgSubtle, color: scanner ? t.green : t.textMuted, fontSize: 10, fontWeight: 700, fontFamily: window.FONTS.mono }}>{scanner ? 'LIVE' : 'PAUSED'}</span>
-            </div>
-            <div style={{ fontSize: 10.5, color: t.textDim, marginTop: 3, lineHeight: 1.45 }}>{scanner ? `${activeMob.toLocaleString()} active · ${tradableMob.toLocaleString()} tradable · best ${bestMob ? window.fmtC(bestMob) : '—'} · ${M.health.scanner.scan_time_ms || '—'}${M.health.scanner.scan_time_ms ? 'ms' : ''}` : 'Resume to monitor markets'}</div>
+            <div style={{ fontSize: 14, fontWeight: 700, fontFamily: FONT_DISPLAY, letterSpacing:'-0.015em' }}>Scanner</div>
+            <div style={{ fontSize: 11, color: t.textDim, marginTop: 1, lineHeight: 1.4 }}>{scanner ? `${activeMob.toLocaleString()} active · best ${bestMob ? window.fmtC(bestMob) : '—'} · ${M.health.scanner.scan_time_ms || '—'}${M.health.scanner.scan_time_ms ? 'ms' : ''}` : 'Resume to monitor markets'}</div>
           </div>
           <button onClick={async () => {
             const next = !scanner;
             if (window.__arbiterScannerControl) {
               const res = await window.__arbiterScannerControl(next ? 'resume' : 'pause');
-              if (!res.ok) { return; }
+              if (!res.ok) return;
             }
             setScanner(next);
-          }} style={{ padding:'5px 10px', background: t.bgSubtle, border: `1px solid ${t.border}`, borderRadius: 6, fontSize: 11, fontWeight: 600, color: t.text, cursor:'pointer', flexShrink: 0 }}>{scanner ? 'Pause' : 'Resume'}</button>
+          }} className="mob-tap" style={{ padding:'7px 13px', background: scanner ? t.amberSoft : t.greenSoft, color: scanner ? t.amber : t.green, border:`1px solid ${(scanner ? t.amber : t.green)}40`, borderRadius: 99, fontSize: 11, fontWeight: 700, cursor:'pointer', flexShrink: 0, letterSpacing:'0.04em' }}>{scanner ? 'Pause' : 'Resume'}</button>
         </div>
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(2, minmax(0, 1fr))', gap: 6 }}>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(2, minmax(0, 1fr))', gap: 8 }}>
           <MobMini label="Active" value={activeMob.toLocaleString()} dot={t.accent}/>
           <MobMini label="Tradable" value={tradableMob.toLocaleString()} dot={tradableMob ? t.green : t.textMuted}/>
           <MobMini label="Manual" value={manualMob.toLocaleString()} dot={t.amber}/>
           <MobMini label="Published" value={publishedMob.toLocaleString()} dot={t.green}/>
         </div>
-        <div style={{ height: 1, background: t.border, margin: '14px 0 12px' }}/>
-        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap: 10, marginBottom: 8 }}>
-          <span style={{ fontSize: 12, fontWeight: 700 }}>Edge distribution</span>
-          <span style={{ fontSize: 10.5, color: t.textMuted, textAlign:'right' }}>{edgeLabelMob} · {(M.edgeBucketSampleCount || 0).toLocaleString()}</span>
-        </div>
-        <div style={{ height: 122 }}>
-          <window.BarChart data={M.edgeBuckets} color={t.bgHover} accent={t.accent} labelColor={t.textDim} emptyLabel="No active, audited, or telemetry edge samples yet."/>
-        </div>
-      </div>
-
-      <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.08em', padding: '4px', marginTop: 8, marginBottom: 8 }}>TOP OPPORTUNITIES</div>
-      {M.opportunities.slice(0, 3).map((o, i) => (
-        <div key={i} style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 14, marginBottom: 8 }}>
-          <div style={{ display:'flex', alignItems:'flex-start', gap: 10, marginBottom: 8 }}>
-            <div style={{ flex: 1, fontSize: 12.5, color: t.text, lineHeight: 1.35 }}>{o.description}</div>
-            <div style={{ fontSize: 14, fontWeight: 700, color: t.green, fontFamily: window.FONTS.mono, flexShrink: 0 }}>{window.fmtC(o.net_edge_cents)}</div>
+        <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${name === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'}` }}>
+          <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', gap: 10, marginBottom: 10 }}>
+            <span style={{ fontSize: 12, fontWeight: 700, fontFamily: FONT_DISPLAY, letterSpacing:'-0.01em' }}>Edge distribution</span>
+            <span style={{ fontSize: 10, color: t.textMuted, textAlign:'right', letterSpacing:'0.04em' }}>{edgeLabelMob} · {(M.edgeBucketSampleCount || 0).toLocaleString()}</span>
           </div>
-          <div style={{ display:'flex', alignItems:'center', gap: 6, fontSize: 10.5 }}>
+          <div style={{ height: 110 }}>
+            <window.BarChart data={M.edgeBuckets} color={name === 'dark' ? 'rgba(255,255,255,0.06)' : t.bgHover} accent={t.accent} labelColor={t.textDim} emptyLabel="Awaiting samples…"/>
+          </div>
+        </div>
+      </PremiumCard>
+
+      {/* TOP OPPORTUNITIES */}
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding: '6px 2px', marginTop: 6, marginBottom: 8 }}>
+        <span style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.16em', textTransform:'uppercase', fontWeight: 700 }}>Top Edge</span>
+        <span style={{ fontSize: 11, color: t.textDim }}>{M.opportunities.length} live</span>
+      </div>
+      {M.opportunities.slice(0, 3).map((o, i) => (
+        <PremiumCard key={i} padding={14} style={{ marginBottom: 8 }}>
+          <div style={{ display:'flex', alignItems:'flex-start', gap: 10, marginBottom: 10 }}>
+            <div style={{ flex: 1, fontSize: 13, color: t.text, lineHeight: 1.4, fontWeight: 500 }}>{o.description}</div>
+            <div style={{ textAlign:'right', flexShrink: 0 }}>
+              <div style={{ fontSize: 16, fontWeight: 700, color: t.green, fontFamily: FONT_DISPLAY, letterSpacing:'-0.02em' }}>{window.fmtC(o.net_edge_cents)}</div>
+              <div style={{ fontSize: 10.5, color: t.textDim, fontFamily: window.FONTS.mono, marginTop: 1 }}>+{window.fmt$(o.expected_profit)}</div>
+            </div>
+          </div>
+          <div style={{ display:'flex', alignItems:'center', gap: 6 }}>
             <window.PlatformChip name={o.yes_platform} side="Y"/>
             <window.PlatformChip name={o.no_platform} side="N"/>
-            <span style={{ marginLeft:'auto', color: t.textDim, fontFamily: window.FONTS.mono }}>+{window.fmt$(o.expected_profit)}</span>
           </div>
-        </div>
+        </PremiumCard>
       ))}
     </div>
   );
 }
 
 function MobMini({ label, value, dot }) {
-  const { t } = window.useApp();
+  const { t, name } = window.useApp();
+  const isDark = name === 'dark';
   return (
-    <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 10, padding: 12 }}>
-      <div style={{ display:'flex', alignItems:'center', gap: 6, marginBottom: 6 }}>
-        <span style={{ width: 6, height: 6, borderRadius:'50%', background: dot }}/>
-        <span style={{ fontSize: 10.5, color: t.textMuted, letterSpacing:'0.04em', textTransform:'uppercase' }}>{label}</span>
+    <div style={{
+      position:'relative',
+      background: isDark ? 'rgba(255,255,255,0.025)' : 'rgba(0,0,0,0.025)',
+      border: `1px solid ${isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'}`,
+      borderRadius: 12,
+      padding: '11px 12px',
+    }}>
+      <div style={{ display:'flex', alignItems:'center', gap: 7, marginBottom: 6 }}>
+        <span style={{ width: 6, height: 6, borderRadius:'50%', background: dot, boxShadow:`0 0 8px ${dot}` }}/>
+        <span style={{ fontSize: 10, color: t.textMuted, letterSpacing:'0.1em', textTransform:'uppercase', fontWeight: 600 }}>{label}</span>
       </div>
-      <div style={{ fontSize: 15, fontWeight: 600, color: t.text, fontFamily: window.FONTS.mono }}>{value}</div>
+      <div style={{ fontSize: 18, fontWeight: 700, color: t.text, fontFamily: FONT_DISPLAY, letterSpacing:'-0.025em' }}>{value}</div>
     </div>
   );
 }
 
 function MobOpps() {
-  const { t } = window.useApp();
+  const { t, name } = window.useApp();
   const M = window.MOCK;
+  const tradable = M.opportunities.filter(o => o.status === 'tradable').length;
+  const best = M.opportunities.reduce((m, o) => Math.max(m, Number(o.net_edge_cents) || 0), 0);
   return (
-    <div style={{ paddingTop: 8 }}>
-      <div style={{ fontSize: 18, fontWeight: 600, color: t.text, marginBottom: 12, padding: '0 4px' }}>Opportunities</div>
-      {M.opportunities.slice(0, 8).map((o, i) => (
-        <div key={i} style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 14, marginBottom: 8 }}>
-          <div style={{ display:'flex', alignItems:'flex-start', gap: 10, marginBottom: 8 }}>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 12.5, color: t.text, lineHeight: 1.35, marginBottom: 4 }}>{o.description}</div>
-              <div style={{ fontSize: 10, color: t.textMuted, fontFamily: window.FONTS.mono }}>{o.canonical_id}</div>
+    <div className="mob-stagger">
+      <div style={{ padding: '14px 2px 18px' }}>
+        <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.2em', textTransform:'uppercase', fontWeight: 600 }}>Live edges</div>
+        <div className="mob-hero-num" style={{ fontSize: 44, fontWeight: 700, fontFamily: FONT_DISPLAY, letterSpacing:'-0.035em', marginTop: 4, lineHeight: 1 }}>{M.opportunities.length}</div>
+        <div style={{ fontSize: 12, color: t.textDim, marginTop: 6 }}>{tradable} tradable · best {best ? window.fmtC(best) : '—'}</div>
+      </div>
+      {M.opportunities.slice(0, 12).map((o, i) => (
+        <PremiumCard key={i} padding={14} style={{ marginBottom: 8 }}>
+          <div style={{ display:'flex', alignItems:'flex-start', gap: 10, marginBottom: 10 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, color: t.text, lineHeight: 1.4, marginBottom: 4, fontWeight: 500 }}>{o.description}</div>
+              <div style={{ fontSize: 10, color: t.textMuted, fontFamily: window.FONTS.mono, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{o.canonical_id}</div>
             </div>
             <div style={{ textAlign:'right', flexShrink: 0 }}>
-              <div style={{ fontSize: 14, fontWeight: 700, color: o.net_edge_cents >= 2 ? t.green : t.amber, fontFamily: window.FONTS.mono }}>{window.fmtC(o.net_edge_cents)}</div>
-              <div style={{ fontSize: 10, color: t.textDim, fontFamily: window.FONTS.mono }}>+{window.fmt$(o.expected_profit)}</div>
+              <div style={{ fontSize: 17, fontWeight: 700, color: o.net_edge_cents >= 2 ? t.green : t.amber, fontFamily: FONT_DISPLAY, letterSpacing:'-0.025em' }}>{window.fmtC(o.net_edge_cents)}</div>
+              <div style={{ fontSize: 10.5, color: t.textDim, fontFamily: window.FONTS.mono, marginTop: 1 }}>+{window.fmt$(o.expected_profit)}</div>
             </div>
           </div>
-          <div style={{ display:'flex', alignItems:'center', flexWrap:'wrap', gap: 6, paddingTop: 10, borderTop: `1px solid ${t.border}` }}>
+          <div style={{ display:'flex', alignItems:'center', flexWrap:'wrap', gap: 6, paddingTop: 10, borderTop: `1px solid ${name === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'}` }}>
             <window.PlatformChip name={o.yes_platform} side="Y"/>
             <window.PlatformChip name={o.no_platform} side="N"/>
             <window.StatusBadge status={o.status} size="sm"/>
           </div>
-        </div>
+        </PremiumCard>
       ))}
     </div>
   );
 }
 
 function MobTrades() {
-  const { t, setModal } = window.useApp();
+  const { t, name, setModal } = window.useApp();
   const M = window.MOCK;
   const rows = Array.isArray(M.executions) ? [...M.executions].sort((a,b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0)) : [];
   const realized = rows.reduce((s, r) => s + Number(r.realized_pnl || 0), 0);
   const expected = rows.reduce((s, r) => s + Number(r.expected_profit || 0), 0);
   const open = rows.filter(r => r.status_group === 'open' || ['pending','submitted','recovering'].includes(String(r.status || '').toLowerCase())).length;
+  const realizedPositive = realized >= 0;
   return (
-    <div style={{ paddingTop: 8 }}>
-      <div style={{ fontSize: 18, fontWeight: 600, color: t.text, marginBottom: 12, padding: '0 4px' }}>Trades</div>
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap: 8, marginBottom: 12 }}>
+    <div className="mob-stagger">
+      <div style={{ padding: '14px 2px 16px' }}>
+        <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.2em', textTransform:'uppercase', fontWeight: 600 }}>Realized P&L</div>
+        <div className="mob-hero-num" style={{ fontSize: 44, fontWeight: 700, fontFamily: FONT_DISPLAY, letterSpacing:'-0.035em', marginTop: 4, lineHeight: 1, color: realizedPositive ? t.green : t.red }}>{window.fmt$Sign(realized)}</div>
+        <div style={{ fontSize: 12, color: t.textDim, marginTop: 6 }}>Expected {window.fmt$Sign(expected)} · delta {window.fmt$Sign(realized - expected)}</div>
+      </div>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap: 8, marginBottom: 16 }}>
         <MobMini label="Trades" value={rows.length.toLocaleString()} dot={t.accent}/>
-        <MobMini label="Actual" value={window.fmt$Sign(realized)} dot={realized >= 0 ? t.green : t.red}/>
+        <MobMini label="Actual" value={window.fmt$Sign(realized)} dot={realizedPositive ? t.green : t.red}/>
         <MobMini label="Open" value={open.toLocaleString()} dot={t.amber}/>
       </div>
-      <div style={{ fontSize: 10.5, color: t.textMuted, margin: '0 4px 10px' }}>Expected {window.fmt$Sign(expected)} · delta {window.fmt$Sign(realized - expected)}</div>
       {rows.map((r, i) => (
-        <button type="button" key={i} onClick={() => setModal({ kind:'trade', payload: r })} aria-label={`Open trade ${r.arb_id || i}`} style={{ width:'100%', textAlign:'left', background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 14, marginBottom: 8, color: t.text, cursor:'pointer', display:'block' }}>
-          <div style={{ display:'flex', alignItems:'center', gap: 8, marginBottom: 6 }}>
-            <span style={{ fontSize: 11, fontFamily: window.FONTS.mono, fontWeight: 700, color: t.text }}>{r.arb_id}</span>
+        <PremiumCard key={i} padding={14} onClick={() => setModal({ kind:'trade', payload: r })} ariaLabel={`Open trade ${r.arb_id || i}`} style={{ marginBottom: 8 }}>
+          <div style={{ display:'flex', alignItems:'center', gap: 8, marginBottom: 8 }}>
+            <span style={{ fontSize: 10.5, fontFamily: window.FONTS.mono, fontWeight: 700, color: t.text, padding:'3px 7px', background: name === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)', borderRadius: 6, letterSpacing:'0.02em' }}>{r.arb_id}</span>
             <window.StatusBadge status={r.status} size="sm"/>
-            <span style={{ marginLeft:'auto', fontSize: 11, color: t.textDim, fontFamily: window.FONTS.mono }}>{window.ago(r.timestamp)}</span>
+            <span style={{ marginLeft:'auto', fontSize: 10.5, color: t.textDim, fontFamily: window.FONTS.mono }}>{window.ago(r.timestamp)}</span>
           </div>
-          <div style={{ fontSize: 12, color: t.text, marginBottom: 8, lineHeight: 1.35 }}>{r.opportunity.description}</div>
-          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', paddingTop: 8, borderTop: `1px solid ${t.border}` }}>
+          <div style={{ fontSize: 13, color: t.text, marginBottom: 10, lineHeight: 1.4, fontWeight: 500 }}>{r.opportunity.description}</div>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', paddingTop: 10, borderTop: `1px solid ${name === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'}` }}>
             <span style={{ fontSize: 10.5, color: t.textMuted, fontFamily: window.FONTS.mono }}>exp {window.fmt$Sign(Number(r.expected_profit || 0))}</span>
             <span style={{ fontSize: 11, color: Number(r.expected_vs_realized || 0) >= 0 ? t.green : t.red, fontFamily: window.FONTS.mono }}>Δ {window.fmt$Sign(Number(r.expected_vs_realized || 0))}</span>
-            <span style={{ fontSize: 13, fontWeight: 700, color: r.realized_pnl >= 0 ? t.green : t.red, fontFamily: window.FONTS.mono }}>{window.fmt$Sign(r.realized_pnl)}</span>
+            <span style={{ fontSize: 15, fontWeight: 700, color: r.realized_pnl >= 0 ? t.green : t.red, fontFamily: FONT_DISPLAY, letterSpacing:'-0.02em' }}>{window.fmt$Sign(r.realized_pnl)}</span>
           </div>
-        </button>
+        </PremiumCard>
       ))}
     </div>
   );
@@ -5724,29 +6028,31 @@ function MobMe({ onSub }) {
   const gates = M.health.readiness.gates || 0;
   const passing = M.health.readiness.passing || 0;
   return (
-    <div style={{ paddingTop: 16 }}>
-      <div onClick={() => setModal({ kind:'profile' })} style={{ display:'flex', alignItems:'center', gap: 12, marginBottom: 22, padding: '12px 4px', cursor:'pointer' }}>
-        <div style={{ width: 48, height: 48, borderRadius: 12, background: t.accent, color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', fontSize: 18, fontWeight: 700 }}>{profile.initials}</div>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 15, fontWeight: 600, color: t.text }}>{profile.name}</div>
-          <div style={{ fontSize: 11.5, color: t.textDim }}>{profile.email}</div>
+    <div className="mob-stagger" style={{ paddingTop: 8 }}>
+      <PremiumCard padding={16} onClick={() => setModal({ kind:'profile' })} style={{ marginBottom: 18 }}>
+        <div style={{ display:'flex', alignItems:'center', gap: 14 }}>
+          <div style={{ width: 56, height: 56, borderRadius: 16, background:`linear-gradient(140deg, ${t.accent} 0%, ${t.purple || t.accent} 100%)`, color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', fontSize: 20, fontWeight: 800, fontFamily: FONT_DISPLAY, letterSpacing:'-0.02em', boxShadow:`0 12px 28px -10px ${t.accent}80` }}>{profile.initials}</div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: t.text, fontFamily: FONT_DISPLAY, letterSpacing:'-0.015em' }}>{profile.name}</div>
+            <div style={{ fontSize: 12, color: t.textDim, marginTop: 2, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{profile.email}</div>
+          </div>
+          <svg viewBox="0 0 24 24" width={16} height={16} fill="none" stroke={t.textMuted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
         </div>
-        <span style={{ color: t.textMuted, fontSize: 13 }}>›</span>
-      </div>
+      </PremiumCard>
 
-      <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, overflow:'hidden', marginBottom: 12 }}>
-        <MobRow icon="◐" label="Funds & deposits" sub={`${window.fmt$(totalBal)} across both platforms`} onClick={() => onSub('funds')}/>
-        <MobRow icon="$" label="P&L" sub={`${window.fmt$Sign(tradePnl)} trading · ${window.fmt$(deposits)} deposits`} onClick={() => onSub('pnl')}/>
-        <MobRow icon="✓" label="System health" sub={`${passing}/${gates || 7} readiness gates`} tone={M.health.readiness.ready ? 'green' : undefined} onClick={() => onSub('health')}/>
-        <MobRow icon="⚙" label="Settings" onClick={() => onSub('settings')} last/>
-      </div>
+      <PremiumCard padding={0} style={{ marginBottom: 12, overflow:'hidden' }}>
+        <MobRow icon="funds" label="Funds & deposits" sub={`${window.fmt$(totalBal)} across both platforms`} onClick={() => onSub('funds')}/>
+        <MobRow icon="pnl" label="P&L" sub={`${window.fmt$Sign(tradePnl)} trading · ${window.fmt$(deposits)} deposits`} onClick={() => onSub('pnl')}/>
+        <MobRow icon="health" label="System health" sub={`${passing}/${gates || 7} readiness gates`} tone={M.health.readiness.ready ? 'green' : undefined} onClick={() => onSub('health')}/>
+        <MobRow icon="settings" label="Settings" onClick={() => onSub('settings')} last/>
+      </PremiumCard>
 
-      <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, overflow:'hidden', marginBottom: 12 }}>
-        <MobRow icon={name === 'light' ? '☾' : '☀'} label={name === 'light' ? 'Dark mode' : 'Light mode'} onClick={toggle}/>
-        <MobRow icon="⏏" label="Sign out" tone="red" onClick={signOut} last/>
-      </div>
+      <PremiumCard padding={0} style={{ marginBottom: 12, overflow:'hidden' }}>
+        <MobRow icon={name === 'light' ? 'moon' : 'sun'} label={name === 'light' ? 'Dark mode' : 'Light mode'} onClick={toggle}/>
+        <MobRow icon="signout" label="Sign out" tone="red" onClick={signOut} last/>
+      </PremiumCard>
 
-      <div style={{ textAlign:'center', fontSize: 10, color: t.textMuted, marginTop: 16, fontFamily: window.FONTS.mono }}>Arbiter v2.4.1 · build 2026.04.27</div>
+      <div style={{ textAlign:'center', fontSize: 10, color: t.textMuted, marginTop: 18, fontFamily: window.FONTS.mono, letterSpacing:'0.04em' }}>Arbiter v2.4.1 · build 2026.04.27</div>
     </div>
   );
 }
@@ -6029,17 +6335,76 @@ function Switch({ on, onChange }) {
   );
 }
 
+// Crisp SVG glyphs for the settings/account row icons. Falls back to
+// rendering the raw `icon` prop as text for callers that still pass
+// unicode glyphs (older sub-screens).
+function MobRowIcon({ icon, color }) {
+  const sw = 1.7;
+  const p = { fill: 'none', stroke: color, strokeWidth: sw, strokeLinecap: 'round', strokeLinejoin: 'round' };
+  switch (icon) {
+    case 'funds': return (
+      <svg viewBox="0 0 24 24" width={18} height={18}>
+        <rect {...p} x="3.5" y="6" width="17" height="13" rx="2.5"/>
+        <path {...p} d="M3.5 10h17"/>
+        <circle {...p} cx="16.5" cy="14.5" r="1.2"/>
+      </svg>
+    );
+    case 'pnl': return (
+      <svg viewBox="0 0 24 24" width={18} height={18}>
+        <path {...p} d="M5 17l5-5 3 3 6-7"/>
+        <path {...p} d="M14 8h5v5"/>
+      </svg>
+    );
+    case 'health': return (
+      <svg viewBox="0 0 24 24" width={18} height={18}>
+        <path {...p} d="M3.5 12.5h4l2-4 3 8 2-4h6"/>
+      </svg>
+    );
+    case 'settings': return (
+      <svg viewBox="0 0 24 24" width={18} height={18}>
+        <circle {...p} cx="12" cy="12" r="2.6"/>
+        <path {...p} d="M12 2.5v2.4M12 19.1v2.4M2.5 12h2.4M19.1 12h2.4M5 5l1.7 1.7M17.3 17.3L19 19M19 5l-1.7 1.7M6.7 17.3L5 19"/>
+      </svg>
+    );
+    case 'moon': return (
+      <svg viewBox="0 0 24 24" width={18} height={18}>
+        <path {...p} d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/>
+      </svg>
+    );
+    case 'sun': return (
+      <svg viewBox="0 0 24 24" width={18} height={18}>
+        <circle {...p} cx="12" cy="12" r="3.6"/>
+        <path {...p} d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5 5l1.5 1.5M17.5 17.5L19 19M19 5l-1.5 1.5M6.5 17.5L5 19"/>
+      </svg>
+    );
+    case 'signout': return (
+      <svg viewBox="0 0 24 24" width={18} height={18}>
+        <path {...p} d="M14 4h4.5A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5H14"/>
+        <path {...p} d="M9 8l-4 4 4 4"/>
+        <path {...p} d="M5 12h11"/>
+      </svg>
+    );
+    default:
+      return <span style={{ fontSize: 13, fontFamily: window.FONTS.mono, color }}>{icon}</span>;
+  }
+}
+
 function MobRow({ icon, label, sub, tone, onClick, last }) {
-  const { t } = window.useApp();
+  const { t, name } = window.useApp();
+  const isDark = name === 'dark';
   const c = tone === 'green' ? t.green : tone === 'red' ? t.red : t.text;
+  const iconBg = tone === 'green' ? t.greenSoft : tone === 'red' ? t.redSoft : (isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)');
+  const iconColor = tone === 'green' ? t.green : tone === 'red' ? t.red : t.textDim;
   return (
-    <div onClick={onClick} style={{ padding: '14px 16px', borderBottom: last ? 'none' : `1px solid ${t.border}`, display:'flex', alignItems:'center', gap: 12, cursor: onClick ? 'pointer' : 'default' }}>
-      <div style={{ width: 30, height: 30, borderRadius: 7, background: t.bgSubtle, color: c, display:'flex', alignItems:'center', justifyContent:'center', fontSize: 13, fontFamily: window.FONTS.mono }}>{icon}</div>
-      <div style={{ flex: 1 }}>
-        <div style={{ fontSize: 13, color: c, fontWeight: 500 }}>{label}</div>
-        {sub && <div style={{ fontSize: 11, color: t.textDim, marginTop: 1 }}>{sub}</div>}
+    <div onClick={onClick} className={onClick ? 'mob-tap' : ''} style={{ padding: '14px 16px', borderBottom: last ? 'none' : `1px solid ${isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)'}`, display:'flex', alignItems:'center', gap: 14, cursor: onClick ? 'pointer' : 'default' }}>
+      <div style={{ width: 36, height: 36, borderRadius: 10, background: iconBg, color: iconColor, display:'flex', alignItems:'center', justifyContent:'center', flexShrink: 0 }}>
+        <MobRowIcon icon={icon} color={iconColor}/>
       </div>
-      <span style={{ color: t.textMuted, fontSize: 13 }}>›</span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 14, color: c, fontWeight: 600, letterSpacing:'-0.01em' }}>{label}</div>
+        {sub && <div style={{ fontSize: 11.5, color: t.textDim, marginTop: 2 }}>{sub}</div>}
+      </div>
+      <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke={t.textMuted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
     </div>
   );
 }
