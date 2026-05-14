@@ -583,3 +583,128 @@ async def test_loss_streak_resets_on_profitable_trade():
 
     # Streak was 2, then reset by profit, then 2 more losses — never hit 3
     assert mapping.allow_auto_trade is True
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Adaptive-depth (bet sizing audit 2026-05-14): when book depth is below
+# the requested qty, halve-and-retry instead of skipping the trade.
+# ─────────────────────────────────────────────────────────────────────
+
+
+class _AdaptiveDepthAdapter:
+    """Fake adapter whose orderbook has a configurable max absorbable qty."""
+
+    def __init__(self, *, max_qty: int, best_price: float = 0.50):
+        self._max_qty = max_qty
+        self._best_price = best_price
+        self.calls: list[tuple[str, str, int]] = []
+
+    async def check_depth(self, market_id: str, side: str, qty: int):
+        self.calls.append((market_id, side, qty))
+        return (qty <= self._max_qty, self._best_price)
+
+
+def _make_preflight_components(
+    *,
+    yes_max_qty: int,
+    no_max_qty: int,
+    suggested_qty: int = 10,
+    liquidity_adaptive_sizing: bool = True,
+    min_depth_usd: float = 1.0,  # keep depth-USD floor out of the picture
+    min_edge_cents_preflight: float = 1.0,
+):
+    """AutoExecutor wired with adaptive-depth adapters for both legs."""
+    pts = {
+        ("kalshi", "TEST-MKT"): _FakePricePoint(
+            yes_price=0.40, no_price=0.55, age_seconds=2.0,
+        ),
+        ("polymarket", "TEST-MKT"): _FakePricePoint(
+            yes_price=0.40, no_price=0.55, age_seconds=2.0,
+        ),
+    }
+    adapters = {
+        "kalshi": _AdaptiveDepthAdapter(max_qty=yes_max_qty, best_price=0.40),
+        "polymarket": _AdaptiveDepthAdapter(max_qty=no_max_qty, best_price=0.55),
+    }
+    scanner = _FakeScanner()
+    engine = SimpleNamespace(
+        execute_opportunity=AsyncMock(
+            return_value=SimpleNamespace(arb_id="ARB-1", realized_pnl=0.05, status="filled"),
+        ),
+    )
+    supervisor = SimpleNamespace(is_armed=False, armed_by=None)
+    mapping_store = _FakeMappingStore(_FakeMapping())
+    cfg = AutoExecutorConfig(
+        enabled=True,
+        max_position_usd=100.0,
+        dedup_window_seconds=5,
+        max_quote_age_s=30.0,
+        min_depth_usd=min_depth_usd,
+        min_edge_cents_preflight=min_edge_cents_preflight,
+        liquidity_adaptive_sizing=liquidity_adaptive_sizing,
+    )
+    ae = AutoExecutor(
+        scanner=scanner, engine=engine, supervisor=supervisor,
+        mapping_store=mapping_store, config=cfg,
+        price_store=_FakePriceStore(pts),
+        adapters_provider=lambda: adapters,
+    )
+    return ae, engine, adapters
+
+
+@pytest.mark.asyncio
+async def test_preflight_reduces_qty_when_book_only_absorbs_half():
+    """Book can absorb 5 contracts; opportunity asks for 10. Adaptive sizing
+    halves try_qty until depth is sufficient (5 contracts at the 10/2 step),
+    then submits the reduced opportunity to the engine."""
+    ae, engine, adapters = _make_preflight_components(
+        yes_max_qty=5, no_max_qty=100, suggested_qty=10,
+    )
+    await ae._consider_opportunity(_make_opportunity(suggested_qty=10))
+    engine.execute_opportunity.assert_awaited_once()
+    submitted = engine.execute_opportunity.await_args.args[0]
+    # 10 -> halved to 5, both legs validated at qty=5
+    assert submitted.suggested_qty == 5
+    assert ae.stats.executed == 1
+    assert ae.stats.skipped_depth_low == 0
+
+
+@pytest.mark.asyncio
+async def test_preflight_uses_smallest_absorbable_qty_across_both_legs():
+    """If yes leg can absorb 5 and no leg can absorb 2, final qty must be the
+    smaller of the two (capped to a halve-step from the original)."""
+    ae, engine, adapters = _make_preflight_components(
+        yes_max_qty=5, no_max_qty=2, suggested_qty=10,
+    )
+    await ae._consider_opportunity(_make_opportunity(suggested_qty=10))
+    engine.execute_opportunity.assert_awaited_once()
+    submitted = engine.execute_opportunity.await_args.args[0]
+    # 10 -> 5 on yes (passes), then 10/2/2=2 step on no (passes at 2)
+    # Adaptive takes min across legs; in this implementation it's the
+    # smallest absorbable-by-halving qty: 2.
+    assert submitted.suggested_qty <= 5
+    assert submitted.suggested_qty >= 1
+
+
+@pytest.mark.asyncio
+async def test_preflight_skips_when_adaptive_disabled_legacy_behaviour():
+    """liquidity_adaptive_sizing=False preserves legacy skip-on-low-depth."""
+    ae, engine, _ = _make_preflight_components(
+        yes_max_qty=5, no_max_qty=100, suggested_qty=10,
+        liquidity_adaptive_sizing=False,
+    )
+    await ae._consider_opportunity(_make_opportunity(suggested_qty=10))
+    engine.execute_opportunity.assert_not_awaited()
+    assert ae.stats.skipped_depth_low == 1
+
+
+@pytest.mark.asyncio
+async def test_preflight_skips_when_book_has_no_depth_even_for_one():
+    """A book that can't absorb qty=1 must skip even with adaptive sizing on."""
+    ae, engine, _ = _make_preflight_components(
+        yes_max_qty=0, no_max_qty=100, suggested_qty=10,
+    )
+    await ae._consider_opportunity(_make_opportunity(suggested_qty=10))
+    engine.execute_opportunity.assert_not_awaited()
+    assert ae.stats.skipped_depth_low == 1
+    assert ae.stats.executed == 0

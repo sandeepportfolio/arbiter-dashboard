@@ -336,3 +336,178 @@ def test_scanner_accepts_tight_bid_ask_spread_on_primary_venue():
                 MARKET_MAP["TEST_TIGHT_SPREAD"] = original_mapping
 
     asyncio.run(runner())
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Position-sizing tests for _compute_position_size
+# Bet sizing audit (2026-05-14): added fraction-of-balance cap, $-reserve
+# floor, and edge-based scaling. These tests pin the math.
+# ────────────────────────────────────────────────────────────────────────
+
+def _sizing_price_point(platform: str, yes_price: float, no_price: float,
+                        yes_volume: float = 10_000, no_volume: float = 10_000):
+    """Build a PricePoint that won't bottleneck sizing on liquidity."""
+    now = time.time()
+    return PricePoint(
+        platform=platform,
+        canonical_id="SIZING",
+        yes_price=yes_price,
+        no_price=no_price,
+        yes_volume=yes_volume,
+        no_volume=no_volume,
+        timestamp=now,
+        raw_market_id=f"{platform}-SIZING",
+        yes_market_id=f"{platform}-SIZING",
+        no_market_id=f"{platform}-SIZING",
+        fee_rate=0.0,
+        mapping_status="confirmed",
+        mapping_score=0.95,
+    )
+
+
+def test_compute_position_size_backward_compatible_with_no_balance_provider():
+    """With no balance_provider, only the MAX_POSITION_USD + liquidity caps fire."""
+    scanner = ArbitrageScanner(
+        ScannerConfig(max_position_usd=10.0),
+        PriceStore(ttl=60),
+    )
+    yes_pp = _sizing_price_point("kalshi", 0.40, 0.60)
+    no_pp = _sizing_price_point("polymarket", 0.40, 0.60)
+    # cost_per_pair = 1.00. Expect floor(10/1.00) = 10
+    qty = scanner._compute_position_size(yes_pp, no_pp, 0.40, 0.60)
+    assert qty == 10
+
+
+def test_compute_position_size_capped_by_balance_fraction():
+    """5% of $200 = $10 -> 10 contracts at $1 cost/pair. Cap is the active gate."""
+    scanner = ArbitrageScanner(
+        ScannerConfig(
+            max_position_usd=1000.0,  # large enough not to bind
+            max_balance_fraction_per_trade=0.05,
+        ),
+        PriceStore(ttl=60),
+        balance_provider=lambda: {"kalshi": 200.0, "polymarket": 200.0},
+    )
+    yes_pp = _sizing_price_point("kalshi", 0.40, 0.60)
+    no_pp = _sizing_price_point("polymarket", 0.40, 0.60)
+    qty = scanner._compute_position_size(yes_pp, no_pp, 0.40, 0.60)
+    # cost_per_pair = $1.00, 5% of $200 = $10 -> qty = 10
+    assert qty == 10
+
+
+def test_compute_position_size_uses_smaller_balance_for_fraction():
+    """When balances differ, the smaller balance bounds the fraction cap."""
+    scanner = ArbitrageScanner(
+        ScannerConfig(
+            max_position_usd=1000.0,
+            max_balance_fraction_per_trade=0.05,
+        ),
+        PriceStore(ttl=60),
+        # Kalshi $354.63, Polymarket $212.08 (current live state)
+        balance_provider=lambda: {"kalshi": 354.63, "polymarket": 212.08},
+    )
+    yes_pp = _sizing_price_point("kalshi", 0.40, 0.60)
+    no_pp = _sizing_price_point("polymarket", 0.40, 0.60)
+    qty = scanner._compute_position_size(yes_pp, no_pp, 0.40, 0.60)
+    # smaller balance = $212.08; 5% = $10.60; cost/pair = $1.00 -> qty = 10
+    assert qty == 10
+
+
+def test_compute_position_size_reserves_min_platform_usd_floor():
+    """A $200 floor on a $210 balance leaves $10 spendable per leg (less 10%)."""
+    scanner = ArbitrageScanner(
+        ScannerConfig(
+            max_position_usd=1000.0,
+            min_platform_reserve_usd=200.0,
+        ),
+        PriceStore(ttl=60),
+        balance_provider=lambda: {"kalshi": 210.0, "polymarket": 210.0},
+    )
+    yes_pp = _sizing_price_point("kalshi", 0.40, 0.60)
+    no_pp = _sizing_price_point("polymarket", 0.40, 0.60)
+    qty = scanner._compute_position_size(yes_pp, no_pp, 0.40, 0.60)
+    # After $200 reserve: $10 each; 90% spendable = $9; on NO leg @ $0.60
+    # that's floor(9/0.60) = 15. On YES leg @ $0.40 that's floor(9/0.40) = 22.
+    # min(yes_cap, no_cap) = 15.
+    assert qty == 15
+
+
+def test_compute_position_size_blocks_when_below_reserve_floor():
+    """If balance is below the reserve floor, qty must be 0."""
+    scanner = ArbitrageScanner(
+        ScannerConfig(
+            max_position_usd=1000.0,
+            min_platform_reserve_usd=300.0,  # higher than balance
+        ),
+        PriceStore(ttl=60),
+        balance_provider=lambda: {"kalshi": 200.0, "polymarket": 200.0},
+    )
+    yes_pp = _sizing_price_point("kalshi", 0.40, 0.60)
+    no_pp = _sizing_price_point("polymarket", 0.40, 0.60)
+    qty = scanner._compute_position_size(yes_pp, no_pp, 0.40, 0.60)
+    assert qty == 0
+
+
+def test_compute_position_size_edge_scaling_grows_size_with_edge():
+    """At min_edge gate, qty = 50% of fraction cap; at ref_edge, qty = 100%."""
+    cfg = ScannerConfig(
+        min_edge_cents=3.0,
+        max_position_usd=1000.0,
+        max_balance_fraction_per_trade=0.10,  # 10% of $200 = $20 -> 20 pairs
+        edge_scaling_enabled=True,
+        edge_scaling_min_fraction=0.5,
+        edge_scaling_ref_cents=10.0,
+    )
+    scanner = ArbitrageScanner(
+        cfg,
+        PriceStore(ttl=60),
+        balance_provider=lambda: {"kalshi": 200.0, "polymarket": 200.0},
+    )
+    yes_pp = _sizing_price_point("kalshi", 0.40, 0.60)
+    no_pp = _sizing_price_point("polymarket", 0.40, 0.60)
+    qty_thin = scanner._compute_position_size(yes_pp, no_pp, 0.40, 0.60,
+                                              net_edge_cents=3.0)
+    qty_rich = scanner._compute_position_size(yes_pp, no_pp, 0.40, 0.60,
+                                              net_edge_cents=10.0)
+    # 50% of 20 = 10 contracts at min edge; 100% at reference edge
+    assert qty_thin == 10
+    assert qty_rich == 20
+
+
+def test_compute_position_size_edge_scaling_off_keeps_full_fraction():
+    """When edge scaling disabled, fraction cap applies in full regardless of edge."""
+    cfg = ScannerConfig(
+        max_position_usd=1000.0,
+        max_balance_fraction_per_trade=0.10,
+        edge_scaling_enabled=False,
+    )
+    scanner = ArbitrageScanner(
+        cfg,
+        PriceStore(ttl=60),
+        balance_provider=lambda: {"kalshi": 200.0, "polymarket": 200.0},
+    )
+    yes_pp = _sizing_price_point("kalshi", 0.40, 0.60)
+    no_pp = _sizing_price_point("polymarket", 0.40, 0.60)
+    qty_thin = scanner._compute_position_size(yes_pp, no_pp, 0.40, 0.60,
+                                              net_edge_cents=3.0)
+    qty_rich = scanner._compute_position_size(yes_pp, no_pp, 0.40, 0.60,
+                                              net_edge_cents=10.0)
+    # Both pin to the full fraction cap (no scaling).
+    assert qty_thin == qty_rich == 20
+
+
+def test_compute_position_size_legacy_default_path_unchanged():
+    """Defaults (fraction=1.0, reserve=0, edge scaling off) preserve legacy
+    qty = floor(0.9 * min_bal / leg_price). With $200 balance @ $0.60 NO leg:
+    0.9 * 200 / 0.60 = 300. With max_position_usd=10, USD cap dominates -> 10."""
+    scanner = ArbitrageScanner(
+        ScannerConfig(max_position_usd=10.0),  # default new fields
+        PriceStore(ttl=60),
+        balance_provider=lambda: {"kalshi": 200.0, "polymarket": 200.0},
+    )
+    yes_pp = _sizing_price_point("kalshi", 0.40, 0.60)
+    no_pp = _sizing_price_point("polymarket", 0.40, 0.60)
+    qty = scanner._compute_position_size(yes_pp, no_pp, 0.40, 0.60)
+    # Legacy gate: USD cap = 10 / 1.0 = 10. Reserve fraction (10%) = 0.9*200/0.60=300.
+    # Result: 10.
+    assert qty == 10

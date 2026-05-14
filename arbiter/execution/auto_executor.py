@@ -55,6 +55,13 @@ class AutoExecutorConfig:
     # -$105.80) where the secondary venue persistently rejects orders and
     # every primary fill turns into a forced unwind.
     loss_streak_disable_threshold: int = 3
+    # When True, insufficient orderbook depth in pre-flight halves the
+    # try_qty until depth is sufficient (or qty drops below 1, which skips).
+    # When False (legacy), insufficient depth at the desired qty skips the
+    # trade entirely. Engine-side depth gate already does adaptive halving;
+    # this aligns pre-flight with that behaviour so partial-depth books
+    # produce smaller trades instead of dropped trades.
+    liquidity_adaptive_sizing: bool = True
 
 
 @dataclass
@@ -518,6 +525,9 @@ class AutoExecutor:
                 )
                 adapters = {}
 
+        # Track the smallest qty the book can absorb across both sides when
+        # adaptive sizing is on. Both legs must support the final qty.
+        adaptive_qty = qty
         for side, platform, market_id, price in (
             ("yes", opp.yes_platform, opp.yes_market_id, yes_price),
             ("no", opp.no_platform, opp.no_market_id, no_price),
@@ -543,7 +553,12 @@ class AutoExecutor:
                     err=str(exc),
                 )
                 return None
-            if not sufficient:
+            if sufficient:
+                continue
+
+            # Insufficient depth. If adaptive sizing is on, halve try_qty
+            # progressively until the book has depth or we drop below 1.
+            if not self._config.liquidity_adaptive_sizing:
                 self.stats.skipped_depth_low += 1
                 log.info(
                     "auto_executor.skip.preflight.depth_low",
@@ -555,6 +570,77 @@ class AutoExecutor:
                     best_price=best_price,
                 )
                 return None
+
+            absorbed_qty = 0
+            try_qty = max(1, required_qty_for_depth // 2)
+            while try_qty >= 1:
+                try:
+                    side_ok, _ = await adapter.check_depth(market_id, side, try_qty)
+                except Exception as exc:  # noqa: BLE001
+                    self.stats.skipped_depth_low += 1
+                    log.warning(
+                        "auto_executor.skip.preflight.depth_check_error",
+                        canonical_id=opp.canonical_id,
+                        platform=platform,
+                        side=side,
+                        err=str(exc),
+                    )
+                    return None
+                if side_ok:
+                    absorbed_qty = try_qty
+                    break
+                try_qty //= 2
+
+            if absorbed_qty < 1:
+                self.stats.skipped_depth_low += 1
+                log.info(
+                    "auto_executor.skip.preflight.depth_low",
+                    canonical_id=opp.canonical_id,
+                    platform=platform,
+                    side=side,
+                    required_qty=required_qty_for_depth,
+                    min_depth_usd=self._config.min_depth_usd,
+                    best_price=best_price,
+                )
+                return None
+
+            adaptive_qty = min(adaptive_qty, absorbed_qty)
+            log.info(
+                "auto_executor.preflight.depth_reduced",
+                canonical_id=opp.canonical_id,
+                platform=platform,
+                side=side,
+                original_qty=qty,
+                reduced_qty=adaptive_qty,
+            )
+
+        # If adaptive sizing reduced the qty, push the new size into the
+        # opportunity so downstream (engine, auditor, alerting) sees the
+        # actual size we will submit. Recompute fees + net edge at the
+        # new qty because Kalshi fees are order-quantity-sensitive.
+        if adaptive_qty < qty and self._config.liquidity_adaptive_sizing:
+            qty = max(1, int(adaptive_qty))
+            total_fees_per_unit = (
+                compute_fee(opp.yes_platform, yes_price, qty, yes_fee_rate)
+                + compute_fee(opp.no_platform, no_price, qty, no_fee_rate)
+            ) / qty
+            net_edge = gross_edge - total_fees_per_unit
+            net_edge_cents = net_edge * 100.0
+            if net_edge_cents < self._config.min_edge_cents_preflight:
+                self.stats.skipped_edge_collapsed += 1
+                log.info(
+                    "auto_executor.skip.preflight.edge_collapsed_after_depth_reduce",
+                    canonical_id=opp.canonical_id,
+                    reduced_qty=qty,
+                    net_edge_cents=round(net_edge_cents, 2),
+                    threshold_cents=self._config.min_edge_cents_preflight,
+                )
+                return None
+            opp.suggested_qty = qty
+            opp.net_edge = net_edge
+            opp.net_edge_cents = net_edge_cents
+            opp.total_fees = total_fees_per_unit
+            opp.max_profit_usd = round(net_edge * qty, 4)
 
         # All pre-flight checks passed — return a re-quoted opportunity so the
         # engine does not have to re-fetch (it will still do its own re-quote
@@ -698,6 +784,9 @@ def make_auto_executor_from_env(
         ),
         require_mapping_confirmed=_bool(
             config_env.get("PREFLIGHT_REQUIRE_MAPPING_CONFIRMED"), default=False,
+        ),
+        liquidity_adaptive_sizing=_bool(
+            config_env.get("LIQUIDITY_ADAPTIVE_SIZING"), default=True,
         ),
     )
     return AutoExecutor(

@@ -415,7 +415,12 @@ class ArbitrageScanner:
                 )
                 return None
 
-        suggested_qty = self._compute_position_size(yes_price_point, no_price_point, yes_price, no_price)
+        # Use gross_edge as the edge proxy for sizing (fees are qty-dependent, so
+        # net edge would be circular here — gross is within 1-3¢ in practice).
+        suggested_qty = self._compute_position_size(
+            yes_price_point, no_price_point, yes_price, no_price,
+            net_edge_cents=gross_edge * 100.0,
+        )
         if suggested_qty <= 0:
             return None
 
@@ -588,38 +593,89 @@ class ArbitrageScanner:
         no_price_point: PricePoint,
         yes_price: float,
         no_price: float,
+        net_edge_cents: float = 0.0,
     ) -> int:
-        cost_per_pair = max(yes_price + no_price, 0.01)
+        """Compute suggested_qty as the min of every active cap.
 
-        # Balance-proportioned sizing: use min of per-platform balance caps
-        # so we never try to spend more than either platform has
+        Caps composed:
+          1. config_limited       — MAX_POSITION_USD / cost_per_pair (USD cap)
+          2. liquidity_limited    — min(yes_volume, no_volume)       (orderbook depth)
+          3. legacy_reserve       — per-leg 10% reserve / leg price   (legacy)
+          4. balance_fraction     — fraction × min(bal) / cost        (NEW: % of balance)
+          5. min_reserve_floor    — ((min(bal) - reserve) × 0.9) / cost (NEW: $ reserve)
+          6. edge_scaling         — multiplies fraction cap by 0.5→1.0 with edge
+        Each cap is a non-negative integer; result is max(0, min(all)).
+        """
+        cost_per_pair = max(yes_price + no_price, 0.01)
         max_cap = self.config.max_position_usd
+        config_limited = int(max_cap / cost_per_pair)
+        liquidity_limited = int(max(min(yes_price_point.yes_volume, no_price_point.no_volume), 1))
+
+        # ── balance-aware caps ──────────────────────────────────────────
+        legacy_reserve = config_limited  # neutralised when no balance provider
+        balance_fraction_cap = config_limited
+        min_reserve_cap = config_limited
         if self._balance_provider:
             try:
-                balances = self._balance_provider()
-                yes_bal = balances.get(yes_price_point.platform, max_cap)
-                no_bal = balances.get(no_price_point.platform, max_cap)
-                # Cap per-leg spend to platform balance (leave 10% reserve)
+                balances = self._balance_provider() or {}
+                # If the provider has no entry for a platform, fall back to
+                # max_cap (legacy behaviour) — we don't punish unknown balances.
+                yes_bal = float(balances.get(yes_price_point.platform, max_cap))
+                no_bal = float(balances.get(no_price_point.platform, max_cap))
+                min_bal = min(yes_bal, no_bal)
+
+                # (3) Legacy 10% per-leg reserve (preserved as-is).
                 RESERVE_FRACTION = 0.10
-                yes_cap = max(yes_bal * (1 - RESERVE_FRACTION), 0) / max(yes_price, 0.01)
-                no_cap = max(no_bal * (1 - RESERVE_FRACTION), 0) / max(no_price, 0.01)
-                balance_limited = int(min(yes_cap, no_cap))
+                yes_cap = max(yes_bal * (1.0 - RESERVE_FRACTION), 0.0) / max(yes_price, 0.01)
+                no_cap = max(no_bal * (1.0 - RESERVE_FRACTION), 0.0) / max(no_price, 0.01)
+                legacy_reserve = int(min(yes_cap, no_cap))
+
+                # (4) Fraction-of-balance cap with optional edge scaling.
+                fraction = float(self.config.max_balance_fraction_per_trade)
+                fraction = max(0.0, min(fraction, 1.0))
+                if self.config.edge_scaling_enabled and fraction > 0.0:
+                    fraction *= self._edge_scalar(net_edge_cents)
+                balance_fraction_cap = int((min_bal * fraction) / cost_per_pair)
+
+                # (5) Minimum platform reserve floor (USD). We treat the floor
+                # as untouchable: only ((bal - floor) × 0.9) is spendable per
+                # leg. If balance is already below the floor, this cap → 0.
+                reserve_floor = max(0.0, float(self.config.min_platform_reserve_usd))
+                if reserve_floor > 0.0:
+                    yes_avail = max(yes_bal - reserve_floor, 0.0) * (1.0 - RESERVE_FRACTION)
+                    no_avail = max(no_bal - reserve_floor, 0.0) * (1.0 - RESERVE_FRACTION)
+                    yes_reserve_cap = yes_avail / max(yes_price, 0.01)
+                    no_reserve_cap = no_avail / max(no_price, 0.01)
+                    min_reserve_cap = int(min(yes_reserve_cap, no_reserve_cap))
             except Exception as exc:
-                # Balance lookup is best-effort: fall back to the static cap so
-                # a flaky balance source doesn't pause the scanner. We log the
-                # reason once per scan so operators can spot persistent issues.
+                # Balance lookup is best-effort: fall back to static cap so a
+                # flaky balance source doesn't pause the scanner. Log once per
+                # scan so operators can spot persistent issues.
                 logger.warning(
                     "scanner.balance_provider.error platform_yes=%s platform_no=%s err=%s",
                     yes_price_point.platform, no_price_point.platform, exc,
                 )
-                balance_limited = int(max_cap / cost_per_pair)
-        else:
-            balance_limited = int(max_cap / cost_per_pair)
 
-        config_limited = int(max_cap / cost_per_pair)
-        liquidity_limited = int(max(min(yes_price_point.yes_volume, no_price_point.no_volume), 1))
-        size = max(1, min(config_limited, liquidity_limited, balance_limited))
+        size = min(
+            config_limited,
+            liquidity_limited,
+            legacy_reserve,
+            balance_fraction_cap,
+            min_reserve_cap,
+        )
         return max(size, 0)
+
+    def _edge_scalar(self, net_edge_cents: float) -> float:
+        """Linear ramp from edge_scaling_min_fraction at min_edge_cents to 1.0
+        at edge_scaling_ref_cents. Clamped to [min_fraction, 1.0]."""
+        min_gate = max(float(self.config.min_edge_cents), 0.0)
+        ref_edge = max(float(self.config.edge_scaling_ref_cents), min_gate + 1e-6)
+        min_frac = max(0.0, min(float(self.config.edge_scaling_min_fraction), 1.0))
+        if ref_edge <= min_gate:
+            return 1.0
+        ratio = (float(net_edge_cents) - min_gate) / (ref_edge - min_gate)
+        scalar = min_frac + max(0.0, ratio) * (1.0 - min_frac)
+        return max(min_frac, min(scalar, 1.0))
 
     def _compute_confidence(
         self,

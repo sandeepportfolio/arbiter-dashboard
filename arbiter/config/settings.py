@@ -587,6 +587,24 @@ class AlertConfig:
     cooldown: float = 300.0
 
 
+def _env_float(name: str, default: float) -> float:
+    """Read float env var with graceful fallback on missing / unparseable."""
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in ("1", "true", "yes", "on")
+
+
 @dataclass
 class ScannerConfig:
     min_edge_cents: float = 3.0
@@ -603,6 +621,34 @@ class ScannerConfig:
     # forced unwind locked in the 47¢ spread as a loss. Set to 0 to disable.
     max_bid_ask_spread_cents: float = 15.0
     dry_run: bool = field(default_factory=lambda: os.getenv("DRY_RUN", "true").lower() != "false")
+
+    # ── Balance-proportional sizing (additive caps; defaults preserve legacy)
+    # MAX_BALANCE_FRACTION_PER_TRADE: cap per-trade notional at this fraction
+    # of min(yes_platform_balance, no_platform_balance). Default 1.0 = no
+    # fractional cap (legacy). Recommended live value: 0.05 (5%) so a single
+    # trade can't exceed 5% of either platform's balance.
+    max_balance_fraction_per_trade: float = field(
+        default_factory=lambda: _env_float("MAX_BALANCE_FRACTION_PER_TRADE", 1.0)
+    )
+    # MIN_PLATFORM_RESERVE_USD: floor balance held back on each platform for
+    # unwind / fees / slippage. Default 0 = legacy behaviour (only the 10%
+    # fractional reserve in _compute_position_size). Recommended live: $20.
+    min_platform_reserve_usd: float = field(
+        default_factory=lambda: _env_float("MIN_PLATFORM_RESERVE_USD", 0.0)
+    )
+    # Edge-based size scaling. When enabled, qty scales linearly between
+    # ``edge_scaling_min_fraction`` (at the min_edge gate) and 1.0 (at
+    # ``edge_scaling_ref_cents``). Applies only to the balance-fraction
+    # cap so the fixed USD caps still floor everything.
+    edge_scaling_enabled: bool = field(
+        default_factory=lambda: _env_bool("EDGE_SCALING_ENABLED", False)
+    )
+    edge_scaling_min_fraction: float = field(
+        default_factory=lambda: _env_float("EDGE_SCALING_MIN_FRACTION", 0.5)
+    )
+    edge_scaling_ref_cents: float = field(
+        default_factory=lambda: _env_float("EDGE_SCALING_REF_CENTS", 10.0)
+    )
 
 
 @dataclass
