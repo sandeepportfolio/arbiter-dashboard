@@ -653,6 +653,10 @@ def _make_preflight_components(
         min_depth_usd=min_depth_usd,
         min_edge_cents_preflight=min_edge_cents_preflight,
         liquidity_adaptive_sizing=liquidity_adaptive_sizing,
+        # H15 flipped require_mapping_confirmed to True; these tests
+        # exercise the depth gate and must opt out so the mapping gate
+        # doesn't filter the test opportunity before depth-gate runs.
+        require_mapping_confirmed=False,
     )
     ae = AutoExecutor(
         scanner=scanner, engine=engine, supervisor=supervisor,
