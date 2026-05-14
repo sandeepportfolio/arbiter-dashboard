@@ -3056,7 +3056,7 @@ function PriceCell({ yes }) {
 
 // ── Mappings ────────────────────────────────────────────────────────
 function PageMappings() {
-  const { t, setModal, toast } = window.useApp();
+  const { t, setModal, setDrawer, toast } = window.useApp();
   const [mappingFilter, setMappingFilter] = React.useState('all');
   const M = window.MOCK;
   const metrics = (M && typeof M.mappingMetrics === 'object' && M.mappingMetrics) || null;
@@ -3335,12 +3335,19 @@ function PageMappings() {
               </div>
             );
           }},
-        ]} rows={filteredCandidates} onRowClick={(r) => setModal({ kind:'agentValidate', payload: r })} emptyTitle="No mapping candidates" emptyHint={mappingFilter === 'all' ? 'The mapping pipeline will surface candidate cross-platform pairs here for review.' : 'No rows match this mapping filter. Choose another filter or run a discovery pass.'} emptyIcon="⇄"/>
+        ]} rows={filteredCandidates} onRowClick={(r) => {
+          const status = statusOf(r);
+          if (status === 'confirmed' || status === 'rejected' || status === 'expired') {
+            setDrawer({ kind: 'mappingHistory', payload: r });
+          } else {
+            setModal({ kind:'agentValidate', payload: r });
+          }
+        }} emptyTitle="No mapping candidates" emptyHint={mappingFilter === 'all' ? 'The mapping pipeline will surface candidate cross-platform pairs here for review.' : 'No rows match this mapping filter. Choose another filter or run a discovery pass.'} emptyIcon="⇄"/>
       </window.Card>
 
       <div style={{ marginTop: 12, padding: '12px 14px', background: t.bgSubtle, border:`1px dashed ${t.border}`, borderRadius: 8, fontSize: 11, color: t.textDim, display:'flex', alignItems:'center', gap: 10 }}>
         <span style={{ width: 6, height: 6, borderRadius:'50%', background: t.accent }}/>
-        Click any mapping row to inspect validation history and run a read-only Claude Opus 4.7 verifier pass with every backend step, tool result, metric, and verdict shown.
+        Pending rows open the read-only Claude Opus 4.7 verifier. Confirmed and rejected rows open the full lifecycle history — every status change, every verifier verdict, every score recorded.
       </div>
     </div>
   );
@@ -6038,7 +6045,7 @@ function MobRow({ icon, label, sub, tone, onClick, last }) {
 }
 
 function MobMappings() {
-  const { t, setModal, toast } = window.useApp();
+  const { t, setModal, setDrawer, toast } = window.useApp();
   const [mappingFilter, setMappingFilter] = mobUseState('all');
   const M = window.MOCK;
   const rows = Array.isArray(M.mappings) ? M.mappings : [];
@@ -6129,7 +6136,14 @@ function MobMappings() {
         const actionable = c.s === 'candidate' || c.s === 'pending' || c.s === 'review';
         const kalshiLabel = c.k || c.description || c.canonical_id || 'Kalshi market unavailable';
         const polyLabel = c.p || c.description || 'Polymarket market unavailable';
-        const openCard = () => setModal({ kind:'agentValidate', payload: c });
+        const openCard = () => {
+          const status = String(c.s || '').toLowerCase();
+          if (status === 'confirmed' || status === 'rejected' || status === 'expired') {
+            setDrawer({ kind: 'mappingHistory', payload: c });
+          } else {
+            setModal({ kind:'agentValidate', payload: c });
+          }
+        };
         return (
           <div key={c.canonical_id || `${c.k}:${c.p}:${i}`} role="button" tabIndex={0} aria-label={`Open mapping validation ${c.canonical_id || c.k || i}`} onClick={openCard} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openCard(); } }} style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 14, marginBottom: 8, cursor: 'pointer', minHeight: 118 }}>
             <div style={{ display:'grid', gridTemplateColumns:'42px minmax(0, 1fr)', columnGap: 10, rowGap: 8, alignItems:'start' }}>
@@ -6407,6 +6421,672 @@ window.LoginScreen = LoginScreen;
     s.classList.add('failed');
   }, 12000);
 </script>
+<script type="text/babel" data-presets="env,react" data-filename="mapping-history-and-edge-history.jsx">
+// =====================================================================
+// MappingHistoryDrawer + EdgeHistory
+// ---------------------------------------------------------------------
+// Two additive features bolted onto the desktop + mobile shells:
+//   1. MappingHistoryDrawer — clicking a confirmed / rejected / expired
+//      mapping row opens a right-side slide-out with the full lifecycle
+//      audit log, every prior verifier verdict, resolution criteria, and
+//      the discovery events that touched the pair.
+//   2. PageOpportunities is wrapped with a "Live / History" tab toggle.
+//      The history tab renders a granular execution ledger view focused
+//      on tying each historical opportunity to the trade that fired (or
+//      did not fire), including leg-by-leg fill detail and error info.
+// =====================================================================
+
+const { useState: mhUseState, useEffect: mhUseEffect, useRef: mhUseRef, useMemo: mhUseMemo } = React;
+
+function fmtTimestamp(ts) {
+  const n = Number(ts);
+  if (!Number.isFinite(n) || n <= 0) return '—';
+  const t = n > 1e12 ? n : n * 1000;
+  try {
+    const d = new Date(t);
+    if (Number.isNaN(d.getTime())) return '—';
+    return d.toLocaleString();
+  } catch (_) {
+    return '—';
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Mapping history slide-out
+// ────────────────────────────────────────────────────────────────────
+function MappingHistoryDrawer() {
+  const { t, drawer, setDrawer, setModal, toast } = window.useApp();
+  if (!drawer || drawer.kind !== 'mappingHistory') return null;
+  const candidate = drawer.payload || {};
+  const raw = candidate.raw || candidate;
+  const canonicalId = candidate.canonical_id
+    || raw.canonical_id
+    || `${candidate.k || raw.kalshi_market_id || ''}::${candidate.p || raw.polymarket_slug || ''}`;
+  const kalshiId = candidate.k || raw.kalshi_market_id || raw.kalshi_ticker || raw.kalshi || '';
+  const polyId = candidate.p || raw.polymarket_slug || raw.poly_slug || raw.polymarket || '';
+  const description = raw.description || raw.polymarket_question || candidate.description || '';
+  const score = Number(candidate.score ?? raw.mapping_score ?? raw.confidence ?? 0);
+  const status = String(raw.status || candidate.s || 'unknown').toLowerCase();
+  const matchStatus = String(raw.resolution_match_status || candidate.match || 'pending_operator_review').toLowerCase();
+  const autoTrade = !!(raw.allow_auto_trade || candidate.auto);
+
+  const [history, setHistory] = mhUseState(null);
+  const [loading, setLoading] = mhUseState(true);
+  const [error, setError] = mhUseState('');
+  const [reopening, setReopening] = mhUseState(false);
+
+  mhUseEffect(() => {
+    let cancelled = false;
+    if (!canonicalId) { setLoading(false); setError('Missing canonical_id'); return; }
+    if (!window.__arbiterMappingValidationHistory) {
+      setLoading(false);
+      setError('Validation history API is not available in this build.');
+      return;
+    }
+    setLoading(true);
+    setError('');
+    setHistory(null);
+    window.__arbiterMappingValidationHistory(canonicalId).then((res) => {
+      if (cancelled) return;
+      setLoading(false);
+      if (!res.ok) {
+        setError(res.error || 'Could not load mapping history.');
+        return;
+      }
+      setHistory(res.data || {});
+    }).catch((e) => {
+      if (cancelled) return;
+      setLoading(false);
+      setError(String((e && e.message) || e));
+    });
+    return () => { cancelled = true; };
+  }, [canonicalId]);
+
+  const audit = Array.isArray(history && history.audit_log) ? history.audit_log : [];
+  const validationRuns = Array.isArray(history && history.validation_runs) ? history.validation_runs : [];
+  const discoveryEvents = Array.isArray(history && history.discovery_events) ? history.discovery_events : [];
+  const liveMapping = (history && history.mapping) || raw;
+  const criteria = liveMapping && typeof liveMapping.resolution_criteria === 'object' ? liveMapping.resolution_criteria : null;
+
+  // Build a unified, time-ordered timeline merging audit_log + validation_runs.
+  const timeline = mhUseMemo(() => {
+    const out = [];
+    audit.forEach((entry) => {
+      out.push({
+        kind: 'audit',
+        ts: Number(entry.ts || entry.timestamp || 0),
+        actor: entry.actor || 'system',
+        title: entry.field
+          ? `${entry.field}: ${entry.old ?? '—'} → ${entry.new ?? '—'}`
+          : entry.note || 'audit event',
+        detail: entry.note || '',
+        raw: entry,
+      });
+    });
+    validationRuns.forEach((run) => {
+      const events = Array.isArray(run.events) ? run.events : [];
+      const verdict = [...events].reverse().find(e => e.kind === 'verdict');
+      const metrics = events.filter(e => e.kind === 'metric');
+      out.push({
+        kind: 'validation',
+        ts: Number(run.ts || run.timestamp || (events[0] && events[0].ts) || 0),
+        actor: run.actor || run.model || 'verifier',
+        title: verdict
+          ? `Verifier verdict: ${String(verdict.verdict || 'manual_review').replace(/_/g, ' ')}`
+          : 'Validation run',
+        detail: verdict && verdict.summary ? verdict.summary : `${events.length} events recorded`,
+        verdict,
+        metrics,
+        raw: run,
+      });
+    });
+    return out.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  }, [audit, validationRuns]);
+
+  const closeDrawer = () => setDrawer(null);
+  const reopenForReview = async () => {
+    if (!window.__arbiterMappingAction) {
+      toast('Mapping action API unavailable', { tone: 'error' });
+      return;
+    }
+    setReopening(true);
+    const res = await window.__arbiterMappingAction(canonicalId, 'review', { note: 'Re-opened from mapping history drawer' });
+    setReopening(false);
+    if (!res.ok) {
+      toast('Re-open failed', { sub: res.error, tone: 'error' });
+      return;
+    }
+    if (window.__arbiterTick) { try { await window.__arbiterTick(); } catch (_) {} }
+    toast('Mapping returned to review queue', { sub: canonicalId });
+    closeDrawer();
+  };
+
+  const statusTone =
+    status === 'confirmed' ? t.green :
+    status === 'rejected' ? t.red :
+    status === 'expired' ? t.amber : t.textDim;
+  const statusSoftTone =
+    status === 'confirmed' ? t.greenSoft :
+    status === 'rejected' ? t.redSoft :
+    status === 'expired' ? t.amberSoft : t.bgSubtle;
+
+  return (
+    <div onClick={closeDrawer} style={{ position:'fixed', inset: 0, background: t.overlay, zIndex: 90, display:'flex', justifyContent:'flex-end' }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: 560, maxWidth: '100%', height: '100%', background: t.bgCard, borderLeft: `1px solid ${t.border}`, display:'flex', flexDirection:'column', boxShadow: t.shadowLg }}>
+        {/* Header */}
+        <div style={{ padding: '20px 24px', borderBottom: `1px solid ${t.border}` }}>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom: 10 }}>
+            <div style={{ display:'flex', alignItems:'center', gap: 8 }}>
+              <span style={{ fontSize: 10.5, color: t.textMuted, letterSpacing:'0.08em', textTransform:'uppercase', fontWeight: 700 }}>Mapping lifecycle</span>
+              <window.StatusBadge status={status}/>
+              {autoTrade && <span style={{ fontSize: 10.5, color: t.green, background: t.greenSoft, borderRadius: 999, padding:'3px 7px', fontWeight: 600 }}>auto-trade</span>}
+            </div>
+            <button onClick={closeDrawer} aria-label="Close" style={{ background:'none', border:'none', color: t.textMuted, fontSize: 18, cursor:'pointer', padding: 4 }}>✕</button>
+          </div>
+          {description && <div style={{ fontSize: 15, fontWeight: 600, color: t.text, lineHeight: 1.35, marginBottom: 6 }}>{description}</div>}
+          <div style={{ fontSize: 11, color: t.textMuted, fontFamily: window.FONTS.mono, wordBreak:'break-all' }}>{canonicalId}</div>
+        </div>
+
+        {/* Body */}
+        <div style={{ flex: 1, overflow:'auto', padding: '18px 24px' }}>
+          {/* Stat tiles */}
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap: 10, marginBottom: 18 }}>
+            <MhStat label="Score" value={Number.isFinite(score) ? score.toFixed(2) : '—'} tone={score >= 0.9 ? t.green : score >= 0.7 ? t.amber : t.red}/>
+            <MhStat label="Status" value={status} tone={statusTone} background={statusSoftTone}/>
+            <MhStat label="Criteria" value={matchStatus.replace(/_/g, ' ')} tone={matchStatus === 'identical' ? t.green : matchStatus === 'divergent' ? t.red : t.textDim}/>
+          </div>
+
+          {/* Platform identifiers */}
+          <div style={{ background: t.bgSubtle, border:`1px solid ${t.border}`, borderRadius: 10, padding: 14, marginBottom: 18 }}>
+            <div style={{ fontSize: 10.5, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom: 8 }}>Platform identifiers</div>
+            <MhRow label="Kalshi" value={kalshiId || '—'}/>
+            <MhRow label="Polymarket" value={polyId || '—'} last/>
+          </div>
+
+          {/* Resolution criteria */}
+          {criteria && (
+            <div style={{ background: t.bgSubtle, border:`1px solid ${t.border}`, borderRadius: 10, padding: 14, marginBottom: 18 }}>
+              <div style={{ fontSize: 10.5, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom: 8 }}>Resolution criteria</div>
+              {Object.entries(criteria).slice(0, 8).map(([k, v], i, arr) => (
+                <MhRow key={k} label={String(k).replace(/_/g, ' ')} value={typeof v === 'string' ? v : JSON.stringify(v)} last={i === arr.length - 1}/>
+              ))}
+            </div>
+          )}
+
+          {/* Timeline */}
+          <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom: 10, fontWeight: 600 }}>Lifecycle timeline</div>
+          {loading && (
+            <div style={{ padding: 24, textAlign:'center', color: t.textMuted, fontSize: 12 }}>
+              <div style={{ width: 22, height: 22, margin:'0 auto 10px', border:`2px solid ${t.border}`, borderTopColor: t.accent, borderRadius:'50%', animation:'spin 0.8s linear infinite' }}/>
+              Loading mapping history…
+            </div>
+          )}
+          {!loading && error && (
+            <div style={{ padding: 14, background: t.redSoft, border:`1px solid ${t.red}40`, borderRadius: 8, fontSize: 12, color: t.red, marginBottom: 14 }}>{error}</div>
+          )}
+          {!loading && !error && timeline.length === 0 && (
+            <div style={{ padding: 18, background: t.bgSubtle, border:`1px dashed ${t.border}`, borderRadius: 10, fontSize: 12, color: t.textDim, textAlign:'center' }}>
+              No lifecycle events recorded for this mapping yet.
+            </div>
+          )}
+          {!loading && !error && timeline.length > 0 && (
+            <div style={{ position:'relative', paddingLeft: 2 }}>
+              {timeline.map((entry, i) => (
+                <MhTimelineEntry key={i} entry={entry} isLast={i === timeline.length - 1}/>
+              ))}
+            </div>
+          )}
+
+          {/* Discovery events footer */}
+          {discoveryEvents.length > 0 && (
+            <div style={{ marginTop: 22 }}>
+              <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom: 8, fontWeight: 600 }}>Discovery events</div>
+              <div style={{ background: t.bgSubtle, border:`1px solid ${t.border}`, borderRadius: 10, padding: '8px 12px', fontSize: 11, color: t.textDim, fontFamily: window.FONTS.mono, maxHeight: 180, overflow:'auto' }}>
+                {discoveryEvents.slice(-12).reverse().map((ev, i) => (
+                  <div key={i} style={{ display:'grid', gridTemplateColumns:'90px 1fr', gap: 10, padding:'4px 0', borderBottom: i < Math.min(discoveryEvents.length, 12) - 1 ? `1px solid ${t.border}` : 'none' }}>
+                    <span style={{ color: t.textMuted }}>{ev.phase || ev.status || 'event'}</span>
+                    <span style={{ overflowWrap:'anywhere' }}>{ev.message || ev.detail || ev.error || JSON.stringify(ev)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Footer actions */}
+        <div style={{ padding: '14px 24px', borderTop: `1px solid ${t.border}`, background: t.bgSubtle, display:'flex', justifyContent:'space-between', alignItems:'center', gap: 8 }}>
+          <span style={{ fontSize: 11, color: t.textMuted, fontFamily: window.FONTS.mono }}>{timeline.length} event{timeline.length === 1 ? '' : 's'} · {validationRuns.length} run{validationRuns.length === 1 ? '' : 's'}</span>
+          <div style={{ display:'flex', gap: 8 }}>
+            <window.Btn variant="ghost" size="sm" onClick={closeDrawer}>Close</window.Btn>
+            {(status === 'rejected' || status === 'expired') && (
+              <window.Btn variant="secondary" size="sm" disabled={reopening} hint="Restore this mapping to the review queue so it can be re-evaluated" onClick={reopenForReview}>{reopening ? 'Re-opening…' : 'Re-open for review'}</window.Btn>
+            )}
+            {status === 'confirmed' && (
+              <window.Btn variant="secondary" size="sm" hint="Open the live verifier — run another read-only pass" onClick={() => { setDrawer(null); setModal({ kind:'agentValidate', payload: candidate }); }}>Run verifier</window.Btn>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MhStat({ label, value, tone, background }) {
+  const { t } = window.useApp();
+  return (
+    <div style={{ background: background || t.bgSubtle, border: `1px solid ${t.border}`, borderRadius: 8, padding: '10px 12px' }}>
+      <div style={{ fontSize: 9.5, color: t.textMuted, letterSpacing:'0.08em', textTransform:'uppercase', marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 14, fontWeight: 700, color: tone || t.text, fontFamily: window.FONTS.mono, textTransform:'capitalize', wordBreak:'break-word' }}>{value}</div>
+    </div>
+  );
+}
+
+function MhRow({ label, value, last }) {
+  const { t } = window.useApp();
+  return (
+    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', gap: 12, padding: '5px 0', borderBottom: last ? 'none' : `1px solid ${t.border}` }}>
+      <span style={{ fontSize: 11, color: t.textDim, textTransform:'capitalize' }}>{label}</span>
+      <span style={{ fontSize: 11.5, color: t.text, fontFamily: window.FONTS.mono, textAlign:'right', overflowWrap:'anywhere', maxWidth: '70%' }}>{value}</span>
+    </div>
+  );
+}
+
+function MhTimelineEntry({ entry, isLast }) {
+  const { t } = window.useApp();
+  const isValidation = entry.kind === 'validation';
+  const verdict = entry.verdict;
+  const verdictKey = String((verdict && verdict.verdict) || '').toLowerCase();
+  const dotColor = isValidation
+    ? (verdictKey === 'confirm' ? t.green : verdictKey === 'reject' ? t.red : t.amber)
+    : t.accent;
+  const dotIcon = isValidation
+    ? (verdictKey === 'confirm' ? '✓' : verdictKey === 'reject' ? '✕' : '◇')
+    : '·';
+  return (
+    <div style={{ display:'flex', gap: 12, position:'relative', paddingBottom: 14 }}>
+      {!isLast && <div style={{ position:'absolute', left: 9, top: 22, bottom: 0, width: 2, background: t.border }}/>}
+      <div style={{ width: 20, height: 20, borderRadius:'50%', background: dotColor, color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', fontSize: 11, fontWeight: 700, flexShrink: 0, zIndex: 1 }}>{dotIcon}</div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', gap: 8, marginBottom: 3 }}>
+          <span style={{ fontSize: 12.5, color: t.text, fontWeight: 600, lineHeight: 1.35 }}>{entry.title}</span>
+          <span style={{ fontSize: 10.5, color: t.textMuted, fontFamily: window.FONTS.mono, whiteSpace:'nowrap' }}>{fmtTimestamp(entry.ts)}</span>
+        </div>
+        <div style={{ fontSize: 11, color: t.textDim, marginBottom: 4 }}>by <span style={{ fontFamily: window.FONTS.mono }}>{entry.actor || 'system'}</span></div>
+        {entry.detail && (
+          <div style={{ fontSize: 11.5, color: t.text, lineHeight: 1.5, marginBottom: isValidation && entry.metrics && entry.metrics.length ? 8 : 0 }}>{entry.detail}</div>
+        )}
+        {isValidation && verdict && Number.isFinite(Number(verdict.confidence)) && (
+          <div style={{ fontSize: 10.5, color: t.textMuted, fontFamily: window.FONTS.mono, marginBottom: 6 }}>confidence={Number(verdict.confidence).toFixed(2)}</div>
+        )}
+        {isValidation && entry.metrics && entry.metrics.length > 0 && (
+          <div style={{ display:'flex', gap: 6, flexWrap:'wrap' }}>
+            {entry.metrics.slice(0, 4).map((m, i) => (
+              <span key={i} style={{ fontSize: 10, padding:'2px 7px', borderRadius: 999, background: t.bgSubtle, border:`1px solid ${t.border}`, color: t.textDim, fontFamily: window.FONTS.mono }}>
+                {m.label} <span style={{ color: t.text, fontWeight: 600 }}>{Number(m.value || 0).toFixed(2)}</span>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+window.MappingHistoryDrawer = MappingHistoryDrawer;
+
+// ────────────────────────────────────────────────────────────────────
+// Edge — granular trade history view
+// ────────────────────────────────────────────────────────────────────
+
+function classifyExecution(e) {
+  const status = String(e.status || '').toLowerCase();
+  const group = String(e.status_group || '').toLowerCase();
+  if (group === 'completed' || ['filled','closed','settled','simulated'].includes(status)) return 'success';
+  if (group === 'failed' || ['failed','aborted','rejected'].includes(status)) return 'error';
+  if (group === 'open' || ['pending','submitted','recovering'].includes(status)) return 'partial';
+  return status || 'unknown';
+}
+
+function EdgeHistoryView() {
+  const { t, setModal } = window.useApp();
+  const M = window.MOCK;
+  const rawExecutions = Array.isArray(M.executions) ? M.executions : [];
+  const failedTrades = Array.isArray(M.failedTrades) ? M.failedTrades : [];
+  // Merge failure_details from /api/failed-trades into matching executions.
+  const failureIndex = mhUseMemo(() => {
+    const idx = {};
+    failedTrades.forEach((row) => {
+      if (row && row.arb_id) idx[row.arb_id] = row.failure_details || row;
+    });
+    return idx;
+  }, [failedTrades]);
+  const executions = mhUseMemo(() => rawExecutions.map((e) => {
+    if (!e || !e.arb_id) return e;
+    if (e.failure_details) return e;
+    const extra = failureIndex[e.arb_id];
+    return extra ? Object.assign({}, e, { failure_details: extra }) : e;
+  }), [rawExecutions, failureIndex]);
+  const [statusFilter, setStatusFilter] = mhUseState('all');
+  const [sortKey, setSortKey] = mhUseState('time');
+  const [expanded, setExpanded] = mhUseState(null);
+  const [search, setSearch] = mhUseState('');
+
+  const rows = mhUseMemo(() => {
+    let r = executions.slice();
+    if (search) {
+      const q = search.toLowerCase();
+      r = r.filter(e => {
+        const o = e.opportunity || {};
+        return String(o.description || '').toLowerCase().includes(q)
+          || String(o.canonical_id || '').toLowerCase().includes(q)
+          || String(e.arb_id || '').toLowerCase().includes(q);
+      });
+    }
+    if (statusFilter !== 'all') {
+      r = r.filter(e => classifyExecution(e) === statusFilter);
+    }
+    if (sortKey === 'time') r.sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0));
+    else if (sortKey === 'edge') r.sort((a, b) => (Number(b.opportunity && b.opportunity.net_edge_cents) || 0) - (Number(a.opportunity && a.opportunity.net_edge_cents) || 0));
+    else if (sortKey === 'pnl') r.sort((a, b) => (Number(b.realized_pnl) || 0) - (Number(a.realized_pnl) || 0));
+    return r;
+  }, [executions, statusFilter, sortKey, search]);
+
+  const stats = mhUseMemo(() => {
+    let success = 0, fail = 0, partial = 0, pnl = 0, expected = 0;
+    executions.forEach(e => {
+      const c = classifyExecution(e);
+      if (c === 'success') success++;
+      else if (c === 'error') fail++;
+      else if (c === 'partial') partial++;
+      pnl += Number(e.realized_pnl || 0);
+      expected += Number(e.expected_profit || 0);
+    });
+    return { total: executions.length, success, fail, partial, pnl, expected };
+  }, [executions]);
+
+  const STATUS_TABS = [
+    { key:'all', label:'All', count: stats.total },
+    { key:'success', label:'Successful', count: stats.success, tone: 'green' },
+    { key:'partial', label:'Open / recovering', count: stats.partial, tone: 'amber' },
+    { key:'error', label:'Failed', count: stats.fail, tone: 'red' },
+  ];
+
+  const exportCsv = () => {
+    const header = ['arb_id','timestamp','canonical_id','description','net_edge_cents','status','expected_profit','realized_pnl','delta','yes_platform','yes_qty','yes_price','no_platform','no_qty','no_price','error'];
+    const esc = (v) => {
+      const s = String(v == null ? '' : v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const lines = [header.join(',')];
+    rows.forEach(r => {
+      const o = r.opportunity || {};
+      const ly = r.leg_yes || {};
+      const ln = r.leg_no || {};
+      const err = ly.error || ln.error || (r.failure_details && r.failure_details.failure_reason) || '';
+      lines.push([
+        r.arb_id, r.timestamp, o.canonical_id, o.description,
+        o.net_edge_cents, r.status,
+        r.expected_profit, r.realized_pnl, r.expected_vs_realized,
+        o.yes_platform, ly.fill_qty || ly.quantity, ly.fill_price || ly.price,
+        o.no_platform, ln.fill_qty || ln.quantity, ln.fill_price || ln.price,
+        err,
+      ].map(esc).join(','));
+    });
+    const blob = new Blob([lines.join('\n')], { type:'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `edge-history-${new Date().toISOString().slice(0,10)}.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div>
+      {/* Summary stats */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap: 14, marginBottom: 18 }}>
+        <window.Card padding={18}>
+          <window.Stat label="Opportunities executed" value={stats.total.toLocaleString()} sub={`${stats.success} success · ${stats.fail} failed · ${stats.partial} open`} mono/>
+        </window.Card>
+        <window.Card padding={18}>
+          <window.Stat label="Success rate" value={stats.total ? `${((stats.success / stats.total) * 100).toFixed(0)}%` : '—'} sub={`${stats.fail} failed legs`} tone={stats.fail === 0 ? 'green' : 'amber'} mono/>
+        </window.Card>
+        <window.Card padding={18}>
+          <window.Stat label="Realized P&L" value={window.fmt$Sign(stats.pnl)} tone={stats.pnl >= 0 ? 'green' : 'red'} sub={`Expected ${window.fmt$Sign(stats.expected)}`} mono/>
+        </window.Card>
+        <window.Card padding={18}>
+          <window.Stat label="vs expected" value={window.fmt$Sign(stats.pnl - stats.expected)} tone={stats.pnl - stats.expected >= 0 ? 'green' : 'red'} sub={stats.expected ? `${(((stats.pnl - stats.expected) / Math.max(0.0001, Math.abs(stats.expected))) * 100).toFixed(0)}% delta` : 'no baseline'} mono/>
+        </window.Card>
+      </div>
+
+      {/* Filters + toolbar */}
+      <div style={{ display:'flex', alignItems:'center', gap: 4, padding: 4, background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 9, marginBottom: 14, width:'fit-content' }}>
+        {STATUS_TABS.map(tab => (
+          <button key={tab.key} onClick={() => setStatusFilter(tab.key)} style={{
+            padding: '6px 12px',
+            background: statusFilter === tab.key ? t.bgSubtle : 'transparent',
+            border: 'none', fontSize: 12,
+            color: statusFilter === tab.key ? t.text : t.textDim,
+            fontWeight: statusFilter === tab.key ? 600 : 400,
+            borderRadius: 6, cursor:'pointer', display:'flex', alignItems:'center', gap: 6,
+          }}>
+            {tab.label}
+            <span style={{ fontSize: 10, color: statusFilter === tab.key ? t.accent : t.textMuted, fontFamily: window.FONTS.mono }}>{tab.count}</span>
+          </button>
+        ))}
+      </div>
+      <div style={{ display:'flex', gap: 8, marginBottom: 12, alignItems:'center' }}>
+        <input placeholder="Filter by market, canonical id, or arb id…" value={search} onChange={e => setSearch(e.target.value)} style={{ flex: 1, padding:'8px 12px', background: t.bgCard, border:`1px solid ${t.border}`, borderRadius: 7, fontSize: 12.5, color: t.text, outline:'none' }}/>
+        <window.Btn variant="secondary" size="sm" hint="Cycle sort key: time / edge / P&L" onClick={() => setSortKey(sortKey === 'time' ? 'edge' : sortKey === 'edge' ? 'pnl' : 'time')}>
+          Sort: {sortKey === 'time' ? 'Newest first' : sortKey === 'edge' ? 'Edge ↓' : 'P&L ↓'}
+        </window.Btn>
+        <window.Btn variant="secondary" size="sm" icon="↓" disabled={rows.length === 0} hint="Download the filtered execution rows as CSV" onClick={exportCsv}>Export CSV</window.Btn>
+      </div>
+
+      {/* Table */}
+      <window.Card padding={0} title="Trade history" action={<span style={{ fontSize: 11, color: t.textMuted }}>{rows.length} of {executions.length}</span>}>
+        {rows.length === 0 && (
+          <div style={{ padding: 36, textAlign:'center', color: t.textDim, fontSize: 12.5 }}>
+            <div style={{ fontSize: 22, color: t.textMuted, marginBottom: 6 }}>◇</div>
+            {executions.length === 0
+              ? 'No executions have been recorded yet. Live trades from /api/executions will appear here.'
+              : 'No executions match the current filter or search.'}
+          </div>
+        )}
+        {rows.length > 0 && (
+          <div style={{ overflowX:'auto' }}>
+            <table style={{ width:'100%', borderCollapse:'collapse', minWidth: 920 }}>
+              <thead>
+                <tr style={{ background: t.bgSubtle }}>
+                  <EhTh style={{ width: 32 }}/>
+                  <EhTh>When</EhTh>
+                  <EhTh>Market</EhTh>
+                  <EhTh align="right">Net edge</EhTh>
+                  <EhTh align="right">Expected</EhTh>
+                  <EhTh align="right">Actual P&amp;L</EhTh>
+                  <EhTh align="right">Δ</EhTh>
+                  <EhTh>Status</EhTh>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => (
+                  <EdgeHistoryRow key={r.arb_id || i} row={r} expanded={expanded === (r.arb_id || i)} onToggle={() => setExpanded(expanded === (r.arb_id || i) ? null : (r.arb_id || i))} onOpenAnalysis={() => setModal({ kind:'trade', payload: r })}/>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </window.Card>
+    </div>
+  );
+}
+
+function EhTh({ children, align, style }) {
+  const { t } = window.useApp();
+  return (
+    <th style={{ textAlign: align || 'left', padding: '10px 14px', fontSize: 10.5, fontWeight: 600, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase', borderBottom: `1px solid ${t.border}`, ...(style || {}) }}>{children}</th>
+  );
+}
+
+function EdgeHistoryRow({ row, expanded, onToggle, onOpenAnalysis }) {
+  const { t } = window.useApp();
+  const o = row.opportunity || {};
+  const ly = row.leg_yes || {};
+  const ln = row.leg_no || {};
+  const cls = classifyExecution(row);
+  const pnl = Number(row.realized_pnl || 0);
+  const expected = Number(row.expected_profit || 0);
+  const delta = Number(row.expected_vs_realized != null ? row.expected_vs_realized : pnl - expected);
+  const failureDetails = row.failure_details || null;
+  const error = ly.error || ln.error || (failureDetails && failureDetails.failure_reason) || '';
+  const failureRaw = failureDetails && failureDetails.failure_raw;
+  const retryAttempts = failureDetails && Number(failureDetails.retry_attempts || 0);
+  const finalDisposition = failureDetails && failureDetails.final_disposition;
+
+  return (
+    <>
+      <tr onClick={onToggle} style={{ cursor:'pointer', borderBottom: `1px solid ${t.border}`, background: expanded ? t.bgSubtle : 'transparent' }}>
+        <td style={{ padding: '12px 8px 12px 14px', color: t.textMuted, fontFamily: window.FONTS.mono, fontSize: 11 }}>{expanded ? '▾' : '▸'}</td>
+        <td style={{ padding: '12px 14px', fontSize: 11.5, color: t.textDim, fontFamily: window.FONTS.mono }}>
+          {window.ago ? window.ago(row.timestamp) : fmtTimestamp(row.timestamp)}
+          <div style={{ fontSize: 10, color: t.textMuted }}>{row.arb_id || '—'}</div>
+        </td>
+        <td style={{ padding: '12px 14px', minWidth: 220 }}>
+          <div style={{ fontSize: 12.5, color: t.text, fontWeight: 500, marginBottom: 2 }}>{o.description || '—'}</div>
+          <div style={{ fontSize: 10.5, color: t.textMuted, fontFamily: window.FONTS.mono, overflowWrap:'anywhere' }}>{o.canonical_id || ''}</div>
+        </td>
+        <td style={{ padding: '12px 14px', textAlign:'right', fontFamily: window.FONTS.mono, fontSize: 12.5, color: Number(o.net_edge_cents || 0) >= 2 ? t.green : Number(o.net_edge_cents || 0) >= 1 ? t.amber : t.textDim, fontWeight: 600 }}>{window.fmtC ? window.fmtC(Number(o.net_edge_cents || 0)) : `${Number(o.net_edge_cents || 0).toFixed(2)}¢`}</td>
+        <td style={{ padding: '12px 14px', textAlign:'right', fontFamily: window.FONTS.mono, fontSize: 12, color: expected >= 0 ? t.green : t.red }}>{window.fmt$Sign(expected)}</td>
+        <td style={{ padding: '12px 14px', textAlign:'right', fontFamily: window.FONTS.mono, fontSize: 12.5, fontWeight: 600, color: pnl > 0 ? t.green : pnl < 0 ? t.red : t.textDim }}>{window.fmt$Sign(pnl)}</td>
+        <td style={{ padding: '12px 14px', textAlign:'right', fontFamily: window.FONTS.mono, fontSize: 12, color: delta >= 0 ? t.green : t.red }}>{window.fmt$Sign(delta)}</td>
+        <td style={{ padding: '12px 14px' }}>
+          <EhStatusBadge cls={cls} status={row.status}/>
+        </td>
+      </tr>
+      {expanded && (
+        <tr style={{ background: t.bgSubtle, borderBottom: `1px solid ${t.border}` }}>
+          <td colSpan={8} style={{ padding: '14px 22px 18px' }}>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 14, marginBottom: error ? 14 : 4 }}>
+              <EhLeg side="YES" leg={ly} platform={o.yes_platform}/>
+              <EhLeg side="NO" leg={ln} platform={o.no_platform}/>
+            </div>
+            {(error || failureRaw) && (
+              <div style={{ background: t.redSoft, border:`1px solid ${t.red}40`, borderRadius: 8, padding: '10px 14px', marginBottom: 10 }}>
+                <div style={{ display:'flex', alignItems:'center', gap: 8, marginBottom: 4 }}>
+                  <span style={{ fontSize: 10.5, color: t.red, letterSpacing:'0.06em', textTransform:'uppercase', fontWeight: 700 }}>Error</span>
+                  {failureDetails && failureDetails.failed_leg_side && (
+                    <span style={{ fontSize: 10, color: t.red, background: '#0000', border:`1px solid ${t.red}40`, padding:'2px 6px', borderRadius: 999 }}>{failureDetails.failed_leg_side} leg · {failureDetails.failed_leg_platform || '—'}</span>
+                  )}
+                  {retryAttempts > 0 && (
+                    <span style={{ fontSize: 10, color: t.textDim }}>retried {retryAttempts}×</span>
+                  )}
+                  {finalDisposition && (
+                    <span style={{ fontSize: 10, color: finalDisposition === 'resolved' ? t.green : t.amber }}>· {finalDisposition}</span>
+                  )}
+                </div>
+                <div style={{ fontSize: 12, color: t.text }}>{error || failureRaw}</div>
+                {failureRaw && error && failureRaw !== error && (
+                  <div style={{ fontSize: 11, color: t.textDim, fontFamily: window.FONTS.mono, marginTop: 4, wordBreak:'break-all' }}>{failureRaw}</div>
+                )}
+              </div>
+            )}
+            <div style={{ display:'flex', gap: 14, alignItems:'center', flexWrap:'wrap', fontSize: 11, color: t.textDim, fontFamily: window.FONTS.mono }}>
+              <span>Submitted {fmtTimestamp(row.timestamp)}</span>
+              {o.persistence_scans != null && <span>· persistence {o.persistence_scans} scans</span>}
+              {row.expected_cost != null && <span>· notional {window.fmt$(Number(row.expected_cost || 0))}</span>}
+              <span style={{ flex: 1 }}/>
+              <window.Btn variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); onOpenAnalysis(); }} hint="Open the full trade detail modal with timeline + post-mortem analysis">View full analysis →</window.Btn>
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+function EhLeg({ side, leg, platform }) {
+  const { t } = window.useApp();
+  const qty = Number(leg.fill_qty != null ? leg.fill_qty : (leg.quantity || 0));
+  const price = Number(leg.fill_price != null ? leg.fill_price : (leg.price || 0));
+  const notional = qty * price;
+  const status = String(leg.status || '').toLowerCase();
+  const tone =
+    status === 'filled' ? t.green :
+    status === 'submitted' || status === 'pending' ? t.amber :
+    status === 'failed' || status === 'rejected' ? t.red : t.textDim;
+  return (
+    <div style={{ border: `1px solid ${t.border}`, borderRadius: 8, padding: '10px 12px', background: t.bgCard }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom: 6 }}>
+        <span style={{ fontSize: 10, color: t.textMuted, letterSpacing:'0.08em', fontWeight: 700 }}>{side} LEG</span>
+        {platform && <window.PlatformChip name={platform}/>}
+      </div>
+      <div style={{ fontSize: 13, color: t.text, fontFamily: window.FONTS.mono, fontWeight: 600, marginBottom: 4 }}>
+        {qty || 0} shares @ ${price.toFixed(2)}
+      </div>
+      <div style={{ display:'flex', alignItems:'center', gap: 6, fontSize: 11, color: t.textDim, fontFamily: window.FONTS.mono }}>
+        <span style={{ width: 6, height: 6, borderRadius:'50%', background: tone }}/>
+        <span style={{ color: tone, fontWeight: 600, textTransform:'uppercase' }}>{status || 'unknown'}</span>
+        <span style={{ color: t.textMuted }}>· notional {window.fmt$(notional)}</span>
+      </div>
+    </div>
+  );
+}
+
+function EhStatusBadge({ cls, status }) {
+  const { t } = window.useApp();
+  const tones = {
+    success: { bg: t.greenSoft, color: t.green, label: 'Success' },
+    error:   { bg: t.redSoft,   color: t.red,   label: 'Error' },
+    partial: { bg: t.amberSoft, color: t.amber, label: 'Open' },
+  };
+  const cfg = tones[cls] || { bg: t.bgSubtle, color: t.textDim, label: status || 'unknown' };
+  return (
+    <span style={{ fontSize: 11, padding:'3px 9px', borderRadius: 999, background: cfg.bg, color: cfg.color, fontWeight: 600, textTransform:'capitalize', whiteSpace:'nowrap' }}>{cfg.label}</span>
+  );
+}
+
+window.EdgeHistoryView = EdgeHistoryView;
+
+// ────────────────────────────────────────────────────────────────────
+// PageOpportunities wrapper — Live / History tab toggle
+// ────────────────────────────────────────────────────────────────────
+
+const OriginalPageOpportunities = window.PageOpportunities;
+
+function PageOpportunitiesWithHistory() {
+  const { t } = window.useApp();
+  const [tab, setTab] = mhUseState('live');
+  return (
+    <div>
+      <div style={{ padding: '20px 32px 0', maxWidth: 1400, margin: '0 auto', display:'flex', alignItems:'center', gap: 4 }}>
+        <div style={{ display:'inline-flex', alignItems:'center', gap: 4, padding: 4, background: t.bgCard, border:`1px solid ${t.border}`, borderRadius: 9 }}>
+          {[['live', 'Live edges'], ['history', 'Trade history']].map(([k, l]) => (
+            <button key={k} onClick={() => setTab(k)} style={{
+              padding: '7px 14px',
+              background: tab === k ? t.bgSubtle : 'transparent',
+              border:'none', fontSize: 12.5,
+              color: tab === k ? t.text : t.textDim,
+              fontWeight: tab === k ? 600 : 500,
+              borderRadius: 6, cursor:'pointer',
+            }}>{l}</button>
+          ))}
+        </div>
+      </div>
+      {tab === 'live' ? (
+        OriginalPageOpportunities ? <OriginalPageOpportunities/> : null
+      ) : (
+        <div style={{ padding: '14px 32px 28px', maxWidth: 1400, margin: '0 auto' }}>
+          <window.PageHeader kicker="Execution ledger" title="Trade history" sub="Granular log of every opportunity that fired. Click a row to inspect leg-by-leg fills, errors, and recovery state."/>
+          <EdgeHistoryView/>
+        </div>
+      )}
+    </div>
+  );
+}
+
+window.PageOpportunities = PageOpportunitiesWithHistory;
+
+</script>
 <script type="text/babel" data-presets="env,react">
   // ─────────────────────────────────────────────────────────────────────
   // Top-level App: viewport-aware, polls the API every 10s and re-renders.
@@ -6468,6 +7148,7 @@ window.LoginScreen = LoginScreen;
       <div style={{ width: '100%', height: '100%', background: t.bg, color: t.text, fontFamily: window.FONTS.sans, position:'relative' }}>
         <PageRouter/>
         <window.OppDrawer/>
+        <window.MappingHistoryDrawer/>
         <window.Modal/>
         <window.ExtraModal/>
         <window.AgentValidateModal/>
@@ -6495,6 +7176,7 @@ window.LoginScreen = LoginScreen;
     return (
       <>
         <window.MobileDashboard/>
+        <window.MappingHistoryDrawer/>
         <window.Modal/>
         <window.ExtraModal/>
         <window.AgentValidateModal/>
@@ -6678,7 +7360,7 @@ window.LoginScreen = LoginScreen;
       'PageOverview', 'PageOpportunities', 'PageTrades', 'PagePnL',
       'PageMarkets', 'PageMappings', 'PageScanner', 'PageAudit',
       'PageDeposits', 'PageSettings',
-      'OppDrawer', 'Modal', 'ExtraModal', 'AgentValidateModal',
+      'OppDrawer', 'MappingHistoryDrawer', 'Modal', 'ExtraModal', 'AgentValidateModal',
       'RefetchMappingsModal', 'CommandPalette', 'AlertsInbox', 'UserMenu',
       'ConfirmDialog', 'ToastHost', 'MobileDashboard',
       'AreaChart', 'Sparkline', 'BarChart', 'Donut',
