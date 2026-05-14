@@ -154,6 +154,14 @@ def _half_recorded_incident_id(arb_id: str) -> str:
     return f"INC-HALF-{arb_id}"
 
 
+def _is_no_exposure_half_recorded_stub(orphan: Dict[str, Any]) -> bool:
+    return (
+        int(orphan.get("leg_count") or 0) == 0
+        and int(orphan.get("filled_leg_count") or 0) == 0
+        and abs(float(orphan.get("filled_notional") or 0.0)) < 0.0001
+    )
+
+
 async def reconcile_half_recorded_arbs(
     store: ExecutionStore,
 ) -> List[Dict[str, Any]]:
@@ -194,12 +202,65 @@ async def reconcile_half_recorded_arbs(
         logger.info("recovery: no half-recorded arbs to reconcile")
         return []
 
+    blockers = list(orphans)
+    no_exposure_stubs = [
+        orphan for orphan in orphans
+        if _is_no_exposure_half_recorded_stub(orphan)
+    ]
+    if no_exposure_stubs:
+        no_exposure_ids = [
+            str(orphan["arb_id"])
+            for orphan in no_exposure_stubs
+            if orphan.get("arb_id")
+        ]
+        try:
+            closed = await store.mark_no_exposure_half_recorded_arbs_failed(no_exposure_ids)
+            await store.resolve_half_recorded_incidents(
+                no_exposure_ids,
+                note=(
+                    "Auto-resolved: half-recorded arb had zero persisted "
+                    "orders and zero filled notional."
+                ),
+            )
+            blockers = [
+                orphan for orphan in blockers
+                if str(orphan.get("arb_id")) not in set(no_exposure_ids)
+            ]
+            logger.info(
+                "recovery: auto-closed %d no-exposure half-recorded arb stub(s)",
+                closed,
+            )
+        except Exception as exc:
+            logger.warning(
+                "recovery: failed to auto-close no-exposure half-recorded stubs: %s",
+                exc,
+            )
+
+    arb_ids = [str(orphan["arb_id"]) for orphan in blockers if orphan.get("arb_id")]
+    stale_cleanup = getattr(store, "resolve_stale_half_recorded_incidents", None)
+    if stale_cleanup is not None:
+        try:
+            stale_resolved = await stale_cleanup(arb_ids)
+            if stale_resolved:
+                logger.info(
+                    "recovery: resolved %d stale half-recorded incident(s)",
+                    stale_resolved,
+                )
+        except Exception as exc:
+            logger.warning(
+                "recovery: failed to resolve stale half-recorded incidents: %s",
+                exc,
+            )
+
+    if not blockers:
+        logger.info("recovery: no exposure-bearing half-recorded arbs remain")
+        return []
+
     logger.warning(
-        "recovery: detected %d half-recorded arb(s) — emitting critical incidents",
-        len(orphans),
+        "recovery: detected %d exposure-bearing half-recorded arb(s) — emitting critical incidents",
+        len(blockers),
     )
 
-    arb_ids = [str(orphan["arb_id"]) for orphan in orphans if orphan.get("arb_id")]
     cleanup = getattr(store, "resolve_superseded_half_recorded_incidents", None)
     if cleanup is not None:
         try:
@@ -215,9 +276,11 @@ async def reconcile_half_recorded_arbs(
                 exc,
             )
 
-    for orphan in orphans:
+    for orphan in blockers:
         arb_id = orphan["arb_id"]
         leg_count = int(orphan.get("leg_count") or 0)
+        filled_leg_count = int(orphan.get("filled_leg_count") or 0)
+        filled_notional = float(orphan.get("filled_notional") or 0.0)
         leg_ids = list(orphan.get("leg_order_ids") or [])
         incident = ExecutionIncident(
             incident_id=_half_recorded_incident_id(str(arb_id)),
@@ -235,6 +298,8 @@ async def reconcile_half_recorded_arbs(
                 "event_type": "half_recorded_arb",
                 "arb_id": arb_id,
                 "leg_count": leg_count,
+                "filled_leg_count": filled_leg_count,
+                "filled_notional": filled_notional,
                 "leg_order_ids": leg_ids,
                 "stuck_status": orphan.get("status"),
             },
@@ -247,4 +312,4 @@ async def reconcile_half_recorded_arbs(
                 arb_id, exc,
             )
 
-    return orphans
+    return blockers

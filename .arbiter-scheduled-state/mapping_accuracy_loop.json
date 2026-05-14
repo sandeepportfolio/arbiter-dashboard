@@ -1,23 +1,24 @@
 {
-  "timestamp": "2026-05-14T22:28:41Z",
+  "timestamp": "2026-05-14T23:03:22Z",
   "agent": "Arbiter end-to-end mapping accuracy and profitability agent",
   "git_state": {
     "branch": "main",
-    "head_before_commit": "fbcf14a70c6e48223294de096fb3315f5608c3fb",
-    "origin_main_before_commit": "fbcf14a70c6e48223294de096fb3315f5608c3fb",
-    "ahead": 0,
-    "behind": 0,
-    "dirty_tracked_files": [],
-    "new_files": [],
-    "notes": [
-      "Local branch main matched origin/main before this continuation.",
-      "No unrelated local changes were overwritten.",
-      "Auto-execute and auto-promote remain disabled and were not promoted."
+    "head_before_current_commit": "8c823e785f69f9e92d0c2afc844c1990d483c92b",
+    "origin_main_before_current_commit": "8c823e785f69f9e92d0c2afc844c1990d483c92b",
+    "ahead_before_current_commit": 0,
+    "behind_before_current_commit": 0,
+    "dirty_tracked_files": [
+      "arbiter/execution/recovery.py",
+      "arbiter/execution/store.py",
+      "arbiter/execution/test_recovery.py",
+      "arbiter/execution/test_store.py",
+      ".arbiter-scheduled-state/mapping_accuracy_loop.json"
     ],
-    "origin_main_before_push": "fbcf14a70c6e48223294de096fb3315f5608c3fb",
-    "post_commit_status": "committed locally; push pending at checkpoint write time",
-    "committed_on_branch": "main",
-    "commit_note": "This checkpoint is included in the commit that contains it; use git rev-parse HEAD after checkout for the exact immutable hash."
+    "notes": [
+      "Fetched origin/main and confirmed local main matched origin/main before this continuation.",
+      "No unrelated local changes were present or overwritten.",
+      "Auto-execute and auto-promote remained disabled throughout validation."
+    ]
   },
   "runtime_state": {
     "service_url": "http://localhost:8080",
@@ -44,63 +45,62 @@
       "is_profitable": false,
       "is_determined": true,
       "progress": 0.7705,
-      "scan_count": 300,
+      "scan_count": 448,
       "published_opportunities": 0,
       "completed_executions": 55,
       "profitable_executions": 26,
       "losing_executions": 8,
       "breakeven_executions": 21,
       "total_realized_pnl": 135.3795,
+      "critical_incidents": 1,
       "reasons": [
         "Critical incidents 1 exceed the allowed 0",
         "Need 25 more published opportunities",
         "Profitable execution ratio 47.27% is below the required 65.00%"
-      ]
+      ],
+      "claim": "Not profitable; do not enable auto-trade."
     },
     "reconciliation": {
       "configured": true,
       "summary": "PnL reconciliation is healthy",
       "flag_count": 0,
+      "latest_report_has_flags": false,
       "total_recorded_pnl": 135.3795,
-      "total_discrepancy": 0.0,
-      "recorded_pnl": {
-        "kalshi": 95.67,
-        "polymarket": 39.7095
-      },
-      "starting_balances": {
-        "kalshi": 258.96,
-        "polymarket": 172.0605
-      },
-      "total_deposits_all": 65.13
+      "total_discrepancy": 0.0
     },
     "portfolio": {
       "total_exposure": 213.1,
       "total_open_positions": 83,
       "total_unhedged": 83,
-      "violations": 83,
-      "note": "Exposure no longer counts zero-fill placeholder pending rows; remaining exposure is from filled one-leg/unhedged historical rows."
-    },
-    "errors": {
-      "api_errors_count": 501,
-      "critical_errors_visible": 202,
-      "summary_incident": "INC-HALF-RECORDED-SUMMARY open",
-      "persisted_half_recorded_open": 201,
-      "persisted_half_recorded_resolved_duplicates": 4422
+      "note": "Open portfolio exposure remains visible and must be reconciled manually before auto-trade can be considered."
     },
     "execution_db": {
       "status_counts": {
-        "pending": 197,
-        "recovering": 48,
-        "failed": 43,
-        "closed": 7
+        "closed": 7,
+        "failed": 208,
+        "pending": 32,
+        "recovering": 48
       },
-      "half_recorded_count": 201,
-      "incident_counts": {
-        "critical_open": 201,
-        "critical_resolved": 4569,
-        "warning_open": 2614,
-        "warning_resolved": 402
+      "half_recorded_active_summary": {
+        "status": "pending",
+        "arb_count": 32,
+        "leg_count_sum": 32,
+        "filled_leg_count_sum": 32,
+        "filled_notional_sum": 38.56
+      },
+      "half_recorded_incidents": {
+        "open_per_arb": 32,
+        "resolved_per_arb": 4591,
+        "stale_open_half_recorded_incidents": 0,
+        "runtime_summary_incident": "INC-HALF-RECORDED-SUMMARY open with count=32"
       }
+    },
+    "api_counts": {
+      "trades": 295,
+      "failed_trades": 179,
+      "errors": 501,
+      "open_critical_errors_visible": 33,
+      "opportunities": 0
     }
   },
   "mapping_state": {
@@ -117,153 +117,125 @@
     "classification": {
       "KEEP_CONFIRMED_BUT_HOLD_AUTO_TRADE": 17,
       "KEEP_AUTO_TRADE": 0,
-      "DISABLE_AUTO_TRADE": "all confirmed remain allow_auto_trade=false until manual recovery blockers are cleared"
+      "DISABLE_AUTO_TRADE": "all confirmed mappings remain allow_auto_trade=false until profitability, incidents, exposure, and manual recovery blockers are clean",
+      "EXPIRE_OR_REJECT": "no additional mappings expired or rejected in this continuation"
     },
-    "discovery_result": {
-      "status": "completed/running during live validation",
-      "notes": [
-        "Discovery pipeline remains enabled for candidates only.",
-        "Auto-promote remains disabled.",
-        "No candidate met all-validator YES plus live/liquid/profitable-after-fees requirements."
-      ]
+    "confirmed_mapping_audit": {
+      "confirmed_count": 17,
+      "resolution_match_status_identical": 17,
+      "resolution_criteria_present": 17,
+      "duplicate_exact_pairs_detected": 0,
+      "auto_trade_enabled": 0
+    },
+    "scanner_visibility": {
+      "active_opportunities": 0,
+      "tradable_opportunities": 0,
+      "manual_opportunities": 0,
+      "published_opportunities": 0
     }
   },
   "do_not_repeat_registry": {
     "rejected_canonical_ids_count": 111,
     "review_canonical_ids_count": 101,
     "expired_endpoint_count_sample": 5000,
-    "failed_or_open_trade_patterns": [
-      {
-        "canonical_id": "GAME_MLS_20260516_ATL_12224bb3",
-        "pending": 147,
-        "failed": 19,
-        "action": "do not reuse; half-recorded/pending recovery blocker"
-      },
-      {
-        "canonical_id": "DEM_HOUSE_2026",
-        "failed": 22,
-        "recovering": 1,
-        "action": "review; allow_auto_trade=false"
-      },
-      {
-        "canonical_id": "GAME_NBA_20260509_DET_dc508cb7",
-        "pending": 7,
-        "recovering": 6,
-        "action": "do not reuse until manually reconciled"
-      }
+    "blocked_patterns": [
+      "rejected canonical IDs",
+      "expired exact venue pairs",
+      "stale Kalshi tickers",
+      "stale Polymarket slugs",
+      "failed canonical IDs",
+      "mappings with repeated pending/failed/recovering trades",
+      "mappings with zero or weak executable liquidity",
+      "mappings with bad PnL or reconciliation impact",
+      "prior false-positive parser/scoring patterns",
+      "prior auto-promote rejection reasons"
     ],
     "past_mistakes_avoided": [
       "No fuzzy-only candidates were auto-confirmed.",
-      "No rejected/review/expired mapping was revived for auto-trade.",
+      "No rejected, review, or expired mapping was revived for auto-trade.",
       "No stale or zero-liquidity candidate was promoted.",
-      "Zero-fill pending execution placeholders were removed from portfolio exposure calculations.",
-      "Duplicate half-recorded restart incidents were collapsed to deterministic per-arb incidents."
+      "No safety gate was loosened to increase volume.",
+      "No prior failed mapping was reused blindly.",
+      "Zero-order execution stubs were not treated as executable profitable history.",
+      "True one-leg exposure rows remain critical blockers instead of being hidden."
     ]
   },
   "validator_verdicts": {
-    "historical_memory_auditor": {
-      "global": "NO_EXECUTE",
-      "notes": [
-        "DEM_HOUSE_2026 is NO due failed/recovering history.",
-        "May 17 MLS rows are NO for auto-trade due missing structured dates.",
-        "May 16 MLS and held politics rows are at best MAYBE while global readiness/reconciliation are red."
-      ]
-    },
-    "structural_resolution_polarity_auditor": {
-      "global": "NO_AUTO_TRADE",
-      "notes": [
-        "May 16 MLS rows are structurally plausible but held.",
-        "Politics control rows remain MAYBE due public source/tie-break ambiguity.",
-        "DEM_HOUSE_2026 was observed revived to auto-trade by discovery before the guard fix."
-      ]
-    },
-    "liquidity_profitability_auditor": {
-      "global": "NO_EXECUTE",
-      "notes": [
-        "Every sampled target row had negative current net edge after fees.",
-        "Profitability is collecting_evidence, not determined profitable.",
-        "Reconciliation is flagged and opportunities are zero."
-      ]
-    },
-    "skeptic_auditor": {
-      "global": "NO",
-      "notes": [
-        "Auto-discovery could undo audit holds; fixed by preserving review/rejected/expired states in candidate writes.",
-        "Production env had AUTO_EXECUTE_ENABLED=true and AUTO_PROMOTE_ENABLED=true; changed local runtime env to false.",
-        "May 16 MLS criteria need live-rule fidelity before any YES."
-      ]
-    },
-    "promotion_rule": "No mapping promoted because at least one validator returned NO or MAYBE for every candidate/group."
+    "historical_memory_auditor": "NO_AUTO_TRADE: prior failures, stale mappings, and repeated trade problems remain in the registry.",
+    "structural_auditor": "HOLD: confirmed mappings visible with identical criteria, but auto-trade stays disabled while global blockers remain.",
+    "resolution_auditor": "HOLD: confirmed mappings have resolution criteria and identical status; candidates/review rows are not promoted.",
+    "polarity_auditor": "HOLD: no polarity mismatch was promoted or auto-enabled.",
+    "liquidity_auditor": "NO_AUTO_TRADE: no active executable opportunities; live liquidity/profitability not proven.",
+    "profitability_auditor": "NO: profitability verdict is blocked and is_profitable=false.",
+    "failure_auditor": "NO_AUTO_TRADE: 32 true one-leg exposure blockers and 179 failed-trade rows remain visible.",
+    "skeptic_auditor": "NO: unresolved critical recovery incident summary remains; fail closed.",
+    "promotion_rule": "No mapping promoted because all validators did not return YES."
   },
+  "failures_and_root_causes": [
+    {
+      "issue": "Half-recorded recovery over-counted zero-order pending DB stubs as critical unmatched-fill exposure.",
+      "root_cause": "list_half_recorded_arbs returned every active arb with fewer than two order rows without separating no-order/no-notional stubs from filled one-leg exposure."
+    },
+    {
+      "issue": "Closed half-recorded rows could leave stale open recovery incidents.",
+      "root_cause": "recovery did not resolve open half-recorded incidents whose arbs were no longer active blockers."
+    },
+    {
+      "issue": "True one-leg filled arbs remain unresolved.",
+      "root_cause": "32 pending arbs each have one filled leg and require manual venue/exposure reconciliation; these were intentionally not auto-resolved."
+    }
+  ],
   "fixes_made": [
-    "Startup now loads full execution history for reconciliation instead of newest 200 rows.",
-    "Restored PnL reconciliation resumes deposit detection once a live execution ledger is present.",
-    "Runtime reconciliation passes the live execution ledger directly to the reconciler.",
-    "/api/errors now includes persisted open execution incidents after restart.",
-    "Half-recorded recovery incidents use deterministic IDs and resolve duplicate restart noise.",
-    "Half-recorded recovery summary is surfaced in runtime incidents/readiness and is not auto-resolved as stale.",
-    "Portfolio exposure now counts actual filled leg notional, not zero-fill pending placeholders."
+    "ExecutionStore.list_half_recorded_arbs now excludes closed terminal rows and includes filled_leg_count plus filled_notional.",
+    "Added ExecutionStore.mark_no_exposure_half_recorded_arbs_failed to close only zero-order/no-exposure stubs as failed with recovery notes.",
+    "Added ExecutionStore.resolve_half_recorded_incidents to resolve incidents for auto-closed no-exposure stubs.",
+    "Added ExecutionStore.resolve_stale_half_recorded_incidents to clear open half-recorded incidents no longer present in active recovery output.",
+    "reconcile_half_recorded_arbs now partitions no-exposure stubs from exposure-bearing blockers and emits critical incidents only for the latter.",
+    "Recovery incident metadata now includes filled_leg_count and filled_notional so operators can prioritize real exposure."
   ],
   "tests_run": [
     {
-      "command": "Final validation passes 1-3: docker compose -f docker-compose.prod.yml --env-file .env.production config",
-      "result": "compose fail-closed overrides verified 3/3: AUTO_EXECUTE_ENABLED=false and AUTO_PROMOTE_ENABLED=false"
+      "command": "python -m pytest arbiter/mapping tests/test_mapping_validation.py tests/test_safety_guards.py -q",
+      "passes": 3,
+      "result": "173 passed in each pass"
     },
     {
-      "command": "Final validation passes 1-3: python -m pytest -q",
-      "result": "878 passed, 88 skipped, 1 warning in each of 3 passes"
+      "command": "python -m pytest arbiter/execution/test_recovery.py arbiter/execution/test_store.py arbiter/test_main_shutdown.py arbiter/test_api_integration.py arbiter/test_pnl_reconciler.py arbiter/portfolio/test_monitor.py -q",
+      "passes": 3,
+      "result": "86 passed, 2 skipped in each pass"
     },
     {
-      "command": "Final validation passes 1-3: python -m pytest arbiter/mapping tests/test_mapping_validation.py tests/test_safety_guards.py -q",
-      "result": "173 passed in each of 3 passes"
+      "command": "python -m pytest -q",
+      "passes": 3,
+      "result": "893 passed, 88 skipped, 1 warning in each pass"
     },
     {
-      "command": "Final validation passes 1-3: python -m pytest arbiter/test_api_integration.py arbiter/mapping/test_market_map.py -q",
-      "result": "45 passed in each of 3 passes"
-    },
-    {
-      "command": "Final validation passes 1-3: live API safety assertions against health, readiness, profitability, reconciliation, opportunities, mappings, and settings",
-      "result": "passed 3/3"
+      "command": "live API/DB validation against health, readiness, profitability, reconciliation, metrics, opportunities, trades, failed-trades, errors, safety events, discovery status, settings, portfolio, mapping endpoints, /ops, and Postgres recovery summaries",
+      "passes": 3,
+      "result": "passed in each pass; readiness=false, profitability=blocked, reconciliation healthy, confirmed_auto_trade_enabled=0, open_half_recorded=32, stale_half_incidents=0"
     }
   ],
   "api_and_website_visibility": {
-    "health": "ok; live_trading_ready=false",
-    "readiness": "visible; blocked by no auto-trade mappings and PnL drift",
-    "profitability": "visible; collecting_evidence, not profitable, not determined",
-    "reconciliation": "visible; drift flagged",
+    "health": "ok; service_ready=true; live_trading_ready=false",
+    "readiness": "visible; blocked by no auto-trade mappings, blocked profitability, and critical recovery incident summary",
+    "profitability": "visible; verdict=blocked; is_profitable=false",
+    "reconciliation": "visible; healthy; flag_count=0",
+    "metrics": "visible; Prometheus metrics returned arbiter_build_info",
     "opportunities": "visible; count=0",
-    "mappings_confirmed": "visible; count=17, auto_enabled=0",
-    "mappings_review_key_rows": "visible; DEM_HOUSE_2026 and May 17 MLS rows held",
-    "metrics": "visible; active opportunities 0, best edge 0.0, auto executed 0, kill switch armed 1",
-    "ops_page": "HTTP 200"
+    "trades": "visible; count=295",
+    "failed_trades": "visible; count=179",
+    "errors": "visible; count=501 with 33 open critical visible including summary",
+    "safety_events": "visible",
+    "discovery_status": "visible; idle",
+    "mappings_confirmed": "visible; count=17; auto_enabled=0; criteria present and identical",
+    "mappings_candidate_review_rejected_expired": "visible; all returned rows have allow_auto_trade=false",
+    "ops_page": "HTTP 200; operator desk rendered"
   },
   "remaining_blockers": [
-    "201 half-recorded arbs still require manual venue/exposure reconciliation before auto-trade can be considered.",
-    "83 unhedged historical portfolio positions remain visible as stale portfolio violations.",
+    "32 true one-leg filled half-recorded arbs remain pending with filled notional 38.56 and require manual venue/exposure reconciliation.",
+    "83 open/unhedged portfolio positions remain visible and must be understood before any auto-trade consideration.",
     "Profitability verdict is blocked; do not claim profitability.",
-    "No confirmed mappings have allow_auto_trade=true; auto-trade remains intentionally disabled."
-  ],
-  "validation": {
-    "full_pytest": [
-      "888 passed, 88 skipped, 1 warning",
-      "888 passed, 88 skipped, 1 warning",
-      "888 passed, 88 skipped, 1 warning"
-    ],
-    "required_mapping_safety": [
-      "173 passed",
-      "173 passed",
-      "173 passed"
-    ],
-    "focused_changed_suites": [
-      "81 passed, 2 skipped",
-      "81 passed, 2 skipped",
-      "81 passed, 2 skipped"
-    ],
-    "additional_portfolio_after_import_cleanup": "2 passed",
-    "live_api_ops": [
-      "health ok; readiness false; auto_executor=false; auto_promote=false; reconciliation healthy; confirmed auto=0; /ops 200",
-      "health ok; readiness false; auto_executor=false; auto_promote=false; reconciliation healthy; confirmed auto=0; /ops 200",
-      "health ok; readiness false; auto_executor=false; auto_promote=false; reconciliation healthy; confirmed auto=0; /ops 200"
-    ]
-  }
+    "No confirmed mappings have allow_auto_trade=true; auto-trade remains intentionally disabled.",
+    "There are no active/published opportunities; live profitable executable liquidity is not proven."
+  ]
 }

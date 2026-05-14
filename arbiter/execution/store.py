@@ -211,6 +211,22 @@ class ExecutionStore:
                     a.status,
                     a.created_at,
                     COUNT(o.order_id) AS leg_count,
+                    COALESCE(SUM(
+                        CASE
+                            WHEN o.status IN ('filled', 'simulated')
+                             AND COALESCE(o.fill_qty, 0) > 0
+                            THEN 1
+                            ELSE 0
+                        END
+                    ), 0) AS filled_leg_count,
+                    COALESCE(SUM(
+                        CASE
+                            WHEN o.status IN ('filled', 'simulated')
+                             AND COALESCE(o.fill_qty, 0) > 0
+                            THEN COALESCE(o.fill_qty, 0) * COALESCE(o.fill_price, o.price, 0)
+                            ELSE 0
+                        END
+                    ), 0) AS filled_notional,
                     COALESCE(
                         ARRAY_AGG(o.order_id ORDER BY o.submitted_at)
                             FILTER (WHERE o.order_id IS NOT NULL),
@@ -219,7 +235,7 @@ class ExecutionStore:
                 FROM execution_arbs a
                 LEFT JOIN execution_orders o ON o.arb_id = a.arb_id
                 WHERE a.status NOT IN
-                    ('filled', 'failed', 'simulated', 'recovering')
+                    ('filled', 'failed', 'simulated', 'recovering', 'closed')
                 GROUP BY a.arb_id, a.canonical_id, a.status, a.created_at
                 HAVING COUNT(o.order_id) < 2
                 ORDER BY a.created_at ASC
@@ -232,6 +248,8 @@ class ExecutionStore:
                 "status": r["status"],
                 "created_at": r["created_at"],
                 "leg_count": int(r["leg_count"] or 0),
+                "filled_leg_count": int(r["filled_leg_count"] or 0),
+                "filled_notional": float(r["filled_notional"] or 0.0),
                 "leg_order_ids": list(r["leg_order_ids"] or []),
             }
             for r in rows
@@ -322,6 +340,104 @@ class ExecutionStore:
                    AND incident_id <> ('INC-HALF-' || arb_id)
                 """,
                 arb_ids,
+            )
+        try:
+            return int(str(result).split()[-1])
+        except (IndexError, ValueError):
+            return 0
+
+    async def mark_no_exposure_half_recorded_arbs_failed(
+        self,
+        arb_ids: List[str],
+    ) -> int:
+        """Close half-recorded DB stubs that never persisted any order leg."""
+        if not arb_ids:
+            return 0
+        if self._pool is None:
+            await self.connect()
+        async with self._pool.acquire() as conn:
+            result = await conn.execute(
+                """
+                UPDATE execution_arbs
+                   SET status = 'failed',
+                       updated_at = NOW(),
+                       closed_at = COALESCE(closed_at, NOW()),
+                       recovery_notes = CASE
+                           WHEN COALESCE(recovery_notes, '') = ''
+                           THEN 'Auto-closed on startup: half-recorded arb had zero persisted orders and zero filled notional.'
+                           ELSE recovery_notes || E'\nAuto-closed on startup: half-recorded arb had zero persisted orders and zero filled notional.'
+                       END
+                 WHERE arb_id = ANY($1::text[])
+                   AND status NOT IN ('filled', 'failed', 'simulated', 'recovering', 'closed')
+                   AND NOT EXISTS (
+                       SELECT 1 FROM execution_orders o
+                        WHERE o.arb_id = execution_arbs.arb_id
+                   )
+                """,
+                arb_ids,
+            )
+        try:
+            return int(str(result).split()[-1])
+        except (IndexError, ValueError):
+            return 0
+
+    async def resolve_half_recorded_incidents(
+        self,
+        arb_ids: List[str],
+        *,
+        note: str,
+    ) -> int:
+        """Resolve all open half-recorded incidents for the supplied arbs."""
+        if not arb_ids:
+            return 0
+        if self._pool is None:
+            await self.connect()
+        async with self._pool.acquire() as conn:
+            result = await conn.execute(
+                """
+                UPDATE execution_incidents
+                   SET status = 'resolved',
+                       resolved_at = COALESCE(resolved_at, NOW()),
+                       resolution_note = CASE
+                           WHEN COALESCE(resolution_note, '') = ''
+                           THEN $2
+                           ELSE resolution_note
+                       END
+                 WHERE status = 'open'
+                   AND metadata->>'event_type' = 'half_recorded_arb'
+                   AND arb_id = ANY($1::text[])
+                """,
+                arb_ids,
+                note,
+            )
+        try:
+            return int(str(result).split()[-1])
+        except (IndexError, ValueError):
+            return 0
+
+    async def resolve_stale_half_recorded_incidents(
+        self,
+        active_arb_ids: List[str],
+    ) -> int:
+        """Resolve half-recorded incidents for arbs no longer in recovery output."""
+        if self._pool is None:
+            await self.connect()
+        async with self._pool.acquire() as conn:
+            result = await conn.execute(
+                """
+                UPDATE execution_incidents
+                   SET status = 'resolved',
+                       resolved_at = COALESCE(resolved_at, NOW()),
+                       resolution_note = CASE
+                           WHEN COALESCE(resolution_note, '') = ''
+                           THEN 'Auto-resolved: half-recorded arb is no longer an active startup recovery blocker.'
+                           ELSE resolution_note
+                       END
+                 WHERE status = 'open'
+                   AND metadata->>'event_type' = 'half_recorded_arb'
+                   AND NOT (arb_id = ANY($1::text[]))
+                """,
+                active_arb_ids,
             )
         try:
             return int(str(result).split()[-1])

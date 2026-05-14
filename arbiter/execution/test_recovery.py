@@ -173,6 +173,9 @@ def _make_half_recorded_store(orphans=None, raise_exc=None):
         store.list_half_recorded_arbs = AsyncMock(return_value=orphans or [])
     store.insert_incident = AsyncMock(return_value=None)
     store.resolve_superseded_half_recorded_incidents = AsyncMock(return_value=0)
+    store.mark_no_exposure_half_recorded_arbs_failed = AsyncMock(return_value=0)
+    store.resolve_half_recorded_incidents = AsyncMock(return_value=0)
+    store.resolve_stale_half_recorded_incidents = AsyncMock(return_value=0)
     return store
 
 
@@ -183,6 +186,8 @@ async def test_reconcile_half_recorded_arbs_no_orphans():
     assert result == []
     assert not store.insert_incident.called
     assert not store.resolve_superseded_half_recorded_incidents.called
+    assert not store.mark_no_exposure_half_recorded_arbs_failed.called
+    assert not store.resolve_stale_half_recorded_incidents.called
 
 
 @pytest.mark.asyncio
@@ -206,8 +211,8 @@ async def test_reconcile_half_recorded_arbs_emits_critical_per_orphan():
             "canonical_id": "MKT_NAKED_2",
             "status": "pending",
             "created_at": None,
-            "leg_count": 0,
-            "leg_order_ids": [],
+            "leg_count": 1,
+            "leg_order_ids": ["ARB-000492-NO-POLY"],
         },
     ]
     store = _make_half_recorded_store(orphans=orphans)
@@ -216,6 +221,10 @@ async def test_reconcile_half_recorded_arbs_emits_critical_per_orphan():
     assert len(result) == 2
     assert store.insert_incident.await_count == 2
     store.resolve_superseded_half_recorded_incidents.assert_awaited_once_with([
+        "ARB-000491",
+        "ARB-000492",
+    ])
+    store.resolve_stale_half_recorded_incidents.assert_awaited_once_with([
         "ARB-000491",
         "ARB-000492",
     ])
@@ -235,8 +244,61 @@ async def test_reconcile_half_recorded_arbs_emits_critical_per_orphan():
     assert by_arb["ARB-000491"].incident_id == "INC-HALF-ARB-000491"
     assert by_arb["ARB-000491"].canonical_id == "MKT_NAKED"
     assert by_arb["ARB-000491"].metadata["stuck_status"] == "pending"
-    assert by_arb["ARB-000492"].metadata["leg_count"] == 0
+    assert by_arb["ARB-000492"].metadata["leg_count"] == 1
     assert by_arb["ARB-000492"].incident_id == "INC-HALF-ARB-000492"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_half_recorded_arbs_auto_closes_zero_leg_no_exposure_stubs():
+    """Zero-order stubs have no venue order and no fill exposure.
+
+    They should be closed as failed/no-exposure bookkeeping rows instead of
+    emitted as critical unmatched-fill incidents.
+    """
+    orphans = [
+        {
+            "arb_id": "ARB-000700",
+            "canonical_id": "NO_ORDER_STUB",
+            "status": "pending",
+            "created_at": None,
+            "leg_count": 0,
+            "filled_leg_count": 0,
+            "filled_notional": 0.0,
+            "leg_order_ids": [],
+        },
+        {
+            "arb_id": "ARB-000701",
+            "canonical_id": "REAL_ONE_LEG",
+            "status": "pending",
+            "created_at": None,
+            "leg_count": 1,
+            "filled_leg_count": 1,
+            "filled_notional": 8.75,
+            "leg_order_ids": ["ARB-000701-YES-KALSHI"],
+        },
+    ]
+    store = _make_half_recorded_store(orphans=orphans)
+
+    result = await reconcile_half_recorded_arbs(store)
+
+    assert [row["arb_id"] for row in result] == ["ARB-000701"]
+    store.mark_no_exposure_half_recorded_arbs_failed.assert_awaited_once_with(
+        ["ARB-000700"],
+    )
+    store.resolve_half_recorded_incidents.assert_awaited_once_with(
+        ["ARB-000700"],
+        note="Auto-resolved: half-recorded arb had zero persisted orders and zero filled notional.",
+    )
+    store.resolve_superseded_half_recorded_incidents.assert_awaited_once_with([
+        "ARB-000701",
+    ])
+    store.resolve_stale_half_recorded_incidents.assert_awaited_once_with([
+        "ARB-000701",
+    ])
+    assert store.insert_incident.await_count == 1
+    incident = store.insert_incident.await_args.args[0]
+    assert incident.arb_id == "ARB-000701"
+    assert incident.metadata["filled_notional"] == 8.75
 
 
 @pytest.mark.asyncio

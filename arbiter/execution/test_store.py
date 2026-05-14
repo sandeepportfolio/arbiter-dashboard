@@ -403,6 +403,79 @@ async def test_resolve_superseded_half_recorded_incidents_marks_duplicate_alerts
 
 
 @pytest.mark.asyncio
+async def test_mark_no_exposure_half_recorded_arbs_failed_closes_stubs(mock_pool):
+    store = ExecutionStore(database_url="postgres://mock/mock")
+    await store.connect()
+
+    updated = await store.mark_no_exposure_half_recorded_arbs_failed([
+        "ARB-000700",
+        "ARB-000701",
+    ])
+
+    assert updated == 0
+    method, sql, args = mock_pool.conn.calls[-1]
+    assert method == "execute"
+    assert "UPDATE execution_arbs" in sql
+    assert "status = 'failed'" in sql
+    assert "recovery_notes" in sql
+    assert "closed_at = COALESCE(closed_at, NOW())" in sql
+    assert args == (["ARB-000700", "ARB-000701"],)
+
+
+@pytest.mark.asyncio
+async def test_resolve_half_recorded_incidents_resolves_all_for_arbs(mock_pool):
+    store = ExecutionStore(database_url="postgres://mock/mock")
+    await store.connect()
+
+    updated = await store.resolve_half_recorded_incidents(
+        ["ARB-000700"],
+        note="cleared",
+    )
+
+    assert updated == 0
+    method, sql, args = mock_pool.conn.calls[-1]
+    assert method == "execute"
+    assert "metadata->>'event_type' = 'half_recorded_arb'" in sql
+    assert "status = 'resolved'" in sql
+    assert args == (["ARB-000700"], "cleared")
+
+
+@pytest.mark.asyncio
+async def test_resolve_stale_half_recorded_incidents_resolves_non_active_arbs(mock_pool):
+    store = ExecutionStore(database_url="postgres://mock/mock")
+    await store.connect()
+
+    updated = await store.resolve_stale_half_recorded_incidents([
+        "ARB-000701",
+        "ARB-000702",
+    ])
+
+    assert updated == 0
+    method, sql, args = mock_pool.conn.calls[-1]
+    assert method == "execute"
+    assert "metadata->>'event_type' = 'half_recorded_arb'" in sql
+    assert "NOT (arb_id = ANY($1::text[]))" in sql
+    assert "status = 'resolved'" in sql
+    assert args == (["ARB-000701", "ARB-000702"],)
+
+
+@pytest.mark.asyncio
+async def test_list_half_recorded_arbs_includes_fill_exposure_fields(mock_pool):
+    store = ExecutionStore(database_url="postgres://mock/mock")
+    await store.connect()
+
+    result = await store.list_half_recorded_arbs()
+
+    assert result == []
+    method, sql, args = mock_pool.conn.calls[-1]
+    assert method == "fetch"
+    assert "filled_leg_count" in sql
+    assert "filled_notional" in sql
+    assert "'closed'" in sql
+    assert args == ()
+
+
+@pytest.mark.asyncio
 async def test_list_incidents_reads_persisted_open_incidents(mock_pool):
     mock_pool.conn = MockConn(fetch_response=[
         {
