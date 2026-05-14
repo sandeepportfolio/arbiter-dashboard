@@ -102,6 +102,11 @@ def _make_components(
         max_position_usd=max_position_usd,
         bootstrap_trades=bootstrap_trades,
         dedup_window_seconds=5,
+        # Use the legacy 3¢ preflight threshold here so the clamping /
+        # cap / dedup tests stay isolated from the production 7¢ floor.
+        # Production wires MIN_EDGE_CENTS=7 via the env, which is covered
+        # by integration tests further down.
+        min_edge_cents_preflight=3.0,
     )
     ae = AutoExecutor(
         scanner=scanner,

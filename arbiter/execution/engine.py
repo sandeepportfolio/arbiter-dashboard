@@ -1013,8 +1013,16 @@ class ExecutionEngine:
 
         # ── Pre-execution profitability gate ─────
         # Verify the arb is genuinely profitable after ALL fees before
-        # risking any capital. Require at least 2.0¢ net edge after fees.
-        MIN_NET_EDGE_CENTS = 2.0
+        # risking any capital. Default 7¢ matches the 2026-05 forensic audit
+        # (median Poly adverse move 3.66¢); ``MIN_EDGE_CENTS`` env override
+        # keeps scanner, AutoExecutor preflight, and engine gate aligned.
+        import os as _os_min_edge
+        try:
+            MIN_NET_EDGE_CENTS = float(
+                _os_min_edge.environ.get("MIN_EDGE_CENTS", "7.0")
+            )
+        except (TypeError, ValueError):
+            MIN_NET_EDGE_CENTS = 7.0
         total_cost = opp.yes_price + opp.no_price
         gross_edge = 1.0 - total_cost
         qty = max(1, int(opp.suggested_qty or 1))
