@@ -15016,5 +15016,4033 @@
       "polarity": "same"
     },
     "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260502_MIA_5a686f38",
+    "description": "MLS: MIA wins on 2026-05-02",
+    "kalshi": "KXMLSGAME-26MAY02MIAORL-MIA",
+    "polymarket": "atc-mls-mia-orl-2026-05-02-mia",
+    "polymarket_question": "MLS: MIA wins on 2026-05-02",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-01 16:03. Kalshi title: Miami vs Orlando Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Miami vs Orlando Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: MIA wins on 2026-05-02"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260502_CLB_fc9f7801",
+    "description": "MLS: CLB wins on 2026-05-02",
+    "kalshi": "KXMLSGAME-26MAY02CLBMIN-CLB",
+    "polymarket": "atc-mls-clb-min-2026-05-02-clb",
+    "polymarket_question": "MLS: CLB wins on 2026-05-02",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-01 16:03. Kalshi title: Columbus vs Minnesota Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Columbus vs Minnesota Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: CLB wins on 2026-05-02"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260503_TOR_bf26dd7a",
+    "description": "MLB: TOR wins on 2026-05-03",
+    "kalshi": "KXMLBGAME-26MAY031245TORMIN-TOR",
+    "polymarket": "aec-mlb-tor-min-2026-05-03",
+    "polymarket_question": "MLB: TOR wins on 2026-05-03",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-01 16:03. Kalshi title: Toronto vs Minnesota Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Toronto vs Minnesota Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: TOR wins on 2026-05-03"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260503_ATL_36a54bb7",
+    "description": "MLB: ATL wins on 2026-05-03",
+    "kalshi": "KXMLBGAME-26MAY031510ATLCOL-ATL",
+    "polymarket": "aec-mlb-atl-col-2026-05-03",
+    "polymarket_question": "MLB: ATL wins on 2026-05-03",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-01 16:03. Kalshi title: Atlanta vs Colorado Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Atlanta vs Colorado Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: ATL wins on 2026-05-03"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260503_CWS_7569174c",
+    "description": "MLB: CWS wins on 2026-05-03",
+    "kalshi": "KXMLBGAME-26MAY031610CWSSD-CWS",
+    "polymarket": "aec-mlb-cws-sd-2026-05-03",
+    "polymarket_question": "MLB: CWS wins on 2026-05-03",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-01 16:03. Kalshi title: Chicago WS vs San Diego Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Chicago WS vs San Diego Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: CWS wins on 2026-05-03"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260503_KC_a0b4412e",
+    "description": "MLB: KC wins on 2026-05-03",
+    "kalshi": "KXMLBGAME-26MAY031610KCSEA-KC",
+    "polymarket": "aec-mlb-kc-sea-2026-05-03",
+    "polymarket_question": "MLB: KC wins on 2026-05-03",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-01 16:03. Kalshi title: Kansas City vs Seattle Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Kansas City vs Seattle Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: KC wins on 2026-05-03"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260503_NYM_aeefa492",
+    "description": "MLB: NYM wins on 2026-05-03",
+    "kalshi": "KXMLBGAME-26MAY031607NYMLAA-NYM",
+    "polymarket": "aec-mlb-nym-laa-2026-05-03",
+    "polymarket_question": "MLB: NYM wins on 2026-05-03",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-01 16:03. Kalshi title: New York M vs Los Angeles A Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "New York M vs Los Angeles A Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: NYM wins on 2026-05-03"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260503_TEX_29dcffea",
+    "description": "MLB: TEX wins on 2026-05-03",
+    "kalshi": "KXMLBGAME-26MAY031920TEXDET-TEX",
+    "polymarket": "aec-mlb-tex-det-2026-05-03",
+    "polymarket_question": "MLB: TEX wins on 2026-05-03",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-01 20:01. Kalshi title: Texas vs Detroit Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Texas vs Detroit Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: TEX wins on 2026-05-03"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260509_TIE_7510a466",
+    "description": "MLS: Draw/Tie on 2026-05-09",
+    "kalshi": "KXMLSGAME-26MAY09TORMIA-TIE",
+    "polymarket": "atc-mls-tor-mia-2026-05-09-draw",
+    "polymarket_question": "MLS: Draw/Tie on 2026-05-09",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-01 20:01. Kalshi title: Toronto vs Miami Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Toronto vs Miami Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: Draw/Tie on 2026-05-09"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260509_MIA_43edd089",
+    "description": "MLS: MIA wins on 2026-05-09",
+    "kalshi": "KXMLSGAME-26MAY09TORMIA-MIA",
+    "polymarket": "atc-mls-tor-mia-2026-05-09-mia",
+    "polymarket_question": "MLS: MIA wins on 2026-05-09",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-01 20:01. Kalshi title: Toronto vs Miami Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Toronto vs Miami Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: MIA wins on 2026-05-09"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260509_TOR_d8277608",
+    "description": "MLS: TOR wins on 2026-05-09",
+    "kalshi": "KXMLSGAME-26MAY09TORMIA-TOR",
+    "polymarket": "atc-mls-tor-mia-2026-05-09-tor",
+    "polymarket_question": "MLS: TOR wins on 2026-05-09",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-01 20:01. Kalshi title: Toronto vs Miami Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Toronto vs Miami Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: TOR wins on 2026-05-09"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_NHL_20260503_MIN_319f8d1b",
+    "description": "NHL: MIN wins on 2026-05-03",
+    "kalshi": "KXNHLGAME-26MAY03MINCOL-MIN",
+    "polymarket": "aec-nhl-min-col-2026-05-03",
+    "polymarket_question": "NHL: MIN wins on 2026-05-03",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "nhl",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-02 04:01. Kalshi title: Game 1: Minnesota at Colorado Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Game 1: Minnesota at Colorado Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "NHL: MIN wins on 2026-05-03"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260509_ATL_c9ddd908",
+    "description": "MLS: ATL wins on 2026-05-09",
+    "kalshi": "KXMLSGAME-26MAY09ATLLAG-ATL",
+    "polymarket": "atc-mls-atl-lag-2026-05-09-atl",
+    "polymarket_question": "MLS: ATL wins on 2026-05-09",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-02 12:01. Kalshi title: Atlanta vs Los Angeles G Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Atlanta vs Los Angeles G Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: ATL wins on 2026-05-09"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260509_LAG_9c49b5d2",
+    "description": "MLS: LAG wins on 2026-05-09",
+    "kalshi": "KXMLSGAME-26MAY09ATLLAG-LAG",
+    "polymarket": "atc-mls-atl-lag-2026-05-09-lag",
+    "polymarket_question": "MLS: LAG wins on 2026-05-09",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-02 12:01. Kalshi title: Atlanta vs Los Angeles G Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Atlanta vs Los Angeles G Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: LAG wins on 2026-05-09"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260509_TIE_ce00a16b",
+    "description": "MLS: Draw/Tie on 2026-05-09",
+    "kalshi": "KXMLSGAME-26MAY09ATLLAG-TIE",
+    "polymarket": "atc-mls-atl-lag-2026-05-09-draw",
+    "polymarket_question": "MLS: Draw/Tie on 2026-05-09",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-02 12:01. Kalshi title: Atlanta vs Los Angeles G Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Atlanta vs Los Angeles G Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: Draw/Tie on 2026-05-09"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260504_BOS_f4547ded",
+    "description": "MLB: BOS wins on 2026-05-04",
+    "kalshi": "KXMLBGAME-26MAY041840BOSDET-BOS",
+    "polymarket": "aec-mlb-bos-det-2026-05-04",
+    "polymarket_question": "MLB: BOS wins on 2026-05-04",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-02 16:01. Kalshi title: Boston vs Detroit Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Boston vs Detroit Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: BOS wins on 2026-05-04"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260504_PHI_fe47567c",
+    "description": "MLB: PHI wins on 2026-05-04",
+    "kalshi": "KXMLBGAME-26MAY041840PHIMIA-PHI",
+    "polymarket": "aec-mlb-phi-mia-2026-05-04",
+    "polymarket_question": "MLB: PHI wins on 2026-05-04",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-02 16:01. Kalshi title: Philadelphia vs Miami Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Philadelphia vs Miami Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: PHI wins on 2026-05-04"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260504_TOR_b95d79d2",
+    "description": "MLB: TOR wins on 2026-05-04",
+    "kalshi": "KXMLBGAME-26MAY041840TORTB-TOR",
+    "polymarket": "aec-mlb-tor-tb-2026-05-04",
+    "polymarket_question": "MLB: TOR wins on 2026-05-04",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-02 20:01. Kalshi title: Toronto vs Tampa Bay Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Toronto vs Tampa Bay Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: TOR wins on 2026-05-04"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260504_BAL_9a99abbb",
+    "description": "MLB: BAL wins on 2026-05-04",
+    "kalshi": "KXMLBGAME-26MAY041905BALNYY-BAL",
+    "polymarket": "aec-mlb-bal-nyy-2026-05-04",
+    "polymarket_question": "MLB: BAL wins on 2026-05-04",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-02 20:01. Kalshi title: Baltimore vs New York Y Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Baltimore vs New York Y Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: BAL wins on 2026-05-04"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260504_CIN_4d531d06",
+    "description": "MLB: CIN wins on 2026-05-04",
+    "kalshi": "KXMLBGAME-26MAY041940CINCHC-CIN",
+    "polymarket": "aec-mlb-cin-chc-2026-05-04",
+    "polymarket_question": "MLB: CIN wins on 2026-05-04",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-02 20:01. Kalshi title: Cincinnati vs Chicago C Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Cincinnati vs Chicago C Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: CIN wins on 2026-05-04"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260504_MIL_c16c6c74",
+    "description": "MLB: MIL wins on 2026-05-04",
+    "kalshi": "KXMLBGAME-26MAY041945MILSTL-MIL",
+    "polymarket": "aec-mlb-mil-stl-2026-05-04",
+    "polymarket_question": "MLB: MIL wins on 2026-05-04",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-02 20:01. Kalshi title: Milwaukee vs St. Louis Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Milwaukee vs St. Louis Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: MIL wins on 2026-05-04"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260504_CLE_e8b981b5",
+    "description": "MLB: CLE wins on 2026-05-04",
+    "kalshi": "KXMLBGAME-26MAY041940CLEKC-CLE",
+    "polymarket": "aec-mlb-cle-kc-2026-05-04",
+    "polymarket_question": "MLB: CLE wins on 2026-05-04",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-02 20:01. Kalshi title: Cleveland vs Kansas City Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Cleveland vs Kansas City Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: CLE wins on 2026-05-04"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_SEA_20260510_FIO_924a9110",
+    "description": "Serie A: FIO wins on 2026-05-10",
+    "kalshi": "KXSERIEAGAME-26MAY10FIOGEN-FIO",
+    "polymarket": "atc-sea-fio-gen-2026-05-10-fio",
+    "polymarket_question": "Serie A: FIO wins on 2026-05-10",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "sea",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-02 20:01. Kalshi title: Fiorentina vs Genoa Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Fiorentina vs Genoa Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "Serie A: FIO wins on 2026-05-10"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_SEA_20260510_GEN_f7c356f3",
+    "description": "Serie A: GEN wins on 2026-05-10",
+    "kalshi": "KXSERIEAGAME-26MAY10FIOGEN-GEN",
+    "polymarket": "atc-sea-fio-gen-2026-05-10-gen",
+    "polymarket_question": "Serie A: GEN wins on 2026-05-10",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "sea",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-02 20:01. Kalshi title: Fiorentina vs Genoa Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Fiorentina vs Genoa Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "Serie A: GEN wins on 2026-05-10"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_SEA_20260510_TIE_b5b9c60f",
+    "description": "Serie A: Draw/Tie on 2026-05-10",
+    "kalshi": "KXSERIEAGAME-26MAY10FIOGEN-TIE",
+    "polymarket": "atc-sea-fio-gen-2026-05-10-draw",
+    "polymarket_question": "Serie A: Draw/Tie on 2026-05-10",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "sea",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-02 20:01. Kalshi title: Fiorentina vs Genoa Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Fiorentina vs Genoa Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "Serie A: Draw/Tie on 2026-05-10"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260509_COL_26eb4542",
+    "description": "MLS: COL wins on 2026-05-09",
+    "kalshi": "KXMLSGAME-26MAY09COLSTL-COL",
+    "polymarket": "atc-mls-col-stl-2026-05-09-col",
+    "polymarket_question": "MLS: COL wins on 2026-05-09",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-02 20:01. Kalshi title: Colorado vs Saint Louis Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Colorado vs Saint Louis Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: COL wins on 2026-05-09"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260509_STL_1e0a5588",
+    "description": "MLS: STL wins on 2026-05-09",
+    "kalshi": "KXMLSGAME-26MAY09COLSTL-STL",
+    "polymarket": "atc-mls-col-stl-2026-05-09-stl",
+    "polymarket_question": "MLS: STL wins on 2026-05-09",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-02 20:01. Kalshi title: Colorado vs Saint Louis Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Colorado vs Saint Louis Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: STL wins on 2026-05-09"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260509_TIE_c6074a4a",
+    "description": "MLS: Draw/Tie on 2026-05-09",
+    "kalshi": "KXMLSGAME-26MAY09COLSTL-TIE",
+    "polymarket": "atc-mls-col-stl-2026-05-09-draw",
+    "polymarket_question": "MLS: Draw/Tie on 2026-05-09",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-02 20:01. Kalshi title: Colorado vs Saint Louis Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Colorado vs Saint Louis Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: Draw/Tie on 2026-05-09"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260509_DAL_03f0a0a7",
+    "description": "MLS: DAL wins on 2026-05-09",
+    "kalshi": "KXMLSGAME-26MAY09DALRSL-DAL",
+    "polymarket": "atc-mls-dal-rsl-2026-05-09-dal",
+    "polymarket_question": "MLS: DAL wins on 2026-05-09",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-02 20:01. Kalshi title: Dallas vs Salt Lake Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Dallas vs Salt Lake Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: DAL wins on 2026-05-09"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260509_RSL_53798cdc",
+    "description": "MLS: RSL wins on 2026-05-09",
+    "kalshi": "KXMLSGAME-26MAY09DALRSL-RSL",
+    "polymarket": "atc-mls-dal-rsl-2026-05-09-rsl",
+    "polymarket_question": "MLS: RSL wins on 2026-05-09",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-02 20:01. Kalshi title: Dallas vs Salt Lake Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Dallas vs Salt Lake Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: RSL wins on 2026-05-09"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260509_TIE_95e18d3d",
+    "description": "MLS: Draw/Tie on 2026-05-09",
+    "kalshi": "KXMLSGAME-26MAY09DALRSL-TIE",
+    "polymarket": "atc-mls-dal-rsl-2026-05-09-draw",
+    "polymarket_question": "MLS: Draw/Tie on 2026-05-09",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-02 20:01. Kalshi title: Dallas vs Salt Lake Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Dallas vs Salt Lake Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: Draw/Tie on 2026-05-09"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260509_POR_4219ba5c",
+    "description": "MLS: POR wins on 2026-05-09",
+    "kalshi": "KXMLSGAME-26MAY09PORSKC-POR",
+    "polymarket": "atc-mls-por-skc-2026-05-09-por",
+    "polymarket_question": "MLS: POR wins on 2026-05-09",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-02 20:01. Kalshi title: Portland vs Kansas City Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Portland vs Kansas City Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: POR wins on 2026-05-09"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260509_SKC_401ad744",
+    "description": "MLS: SKC wins on 2026-05-09",
+    "kalshi": "KXMLSGAME-26MAY09PORSKC-SKC",
+    "polymarket": "atc-mls-por-skc-2026-05-09-skc",
+    "polymarket_question": "MLS: SKC wins on 2026-05-09",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-02 20:01. Kalshi title: Portland vs Kansas City Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Portland vs Kansas City Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: SKC wins on 2026-05-09"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260509_TIE_6bc513a8",
+    "description": "MLS: Draw/Tie on 2026-05-09",
+    "kalshi": "KXMLSGAME-26MAY09PORSKC-TIE",
+    "polymarket": "atc-mls-por-skc-2026-05-09-draw",
+    "polymarket_question": "MLS: Draw/Tie on 2026-05-09",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-02 20:01. Kalshi title: Portland vs Kansas City Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Portland vs Kansas City Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: Draw/Tie on 2026-05-09"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260504_LAD_06d4d0c4",
+    "description": "MLB: LAD wins on 2026-05-04",
+    "kalshi": "KXMLBGAME-26MAY042010LADHOU-LAD",
+    "polymarket": "aec-mlb-lad-hou-2026-05-04",
+    "polymarket_question": "MLB: LAD wins on 2026-05-04",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-03 00:01. Kalshi title: Los Angeles D vs Houston Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Los Angeles D vs Houston Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: LAD wins on 2026-05-04"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260504_NYM_f6c666be",
+    "description": "MLB: NYM wins on 2026-05-04",
+    "kalshi": "KXMLBGAME-26MAY042040NYMCOL-NYM",
+    "polymarket": "aec-mlb-nym-col-2026-05-04",
+    "polymarket_question": "MLB: NYM wins on 2026-05-04",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-03 00:01. Kalshi title: New York M vs Colorado Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "New York M vs Colorado Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: NYM wins on 2026-05-04"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260504_ATL_db7544fb",
+    "description": "MLB: ATL wins on 2026-05-04",
+    "kalshi": "KXMLBGAME-26MAY042140ATLSEA-ATL",
+    "polymarket": "aec-mlb-atl-sea-2026-05-04",
+    "polymarket_question": "MLB: ATL wins on 2026-05-04",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-03 00:01. Kalshi title: Atlanta vs Seattle Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Atlanta vs Seattle Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: ATL wins on 2026-05-04"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260504_CWS_11b8f1a5",
+    "description": "MLB: CWS wins on 2026-05-04",
+    "kalshi": "KXMLBGAME-26MAY042138CWSLAA-CWS",
+    "polymarket": "aec-mlb-cws-laa-2026-05-04",
+    "polymarket_question": "MLB: CWS wins on 2026-05-04",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-03 00:01. Kalshi title: Chicago WS vs Los Angeles A Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Chicago WS vs Los Angeles A Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: CWS wins on 2026-05-04"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260504_SD_ba5282f9",
+    "description": "MLB: SD wins on 2026-05-04",
+    "kalshi": "KXMLBGAME-26MAY042145SDSF-SD",
+    "polymarket": "aec-mlb-sd-sf-2026-05-04",
+    "polymarket_question": "MLB: SD wins on 2026-05-04",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-03 00:01. Kalshi title: San Diego vs San Francisco Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "San Diego vs San Francisco Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: SD wins on 2026-05-04"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260510_CLB_12ce640c",
+    "description": "MLS: CLB wins on 2026-05-10",
+    "kalshi": "KXMLSGAME-26MAY10NYCCLB-CLB",
+    "polymarket": "atc-mls-nyc-clb-2026-05-10-clb",
+    "polymarket_question": "MLS: CLB wins on 2026-05-10",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-03 04:01. Kalshi title: New York City vs Columbus Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "New York City vs Columbus Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: CLB wins on 2026-05-10"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260510_TIE_807a016c",
+    "description": "MLS: Draw/Tie on 2026-05-10",
+    "kalshi": "KXMLSGAME-26MAY10NYCCLB-TIE",
+    "polymarket": "atc-mls-nyc-clb-2026-05-10-draw",
+    "polymarket_question": "MLS: Draw/Tie on 2026-05-10",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-03 04:01. Kalshi title: New York City vs Columbus Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "New York City vs Columbus Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: Draw/Tie on 2026-05-10"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260510_NYC_922fb2c6",
+    "description": "MLS: NYC wins on 2026-05-10",
+    "kalshi": "KXMLSGAME-26MAY10NYCCLB-NYC",
+    "polymarket": "atc-mls-nyc-clb-2026-05-10-nyc",
+    "polymarket_question": "MLS: NYC wins on 2026-05-10",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-03 04:01. Kalshi title: New York City vs Columbus Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "New York City vs Columbus Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: NYC wins on 2026-05-10"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260510_ATX_ac5b0d4f",
+    "description": "MLS: ATX wins on 2026-05-10",
+    "kalshi": "KXMLSGAME-26MAY10MINATX-ATX",
+    "polymarket": "atc-mls-min-aus-2026-05-10-aus",
+    "polymarket_question": "MLS: ATX wins on 2026-05-10",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-03 04:01. Kalshi title: Minnesota vs Austin Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Minnesota vs Austin Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: ATX wins on 2026-05-10"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_NHL_20260505_MIN_da40eafd",
+    "description": "NHL: MIN wins on 2026-05-05",
+    "kalshi": "KXNHLGAME-26MAY05MINCOL-MIN",
+    "polymarket": "aec-nhl-min-col-2026-05-05",
+    "polymarket_question": "NHL: MIN wins on 2026-05-05",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "nhl",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-03 04:01. Kalshi title: Game 2: Minnesota at Colorado Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Game 2: Minnesota at Colorado Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "NHL: MIN wins on 2026-05-05"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260510_MIN_60e5609f",
+    "description": "MLS: MIN wins on 2026-05-10",
+    "kalshi": "KXMLSGAME-26MAY10MINATX-MIN",
+    "polymarket": "atc-mls-min-aus-2026-05-10-min",
+    "polymarket_question": "MLS: MIN wins on 2026-05-10",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-03 04:01. Kalshi title: Minnesota vs Austin Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Minnesota vs Austin Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: MIN wins on 2026-05-10"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260510_TIE_662c498a",
+    "description": "MLS: Draw/Tie on 2026-05-10",
+    "kalshi": "KXMLSGAME-26MAY10MINATX-TIE",
+    "polymarket": "atc-mls-min-aus-2026-05-10-draw",
+    "polymarket_question": "MLS: Draw/Tie on 2026-05-10",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-03 04:01. Kalshi title: Minnesota vs Austin Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Minnesota vs Austin Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: Draw/Tie on 2026-05-10"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_NHL_20260504_PHI_a7e937c6",
+    "description": "NHL: PHI wins on 2026-05-04",
+    "kalshi": "KXNHLGAME-26MAY04PHICAR-PHI",
+    "polymarket": "aec-nhl-phi-car-2026-05-04",
+    "polymarket_question": "NHL: PHI wins on 2026-05-04",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "nhl",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-03 04:01. Kalshi title: Game 2: Philadelphia at Carolina Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Game 2: Philadelphia at Carolina Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "NHL: PHI wins on 2026-05-04"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_NHL_20260509_CAR_3b14b847",
+    "description": "NHL: CAR wins on 2026-05-09",
+    "kalshi": "KXNHLGAME-26MAY09CARPHI-CAR",
+    "polymarket": "aec-nhl-car-phi-2026-05-09",
+    "polymarket_question": "NHL: CAR wins on 2026-05-09",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "nhl",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-03 08:01. Kalshi title: Game 4: Carolina at Philadelphia Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Game 4: Carolina at Philadelphia Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "NHL: CAR wins on 2026-05-09"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_NHL_20260507_CAR_f4a0f9ba",
+    "description": "NHL: CAR wins on 2026-05-07",
+    "kalshi": "KXNHLGAME-26MAY07CARPHI-CAR",
+    "polymarket": "aec-nhl-car-phi-2026-05-07",
+    "polymarket_question": "NHL: CAR wins on 2026-05-07",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "nhl",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-03 08:01. Kalshi title: Game 3: Carolina at Philadelphia Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Game 3: Carolina at Philadelphia Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "NHL: CAR wins on 2026-05-07"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_NHL_20260509_COL_d1d4b12e",
+    "description": "NHL: COL wins on 2026-05-09",
+    "kalshi": "KXNHLGAME-26MAY09COLMIN-COL",
+    "polymarket": "aec-nhl-col-min-2026-05-09",
+    "polymarket_question": "NHL: COL wins on 2026-05-09",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "nhl",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-03 08:01. Kalshi title: Game 3: Colorado at Minnesota Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Game 3: Colorado at Minnesota Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "NHL: COL wins on 2026-05-09"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_NBA_20260505_LAL_ed681b9e",
+    "description": "NBA: LAL wins on 2026-05-05",
+    "kalshi": "KXNBAGAME-26MAY05LALOKC-LAL",
+    "polymarket": "aec-nba-lal-okc-2026-05-05",
+    "polymarket_question": "NBA: LAL wins on 2026-05-05",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "nba",
+      "game-winner",
+      "auto-discovered",
+      "expanded"
+    ],
+    "notes": "Expanded discovery 2026-05-03 12:01. Kalshi: Game 1: Los Angeles L at Oklahoma City Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Game 1: Los Angeles L at Oklahoma City Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "NBA: LAL wins on 2026-05-05"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_NBA_20260507_LAL_6a531a4f",
+    "description": "NBA: LAL wins on 2026-05-07",
+    "kalshi": "KXNBAGAME-26MAY07LALOKC-LAL",
+    "polymarket": "aec-nba-lal-okc-2026-05-07",
+    "polymarket_question": "NBA: LAL wins on 2026-05-07",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "nba",
+      "game-winner",
+      "auto-discovered",
+      "expanded"
+    ],
+    "notes": "Expanded discovery 2026-05-03 12:01. Kalshi: Game 2: Los Angeles L at Oklahoma City Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Game 2: Los Angeles L at Oklahoma City Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "NBA: LAL wins on 2026-05-07"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_NBA_20260509_OKC_d6a72357",
+    "description": "NBA: OKC wins on 2026-05-09",
+    "kalshi": "KXNBAGAME-26MAY09OKCLAL-OKC",
+    "polymarket": "aec-nba-okc-lal-2026-05-09",
+    "polymarket_question": "NBA: OKC wins on 2026-05-09",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "nba",
+      "game-winner",
+      "auto-discovered",
+      "expanded"
+    ],
+    "notes": "Expanded discovery 2026-05-03 12:01. Kalshi: Game 3: Oklahoma City at Los Angeles L Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Game 3: Oklahoma City at Los Angeles L Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "NBA: OKC wins on 2026-05-09"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260505_BAL_ba34b88c",
+    "description": "MLB: BAL wins on 2026-05-05",
+    "kalshi": "KXMLBGAME-26MAY051840BALMIA-BAL",
+    "polymarket": "aec-mlb-bal-mia-2026-05-05",
+    "polymarket_question": "MLB: BAL wins on 2026-05-05",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-03 20:01. Kalshi title: Baltimore vs Miami Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Baltimore vs Miami Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: BAL wins on 2026-05-05"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260505_BOS_c130e112",
+    "description": "MLB: BOS wins on 2026-05-05",
+    "kalshi": "KXMLBGAME-26MAY051840BOSDET-BOS",
+    "polymarket": "aec-mlb-bos-det-2026-05-05",
+    "polymarket_question": "MLB: BOS wins on 2026-05-05",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-03 20:01. Kalshi title: Boston vs Detroit Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Boston vs Detroit Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: BOS wins on 2026-05-05"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260505_MIN_6e3de412",
+    "description": "MLB: MIN wins on 2026-05-05",
+    "kalshi": "KXMLBGAME-26MAY051845MINWSH-MIN",
+    "polymarket": "aec-mlb-min-wsh-2026-05-05",
+    "polymarket_question": "MLB: MIN wins on 2026-05-05",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-03 20:01. Kalshi title: Minnesota vs Washington Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Minnesota vs Washington Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: MIN wins on 2026-05-05"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260505_TOR_27b50ee3",
+    "description": "MLB: TOR wins on 2026-05-05",
+    "kalshi": "KXMLBGAME-26MAY051840TORTB-TOR",
+    "polymarket": "aec-mlb-tor-tb-2026-05-05",
+    "polymarket_question": "MLB: TOR wins on 2026-05-05",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-03 20:01. Kalshi title: Toronto vs Tampa Bay Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Toronto vs Tampa Bay Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: TOR wins on 2026-05-05"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260505_CIN_a63ec48e",
+    "description": "MLB: CIN wins on 2026-05-05",
+    "kalshi": "KXMLBGAME-26MAY051940CINCHC-CIN",
+    "polymarket": "aec-mlb-cin-chc-2026-05-05",
+    "polymarket_question": "MLB: CIN wins on 2026-05-05",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-03 20:01. Kalshi title: Cincinnati vs Chicago C Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Cincinnati vs Chicago C Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: CIN wins on 2026-05-05"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260505_MIL_5efd3c0f",
+    "description": "MLB: MIL wins on 2026-05-05",
+    "kalshi": "KXMLBGAME-26MAY051945MILSTL-MIL",
+    "polymarket": "aec-mlb-mil-stl-2026-05-05",
+    "polymarket_question": "MLB: MIL wins on 2026-05-05",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-03 20:01. Kalshi title: Milwaukee vs St. Louis Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Milwaukee vs St. Louis Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: MIL wins on 2026-05-05"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260505_CLE_bf752076",
+    "description": "MLB: CLE wins on 2026-05-05",
+    "kalshi": "KXMLBGAME-26MAY051940CLEKC-CLE",
+    "polymarket": "aec-mlb-cle-kc-2026-05-05",
+    "polymarket_question": "MLB: CLE wins on 2026-05-05",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-03 20:01. Kalshi title: Cleveland vs Kansas City Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Cleveland vs Kansas City Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: CLE wins on 2026-05-05"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260505_TEX_6d51972a",
+    "description": "MLB: TEX wins on 2026-05-05",
+    "kalshi": "KXMLBGAME-26MAY051905TEXNYY-TEX",
+    "polymarket": "aec-mlb-tex-nyy-2026-05-05",
+    "polymarket_question": "MLB: TEX wins on 2026-05-05",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-04 00:01. Kalshi title: Texas vs New York Y Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Texas vs New York Y Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: TEX wins on 2026-05-05"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260505_LAD_1d3dce12",
+    "description": "MLB: LAD wins on 2026-05-05",
+    "kalshi": "KXMLBGAME-26MAY052010LADHOU-LAD",
+    "polymarket": "aec-mlb-lad-hou-2026-05-05",
+    "polymarket_question": "MLB: LAD wins on 2026-05-05",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-04 00:01. Kalshi title: Los Angeles D vs Houston Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Los Angeles D vs Houston Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: LAD wins on 2026-05-05"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260505_NYM_566e6bb4",
+    "description": "MLB: NYM wins on 2026-05-05",
+    "kalshi": "KXMLBGAME-26MAY052040NYMCOL-NYM",
+    "polymarket": "aec-mlb-nym-col-2026-05-05",
+    "polymarket_question": "MLB: NYM wins on 2026-05-05",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-04 00:01. Kalshi title: New York M vs Colorado Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "New York M vs Colorado Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: NYM wins on 2026-05-05"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260505_SD_19dc31ab",
+    "description": "MLB: SD wins on 2026-05-05",
+    "kalshi": "KXMLBGAME-26MAY052145SDSF-SD",
+    "polymarket": "aec-mlb-sd-sf-2026-05-05",
+    "polymarket_question": "MLB: SD wins on 2026-05-05",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-04 00:01. Kalshi title: San Diego vs San Francisco Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "San Diego vs San Francisco Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: SD wins on 2026-05-05"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260505_ATL_99a88328",
+    "description": "MLB: ATL wins on 2026-05-05",
+    "kalshi": "KXMLBGAME-26MAY052140ATLSEA-ATL",
+    "polymarket": "aec-mlb-atl-sea-2026-05-05",
+    "polymarket_question": "MLB: ATL wins on 2026-05-05",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-04 00:01. Kalshi title: Atlanta vs Seattle Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Atlanta vs Seattle Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: ATL wins on 2026-05-05"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260505_PIT_0e3f79df",
+    "description": "MLB: PIT wins on 2026-05-05",
+    "kalshi": "KXMLBGAME-26MAY052140PITAZ-PIT",
+    "polymarket": "aec-mlb-pit-az-2026-05-05",
+    "polymarket_question": "MLB: PIT wins on 2026-05-05",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-04 00:01. Kalshi title: Pittsburgh vs Arizona Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Pittsburgh vs Arizona Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: PIT wins on 2026-05-05"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260505_CWS_69479502",
+    "description": "MLB: CWS wins on 2026-05-05",
+    "kalshi": "KXMLBGAME-26MAY052138CWSLAA-CWS",
+    "polymarket": "aec-mlb-cws-laa-2026-05-05",
+    "polymarket_question": "MLB: CWS wins on 2026-05-05",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-04 00:01. Kalshi title: Chicago WS vs Los Angeles A Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Chicago WS vs Los Angeles A Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: CWS wins on 2026-05-05"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_NBA_20260511_OKC_b2135987",
+    "description": "NBA: OKC wins on 2026-05-11",
+    "kalshi": "KXNBAGAME-26MAY11OKCLAL-OKC",
+    "polymarket": "aec-nba-okc-lal-2026-05-11",
+    "polymarket_question": "NBA: OKC wins on 2026-05-11",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "nba",
+      "game-winner",
+      "auto-discovered",
+      "expanded"
+    ],
+    "notes": "Expanded discovery 2026-05-04 08:01. Kalshi: Game 4: Oklahoma City at Los Angeles L Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Game 4: Oklahoma City at Los Angeles L Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "NBA: OKC wins on 2026-05-11"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260506_TOR_6ef9ae4d",
+    "description": "MLB: TOR wins on 2026-05-06",
+    "kalshi": "KXMLBGAME-26MAY061310TORTB-TOR",
+    "polymarket": "aec-mlb-tor-tb-2026-05-06",
+    "polymarket_question": "MLB: TOR wins on 2026-05-06",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-04 12:01. Kalshi title: Toronto vs Tampa Bay Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Toronto vs Tampa Bay Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: TOR wins on 2026-05-06"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260506_MIL_1972aac1",
+    "description": "MLB: MIL wins on 2026-05-06",
+    "kalshi": "KXMLBGAME-26MAY061315MILSTL-MIL",
+    "polymarket": "aec-mlb-mil-stl-2026-05-06",
+    "polymarket_question": "MLB: MIL wins on 2026-05-06",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-04 12:01. Kalshi title: Milwaukee vs St. Louis Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Milwaukee vs St. Louis Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: MIL wins on 2026-05-06"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260506_LAD_92ad80fd",
+    "description": "MLB: LAD wins on 2026-05-06",
+    "kalshi": "KXMLBGAME-26MAY061410LADHOU-LAD",
+    "polymarket": "aec-mlb-lad-hou-2026-05-06",
+    "polymarket_question": "MLB: LAD wins on 2026-05-06",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-04 12:01. Kalshi title: Los Angeles D vs Houston Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Los Angeles D vs Houston Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: LAD wins on 2026-05-06"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260506_NYM_4c4b57c3",
+    "description": "MLB: NYM wins on 2026-05-06",
+    "kalshi": "KXMLBGAME-26MAY061510NYMCOL-NYM",
+    "polymarket": "aec-mlb-nym-col-2026-05-06",
+    "polymarket_question": "MLB: NYM wins on 2026-05-06",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-04 16:00. Kalshi title: New York M vs Colorado Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "New York M vs Colorado Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: NYM wins on 2026-05-06"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260506_SD_123dbc1c",
+    "description": "MLB: SD wins on 2026-05-06",
+    "kalshi": "KXMLBGAME-26MAY061545SDSF-SD",
+    "polymarket": "aec-mlb-sd-sf-2026-05-06",
+    "polymarket_question": "MLB: SD wins on 2026-05-06",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-04 16:00. Kalshi title: San Diego vs San Francisco Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "San Diego vs San Francisco Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: SD wins on 2026-05-06"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260506_ATL_149563c3",
+    "description": "MLB: ATL wins on 2026-05-06",
+    "kalshi": "KXMLBGAME-26MAY061610ATLSEA-ATL",
+    "polymarket": "aec-mlb-atl-sea-2026-05-06",
+    "polymarket_question": "MLB: ATL wins on 2026-05-06",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-04 16:00. Kalshi title: Atlanta vs Seattle Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Atlanta vs Seattle Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: ATL wins on 2026-05-06"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260506_CWS_e2b44ca5",
+    "description": "MLB: CWS wins on 2026-05-06",
+    "kalshi": "KXMLBGAME-26MAY061607CWSLAA-CWS",
+    "polymarket": "aec-mlb-cws-laa-2026-05-06",
+    "polymarket_question": "MLB: CWS wins on 2026-05-06",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-04 16:00. Kalshi title: Chicago WS vs Los Angeles A Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Chicago WS vs Los Angeles A Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: CWS wins on 2026-05-06"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260506_BAL_616a8b7c",
+    "description": "MLB: BAL wins on 2026-05-06",
+    "kalshi": "KXMLBGAME-26MAY061840BALMIA-BAL",
+    "polymarket": "aec-mlb-bal-mia-2026-05-06",
+    "polymarket_question": "MLB: BAL wins on 2026-05-06",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-04 20:00. Kalshi title: Baltimore vs Miami Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Baltimore vs Miami Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: BAL wins on 2026-05-06"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260506_BOS_c54e80fa",
+    "description": "MLB: BOS wins on 2026-05-06",
+    "kalshi": "KXMLBGAME-26MAY061840BOSDET-BOS",
+    "polymarket": "aec-mlb-bos-det-2026-05-06",
+    "polymarket_question": "MLB: BOS wins on 2026-05-06",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-04 20:00. Kalshi title: Boston vs Detroit Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Boston vs Detroit Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: BOS wins on 2026-05-06"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260506_MIN_45c3b507",
+    "description": "MLB: MIN wins on 2026-05-06",
+    "kalshi": "KXMLBGAME-26MAY061845MINWSH-MIN",
+    "polymarket": "aec-mlb-min-wsh-2026-05-06",
+    "polymarket_question": "MLB: MIN wins on 2026-05-06",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-04 20:00. Kalshi title: Minnesota vs Washington Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Minnesota vs Washington Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: MIN wins on 2026-05-06"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260506_TEX_fc77a5c1",
+    "description": "MLB: TEX wins on 2026-05-06",
+    "kalshi": "KXMLBGAME-26MAY061905TEXNYY-TEX",
+    "polymarket": "aec-mlb-tex-nyy-2026-05-06",
+    "polymarket_question": "MLB: TEX wins on 2026-05-06",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-04 20:00. Kalshi title: Texas vs New York Y Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Texas vs New York Y Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: TEX wins on 2026-05-06"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260506_CIN_de3426f1",
+    "description": "MLB: CIN wins on 2026-05-06",
+    "kalshi": "KXMLBGAME-26MAY061940CINCHC-CIN",
+    "polymarket": "aec-mlb-cin-chc-2026-05-06",
+    "polymarket_question": "MLB: CIN wins on 2026-05-06",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-04 20:01. Kalshi title: Cincinnati vs Chicago C Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Cincinnati vs Chicago C Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: CIN wins on 2026-05-06"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260506_CLE_346196f0",
+    "description": "MLB: CLE wins on 2026-05-06",
+    "kalshi": "KXMLBGAME-26MAY061940CLEKC-CLE",
+    "polymarket": "aec-mlb-cle-kc-2026-05-06",
+    "polymarket_question": "MLB: CLE wins on 2026-05-06",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-04 20:01. Kalshi title: Cleveland vs Kansas City Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Cleveland vs Kansas City Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: CLE wins on 2026-05-06"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260506_PIT_17914f8d",
+    "description": "MLB: PIT wins on 2026-05-06",
+    "kalshi": "KXMLBGAME-26MAY062140PITAZ-PIT",
+    "polymarket": "aec-mlb-pit-az-2026-05-06",
+    "polymarket_question": "MLB: PIT wins on 2026-05-06",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-05 00:00. Kalshi title: ",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "MLB: PIT wins on 2026-05-06"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: PIT wins on 2026-05-06"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_NBA_20260505_CLE_81b23b72",
+    "description": "NBA: CLE wins on 2026-05-05",
+    "kalshi": "KXNBAGAME-26MAY05CLEDET-CLE",
+    "polymarket": "aec-nba-cle-det-2026-05-05",
+    "polymarket_question": "NBA: CLE wins on 2026-05-05",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "nba",
+      "game-winner",
+      "auto-discovered",
+      "expanded"
+    ],
+    "notes": "Expanded discovery 2026-05-05 04:00. Kalshi: Game 1: Cleveland at Detroit Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Game 1: Cleveland at Detroit Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "NBA: CLE wins on 2026-05-05"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_NBA_20260507_CLE_ede948c1",
+    "description": "NBA: CLE wins on 2026-05-07",
+    "kalshi": "KXNBAGAME-26MAY07CLEDET-CLE",
+    "polymarket": "aec-nba-cle-det-2026-05-07",
+    "polymarket_question": "NBA: CLE wins on 2026-05-07",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "nba",
+      "game-winner",
+      "auto-discovered",
+      "expanded"
+    ],
+    "notes": "Expanded discovery 2026-05-05 04:00. Kalshi: Game 2: Cleveland at Detroit Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Game 2: Cleveland at Detroit Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "NBA: CLE wins on 2026-05-07"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_NBA_20260511_DET_7c261614",
+    "description": "NBA: DET wins on 2026-05-11",
+    "kalshi": "KXNBAGAME-26MAY11DETCLE-DET",
+    "polymarket": "aec-nba-det-cle-2026-05-11",
+    "polymarket_question": "NBA: DET wins on 2026-05-11",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "nba",
+      "game-winner",
+      "auto-discovered",
+      "expanded"
+    ],
+    "notes": "Expanded discovery 2026-05-05 04:00. Kalshi: Game 4: Detroit at Cleveland Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Game 4: Detroit at Cleveland Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "NBA: DET wins on 2026-05-11"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_NBA_20260509_DET_dc508cb7",
+    "description": "NBA: DET wins on 2026-05-09",
+    "kalshi": "KXNBAGAME-26MAY09DETCLE-DET",
+    "polymarket": "aec-nba-det-cle-2026-05-09",
+    "polymarket_question": "NBA: DET wins on 2026-05-09",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "nba",
+      "game-winner",
+      "auto-discovered",
+      "expanded"
+    ],
+    "notes": "Expanded discovery 2026-05-05 04:00. Kalshi: Game 3: Detroit at Cleveland Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Game 3: Detroit at Cleveland Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "NBA: DET wins on 2026-05-09"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260507_MIN_abf5f472",
+    "description": "MLB: MIN wins on 2026-05-07",
+    "kalshi": "KXMLBGAME-26MAY071305MINWSH-MIN",
+    "polymarket": "aec-mlb-min-wsh-2026-05-07",
+    "polymarket_question": "MLB: MIN wins on 2026-05-07",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-05 12:00. Kalshi title: Minnesota vs Washington Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Minnesota vs Washington Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: MIN wins on 2026-05-07"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260507_CLE_af69d9bf",
+    "description": "MLB: CLE wins on 2026-05-07",
+    "kalshi": "KXMLBGAME-26MAY071410CLEKC-CLE",
+    "polymarket": "aec-mlb-cle-kc-2026-05-07",
+    "polymarket_question": "MLB: CLE wins on 2026-05-07",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-05 12:00. Kalshi title: Cleveland vs Kansas City Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Cleveland vs Kansas City Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: CLE wins on 2026-05-07"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260507_CIN_19845c14",
+    "description": "MLB: CIN wins on 2026-05-07",
+    "kalshi": "KXMLBGAME-26MAY071420CINCHC-CIN",
+    "polymarket": "aec-mlb-cin-chc-2026-05-07",
+    "polymarket_question": "MLB: CIN wins on 2026-05-07",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-05 12:00. Kalshi title: Cincinnati vs Chicago C Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Cincinnati vs Chicago C Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: CIN wins on 2026-05-07"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260513_PHI_40573832",
+    "description": "MLS: PHI wins on 2026-05-13",
+    "kalshi": "KXMLSGAME-26MAY13ORLPHI-PHI",
+    "polymarket": "atc-mls-orl-phi-2026-05-13-phi",
+    "polymarket_question": "MLS: PHI wins on 2026-05-13",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-06 17:39. Kalshi title: Orlando vs Philadelphia Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Orlando vs Philadelphia Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: PHI wins on 2026-05-13"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260513_TIE_4f779991",
+    "description": "MLS: Draw/Tie on 2026-05-13",
+    "kalshi": "KXMLSGAME-26MAY13ORLPHI-TIE",
+    "polymarket": "atc-mls-orl-phi-2026-05-13-draw",
+    "polymarket_question": "MLS: Draw/Tie on 2026-05-13",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-06 17:39. Kalshi title: Orlando vs Philadelphia Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Orlando vs Philadelphia Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: Draw/Tie on 2026-05-13"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260513_ORL_979665a8",
+    "description": "MLS: ORL wins on 2026-05-13",
+    "kalshi": "KXMLSGAME-26MAY13ORLPHI-ORL",
+    "polymarket": "atc-mls-orl-phi-2026-05-13-orl",
+    "polymarket_question": "MLS: ORL wins on 2026-05-13",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-06 17:39. Kalshi title: Orlando vs Philadelphia Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Orlando vs Philadelphia Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: ORL wins on 2026-05-13"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260508_HOU_2beb1bcd",
+    "description": "MLB: HOU wins on 2026-05-08",
+    "kalshi": "KXMLBGAME-26MAY081810HOUCIN-HOU",
+    "polymarket": "aec-mlb-hou-cin-2026-05-08",
+    "polymarket_question": "MLB: HOU wins on 2026-05-08",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-06 17:39. Kalshi title: Houston vs Cincinnati Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Houston vs Cincinnati Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: HOU wins on 2026-05-08"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260508_COL_28d3a90b",
+    "description": "MLB: COL wins on 2026-05-08",
+    "kalshi": "KXMLBGAME-26MAY081840COLPHI-COL",
+    "polymarket": "aec-mlb-col-phi-2026-05-08",
+    "polymarket_question": "MLB: COL wins on 2026-05-08",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-06 17:39. Kalshi title: Colorado vs Philadelphia Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Colorado vs Philadelphia Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: COL wins on 2026-05-08"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260508_MIN_723657f5",
+    "description": "MLB: MIN wins on 2026-05-08",
+    "kalshi": "KXMLBGAME-26MAY081915MINCLE-MIN",
+    "polymarket": "aec-mlb-min-cle-2026-05-08",
+    "polymarket_question": "MLB: MIN wins on 2026-05-08",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-06 17:39. Kalshi title: Minnesota vs Cleveland Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Minnesota vs Cleveland Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: MIN wins on 2026-05-08"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260508_WSH_68b7bfbc",
+    "description": "MLB: WSH wins on 2026-05-08",
+    "kalshi": "KXMLBGAME-26MAY081910WSHMIA-WSH",
+    "polymarket": "aec-mlb-wsh-mia-2026-05-08",
+    "polymarket_question": "MLB: WSH wins on 2026-05-08",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-06 17:39. Kalshi title: Washington vs Miami Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Washington vs Miami Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: WSH wins on 2026-05-08"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260508_LAA_3f16a7de",
+    "description": "MLB: LAA wins on 2026-05-08",
+    "kalshi": "KXMLBGAME-26MAY081907LAATOR-LAA",
+    "polymarket": "aec-mlb-laa-tor-2026-05-08",
+    "polymarket_question": "MLB: LAA wins on 2026-05-08",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-06 17:39. Kalshi title: Los Angeles A vs Toronto Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Los Angeles A vs Toronto Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: LAA wins on 2026-05-08"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260508_TB_706a7b45",
+    "description": "MLB: TB wins on 2026-05-08",
+    "kalshi": "KXMLBGAME-26MAY081910TBBOS-TB",
+    "polymarket": "aec-mlb-tb-bos-2026-05-08",
+    "polymarket_question": "MLB: TB wins on 2026-05-08",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-06 17:39. Kalshi title: Tampa Bay vs Boston Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Tampa Bay vs Boston Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: TB wins on 2026-05-08"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260508_SEA_04d82b1e",
+    "description": "MLB: SEA wins on 2026-05-08",
+    "kalshi": "KXMLBGAME-26MAY081940SEACWS-SEA",
+    "polymarket": "aec-mlb-sea-cws-2026-05-08",
+    "polymarket_question": "MLB: SEA wins on 2026-05-08",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-06 17:39. Kalshi title: Seattle vs Chicago WS Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Seattle vs Chicago WS Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: SEA wins on 2026-05-08"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260508_DET_c8369a27",
+    "description": "MLB: DET wins on 2026-05-08",
+    "kalshi": "KXMLBGAME-26MAY081940DETKC-DET",
+    "polymarket": "aec-mlb-det-kc-2026-05-08",
+    "polymarket_question": "MLB: DET wins on 2026-05-08",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-06 17:39. Kalshi title: Detroit vs Kansas City Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Detroit vs Kansas City Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: DET wins on 2026-05-08"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLB_20260508_NYY_adf775b7",
+    "description": "MLB: NYY wins on 2026-05-08",
+    "kalshi": "KXMLBGAME-26MAY081940NYYMIL-NYY",
+    "polymarket": "aec-mlb-nyy-mil-2026-05-08",
+    "polymarket_question": "MLB: NYY wins on 2026-05-08",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mlb",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-06 17:39. Kalshi title: New York Y vs Milwaukee Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "New York Y vs Milwaukee Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLB: NYY wins on 2026-05-08"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260513_COL_3d0a21c0",
+    "description": "MLS: COL wins on 2026-05-13",
+    "kalshi": "KXMLSGAME-26MAY13MINCOL-COL",
+    "polymarket": "atc-mls-min-col-2026-05-13-col",
+    "polymarket_question": "MLS: COL wins on 2026-05-13",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-06 17:39. Kalshi title: Minnesota vs Colorado Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Minnesota vs Colorado Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: COL wins on 2026-05-13"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260513_MIN_f380487e",
+    "description": "MLS: MIN wins on 2026-05-13",
+    "kalshi": "KXMLSGAME-26MAY13MINCOL-MIN",
+    "polymarket": "atc-mls-min-col-2026-05-13-min",
+    "polymarket_question": "MLS: MIN wins on 2026-05-13",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-06 17:39. Kalshi title: Minnesota vs Colorado Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Minnesota vs Colorado Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: MIN wins on 2026-05-13"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260513_TIE_6d0f3e70",
+    "description": "MLS: Draw/Tie on 2026-05-13",
+    "kalshi": "KXMLSGAME-26MAY13MINCOL-TIE",
+    "polymarket": "atc-mls-min-col-2026-05-13-draw",
+    "polymarket_question": "MLS: Draw/Tie on 2026-05-13",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-06 17:39. Kalshi title: Minnesota vs Colorado Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Minnesota vs Colorado Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: Draw/Tie on 2026-05-13"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260513_HOU_1a4f22ef",
+    "description": "MLS: HOU wins on 2026-05-13",
+    "kalshi": "KXMLSGAME-26MAY13RSLHOU-HOU",
+    "polymarket": "atc-mls-rsl-hou-2026-05-13-hou",
+    "polymarket_question": "MLS: HOU wins on 2026-05-13",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-06 17:39. Kalshi title: Salt Lake vs Houston Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Salt Lake vs Houston Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: HOU wins on 2026-05-13"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260513_TIE_d93f9925",
+    "description": "MLS: Draw/Tie on 2026-05-13",
+    "kalshi": "KXMLSGAME-26MAY13RSLHOU-TIE",
+    "polymarket": "atc-mls-rsl-hou-2026-05-13-draw",
+    "polymarket_question": "MLS: Draw/Tie on 2026-05-13",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-06 17:39. Kalshi title: Salt Lake vs Houston Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Salt Lake vs Houston Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: Draw/Tie on 2026-05-13"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260513_RSL_591d2f00",
+    "description": "MLS: RSL wins on 2026-05-13",
+    "kalshi": "KXMLSGAME-26MAY13RSLHOU-RSL",
+    "polymarket": "atc-mls-rsl-hou-2026-05-13-rsl",
+    "polymarket_question": "MLS: RSL wins on 2026-05-13",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-06 17:39. Kalshi title: Salt Lake vs Houston Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Salt Lake vs Houston Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: RSL wins on 2026-05-13"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260513_LAG_ab1eeb08",
+    "description": "MLS: LAG wins on 2026-05-13",
+    "kalshi": "KXMLSGAME-26MAY13SKCLAG-LAG",
+    "polymarket": "atc-mls-skc-lag-2026-05-13-lag",
+    "polymarket_question": "MLS: LAG wins on 2026-05-13",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-06 17:39. Kalshi title: Kansas City vs Los Angeles G Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Kansas City vs Los Angeles G Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: LAG wins on 2026-05-13"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260513_SKC_23bad850",
+    "description": "MLS: SKC wins on 2026-05-13",
+    "kalshi": "KXMLSGAME-26MAY13SKCLAG-SKC",
+    "polymarket": "atc-mls-skc-lag-2026-05-13-skc",
+    "polymarket_question": "MLS: SKC wins on 2026-05-13",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-06 17:39. Kalshi title: Kansas City vs Los Angeles G Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Kansas City vs Los Angeles G Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: SKC wins on 2026-05-13"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260513_TIE_3fe38f5a",
+    "description": "MLS: Draw/Tie on 2026-05-13",
+    "kalshi": "KXMLSGAME-26MAY13SKCLAG-TIE",
+    "polymarket": "atc-mls-skc-lag-2026-05-13-draw",
+    "polymarket_question": "MLS: Draw/Tie on 2026-05-13",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-06 17:39. Kalshi title: Kansas City vs Los Angeles G Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Kansas City vs Los Angeles G Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: Draw/Tie on 2026-05-13"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260516_ORL_b30d5a00",
+    "description": "MLS: ORL wins on 2026-05-16",
+    "kalshi": "KXMLSGAME-26MAY16ORLATL-ORL",
+    "polymarket": "atc-mls-orl-atl-2026-05-16-orl",
+    "polymarket_question": "MLS: ORL wins on 2026-05-16",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-09 08:01. Kalshi title: Orlando vs Atlanta Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Orlando vs Atlanta Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: ORL wins on 2026-05-16"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260516_TIE_68faa35e",
+    "description": "MLS: Draw/Tie on 2026-05-16",
+    "kalshi": "KXMLSGAME-26MAY16ORLATL-TIE",
+    "polymarket": "atc-mls-orl-atl-2026-05-16-draw",
+    "polymarket_question": "MLS: Draw/Tie on 2026-05-16",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-09 08:01. Kalshi title: Orlando vs Atlanta Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Orlando vs Atlanta Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: Draw/Tie on 2026-05-16"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260516_ATL_12224bb3",
+    "description": "MLS: ATL wins on 2026-05-16",
+    "kalshi": "KXMLSGAME-26MAY16ORLATL-ATL",
+    "polymarket": "atc-mls-orl-atl-2026-05-16-atl",
+    "polymarket_question": "MLS: ATL wins on 2026-05-16",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-09 08:01. Kalshi title: Orlando vs Atlanta Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Orlando vs Atlanta Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: ATL wins on 2026-05-16"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260516_CLB_b433ad4d",
+    "description": "MLS: CLB wins on 2026-05-16",
+    "kalshi": "KXMLSGAME-26MAY16PHICLB-CLB",
+    "polymarket": "atc-mls-phi-clb-2026-05-16-clb",
+    "polymarket_question": "MLS: CLB wins on 2026-05-16",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-09 08:01. Kalshi title: Philadelphia vs Columbus Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Philadelphia vs Columbus Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: CLB wins on 2026-05-16"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260516_PHI_75572b7a",
+    "description": "MLS: PHI wins on 2026-05-16",
+    "kalshi": "KXMLSGAME-26MAY16PHICLB-PHI",
+    "polymarket": "atc-mls-phi-clb-2026-05-16-phi",
+    "polymarket_question": "MLS: PHI wins on 2026-05-16",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-09 08:01. Kalshi title: Philadelphia vs Columbus Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Philadelphia vs Columbus Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: PHI wins on 2026-05-16"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260516_TIE_0304a609",
+    "description": "MLS: Draw/Tie on 2026-05-16",
+    "kalshi": "KXMLSGAME-26MAY16PHICLB-TIE",
+    "polymarket": "atc-mls-phi-clb-2026-05-16-draw",
+    "polymarket_question": "MLS: Draw/Tie on 2026-05-16",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-09 08:01. Kalshi title: ",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "MLS: Draw/Tie on 2026-05-16"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: Draw/Tie on 2026-05-16"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260516_ATX_9cdc7e65",
+    "description": "MLS: ATX wins on 2026-05-16",
+    "kalshi": "KXMLSGAME-26MAY16ATXSKC-ATX",
+    "polymarket": "atc-mls-aus-skc-2026-05-16-aus",
+    "polymarket_question": "MLS: ATX wins on 2026-05-16",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-09 20:01. Kalshi title: Austin vs Kansas City Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Austin vs Kansas City Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: ATX wins on 2026-05-16"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260516_SKC_a3b9590d",
+    "description": "MLS: SKC wins on 2026-05-16",
+    "kalshi": "KXMLSGAME-26MAY16ATXSKC-SKC",
+    "polymarket": "atc-mls-aus-skc-2026-05-16-skc",
+    "polymarket_question": "MLS: SKC wins on 2026-05-16",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-09 20:01. Kalshi title: Austin vs Kansas City Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Austin vs Kansas City Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: SKC wins on 2026-05-16"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260516_TIE_eee5c5c4",
+    "description": "MLS: Draw/Tie on 2026-05-16",
+    "kalshi": "KXMLSGAME-26MAY16ATXSKC-TIE",
+    "polymarket": "atc-mls-aus-skc-2026-05-16-draw",
+    "polymarket_question": "MLS: Draw/Tie on 2026-05-16",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-09 20:01. Kalshi title: Austin vs Kansas City Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Austin vs Kansas City Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: Draw/Tie on 2026-05-16"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260516_LAG_f1ff0f40",
+    "description": "MLS: LAG wins on 2026-05-16",
+    "kalshi": "KXMLSGAME-26MAY16SEALAG-LAG",
+    "polymarket": "atc-mls-sea-lag-2026-05-16-lag",
+    "polymarket_question": "MLS: LAG wins on 2026-05-16",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-09 20:01. Kalshi title: Seattle vs Los Angeles G Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Seattle vs Los Angeles G Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: LAG wins on 2026-05-16"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260516_SEA_04d4630d",
+    "description": "MLS: SEA wins on 2026-05-16",
+    "kalshi": "KXMLSGAME-26MAY16SEALAG-SEA",
+    "polymarket": "atc-mls-sea-lag-2026-05-16-sea",
+    "polymarket_question": "MLS: SEA wins on 2026-05-16",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-09 20:01. Kalshi title: Seattle vs Los Angeles G Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Seattle vs Los Angeles G Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: SEA wins on 2026-05-16"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260516_TIE_595cd537",
+    "description": "MLS: Draw/Tie on 2026-05-16",
+    "kalshi": "KXMLSGAME-26MAY16SEALAG-TIE",
+    "polymarket": "atc-mls-sea-lag-2026-05-16-draw",
+    "polymarket_question": "MLS: Draw/Tie on 2026-05-16",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-09 20:01. Kalshi title: Seattle vs Los Angeles G Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Seattle vs Los Angeles G Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: Draw/Tie on 2026-05-16"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260516_COL_a10edf71",
+    "description": "MLS: COL wins on 2026-05-16",
+    "kalshi": "KXMLSGAME-26MAY16RSLCOL-COL",
+    "polymarket": "atc-mls-rsl-col-2026-05-16-col",
+    "polymarket_question": "MLS: COL wins on 2026-05-16",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-09 20:01. Kalshi title: Salt Lake vs Colorado Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Salt Lake vs Colorado Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: COL wins on 2026-05-16"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260516_RSL_f9339a56",
+    "description": "MLS: RSL wins on 2026-05-16",
+    "kalshi": "KXMLSGAME-26MAY16RSLCOL-RSL",
+    "polymarket": "atc-mls-rsl-col-2026-05-16-rsl",
+    "polymarket_question": "MLS: RSL wins on 2026-05-16",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-09 20:01. Kalshi title: Salt Lake vs Colorado Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Salt Lake vs Colorado Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: RSL wins on 2026-05-16"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260516_TIE_2dcee760",
+    "description": "MLS: Draw/Tie on 2026-05-16",
+    "kalshi": "KXMLSGAME-26MAY16RSLCOL-TIE",
+    "polymarket": "atc-mls-rsl-col-2026-05-16-draw",
+    "polymarket_question": "MLS: Draw/Tie on 2026-05-16",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-09 20:01. Kalshi title: Salt Lake vs Colorado Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Salt Lake vs Colorado Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: Draw/Tie on 2026-05-16"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260517_MIA_8049f31c",
+    "description": "MLS: MIA wins on 2026-05-17",
+    "kalshi": "KXMLSGAME-26MAY17MIAPOR-MIA",
+    "polymarket": "atc-mls-mia-por-2026-05-17-mia",
+    "polymarket_question": "MLS: MIA wins on 2026-05-17",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-10 00:01. Kalshi title: Miami vs Portland Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Miami vs Portland Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: MIA wins on 2026-05-17"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260517_TIE_49e9c319",
+    "description": "MLS: Draw/Tie on 2026-05-17",
+    "kalshi": "KXMLSGAME-26MAY17MIAPOR-TIE",
+    "polymarket": "atc-mls-mia-por-2026-05-17-draw",
+    "polymarket_question": "MLS: Draw/Tie on 2026-05-17",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-10 00:01. Kalshi title: Miami vs Portland Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Miami vs Portland Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: Draw/Tie on 2026-05-17"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_MLS_20260517_POR_479a5686",
+    "description": "MLS: POR wins on 2026-05-17",
+    "kalshi": "KXMLSGAME-26MAY17MIAPOR-POR",
+    "polymarket": "atc-mls-mia-por-2026-05-17-por",
+    "polymarket_question": "MLS: POR wins on 2026-05-17",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "mls",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-10 00:01. Kalshi title: Miami vs Portland Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Miami vs Portland Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "MLS: POR wins on 2026-05-17"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_SEA_20260517_TIE_3097dd22",
+    "description": "Serie A: Draw/Tie on 2026-05-17",
+    "kalshi": "KXSERIEAGAME-26MAY17ATABFC-TIE",
+    "polymarket": "atc-sea-ata-bol-2026-05-17-draw",
+    "polymarket_question": "Serie A: Draw/Tie on 2026-05-17",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "sea",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-10 04:01. Kalshi title: Atalanta vs Bologna Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Atalanta vs Bologna Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "Serie A: Draw/Tie on 2026-05-17"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_SEA_20260517_BFC_c75de044",
+    "description": "Serie A: BFC wins on 2026-05-17",
+    "kalshi": "KXSERIEAGAME-26MAY17ATABFC-BFC",
+    "polymarket": "atc-sea-ata-bol-2026-05-17-bol",
+    "polymarket_question": "Serie A: BFC wins on 2026-05-17",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "sea",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-10 04:01. Kalshi title: Atalanta vs Bologna Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Atalanta vs Bologna Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "Serie A: BFC wins on 2026-05-17"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_SEA_20260517_TOR_86f89b61",
+    "description": "Serie A: TOR wins on 2026-05-17",
+    "kalshi": "KXSERIEAGAME-26MAY17CAGTOR-TOR",
+    "polymarket": "atc-sea-cag-tor-2026-05-17-tor",
+    "polymarket_question": "Serie A: TOR wins on 2026-05-17",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "sea",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-10 04:01. Kalshi title: Cagliari vs Torino Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Cagliari vs Torino Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "Serie A: TOR wins on 2026-05-17"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_SEA_20260517_ATA_7688cb8a",
+    "description": "Serie A: ATA wins on 2026-05-17",
+    "kalshi": "KXSERIEAGAME-26MAY17ATABFC-ATA",
+    "polymarket": "atc-sea-ata-bol-2026-05-17-ata",
+    "polymarket_question": "Serie A: ATA wins on 2026-05-17",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "sea",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-10 04:01. Kalshi title: Atalanta vs Bologna Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Atalanta vs Bologna Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "Serie A: ATA wins on 2026-05-17"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_SEA_20260517_TIE_fa7013c4",
+    "description": "Serie A: Draw/Tie on 2026-05-17",
+    "kalshi": "KXSERIEAGAME-26MAY17CAGTOR-TIE",
+    "polymarket": "atc-sea-cag-tor-2026-05-17-draw",
+    "polymarket_question": "Serie A: Draw/Tie on 2026-05-17",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "sea",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-10 04:01. Kalshi title: Cagliari vs Torino Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Cagliari vs Torino Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "Serie A: Draw/Tie on 2026-05-17"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
+  },
+  {
+    "canonical_id": "GAME_SEA_20260517_CAG_8ccac289",
+    "description": "Serie A: CAG wins on 2026-05-17",
+    "kalshi": "KXSERIEAGAME-26MAY17CAGTOR-CAG",
+    "polymarket": "atc-sea-cag-tor-2026-05-17-cag",
+    "polymarket_question": "Serie A: CAG wins on 2026-05-17",
+    "category": "sports",
+    "status": "confirmed",
+    "allow_auto_trade": true,
+    "tags": [
+      "sports",
+      "sea",
+      "game-winner",
+      "auto-discovered"
+    ],
+    "notes": "Auto-discovered 2026-05-10 04:01. Kalshi title: Cagliari vs Torino Winner?",
+    "resolution_criteria": {
+      "kalshi": {
+        "source": "Kalshi",
+        "rule": "Cagliari vs Torino Winner?"
+      },
+      "polymarket": {
+        "source": "Polymarket US",
+        "rule": "Serie A: CAG wins on 2026-05-17"
+      },
+      "criteria_match": "identical",
+      "polarity": "same"
+    },
+    "resolution_match_status": "identical"
   }
 ]

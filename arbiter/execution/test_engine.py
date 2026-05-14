@@ -1399,6 +1399,9 @@ def _wire_live_depth(adapter, price: float) -> None:
 
 
 def test_live_burst_submitted_rejected_at_per_platform_ceiling():
+    import os as _os_test
+    _old_exec_order = _os_test.environ.get("EXECUTION_ORDER")
+    _os_test.environ["EXECUTION_ORDER"] = "kalshi_first"
     """SAFE-02 gap closure: live recovery still books surviving exposure.
 
     A filled primary plus resting secondary enters recovery, cancels the
@@ -1495,9 +1498,16 @@ def test_live_burst_submitted_rejected_at_per_platform_ceiling():
         assert kalshi.place_fok.await_count == 1
 
     asyncio.run(runner())
+    if _old_exec_order is None:
+        _os_test.environ.pop("EXECUTION_ORDER", None)
+    else:
+        _os_test.environ["EXECUTION_ORDER"] = _old_exec_order
 
 
 def test_live_recovering_records_only_surviving_leg():
+    import os as _os_test
+    _old_exec_order = _os_test.environ.get("EXECUTION_ORDER")
+    _os_test.environ["EXECUTION_ORDER"] = "kalshi_first"
     """SAFE-02 gap closure: when one leg FILLS and the other venue REJECTS
     (FAILED), _live_execution resolves to status='recovering'. Only the
     surviving (filled) leg's exposure is recorded. The rejected leg is NOT
@@ -1570,9 +1580,16 @@ def test_live_recovering_records_only_surviving_leg():
         assert engine.risk._platform_exposures.get("polymarket", 0.0) == 0.0
 
     asyncio.run(runner())
+    if _old_exec_order is None:
+        _os_test.environ.pop("EXECUTION_ORDER", None)
+    else:
+        _os_test.environ["EXECUTION_ORDER"] = _old_exec_order
 
 
 def test_live_recovery_cancellation_releases_reservation():
+    import os as _os_test
+    _old_exec_order = _os_test.environ.get("EXECUTION_ORDER")
+    _os_test.environ["EXECUTION_ORDER"] = "kalshi_first"
     """SAFE-02 gap closure symmetry: when _recover_one_leg_risk cancels a
     previously-SUBMITTED leg successfully, Task 2's release_trade hook frees
     the per-platform reservation that Task 1 booked. Currently (pre-Task 2)
@@ -1665,6 +1682,10 @@ def test_live_recovery_cancellation_releases_reservation():
         assert engine.risk._open_positions.get(opp.canonical_id, 0.0) == 0.0
 
     asyncio.run(runner())
+    if _old_exec_order is None:
+        _os_test.environ.pop("EXECUTION_ORDER", None)
+    else:
+        _os_test.environ["EXECUTION_ORDER"] = _old_exec_order
 
 
 def test_dry_run_record_trade_unchanged_after_fix():

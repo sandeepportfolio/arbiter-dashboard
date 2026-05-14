@@ -58,6 +58,18 @@
   #boot-splash .err p { font-size: 13px; line-height: 1.55; color:#6B6B66; margin: 0 0 14px; }
   #boot-splash .err code { font-family: ui-monospace, "JetBrains Mono", monospace; font-size: 11.5px; background:#F4F4F2; padding: 1px 5px; border-radius: 4px; color:#1A1A17; }
   #boot-splash .err button { padding: 8px 14px; background:#1A1A17; color:#FAFAF9; border:none; border-radius: 7px; font-size: 12.5px; font-weight: 600; cursor:pointer; font-family: inherit; }
+  .overview-lower-grid { display:grid; grid-template-columns:minmax(310px, 0.9fr) minmax(0, 1.85fr); gap:14px; margin-bottom:18px; align-items:stretch; }
+  .scanner-edge-layout { display:grid; grid-template-columns:minmax(320px, 0.95fr) minmax(320px, 1.05fr); gap:16px; align-items:stretch; }
+  .scanner-metric-grid { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:10px; }
+  .scanner-edge-divider { width:1px; align-self:stretch; }
+  @media (max-width: 1180px) {
+    .overview-lower-grid { grid-template-columns:1fr; }
+    .scanner-edge-layout { grid-template-columns:1fr; }
+    .scanner-edge-divider { width:100%; height:1px; }
+  }
+  @media (max-width: 760px) {
+    .scanner-metric-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+  }
 </style>
 <script>
 // Apply the saved theme to <html> before any paint, so the splash and
@@ -2212,8 +2224,8 @@ function PageOverview() {
         </window.Card>
       </div>
 
-      {/* Bottom row: balances breakdown + scanner activity + edge histogram */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.3fr 1fr', gap: 14, marginBottom: 18 }}>
+      {/* Bottom row: balances breakdown + scanner quality */}
+      <div className="overview-lower-grid">
         <window.Card title="Balance composition" padding={20}>
           <div style={{ display:'flex', alignItems:'center', gap: 16 }}>
             <div style={{ width: 110, height: 110, flexShrink: 0 }}>
@@ -2231,30 +2243,62 @@ function PageOverview() {
           </div>
         </window.Card>
 
-        <window.Card title="Scanner telemetry" action={<span style={{ fontSize: 10.5, color: scanner ? t.green : t.textMuted, fontFamily: window.FONTS.mono }}>{scanner ? 'LIVE' : 'PAUSED'}</span>} padding={0}>
-          <div style={{ padding: '14px 18px', display:'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: 14 }}>
-            <Mini label="Scans" value={(M.health.scanner.scan_count || 0).toLocaleString()} mono/>
-            <Mini label="Avg latency" value={`${M.health.scanner.scan_time_ms || 0}ms`} mono/>
-            <Mini label="Active" value={scanActive.toLocaleString()} mono/>
-            <Mini label="Tradable" value={scanTradable.toLocaleString()} mono tone={scanTradable ? 'green' : undefined}/>
-            <Mini label="Manual" value={scanManual.toLocaleString()} mono/>
-          </div>
-          <div style={{ padding: '0 18px 10px', display:'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10 }}>
-            <Mini label="Published" value={scanPublished.toLocaleString()} mono/>
-            <Mini label="Best edge" value={bestEdge ? window.fmtC(bestEdge) : '—'} mono tone="green"/>
-            <Mini label="Audit feed" value={(M.health.audit.recent_results || []).length.toLocaleString()} mono/>
-          </div>
-          <div style={{ padding: '0 18px 14px' }}>
-            <div style={{ fontSize: 10, color: t.textMuted, letterSpacing: '0.08em', marginBottom: 6 }}>BEST EDGE — LIVE SCANS + AUDITED SHADOW SAMPLES</div>
-            <div style={{ height: 56 }}>
-              <window.EdgeStrip history={scannerHist} scale={[t.bgSubtle, t.accentSoft, t.accent + '90', t.green]}/>
+        <window.Card title="Scanner & edge quality" action={
+          <span style={{ display:'inline-flex', alignItems:'center', gap: 6, padding:'4px 9px', borderRadius: 99, background: scanner ? t.greenSoft : t.bgSubtle, color: scanner ? t.green : t.textMuted, fontSize: 10.5, fontWeight: 700, fontFamily: window.FONTS.mono }}>
+            <span style={{ width: 6, height: 6, borderRadius:'50%', background: scanner ? t.green : t.textMuted, animation: scanner ? 'pulse 2s infinite' : 'none' }}/>
+            {scanner ? 'LIVE' : 'PAUSED'}
+          </span>
+        } padding={0}>
+          <div style={{ padding: 18 }}>
+            <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap: 16, marginBottom: 16 }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 10.5, color: t.textMuted, letterSpacing:'0.08em', textTransform:'uppercase', marginBottom: 4 }}>Scanner telemetry</div>
+                <div style={{ fontSize: 20, fontWeight: 650, color: t.text, letterSpacing:'-0.012em' }}>
+                  {scanActive.toLocaleString()} active <span style={{ color: t.textMuted, fontWeight: 500 }}>/</span> {scanTradable.toLocaleString()} tradable
+                </div>
+                <div style={{ fontSize: 11, color: t.textDim, marginTop: 4, lineHeight: 1.45 }}>
+                  {(M.health.scanner.scan_count || 0).toLocaleString()} scans · {scanPublished.toLocaleString()} published · {scanManual.toLocaleString()} manual review
+                </div>
+              </div>
+              <div style={{ textAlign:'right', flexShrink: 0 }}>
+                <div style={{ fontSize: 10.5, color: t.textMuted }}>Best edge</div>
+                <div style={{ fontSize: 20, fontWeight: 700, color: bestEdge ? t.green : t.textMuted, fontFamily: window.FONTS.mono, marginTop: 2 }}>{bestEdge ? window.fmtC(bestEdge) : '—'}</div>
+                <div style={{ fontSize: 10.5, color: t.textMuted, marginTop: 4 }}>{edgeLabel}</div>
+              </div>
             </div>
-          </div>
-        </window.Card>
 
-        <window.Card title="Edge distribution" action={<span style={{ fontSize: 10.5, color: t.textMuted }}>{edgeLabel} · {(M.edgeBucketSampleCount || 0).toLocaleString()}</span>} padding={20}>
-          <div style={{ height: 180 }}>
-            <window.BarChart data={M.edgeBuckets} color={t.bgHover} accent={t.accent} labelColor={t.textDim} emptyLabel="No active or audited edge samples yet — the scanner will plot live and shadow spreads here."/>
+            <div className="scanner-edge-layout">
+              <div style={{ minWidth: 0 }}>
+                <div className="scanner-metric-grid">
+                  <ScannerMetric label="Scans" value={(M.health.scanner.scan_count || 0).toLocaleString()} sub="lifetime"/>
+                  <ScannerMetric label="Latency" value={`${M.health.scanner.scan_time_ms || 0}ms`} sub="avg scan"/>
+                  <ScannerMetric label="Published" value={scanPublished.toLocaleString()} sub="queue"/>
+                  <ScannerMetric label="Audit feed" value={(M.health.audit.recent_results || []).length.toLocaleString()} sub="recent"/>
+                </div>
+                <div style={{ marginTop: 16 }}>
+                  <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap: 12, marginBottom: 7 }}>
+                    <div style={{ fontSize: 10, color: t.textMuted, letterSpacing: '0.08em', textTransform:'uppercase' }}>Best edge history</div>
+                    <div style={{ fontSize: 10.5, color: t.textMuted, fontFamily: window.FONTS.mono }}>live + audited samples</div>
+                  </div>
+                  <div style={{ height: 58, borderRadius: 7, overflow:'hidden', background: t.bgSubtle }}>
+                    <window.EdgeStrip history={scannerHist} scale={[t.bgSubtle, t.accentSoft, t.accent + '90', t.green]} emptyLabel="Awaiting scanner history..."/>
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ minWidth: 0 }}>
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap: 12, marginBottom: 8 }}>
+                  <div>
+                    <div style={{ fontSize: 10.5, color: t.textMuted, letterSpacing:'0.08em', textTransform:'uppercase' }}>Edge distribution</div>
+                    <div style={{ fontSize: 11, color: t.textDim, marginTop: 3 }}>Edge samples · {(M.edgeBucketSampleCount || 0).toLocaleString()}</div>
+                  </div>
+                  <div style={{ fontSize: 10.5, color: t.textMuted, fontFamily: window.FONTS.mono, whiteSpace:'nowrap' }}>{edgeLabel}</div>
+                </div>
+                <div style={{ height: 176 }}>
+                  <window.BarChart data={M.edgeBuckets} color={t.bgHover} accent={t.accent} labelColor={t.textDim} emptyLabel="No active or audited edge samples yet. The scanner will plot live and shadow spreads here."/>
+                </div>
+              </div>
+            </div>
           </div>
         </window.Card>
       </div>
@@ -2363,6 +2407,18 @@ function Mini({ label, value, mono, tone }) {
     <div>
       <div style={{ fontSize: 10, color: t.textMuted, letterSpacing: '0.06em', textTransform:'uppercase', marginBottom: 4 }}>{label}</div>
       <div style={{ fontSize: 15, fontWeight: 600, color: c, fontFamily: mono ? window.FONTS.mono : window.FONTS.sans, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{value}</div>
+    </div>
+  );
+}
+
+function ScannerMetric({ label, value, tone, sub }) {
+  const { t } = window.useApp();
+  const color = tone === 'green' ? t.green : tone === 'amber' ? t.amber : tone === 'red' ? t.red : t.text;
+  return (
+    <div style={{ minWidth: 0, padding: '10px 11px', borderRadius: 8, background: t.bgSubtle }}>
+      <div style={{ fontSize: 9.5, color: t.textMuted, letterSpacing: '0.06em', textTransform:'uppercase', marginBottom: 4, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{label}</div>
+      <div style={{ fontSize: 16, fontWeight: 650, color, fontFamily: window.FONTS.mono, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{value}</div>
+      {sub && <div style={{ fontSize: 10.5, color: t.textDim, marginTop: 3, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{sub}</div>}
     </div>
   );
 }
@@ -5356,12 +5412,15 @@ function MobHome({ totalBal, totalPnl }) {
         <div style={{ fontSize: 10.5, color: t.textMuted, marginTop: 8 }}>Rows show live balances and deposit-neutral source P&L.</div>
       </div>
 
-      <div style={{ background: scanner ? t.greenSoft : t.bgSubtle, border: `1px solid ${scanner ? t.green + '30' : t.border}`, borderRadius: 12, padding: 14, marginBottom: 12 }}>
-        <div style={{ display:'flex', alignItems:'center', gap: 10 }}>
-          <span style={{ width: 8, height: 8, borderRadius:'50%', background: scanner ? t.green : t.textMuted, animation: scanner ? 'pulse 2s infinite' : 'none' }}/>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: scanner ? t.green : t.textDim }}>Scanner telemetry</div>
-            <div style={{ fontSize: 10.5, color: t.textDim }}>{scanner ? `${activeMob.toLocaleString()} active · ${tradableMob.toLocaleString()} tradable · best ${bestMob ? window.fmtC(bestMob) : '—'} · ${M.health.scanner.scan_time_ms || '—'}${M.health.scanner.scan_time_ms ? 'ms' : ''}` : 'Resume to monitor markets'}</div>
+      <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 14, marginBottom: 12 }}>
+        <div style={{ display:'flex', alignItems:'flex-start', gap: 10, marginBottom: 12 }}>
+          <span style={{ width: 8, height: 8, borderRadius:'50%', background: scanner ? t.green : t.textMuted, animation: scanner ? 'pulse 2s infinite' : 'none', marginTop: 5, flexShrink: 0 }}/>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap: 8 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: t.text }}>Scanner telemetry</div>
+              <span style={{ padding:'3px 7px', borderRadius: 99, background: scanner ? t.greenSoft : t.bgSubtle, color: scanner ? t.green : t.textMuted, fontSize: 10, fontWeight: 700, fontFamily: window.FONTS.mono }}>{scanner ? 'LIVE' : 'PAUSED'}</span>
+            </div>
+            <div style={{ fontSize: 10.5, color: t.textDim, marginTop: 3, lineHeight: 1.45 }}>{scanner ? `${activeMob.toLocaleString()} active · ${tradableMob.toLocaleString()} tradable · best ${bestMob ? window.fmtC(bestMob) : '—'} · ${M.health.scanner.scan_time_ms || '—'}${M.health.scanner.scan_time_ms ? 'ms' : ''}` : 'Resume to monitor markets'}</div>
           </div>
           <button onClick={async () => {
             const next = !scanner;
@@ -5370,22 +5429,20 @@ function MobHome({ totalBal, totalPnl }) {
               if (!res.ok) { return; }
             }
             setScanner(next);
-          }} style={{ padding:'5px 10px', background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 6, fontSize: 11, fontWeight: 600, color: t.text, cursor:'pointer' }}>{scanner ? 'Pause' : 'Resume'}</button>
+          }} style={{ padding:'5px 10px', background: t.bgSubtle, border: `1px solid ${t.border}`, borderRadius: 6, fontSize: 11, fontWeight: 600, color: t.text, cursor:'pointer', flexShrink: 0 }}>{scanner ? 'Pause' : 'Resume'}</button>
         </div>
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(2, 1fr)', gap: 6, marginTop: 12 }}>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(2, minmax(0, 1fr))', gap: 6 }}>
           <MobMini label="Active" value={activeMob.toLocaleString()} dot={t.accent}/>
           <MobMini label="Tradable" value={tradableMob.toLocaleString()} dot={tradableMob ? t.green : t.textMuted}/>
           <MobMini label="Manual" value={manualMob.toLocaleString()} dot={t.amber}/>
           <MobMini label="Published" value={publishedMob.toLocaleString()} dot={t.green}/>
         </div>
-      </div>
-
-      <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 14, marginBottom: 12 }}>
-        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom: 8 }}>
-          <span style={{ fontSize: 12, fontWeight: 600 }}>Edge distribution</span>
-          <span style={{ fontSize: 10.5, color: t.textMuted }}>{edgeLabelMob} · {(M.edgeBucketSampleCount || 0).toLocaleString()}</span>
+        <div style={{ height: 1, background: t.border, margin: '14px 0 12px' }}/>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap: 10, marginBottom: 8 }}>
+          <span style={{ fontSize: 12, fontWeight: 700 }}>Edge distribution</span>
+          <span style={{ fontSize: 10.5, color: t.textMuted, textAlign:'right' }}>{edgeLabelMob} · {(M.edgeBucketSampleCount || 0).toLocaleString()}</span>
         </div>
-        <div style={{ height: 120 }}>
+        <div style={{ height: 122 }}>
           <window.BarChart data={M.edgeBuckets} color={t.bgHover} accent={t.accent} labelColor={t.textDim} emptyLabel="No active, audited, or telemetry edge samples yet."/>
         </div>
       </div>

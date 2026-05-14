@@ -173,6 +173,22 @@ describe("ops desktop balance cards", () => {
     expect(kpiCard).toContain("platformBalances.map");
     expect(kpiCard).toContain("lineHeight: 1.35");
   });
+
+  it("combines scanner telemetry and edge distribution in a responsive quality panel", () => {
+    const overview = functionBody("PageOverview");
+    const mobile = functionBody("MobHome");
+
+    expect(opsHtml).toContain(".overview-lower-grid");
+    expect(opsHtml).toContain("@media (max-width: 1180px)");
+    expect(overview).toContain("Scanner & edge quality");
+    expect(overview).toContain("className=\"scanner-edge-layout\"");
+    expect(overview).toContain("className=\"scanner-metric-grid\"");
+    expect(overview).toContain("<ScannerMetric label=\"Latency\"");
+    expect(overview).toContain("Edge samples ·");
+    expect(mobile).toContain("Scanner telemetry");
+    expect(mobile).toContain("Edge distribution");
+    expect(mobile).toContain("gridTemplateColumns:'repeat(2, minmax(0, 1fr))'");
+  });
 });
 
 describe("ops refresh persistence", () => {

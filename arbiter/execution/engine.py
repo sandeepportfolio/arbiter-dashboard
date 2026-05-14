@@ -1008,15 +1008,36 @@ class ExecutionEngine:
             )
             # Skip straight to status determination below
         else:
-            # Determine primary/secondary: Kalshi (FOK) goes first because
-            # it gives an immediate fill-or-kill result.
-            if opp.yes_platform == "kalshi":
-                primary_side, secondary_side = "yes", "no"
-            elif opp.no_platform == "kalshi":
-                primary_side, secondary_side = "no", "yes"
+            # POLY-FIRST STRATEGY: Execute Polymarket first because it
+            # reprices faster than Kalshi. Historical data shows 0/118
+            # trades completed both legs with Kalshi-first — the Polymarket
+            # book always moved past profitability before the secondary
+            # could fill. By filling the fast market first, the slow market
+            # (Kalshi) is more likely to still have the stale price.
+            # Backward-compat: set EXECUTION_ORDER=kalshi_first to revert.
+            import os as _os_exec_order
+            _exec_order = _os_exec_order.environ.get("EXECUTION_ORDER", "poly_first")
+            if _exec_order == "kalshi_first":
+                # Legacy behavior
+                if opp.yes_platform == "kalshi":
+                    primary_side, secondary_side = "yes", "no"
+                elif opp.no_platform == "kalshi":
+                    primary_side, secondary_side = "no", "yes"
+                else:
+                    primary_side, secondary_side = "yes", "no"
             else:
-                # Neither is Kalshi — default to YES first
-                primary_side, secondary_side = "yes", "no"
+                # Poly-first (default)
+                if opp.yes_platform == "polymarket":
+                    primary_side, secondary_side = "yes", "no"
+                elif opp.no_platform == "polymarket":
+                    primary_side, secondary_side = "no", "yes"
+                elif opp.yes_platform == "polymarket_us":
+                    primary_side, secondary_side = "yes", "no"
+                elif opp.no_platform == "polymarket_us":
+                    primary_side, secondary_side = "no", "yes"
+                else:
+                    # Neither is Polymarket — default to YES first
+                    primary_side, secondary_side = "yes", "no"
 
             primary_platform = getattr(opp, f"{primary_side}_platform")
             primary_market = getattr(opp, f"{primary_side}_market_id")
@@ -1264,7 +1285,12 @@ class ExecutionEngine:
                 # the walked price already crosses our edge floor — at
                 # that point the trade is guaranteed-loss before any
                 # book movement, so we want the recovery path instead.
-                abort_secondary = secondary_fok_price > max_affordable_secondary
+                # Only hard-abort if walked price exceeds max_affordable by
+                # more than 5¢ ("hopeless" threshold).  If within 5¢, still
+                # try the IOC at max_affordable — the book might move back
+                # by the time the order hits.
+                HOPELESS_THRESHOLD = 0.05
+                abort_secondary = secondary_fok_price > (max_affordable_secondary + HOPELESS_THRESHOLD)
                 buffered_limit = max_affordable_secondary if not abort_secondary else secondary_fok_price
 
                 logger.info(
@@ -1330,10 +1356,18 @@ class ExecutionEngine:
                 if abort_secondary:
                     pass  # secondary_leg already constructed as ABORTED above
                 else:
-                    secondary_leg = await self._place_order_for_leg(
-                        arb_id, secondary_platform, secondary_market,
-                        opp.canonical_id, secondary_side, buffered_limit, effective_qty,
-                        use_ioc=True,
+                    secondary_leg = await self._execute_with_fallbacks(
+                        arb_id=arb_id,
+                        secondary_platform=secondary_platform,
+                        secondary_market=secondary_market,
+                        canonical_id=opp.canonical_id,
+                        secondary_side=secondary_side,
+                        initial_price=buffered_limit,
+                        qty=effective_qty,
+                        max_affordable_price=max_affordable_secondary,
+                        primary_leg=primary_leg,
+                        primary_platform=primary_platform,
+                        opp=opp,
                     )
 
                 if secondary_leg.status not in {OrderStatus.FILLED, OrderStatus.SUBMITTED, OrderStatus.PARTIAL}:
@@ -1416,6 +1450,38 @@ class ExecutionEngine:
                 leg_yes, leg_no = primary_leg, secondary_leg
             else:
                 leg_yes, leg_no = secondary_leg, primary_leg
+
+            # Post-trade validation: verify combined fill prices are profitable
+            if (
+                leg_yes.status == OrderStatus.FILLED
+                and leg_no.status == OrderStatus.FILLED
+            ):
+                actual_yes_cost = float(leg_yes.fill_price)
+                actual_no_cost = float(leg_no.fill_price)
+                actual_total_cost = actual_yes_cost + actual_no_cost
+                actual_yes_fee = compute_fee(
+                    opp.yes_platform, actual_yes_cost,
+                    effective_qty, opp.yes_fee_rate,
+                ) / max(effective_qty, 1)
+                actual_no_fee = compute_fee(
+                    opp.no_platform, actual_no_cost,
+                    effective_qty, opp.no_fee_rate,
+                ) / max(effective_qty, 1)
+                actual_fees_per = actual_yes_fee + actual_no_fee
+                actual_profit_per = 1.0 - actual_total_cost - actual_fees_per
+                if actual_profit_per < 0:
+                    logger.error(
+                        "POST-TRADE ALERT: fills are unprofitable! "
+                        "total=%.4f fees=%.4f profit=%.4f cents",
+                        actual_total_cost, actual_fees_per,
+                        actual_profit_per * 100,
+                    )
+                else:
+                    logger.info(
+                        "POST-TRADE OK: total=%.4f fees=%.4f profit=%.2f cents",
+                        actual_total_cost, actual_fees_per,
+                        actual_profit_per * 100,
+                    )
 
         # Plan 03-08 (SAFE-02 gap closure — closes the
         # 03-VERIFICATION.md "Per-platform exposure tracking fires on
@@ -1589,6 +1655,97 @@ class ExecutionEngine:
             except Exception as exc:
                 logger.warning("ExecutionStore record_arb failed: %s", exc)
         return execution
+
+    async def _execute_with_fallbacks(
+        self,
+        arb_id: str,
+        secondary_platform: str,
+        secondary_market: str,
+        canonical_id: str,
+        secondary_side: str,
+        initial_price: float,
+        qty: int,
+        max_affordable_price: float,
+        primary_leg: "Order",
+        primary_platform: str,
+        opp: "ArbitrageOpportunity",
+    ) -> "Order":
+        """Execute secondary leg with multiple fallback strategies.
+
+        Fallback chain:
+        1. IOC at walked/buffered price (current behavior)
+        2. IOC at max_affordable price (widest profitable limit)
+        3. FOK at max_affordable price (some venues handle FOK differently)
+        All attempts failed -> return last failed order for recovery path.
+        """
+        # Uses module-level logger = logging.getLogger("arbiter.execution")
+
+        # Attempt 1: IOC at walked/buffered price
+        order = await self._place_order_for_leg(
+            arb_id, secondary_platform, secondary_market,
+            canonical_id, secondary_side, initial_price, qty,
+            use_ioc=True,
+        )
+        if order.status in {OrderStatus.FILLED, OrderStatus.PARTIAL}:
+            logger.info(
+                "  ✓ FALLBACK-1 (IOC at walked): %s filled %d/%d @ %.4f",
+                secondary_side.upper(), order.fill_qty, qty, order.fill_price,
+            )
+            return order
+
+        # Attempt 2: IOC at max affordable price (widest profitable limit)
+        order2 = None
+        if max_affordable_price > initial_price + 0.005:
+            logger.info(
+                "  ↻ FALLBACK-2: retrying IOC at max_affordable=%.4f (was %.4f)",
+                max_affordable_price, initial_price,
+            )
+            order2 = await self._place_order_for_leg(
+                f"{arb_id}-F2", secondary_platform, secondary_market,
+                canonical_id, secondary_side, max_affordable_price, qty,
+                use_ioc=True,
+            )
+            if order2.status in {OrderStatus.FILLED, OrderStatus.PARTIAL}:
+                logger.info(
+                    "  ✓ FALLBACK-2 (IOC wider): filled %d/%d @ %.4f",
+                    order2.fill_qty, qty, order2.fill_price,
+                )
+                return order2
+
+        # Attempt 3: FOK at max affordable (some venues handle FOK differently)
+        logger.info(
+            "  ↻ FALLBACK-3: trying FOK at max_affordable=%.4f",
+            max_affordable_price,
+        )
+        order3 = await self._place_order_for_leg(
+            f"{arb_id}-F3", secondary_platform, secondary_market,
+            canonical_id, secondary_side, max_affordable_price, qty,
+            use_ioc=False,  # FOK
+        )
+        if order3.status in {OrderStatus.FILLED}:
+            logger.info(
+                "  ✓ FALLBACK-3 (FOK wider): filled %d @ %.4f",
+                order3.fill_qty, order3.fill_price,
+            )
+            return order3
+
+        # All attempts failed — return the last failed order
+        order2_status = order2.status.value if order2 is not None else "skipped"
+        logger.error(
+            "  ✗ ALL FALLBACKS EXHAUSTED for %s on %s. "
+            "Primary %s on %s is now naked.",
+            secondary_side.upper(), secondary_platform,
+            "YES" if secondary_side == "no" else "NO",
+            primary_platform,
+        )
+        # Aggregate error onto the original order for downstream logging
+        order.error = (
+            f"All fallbacks exhausted: "
+            f"IOC@{initial_price:.4f} -> {order.status.value}, "
+            f"IOC@{max_affordable_price:.4f} -> {order2_status}, "
+            f"FOK@{max_affordable_price:.4f} -> {order3.status.value}"
+        )
+        return order
 
     async def _place_order_for_leg(
         self,

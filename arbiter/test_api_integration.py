@@ -565,6 +565,9 @@ def test_ops_scanner_balance_and_trades_widgets_use_live_telemetry():
     assert "Rows show live balances and deposit-neutral source P&L" in html
     assert "Tap a row" not in html
     assert "Edge samples" in html
+    assert "Scanner & edge quality" in html
+    assert 'className="scanner-edge-layout"' in html
+    assert "function ScannerMetric" in html
     assert "Scanner telemetry" in html
     assert "Expected profit" in html
     assert "expected_vs_realized" in html
