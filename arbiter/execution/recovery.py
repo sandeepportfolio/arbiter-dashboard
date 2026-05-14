@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import logging
 import time
-import uuid
 from typing import Any, Dict, List
 
 from .adapters.base import PlatformAdapter
@@ -151,6 +150,10 @@ def _derive_arb_id(order_id: str) -> str:
     return order_id
 
 
+def _half_recorded_incident_id(arb_id: str) -> str:
+    return f"INC-HALF-{arb_id}"
+
+
 async def reconcile_half_recorded_arbs(
     store: ExecutionStore,
 ) -> List[Dict[str, Any]]:
@@ -196,12 +199,28 @@ async def reconcile_half_recorded_arbs(
         len(orphans),
     )
 
+    arb_ids = [str(orphan["arb_id"]) for orphan in orphans if orphan.get("arb_id")]
+    cleanup = getattr(store, "resolve_superseded_half_recorded_incidents", None)
+    if cleanup is not None:
+        try:
+            resolved = await cleanup(arb_ids)
+            if resolved:
+                logger.info(
+                    "recovery: resolved %d superseded half-recorded incident duplicate(s)",
+                    resolved,
+                )
+        except Exception as exc:
+            logger.warning(
+                "recovery: failed to resolve superseded half-recorded incidents: %s",
+                exc,
+            )
+
     for orphan in orphans:
         arb_id = orphan["arb_id"]
         leg_count = int(orphan.get("leg_count") or 0)
         leg_ids = list(orphan.get("leg_order_ids") or [])
         incident = ExecutionIncident(
-            incident_id=f"INC-HALF-{uuid.uuid4().hex[:8]}",
+            incident_id=_half_recorded_incident_id(str(arb_id)),
             arb_id=arb_id,
             canonical_id=(orphan.get("canonical_id") or ""),
             severity="critical",

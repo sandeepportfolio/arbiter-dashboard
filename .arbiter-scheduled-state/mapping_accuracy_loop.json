@@ -1,34 +1,30 @@
 {
-  "timestamp": "2026-05-14T20:52:29Z",
+  "timestamp": "2026-05-14T22:28:41Z",
   "agent": "Arbiter end-to-end mapping accuracy and profitability agent",
   "git_state": {
     "branch": "main",
-    "head": "6341e5a6ea0631b7526a9628560eb6190af90308",
-    "origin_main": "6341e5a6ea0631b7526a9628560eb6190af90308",
+    "head_before_commit": "fbcf14a70c6e48223294de096fb3315f5608c3fb",
+    "origin_main_before_commit": "fbcf14a70c6e48223294de096fb3315f5608c3fb",
     "ahead": 0,
     "behind": 0,
-    "dirty_tracked_files": [
-      "arbiter/api.py",
-      "arbiter/mapping/market_map.py",
-      "arbiter/mapping/test_auto_discovery.py",
-      "arbiter/mapping/test_market_map.py",
-      "arbiter/test_api_integration.py",
-      "docker-compose.prod.yml"
-    ],
-    "ignored_runtime_files_changed": [
-      ".env.production: AUTO_EXECUTE_ENABLED=false, AUTO_PROMOTE_ENABLED=false"
-    ],
+    "dirty_tracked_files": [],
+    "new_files": [],
     "notes": [
-      "Local main was behind origin/main by 1 commit and was fast-forwarded before final validation.",
-      "arbiter/mapping/test_auto_discovery.py was dirty before this audit and was not reverted.",
-      "Unrelated local work was not overwritten."
-    ]
+      "Local branch main matched origin/main before this continuation.",
+      "No unrelated local changes were overwritten.",
+      "Auto-execute and auto-promote remain disabled and were not promoted."
+    ],
+    "origin_main_before_push": "fbcf14a70c6e48223294de096fb3315f5608c3fb",
+    "post_commit_status": "committed locally; push pending at checkpoint write time",
+    "committed_on_branch": "main",
+    "commit_note": "This checkpoint is included in the commit that contains it; use git rev-parse HEAD after checkout for the exact immutable hash."
   },
   "runtime_state": {
     "service_url": "http://localhost:8080",
     "ops_page": {
       "url": "http://localhost:8080/ops",
-      "status": 200
+      "status": 200,
+      "validated": true
     },
     "settings": {
       "auto_executor_enabled": false,
@@ -39,64 +35,71 @@
       "ready_for_live_trading": false,
       "blocking_reasons": [
         "No confirmed auto-trade mappings are enabled",
-        "PnL reconciliation drift is flagged"
+        "Profitability verdict is blocked",
+        "1 critical incidents remain unresolved"
       ]
     },
     "profitability": {
-      "verdict": "collecting_evidence",
+      "verdict": "blocked",
       "is_profitable": false,
-      "is_determined": false,
-      "progress": 0.756,
-      "scan_count": 40,
+      "is_determined": true,
+      "progress": 0.7705,
+      "scan_count": 300,
       "published_opportunities": 0,
-      "active_opportunities": 0,
-      "completed_executions": 4,
-      "total_realized_pnl": 20.1,
+      "completed_executions": 55,
+      "profitable_executions": 26,
+      "losing_executions": 8,
+      "breakeven_executions": 21,
+      "total_realized_pnl": 135.3795,
       "reasons": [
-        "Need 210 more scans before profitability can be determined",
+        "Critical incidents 1 exceed the allowed 0",
         "Need 25 more published opportunities",
-        "Need 6 more completed executions"
+        "Profitable execution ratio 47.27% is below the required 65.00%"
       ]
     },
     "reconciliation": {
       "configured": true,
-      "summary": "PnL reconciliation drift is flagged",
-      "flag_count": 1,
-      "total_recorded_pnl": 20.1,
-      "total_discrepancy": -180.41,
-      "entries": [
-        {
-          "platform": "kalshi",
-          "recorded_pnl": 20.1,
-          "platform_balance": 354.63,
-          "starting_balance": 227.35,
-          "expected_balance": 247.45,
-          "discrepancy": -107.18,
-          "is_flagged": true
-        },
-        {
-          "platform": "polymarket",
-          "recorded_pnl": 0.0,
-          "platform_balance": 211.77,
-          "starting_balance": 138.54,
-          "expected_balance": 138.54,
-          "discrepancy": -73.23,
-          "is_flagged": false
-        }
-      ]
+      "summary": "PnL reconciliation is healthy",
+      "flag_count": 0,
+      "total_recorded_pnl": 135.3795,
+      "total_discrepancy": 0.0,
+      "recorded_pnl": {
+        "kalshi": 95.67,
+        "polymarket": 39.7095
+      },
+      "starting_balances": {
+        "kalshi": 258.96,
+        "polymarket": 172.0605
+      },
+      "total_deposits_all": 65.13
     },
-    "metrics": {
-      "scanner_active_opportunities": 0,
-      "scanner_best_edge_cents": 0.0,
-      "auto_executor_considered": 0,
-      "auto_executor_executed": 0,
-      "kill_switch_armed": 1,
-      "errors_count": 0,
-      "failed_trades_endpoint_count": 20,
-      "trades_endpoint_statuses": {
-        "failed": 20,
-        "pending": 172,
-        "recovering": 8
+    "portfolio": {
+      "total_exposure": 213.1,
+      "total_open_positions": 83,
+      "total_unhedged": 83,
+      "violations": 83,
+      "note": "Exposure no longer counts zero-fill placeholder pending rows; remaining exposure is from filled one-leg/unhedged historical rows."
+    },
+    "errors": {
+      "api_errors_count": 501,
+      "critical_errors_visible": 202,
+      "summary_incident": "INC-HALF-RECORDED-SUMMARY open",
+      "persisted_half_recorded_open": 201,
+      "persisted_half_recorded_resolved_duplicates": 4422
+    },
+    "execution_db": {
+      "status_counts": {
+        "pending": 197,
+        "recovering": 48,
+        "failed": 43,
+        "closed": 7
+      },
+      "half_recorded_count": 201,
+      "incident_counts": {
+        "critical_open": 201,
+        "critical_resolved": 4569,
+        "warning_open": 2614,
+        "warning_resolved": 402
       }
     }
   },
@@ -104,115 +107,57 @@
     "status_counts": {
       "candidate": 139,
       "confirmed": 17,
-      "expired": 34219,
+      "expired_endpoint_returned": 5000,
       "rejected": 111,
       "review": 101
     },
     "confirmed_auto_trade_enabled": 0,
-    "confirmed_missing_resolution_criteria": 0,
-    "confirmed_non_identical_resolution": 0,
-    "confirmed_kept_but_held": [
-      "DEM_SENATE_2026",
-      "GOP_HOUSE_2026",
-      "GOP_SENATE_2026",
-      "GAME_MLS_20260516_ATX_9cdc7e65",
-      "GAME_MLS_20260516_CLB_b433ad4d",
-      "GAME_MLS_20260516_COL_a10edf71",
-      "GAME_MLS_20260516_LAG_f1ff0f40",
-      "GAME_MLS_20260516_ORL_b30d5a00",
-      "GAME_MLS_20260516_PHI_75572b7a",
-      "GAME_MLS_20260516_RSL_f9339a56",
-      "GAME_MLS_20260516_SEA_04d4630d",
-      "GAME_MLS_20260516_SKC_a3b9590d",
-      "GAME_MLS_20260516_TIE_0304a609",
-      "GAME_MLS_20260516_TIE_2dcee760",
-      "GAME_MLS_20260516_TIE_595cd537",
-      "GAME_MLS_20260516_TIE_68faa35e",
-      "GAME_MLS_20260516_TIE_eee5c5c4"
-    ],
-    "held_or_disabled_this_run": [
-      {
-        "canonical_id": "DEM_HOUSE_2026",
-        "status": "review",
-        "reason": "Repeated/open trade risk: failed=22, recovering=1; auto-discovery attempted to revive it and was blocked by new guard."
-      },
-      {
-        "canonical_id": "GAME_MLS_20260517_MIA_8049f31c",
-        "status": "review",
-        "reason": "Auto-promote gate llm_maybe and missing structured settlement dates."
-      },
-      {
-        "canonical_id": "GAME_MLS_20260517_POR_479a5686",
-        "status": "review",
-        "reason": "Auto-promote gate llm_maybe and missing structured settlement dates."
-      },
-      {
-        "canonical_id": "GAME_MLS_20260517_TIE_49e9c319",
-        "status": "review",
-        "reason": "Auto-promote gate llm_maybe and missing structured settlement dates."
-      }
-    ],
-    "stale_expired_this_run": 196,
     "new_accurate_mappings_found": [],
+    "new_mappings_enabled_for_auto_trade": [],
+    "classification": {
+      "KEEP_CONFIRMED_BUT_HOLD_AUTO_TRADE": 17,
+      "KEEP_AUTO_TRADE": 0,
+      "DISABLE_AUTO_TRADE": "all confirmed remain allow_auto_trade=false until manual recovery blockers are cleared"
+    },
     "discovery_result": {
-      "run_completed": true,
-      "kalshi_markets": 10000,
-      "kalshi_events": 5000,
-      "polymarket_markets": 1995,
-      "scored_pairs": 64666,
-      "candidates_selected": 7,
-      "candidates_written": 7,
-      "confirmed_in_batch": 0,
+      "status": "completed/running during live validation",
       "notes": [
-        "Discovery surfaced known politics rows and May 17 MLS rows.",
-        "No candidate received all-validator YES, positive net edge, clean reconciliation, and profitability proof.",
-        "No new mapping was enabled for auto-trade."
+        "Discovery pipeline remains enabled for candidates only.",
+        "Auto-promote remains disabled.",
+        "No candidate met all-validator YES plus live/liquid/profitable-after-fees requirements."
       ]
     }
   },
   "do_not_repeat_registry": {
     "rejected_canonical_ids_count": 111,
-    "expired_exact_venue_pairs_count": 34219,
+    "review_canonical_ids_count": 101,
+    "expired_endpoint_count_sample": 5000,
     "failed_or_open_trade_patterns": [
+      {
+        "canonical_id": "GAME_MLS_20260516_ATL_12224bb3",
+        "pending": 147,
+        "failed": 19,
+        "action": "do not reuse; half-recorded/pending recovery blocker"
+      },
       {
         "canonical_id": "DEM_HOUSE_2026",
         "failed": 22,
-        "pending": 0,
         "recovering": 1,
         "action": "review; allow_auto_trade=false"
       },
       {
-        "canonical_id": "GAME_MLS_20260516_ATL_12224bb3",
-        "failed": 19,
-        "pending": 147,
-        "recovering": 0,
-        "action": "do not reuse ORL/ATL May 16 family blindly"
-      },
-      {
         "canonical_id": "GAME_NBA_20260509_DET_dc508cb7",
-        "failed": 1,
         "pending": 7,
         "recovering": 6,
-        "action": "stale/open trade residue"
-      },
-      {
-        "canonical_id": "AUTO_KXLOSEMAJORITY_27JAN01_1427a45c154c",
-        "failed": 0,
-        "pending": 0,
-        "recovering": 7,
-        "action": "prior false-positive politics mapping; do not reuse"
+        "action": "do not reuse until manually reconciled"
       }
     ],
-    "known_stale_or_rejected_patterns": [
-      "KXMVE multi-leg/parlay markets",
-      "Bracket or seat-count markets mapped to binary control markets",
-      "Old 2028 party/nominee seed slugs and tickers",
-      "KXLOSEMAJORITY pre-election majority-change market mapped to midterm winner",
-      "Fuzzy/LLM-only matches without structural identity",
-      "Sports spread/total/futures vs moneyline mismatches",
-      "Sports rows without matching structured settlement dates",
-      "Mappings with zero or weak executable liquidity",
-      "Mappings with active pending/recovering/failed execution residue"
+    "past_mistakes_avoided": [
+      "No fuzzy-only candidates were auto-confirmed.",
+      "No rejected/review/expired mapping was revived for auto-trade.",
+      "No stale or zero-liquidity candidate was promoted.",
+      "Zero-fill pending execution placeholders were removed from portfolio exposure calculations.",
+      "Duplicate half-recorded restart incidents were collapsed to deterministic per-arb incidents."
     ]
   },
   "validator_verdicts": {
@@ -251,30 +196,13 @@
     "promotion_rule": "No mapping promoted because at least one validator returned NO or MAYBE for every candidate/group."
   },
   "fixes_made": [
-    {
-      "file": "arbiter/api.py",
-      "summary": "Added expire action for stale mappings and fixed reconciliation summary so has_flags=true reports drift instead of healthy."
-    },
-    {
-      "file": "arbiter/mapping/market_map.py",
-      "summary": "Sports auto-trade safety now requires same polarity plus matching structured settlement dates; discovery candidate writes now preserve review/rejected/expired holds and force allow_auto_trade=false for protected rows."
-    },
-    {
-      "file": "arbiter/mapping/test_market_map.py",
-      "summary": "Added regression coverage for missing sports settlement dates and for discovery not reviving a mapping under review."
-    },
-    {
-      "file": "arbiter/test_api_integration.py",
-      "summary": "Added coverage for reconciliation drift summary and expire action; updated stale ops.html string assertions to current UI contract."
-    },
-    {
-      "file": ".env.production",
-      "summary": "Local ignored runtime toggles set to AUTO_EXECUTE_ENABLED=false and AUTO_PROMOTE_ENABLED=false so future recreates start fail-closed."
-    },
-    {
-      "file": "docker-compose.prod.yml",
-      "summary": "Tracked production compose overrides set AUTO_EXECUTE_ENABLED=false and AUTO_PROMOTE_ENABLED=false so pushed main also starts fail-closed even if an ignored env file contains unsafe values."
-    }
+    "Startup now loads full execution history for reconciliation instead of newest 200 rows.",
+    "Restored PnL reconciliation resumes deposit detection once a live execution ledger is present.",
+    "Runtime reconciliation passes the live execution ledger directly to the reconciler.",
+    "/api/errors now includes persisted open execution incidents after restart.",
+    "Half-recorded recovery incidents use deterministic IDs and resolve duplicate restart noise.",
+    "Half-recorded recovery summary is surfaced in runtime incidents/readiness and is not auto-resolved as stale.",
+    "Portfolio exposure now counts actual filled leg notional, not zero-fill pending placeholders."
   ],
   "tests_run": [
     {
@@ -310,12 +238,32 @@
     "ops_page": "HTTP 200"
   },
   "remaining_blockers": [
-    "PnL reconciliation drift: total discrepancy -180.41, Kalshi discrepancy -107.18.",
-    "Profitability validator is not determined profitable and still needs scans, published opportunities, and completed executions.",
-    "No confirmed mapping is allowed to auto-trade; this is intentional until audits are clean.",
-    "Open/failed/recovering execution residue remains, especially DEM_HOUSE_2026 and GAME_MLS_20260516_ATL_12224bb3.",
-    "Politics control mappings need explicit settlement source/tie-break confirmation before auto-trade.",
-    "May 16 MLS held mappings need live-rule fidelity review and positive net edge before execution.",
-    "May 17 MLS rows need structured settlement dates and non-MAYBE validation before promotion."
-  ]
+    "201 half-recorded arbs still require manual venue/exposure reconciliation before auto-trade can be considered.",
+    "83 unhedged historical portfolio positions remain visible as stale portfolio violations.",
+    "Profitability verdict is blocked; do not claim profitability.",
+    "No confirmed mappings have allow_auto_trade=true; auto-trade remains intentionally disabled."
+  ],
+  "validation": {
+    "full_pytest": [
+      "888 passed, 88 skipped, 1 warning",
+      "888 passed, 88 skipped, 1 warning",
+      "888 passed, 88 skipped, 1 warning"
+    ],
+    "required_mapping_safety": [
+      "173 passed",
+      "173 passed",
+      "173 passed"
+    ],
+    "focused_changed_suites": [
+      "81 passed, 2 skipped",
+      "81 passed, 2 skipped",
+      "81 passed, 2 skipped"
+    ],
+    "additional_portfolio_after_import_cleanup": "2 passed",
+    "live_api_ops": [
+      "health ok; readiness false; auto_executor=false; auto_promote=false; reconciliation healthy; confirmed auto=0; /ops 200",
+      "health ok; readiness false; auto_executor=false; auto_promote=false; reconciliation healthy; confirmed auto=0; /ops 200",
+      "health ok; readiness false; auto_executor=false; auto_promote=false; reconciliation healthy; confirmed auto=0; /ops 200"
+    ]
+  }
 }

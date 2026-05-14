@@ -204,6 +204,7 @@ class ArbiterAPI:
         port: int = 8080,
         safety: Optional[SafetySupervisor] = None,
         mapping_store=None,
+        execution_store=None,
     ):
         self.store = price_store
         self.scanner = scanner
@@ -220,6 +221,7 @@ class ArbiterAPI:
         self.port = port
         self.safety = safety
         self.mapping_store = mapping_store
+        self.execution_store = execution_store
         # SafetyEventStore exposes list_events() for GET /api/safety/events;
         # supervisor holds the reference on ``_safety_store`` (may be None in
         # dev mode without Postgres).
@@ -1835,7 +1837,21 @@ class ArbiterAPI:
         return web.json_response(session)
 
     async def handle_errors(self, request):
-        return web.json_response([incident.to_dict() for incident in self.engine.incidents])
+        incidents = {
+            incident.incident_id: incident.to_dict()
+            for incident in self.engine.incidents
+        }
+        if self.execution_store is not None:
+            try:
+                persisted = await self.execution_store.list_incidents(
+                    status="open",
+                    limit=500,
+                )
+                for incident in persisted:
+                    incidents.setdefault(incident.incident_id, incident.to_dict())
+            except Exception as exc:
+                logger.warning("Failed to load persisted incidents for /api/errors: %s", exc)
+        return web.json_response(list(incidents.values()))
 
     async def handle_manual_positions(self, request):
         return web.json_response([position.to_dict() for position in self.engine.manual_positions])
@@ -3563,6 +3579,7 @@ def create_api_server(
     port=8080,
     safety=None,
     mapping_store=None,
+    execution_store=None,
 ) -> ArbiterAPI:
     return ArbiterAPI(
         price_store,
@@ -3580,4 +3597,5 @@ def create_api_server(
         port=port,
         safety=safety,
         mapping_store=mapping_store,
+        execution_store=execution_store,
     )

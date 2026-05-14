@@ -147,3 +147,49 @@ def test_detect_deposits_does_not_double_record_within_window():
     reconciler.reconcile({"kalshi": 150.0})
     # Dedup must keep the count at 1.
     assert len(reconciler.deposit_history) == 1
+
+
+def test_restored_state_resumes_deposit_detection_once_execution_ledger_is_present():
+    """After DB restore, live execution context should re-enable deposit detection.
+
+    The first restored reconciliation intentionally skips deposit detection so
+    historical trading gains are not misclassified as deposits. Once the engine
+    has supplied an execution ledger, a new unexplained balance jump should be
+    treated as capital movement instead of permanent reconciliation drift.
+    """
+    reconciler = PnLReconciler(discrepancy_threshold=1.0, log_to_disk=False)
+    reconciler.set_starting_balance("kalshi", 100.0)
+    reconciler._restored_from_db = True
+
+    report = reconciler.reconcile(
+        {"kalshi": 151.0},
+        executions=[make_execution(2.0, yes_platform="kalshi", no_platform="polymarket")],
+    )
+
+    assert report.has_flags is False
+    assert reconciler.stats["starting_balances"]["kalshi"] == 150.0
+    assert reconciler.stats["recorded_pnl"]["kalshi"] == 1.0
+    assert reconciler.total_deposits_by_platform["kalshi"] == 50.0
+    assert reconciler._restored_from_db is False
+
+
+def test_runtime_reconciliation_uses_live_execution_ledger():
+    from arbiter.main import sync_runtime_reconciliation
+
+    reconciler = PnLReconciler(discrepancy_threshold=1.0, log_to_disk=False)
+    reconciler.set_starting_balance("kalshi", 100.0)
+    reconciler._restored_from_db = True
+    monitor = SimpleNamespace(
+        current_balances={"kalshi": SimpleNamespace(balance=151.0)}
+    )
+    engine = SimpleNamespace(
+        execution_history=[
+            make_execution(2.0, yes_platform="kalshi", no_platform="polymarket")
+        ]
+    )
+
+    report = sync_runtime_reconciliation(reconciler, monitor, engine)
+
+    assert report.has_flags is False
+    assert reconciler.stats["recorded_pnl"]["kalshi"] == 1.0
+    assert reconciler.total_deposits_by_platform["kalshi"] == 50.0

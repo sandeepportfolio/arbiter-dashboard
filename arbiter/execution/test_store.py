@@ -353,6 +353,85 @@ async def test_record_arb_rolls_back_when_arb_insert_fails(mock_pool):
     assert mock_pool.conn.executes_inside_txn == 1
 
 
+# ─── Rehydration ──────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_load_execution_history_can_load_all_rows_for_reconciliation(mock_pool):
+    store = ExecutionStore(database_url="postgres://mock/mock")
+    await store.connect()
+
+    result = await store.load_execution_history(limit=None)
+
+    assert result == []
+    assert mock_pool.conn.calls, "load_execution_history made no DB call"
+    method, sql, args = mock_pool.conn.calls[-1]
+    assert method == "fetch"
+    assert "LIMIT $1" not in sql
+    assert args == ()
+
+
+@pytest.mark.asyncio
+async def test_load_execution_history_defaults_to_bounded_recent_rows(mock_pool):
+    store = ExecutionStore(database_url="postgres://mock/mock")
+    await store.connect()
+
+    result = await store.load_execution_history()
+
+    assert result == []
+    method, sql, args = mock_pool.conn.calls[-1]
+    assert method == "fetch"
+    assert "LIMIT $1" in sql
+    assert args == (200,)
+
+
+@pytest.mark.asyncio
+async def test_resolve_superseded_half_recorded_incidents_marks_duplicate_alerts(mock_pool):
+    store = ExecutionStore(database_url="postgres://mock/mock")
+    await store.connect()
+
+    updated = await store.resolve_superseded_half_recorded_incidents([
+        "ARB-000491",
+        "ARB-000492",
+    ])
+
+    assert updated == 0
+    method, sql, args = mock_pool.conn.calls[-1]
+    assert method == "execute"
+    assert "metadata->>'event_type' = 'half_recorded_arb'" in sql
+    assert "incident_id <> ('INC-HALF-' || arb_id)" in sql
+    assert args == (["ARB-000491", "ARB-000492"],)
+
+
+@pytest.mark.asyncio
+async def test_list_incidents_reads_persisted_open_incidents(mock_pool):
+    mock_pool.conn = MockConn(fetch_response=[
+        {
+            "incident_id": "INC-HALF-ARB-000491",
+            "arb_id": "ARB-000491",
+            "canonical_id": "MKT_NAKED",
+            "severity": "critical",
+            "message": "Half-recorded arb",
+            "metadata": {"event_type": "half_recorded_arb"},
+            "status": "open",
+            "ts": 123.0,
+            "resolved_ts": None,
+            "resolution_note": "",
+        }
+    ])
+    store = ExecutionStore(database_url="postgres://mock/mock")
+    await store.connect()
+
+    incidents = await store.list_incidents(status="open", limit=50)
+
+    assert len(incidents) == 1
+    assert incidents[0].incident_id == "INC-HALF-ARB-000491"
+    assert incidents[0].severity == "critical"
+    method, sql, args = mock_pool.conn.calls[-1]
+    assert method == "fetch"
+    assert "FROM execution_incidents" in sql
+    assert args == ("open", 50)
+
+
 # ─── C4.3: UNIQUE(client_order_id) migration shape ────────────────────────
 
 

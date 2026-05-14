@@ -28,7 +28,7 @@ from .collectors.kalshi import KalshiCollector
 from .collectors.polymarket import PolymarketCollector
 from .scanner.arbitrage import ArbitrageScanner
 from .monitor.balance import BalanceMonitor, BalanceSnapshot
-from .execution.engine import ExecutionEngine
+from .execution.engine import ExecutionEngine, ExecutionIncident
 from .execution.adapters import KalshiAdapter, PolymarketAdapter
 from .execution.failure_tracker import (
     FailureTracker,
@@ -298,8 +298,76 @@ def sync_runtime_reconciliation(
             if abs(known_balances[platform] - balance) > 0.01:
                 reconciler.set_starting_balance(platform, balance)
 
-    reconciler.load_execution_history(engine.execution_history)
-    return reconciler.reconcile(current_balances)
+    return reconciler.reconcile(current_balances, engine.execution_history)
+
+
+def surface_half_recorded_recovery_summary(
+    engine: ExecutionEngine,
+    half_recorded_arbs: list[dict],
+) -> Optional[ExecutionIncident]:
+    """Expose persisted half-recorded startup blockers to readiness/API state."""
+    if not half_recorded_arbs:
+        return None
+    incident = ExecutionIncident(
+        incident_id="INC-HALF-RECORDED-SUMMARY",
+        arb_id="MULTIPLE",
+        canonical_id="HALF_RECORDED_ARBS",
+        severity="critical",
+        message=(
+            f"{len(half_recorded_arbs)} half-recorded arb(s) remain unresolved "
+            "after startup recovery. Check /api/errors for per-arb details and "
+            "reconcile venue exposure manually before enabling auto-trade."
+        ),
+        timestamp=time.time(),
+        metadata={
+            "event_type": "half_recorded_arb_summary",
+            "count": len(half_recorded_arbs),
+            "sample_arb_ids": [
+                row.get("arb_id")
+                for row in half_recorded_arbs[:10]
+            ],
+            "sample_canonical_ids": sorted({
+                str(row.get("canonical_id") or "")
+                for row in half_recorded_arbs
+            })[:10],
+        },
+    )
+    incidents = getattr(engine, "_incidents", None)
+    if incidents is not None and not any(
+        getattr(existing, "incident_id", "") == incident.incident_id
+        for existing in incidents
+    ):
+        incidents.appendleft(incident)
+    return incident
+
+
+_MANUAL_CRITICAL_EVENT_TYPES = {
+    "half_recorded_arb",
+    "half_recorded_arb_summary",
+    "one_leg_exposure",
+    "soft_naked_leg",
+    "db_write_failure",
+}
+
+
+def _is_stale_auto_resolvable_incident(
+    incident,
+    *,
+    now: float,
+    max_age: float,
+) -> bool:
+    if getattr(incident, "status", "open") == "resolved":
+        return False
+    if str(getattr(incident, "severity", "")).lower() != "critical":
+        return False
+    metadata = getattr(incident, "metadata", {}) or {}
+    event_type = ""
+    if isinstance(metadata, dict):
+        event_type = str(metadata.get("event_type", "")).lower()
+    if event_type in _MANUAL_CRITICAL_EVENT_TYPES:
+        return False
+    inc_ts = float(getattr(incident, "timestamp", now) or now)
+    return now - inc_ts > max_age
 
 
 async def run_reconciliation_loop(
@@ -390,12 +458,12 @@ async def run_incident_auto_resolve_loop(engine: ExecutionEngine, interval: floa
             await asyncio.sleep(interval)
             now = time.time()
             for inc in list(getattr(engine, "_incidents", [])):
-                if getattr(inc, "status", "open") == "resolved":
-                    continue
-                if str(getattr(inc, "severity", "")).lower() != "critical":
-                    continue
-                inc_ts = getattr(inc, "timestamp", now)
-                if now - inc_ts > max_age:
+                if _is_stale_auto_resolvable_incident(
+                    inc,
+                    now=now,
+                    max_age=max_age,
+                ):
+                    inc_ts = float(getattr(inc, "timestamp", now) or now)
                     await engine.resolve_incident(
                         inc.incident_id,
                         note=f"Auto-resolved: stale critical incident (age={int(now - inc_ts)}s > {int(max_age)}s)",
@@ -826,6 +894,7 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
         port=port,
         safety=safety,
         mapping_store=mapping_store,
+        execution_store=store,
     )
 
     pm_us_metrics = {
@@ -902,8 +971,9 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
         # these orphans, but genuine SIGKILL / OOM / power-loss between
         # writes can still produce them — and any pre-fix rows already
         # in the DB also need flagging.
+        half_recorded_arbs = []
         try:
-            await reconcile_half_recorded_arbs(store)
+            half_recorded_arbs = await reconcile_half_recorded_arbs(store)
         except RecoveryInitError as exc:
             logger.critical(
                 "Half-recorded arb reconciliation failed (%s) — arming SafetySupervisor",
@@ -919,13 +989,15 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
                     "Failed to arm SafetySupervisor after half-recorded-arb error: %s",
                     arm_exc,
                 )
+        surface_half_recorded_recovery_summary(engine, half_recorded_arbs)
 
     # ── Rehydrate execution history from database ──────────────
-    # Populates the in-memory execution_history so the dashboard
-    # shows historical trades and positions after a restart.
+    # Populates the in-memory execution_history so reconciliation sees the
+    # full realized-P&L ledger and the dashboard can show historical trades
+    # and positions after a restart.
     if store is not None:
         try:
-            past_executions = await store.load_execution_history(limit=200)
+            past_executions = await store.load_execution_history(limit=None)
             if past_executions:
                 engine._executions.extend(past_executions)
                 logger.info(
@@ -1027,10 +1099,10 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     # ── Auto-resolve stale critical incidents from prior sessions ─
     # Without this, a single audit flag from a previous session blocks all
     # trades permanently. Resolve anything older than 60 seconds.
+    now = time.time()
     stale_incidents = [
         inc for inc in getattr(engine, "_incidents", [])
-        if getattr(inc, "status", "open") != "resolved"
-        and str(getattr(inc, "severity", "")).lower() == "critical"
+        if _is_stale_auto_resolvable_incident(inc, now=now, max_age=60.0)
     ]
     if stale_incidents:
         for inc in stale_incidents:
@@ -1090,8 +1162,7 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     # state, auto-resolve them so trading can begin clean.
     stale_incidents = [
         inc for inc in getattr(engine, "incidents", [])
-        if getattr(inc, "status", "open") != "resolved"
-        and str(getattr(inc, "severity", "")).lower() == "critical"
+        if _is_stale_auto_resolvable_incident(inc, now=time.time(), max_age=60.0)
     ]
     if stale_incidents:
         logger.info(

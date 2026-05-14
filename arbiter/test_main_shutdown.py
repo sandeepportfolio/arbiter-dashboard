@@ -226,3 +226,63 @@ async def test_shared_session_has_explicit_timeout():
         )
     finally:
         await session.close()
+
+
+def test_half_recorded_recovery_summary_surfaces_runtime_incident():
+    from collections import deque
+
+    from arbiter.main import surface_half_recorded_recovery_summary
+
+    engine = SimpleNamespace(_incidents=deque(maxlen=200))
+    incident = surface_half_recorded_recovery_summary(
+        engine,
+        [
+            {
+                "arb_id": "ARB-000491",
+                "canonical_id": "MKT_NAKED",
+            }
+        ],
+    )
+
+    assert incident is not None
+    assert incident.severity == "critical"
+    assert incident.metadata["count"] == 1
+    assert list(engine._incidents) == [incident]
+
+    duplicate = surface_half_recorded_recovery_summary(
+        engine,
+        [{"arb_id": "ARB-000492", "canonical_id": "MKT_NAKED_2"}],
+    )
+
+    assert duplicate is not None
+    assert len(engine._incidents) == 1
+
+
+def test_manual_recovery_incidents_are_not_auto_resolved_as_stale():
+    from arbiter.main import _is_stale_auto_resolvable_incident
+
+    incident = SimpleNamespace(
+        status="open",
+        severity="critical",
+        timestamp=100.0,
+        metadata={"event_type": "half_recorded_arb_summary"},
+    )
+
+    assert not _is_stale_auto_resolvable_incident(
+        incident,
+        now=1_000.0,
+        max_age=60.0,
+    )
+
+    audit_incident = SimpleNamespace(
+        status="open",
+        severity="critical",
+        timestamp=100.0,
+        metadata={"event_type": "old_audit_flag"},
+    )
+
+    assert _is_stale_auto_resolvable_incident(
+        audit_incident,
+        now=1_000.0,
+        max_age=60.0,
+    )

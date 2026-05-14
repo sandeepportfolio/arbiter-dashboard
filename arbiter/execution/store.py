@@ -272,6 +272,9 @@ class ExecutionStore:
                     message, metadata, status, resolved_at, resolution_note
                 ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9)
                 ON CONFLICT (incident_id) DO UPDATE SET
+                    severity = EXCLUDED.severity,
+                    message = EXCLUDED.message,
+                    metadata = EXCLUDED.metadata,
                     status = EXCLUDED.status,
                     resolved_at = EXCLUDED.resolved_at,
                     resolution_note = EXCLUDED.resolution_note
@@ -286,6 +289,92 @@ class ExecutionStore:
                 _epoch_to_ts(incident.resolved_at),
                 incident.resolution_note or "",
             )
+
+    async def resolve_superseded_half_recorded_incidents(
+        self,
+        arb_ids: List[str],
+    ) -> int:
+        """Resolve duplicate legacy half-recorded alerts for active arbs.
+
+        Older recovery runs generated a fresh random ``INC-HALF-*`` incident
+        on every restart. The deterministic incident id remains open; prior
+        duplicates are marked resolved so the operator sees one actionable
+        alert per affected arb instead of restart noise.
+        """
+        if not arb_ids:
+            return 0
+        if self._pool is None:
+            await self.connect()
+        async with self._pool.acquire() as conn:
+            result = await conn.execute(
+                """
+                UPDATE execution_incidents
+                   SET status = 'resolved',
+                       resolved_at = COALESCE(resolved_at, NOW()),
+                       resolution_note = CASE
+                           WHEN COALESCE(resolution_note, '') = ''
+                           THEN 'Superseded by deterministic half-recorded incident'
+                           ELSE resolution_note
+                       END
+                 WHERE status = 'open'
+                   AND metadata->>'event_type' = 'half_recorded_arb'
+                   AND arb_id = ANY($1::text[])
+                   AND incident_id <> ('INC-HALF-' || arb_id)
+                """,
+                arb_ids,
+            )
+        try:
+            return int(str(result).split()[-1])
+        except (IndexError, ValueError):
+            return 0
+
+    async def list_incidents(
+        self,
+        *,
+        status: Optional[str] = None,
+        limit: int = 200,
+    ) -> List[ExecutionIncident]:
+        if self._pool is None:
+            await self.connect()
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT incident_id, arb_id, canonical_id, severity, message,
+                       metadata, status,
+                       EXTRACT(EPOCH FROM created_at) AS ts,
+                       EXTRACT(EPOCH FROM resolved_at) AS resolved_ts,
+                       resolution_note
+                FROM execution_incidents
+                WHERE ($1::text IS NULL OR status = $1)
+                ORDER BY created_at DESC
+                LIMIT $2
+                """,
+                status,
+                int(limit),
+            )
+        incidents: List[ExecutionIncident] = []
+        for row in rows:
+            metadata = row["metadata"] or {}
+            if isinstance(metadata, str):
+                try:
+                    metadata = json.loads(metadata)
+                except json.JSONDecodeError:
+                    metadata = {}
+            incidents.append(
+                ExecutionIncident(
+                    incident_id=row["incident_id"],
+                    arb_id=row["arb_id"] or "",
+                    canonical_id=row["canonical_id"] or "",
+                    severity=row["severity"] or "warning",
+                    message=row["message"] or "",
+                    timestamp=float(row["ts"] or 0.0),
+                    metadata=metadata,
+                    status=row["status"] or "open",
+                    resolved_at=float(row["resolved_ts"] or 0.0),
+                    resolution_note=row["resolution_note"] or "",
+                )
+            )
+        return incidents
 
     # ─── Top-level arb persistence ───────────────────────────────────────────
 
@@ -402,28 +491,30 @@ class ExecutionStore:
 
     # ─── Rehydration (load past trades on restart) ────────────────────────────
 
-    async def load_execution_history(self, limit: int = 200) -> List[ArbExecution]:
+    async def load_execution_history(self, limit: Optional[int] = 200) -> List[ArbExecution]:
         """Rehydrate ArbExecution objects from the database for dashboard display.
 
-        Loads the most recent `limit` arb executions with their YES/NO leg orders.
-        Used on startup to populate the engine's execution_history so the
-        Trades and Positions tabs show historical data.
+        Loads the most recent ``limit`` arb executions with their YES/NO leg
+        orders. Pass ``limit=None`` when startup reconciliation needs the full
+        realized-P&L ledger instead of a bounded dashboard slice.
         """
         if self._pool is None:
             await self.connect()
         from ..scanner.arbitrage import ArbitrageOpportunity
 
-        async with self._pool.acquire() as conn:
-            arb_rows = await conn.fetch(
-                """
+        arb_sql = """
                 SELECT arb_id, canonical_id, status, net_edge, realized_pnl,
                        opportunity_json, is_simulation, created_at
                 FROM execution_arbs
                 ORDER BY created_at DESC
-                LIMIT $1
-                """,
-                limit,
-            )
+                """
+        args: tuple[Any, ...] = ()
+        if limit is not None:
+            arb_sql += "LIMIT $1"
+            args = (int(limit),)
+
+        async with self._pool.acquire() as conn:
+            arb_rows = await conn.fetch(arb_sql, *args)
             # Build a map of arb_id -> [order rows]
             arb_ids = [r["arb_id"] for r in arb_rows]
             if not arb_ids:

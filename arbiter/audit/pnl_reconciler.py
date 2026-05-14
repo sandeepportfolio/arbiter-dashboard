@@ -477,6 +477,8 @@ class PnLReconciler:
         # survivor-aware _pnl_by_platform attribution).
         if executions is not None:
             self.load_execution_history(executions)
+            if executions:
+                self._restored_from_db = False
 
         # When state was restored from PostgreSQL, the gap between
         # starting_balance and current_balance IS the real trading P&L,

@@ -15,7 +15,7 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Set
 
 from ..config.settings import ScannerConfig
-from ..execution.engine import ExecutionEngine, OrderStatus
+from ..execution.engine import ExecutionEngine
 from ..ledger.position_ledger import PositionLedger, PositionStatus
 from ..monitor.balance import BalanceMonitor
 
@@ -257,8 +257,10 @@ class PortfolioMonitor:
         by_venue: Dict[str, VenueExposure] = {}
         all_platforms = set()
         for pos in positions:
-            all_platforms.add(pos.get("yes_platform", ""))
-            all_platforms.add(pos.get("no_platform", ""))
+            if pos.get("yes_cost", 0) > 0:
+                all_platforms.add(pos.get("yes_platform", ""))
+            if pos.get("no_cost", 0) > 0:
+                all_platforms.add(pos.get("no_platform", ""))
 
         balances = {}
         if self.balance_monitor:
@@ -274,7 +276,8 @@ class PortfolioMonitor:
             venue_positions = [p for p in positions
                               if p.get("yes_platform") == platform or p.get("no_platform") == platform]
             venue_exposure = sum(
-                p.get("quantity", 0) * (p.get("yes_price", 0) + p.get("no_price", 0))
+                (p.get("yes_cost", 0.0) if p.get("yes_platform") == platform else 0.0)
+                + (p.get("no_cost", 0.0) if p.get("no_platform") == platform else 0.0)
                 for p in venue_positions
             )
             balance_info = balances.get(platform, {})
@@ -319,6 +322,66 @@ class PortfolioMonitor:
         self._last_snapshot = snapshot
         return snapshot
 
+    @staticmethod
+    def _filled_leg_cost(order) -> tuple[float, float]:
+        """Return filled quantity and notional cost for a settled leg."""
+        if order is None:
+            return 0.0, 0.0
+        status = getattr(order, "status", "")
+        status_value = getattr(status, "value", status)
+        if str(status_value).lower() not in {"filled", "simulated"}:
+            return 0.0, 0.0
+        qty = float(getattr(order, "fill_qty", 0.0) or 0.0)
+        if qty <= 0:
+            return 0.0, 0.0
+        price = float(
+            getattr(order, "fill_price", 0.0)
+            or getattr(order, "price", 0.0)
+            or 0.0
+        )
+        return qty, qty * price
+
+    def _position_from_execution(self, arb_exec) -> Optional[Dict[str, Any]]:
+        opp = getattr(arb_exec, "opportunity", None)
+        if opp is None:
+            return None
+
+        yes_qty, yes_cost = self._filled_leg_cost(getattr(arb_exec, "leg_yes", None))
+        no_qty, no_cost = self._filled_leg_cost(getattr(arb_exec, "leg_no", None))
+        status = str(getattr(arb_exec, "status", "") or "").lower()
+
+        if yes_qty <= 0 and no_qty <= 0:
+            if status not in {"filled", "simulated", "manual_entered"}:
+                return None
+            qty = float(getattr(opp, "suggested_qty", 0) or 0)
+            yes_cost = qty * float(getattr(opp, "yes_price", 0.0) or 0.0)
+            no_cost = qty * float(getattr(opp, "no_price", 0.0) or 0.0)
+            yes_qty = no_qty = qty
+        else:
+            qty = max(yes_qty, no_qty)
+
+        if qty <= 0:
+            return None
+
+        hedge_complete = yes_qty > 0 and no_qty > 0 and abs(yes_qty - no_qty) <= 1e-9
+        return {
+            "canonical_id": getattr(opp, "canonical_id", getattr(arb_exec, "arb_id", "unknown")),
+            "description": getattr(opp, "description", ""),
+            "quantity": qty,
+            "yes_price": yes_cost / qty if qty else 0.0,
+            "no_price": no_cost / qty if qty else 0.0,
+            "yes_cost": yes_cost,
+            "no_cost": no_cost,
+            "yes_platform": getattr(opp, "yes_platform", ""),
+            "no_platform": getattr(opp, "no_platform", ""),
+            "status": "hedged" if hedge_complete else "open",
+            "hedge_status": "complete" if hedge_complete else "none",
+            "created_at": getattr(arb_exec, "timestamp", time.time()),
+            "updated_at": getattr(arb_exec, "timestamp", time.time()),
+            "source": "engine",
+            "realized_pnl": getattr(arb_exec, "realized_pnl", 0.0),
+        }
+
     def _get_open_positions(self) -> List[Dict[str, Any]]:
         """Gather open positions from engine and (optionally) ledger."""
         positions = []
@@ -335,30 +398,10 @@ class PortfolioMonitor:
                 "manual_entered",
             }
             for arb_exec in getattr(self.engine, "_executions", []):
-                pos = {
-                    "canonical_id": arb_exec.opportunity.canonical_id if hasattr(arb_exec, "opportunity") else arb_exec.arb_id,
-                    "description": arb_exec.opportunity.description if hasattr(arb_exec, "opportunity") else "",
-                    "quantity": arb_exec.opportunity.suggested_qty if hasattr(arb_exec, "opportunity") else 0,
-                    "yes_price": arb_exec.opportunity.yes_price if hasattr(arb_exec, "opportunity") else 0,
-                    "no_price": arb_exec.opportunity.no_price if hasattr(arb_exec, "opportunity") else 0,
-                    "yes_platform": arb_exec.opportunity.yes_platform if hasattr(arb_exec, "opportunity") else "",
-                    "no_platform": arb_exec.opportunity.no_platform if hasattr(arb_exec, "opportunity") else "",
-                    "status": arb_exec.status,
-                    "hedge_status": (
-                        "complete"
-                        if arb_exec.status in {"simulated", "filled"}
-                        or (
-                            arb_exec.leg_yes.status in (OrderStatus.FILLED, OrderStatus.SIMULATED)
-                            and arb_exec.leg_no.status in (OrderStatus.FILLED, OrderStatus.SIMULATED)
-                        )
-                        else "none"
-                    ),
-                    "created_at": arb_exec.timestamp,
-                    "updated_at": arb_exec.timestamp,
-                    "source": "engine",
-                    "realized_pnl": arb_exec.realized_pnl,
-                }
-                if pos["status"] in active_statuses:
+                if getattr(arb_exec, "status", None) not in active_statuses:
+                    continue
+                pos = self._position_from_execution(arb_exec)
+                if pos is not None:
                     positions.append(pos)
 
         # From durable ledger

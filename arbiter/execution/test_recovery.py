@@ -172,6 +172,7 @@ def _make_half_recorded_store(orphans=None, raise_exc=None):
     else:
         store.list_half_recorded_arbs = AsyncMock(return_value=orphans or [])
     store.insert_incident = AsyncMock(return_value=None)
+    store.resolve_superseded_half_recorded_incidents = AsyncMock(return_value=0)
     return store
 
 
@@ -181,6 +182,7 @@ async def test_reconcile_half_recorded_arbs_no_orphans():
     result = await reconcile_half_recorded_arbs(store)
     assert result == []
     assert not store.insert_incident.called
+    assert not store.resolve_superseded_half_recorded_incidents.called
 
 
 @pytest.mark.asyncio
@@ -213,6 +215,10 @@ async def test_reconcile_half_recorded_arbs_emits_critical_per_orphan():
 
     assert len(result) == 2
     assert store.insert_incident.await_count == 2
+    store.resolve_superseded_half_recorded_incidents.assert_awaited_once_with([
+        "ARB-000491",
+        "ARB-000492",
+    ])
 
     incidents = [c.args[0] for c in store.insert_incident.await_args_list]
     severities = {i.severity for i in incidents}
@@ -226,9 +232,11 @@ async def test_reconcile_half_recorded_arbs_emits_critical_per_orphan():
     assert by_arb["ARB-000491"].metadata["leg_order_ids"] == [
         "ARB-000491-YES-KALSHI"
     ]
+    assert by_arb["ARB-000491"].incident_id == "INC-HALF-ARB-000491"
     assert by_arb["ARB-000491"].canonical_id == "MKT_NAKED"
     assert by_arb["ARB-000491"].metadata["stuck_status"] == "pending"
     assert by_arb["ARB-000492"].metadata["leg_count"] == 0
+    assert by_arb["ARB-000492"].incident_id == "INC-HALF-ARB-000492"
 
 
 @pytest.mark.asyncio
