@@ -30,12 +30,20 @@ from .scanner.arbitrage import ArbitrageScanner
 from .monitor.balance import BalanceMonitor, BalanceSnapshot
 from .execution.engine import ExecutionEngine
 from .execution.adapters import KalshiAdapter, PolymarketAdapter
+from .execution.failure_tracker import (
+    FailureTracker,
+    make_failure_tracker_from_env,
+)
 from .execution.recovery import (
     RecoveryInitError,
     reconcile_half_recorded_arbs,
     reconcile_non_terminal_orders,
 )
 from .execution.store import ExecutionStore
+from .execution.stuck_trade_recovery import (
+    StuckTradeRecoveryStats,
+    recover_stuck_trades,
+)
 from .portfolio import PortfolioConfig, PortfolioMonitor
 from .profitability import ProfitabilityConfig, ProfitabilityValidator
 from .readiness import OperationalReadiness
@@ -323,6 +331,56 @@ async def run_reconciliation_loop(
             await asyncio.sleep(min(reconciler.check_interval, 10.0))
 
 
+async def run_stuck_trade_recovery_loop(
+    store: ExecutionStore,
+    adapters: dict,
+    *,
+    engine: Optional[ExecutionEngine] = None,
+    interval_s: float = 300.0,
+    max_age_seconds: float = 86400.0,
+    stats: Optional[StuckTradeRecoveryStats] = None,
+):
+    """Re-poll the venue for every arb stuck >max_age_seconds, every interval_s.
+
+    Pairs with the startup recovery in ``arbiter.execution.recovery``. That
+    one runs once; this one runs forever so trades that go stuck *after*
+    the process starts also get reconciled.
+    """
+    log = logging.getLogger("arbiter.main.stuck_trade_recovery")
+    # Wait one interval before the first run so we don't double up with the
+    # startup recovery that already executed.
+    try:
+        await asyncio.sleep(min(interval_s, 60.0))
+    except asyncio.CancelledError:
+        return
+
+    while True:
+        try:
+            outcomes = await recover_stuck_trades(
+                store, adapters, max_age_seconds=max_age_seconds, stats=stats,
+            )
+            if outcomes and engine is not None:
+                # Reflect any status changes in the in-memory execution_history
+                # so the dashboard updates without waiting for a restart.
+                by_arb = {
+                    e.arb_id: e for e in getattr(engine, "_executions", [])
+                }
+                for outcome in outcomes:
+                    execution = by_arb.get(outcome.arb_id)
+                    if execution is None:
+                        continue
+                    if outcome.new_status and outcome.new_status != execution.status:
+                        execution.status = outcome.new_status
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:  # noqa: BLE001 — never let the loop die
+            log.error("stuck_trade_recovery loop error: %s", exc)
+        try:
+            await asyncio.sleep(interval_s)
+        except asyncio.CancelledError:
+            return
+
+
 async def run_incident_auto_resolve_loop(engine: ExecutionEngine, interval: float = 120.0, max_age: float = 120.0):
     """Periodically auto-resolve stale critical incidents so one audit flag
     doesn't permanently block the trade gate."""
@@ -365,6 +423,7 @@ async def cleanup_runtime(
     mapping_store: Optional[MarketMappingStore],
     shared_session: aiohttp.ClientSession,
     retry_scheduler=None,
+    failure_tracker=None,
 ) -> None:
     """Best-effort teardown for shutdown and failed startup paths."""
 
@@ -378,6 +437,8 @@ async def cleanup_runtime(
     await _await_cleanup("auto_executor.stop", auto_executor.stop())
     if retry_scheduler is not None:
         await _await_cleanup("retry_scheduler.stop", retry_scheduler.stop())
+    if failure_tracker is not None:
+        await _await_cleanup("failure_tracker.stop", failure_tracker.stop())
     await _await_cleanup("kalshi.stop", kalshi.stop())
     if polymarket is not None:
         await _await_cleanup("polymarket.stop", polymarket.stop())
@@ -910,6 +971,14 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     )
     from .config.settings import MARKET_MAP
 
+    # FailureTracker — sliding-window backoff per (market, side, price-bucket).
+    # Subscribes to the engine in start(); auto-executor consults it in the
+    # pre-flight gate to skip submissions on tuples that have failed 3+ times
+    # in the trailing hour.
+    failure_tracker = make_failure_tracker_from_env(
+        engine=engine, config_env=os.environ,
+    )
+
     auto_executor = make_auto_executor_from_env(
         scanner=scanner,
         engine=engine,
@@ -921,6 +990,7 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
         # is empty (dry-run / api-only).
         price_store=price_store,
         adapters_provider=lambda: dict(getattr(engine, "adapters", {}) or {}),
+        failure_tracker=failure_tracker,
     )
     # Expose to the api server so /api/metrics can surface auto_executor stats
     # and so persisted operator settings can hydrate the runtime knobs.
@@ -939,6 +1009,10 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
         config_env=os.environ,
     )
     api.attach_retry_scheduler(retry_scheduler)
+    # Stuck-trade recovery loop and failure tracker stats surface in /api/metrics.
+    stuck_recovery_stats = StuckTradeRecoveryStats()
+    api.attach_failure_tracker(failure_tracker)
+    api.attach_stuck_recovery_stats(stuck_recovery_stats)
     logger.info(
         f"  Auto-execute: {'✓ ENABLED' if auto_executor._config.enabled else '✗ disabled (AUTO_EXECUTE_ENABLED=false)'}"
     )
@@ -1006,6 +1080,9 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
         # Retry scheduler subscribes to engine executions and auto-retries
         # failed arbs with fresh quotes; safe to run in api_only-skipped paths.
         await retry_scheduler.start()
+        # FailureTracker also subscribes to engine executions; start AFTER the
+        # other subscribers so its queue is wired in the same order.
+        await failure_tracker.start()
 
     # ── Auto-resolve stale critical incidents from previous runs ─────
     # On fresh startup, any leftover critical incidents from a prior session
@@ -1033,6 +1110,24 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     tasks.append(asyncio.create_task(profitability.run(), name="profitability-validator"))
     tasks.append(asyncio.create_task(run_reconciliation_loop(reconciler, monitor, engine), name="pnl-reconciler"))
     tasks.append(asyncio.create_task(run_incident_auto_resolve_loop(engine, interval=120.0, max_age=120.0), name="incident-auto-resolve"))
+
+    # Stuck-trade recovery loop (5-min default). Only runs when a Postgres
+    # store and at least one platform adapter are configured — otherwise the
+    # loop has nothing to query or reconcile against.
+    if store is not None and adapters:
+        interval_s = float(os.getenv("STUCK_TRADE_RECOVERY_INTERVAL_S", "300"))
+        max_age_s = float(os.getenv("STUCK_TRADE_MAX_AGE_S", "86400"))
+        tasks.append(asyncio.create_task(
+            run_stuck_trade_recovery_loop(
+                store,
+                adapters,
+                engine=engine,
+                interval_s=interval_s,
+                max_age_seconds=max_age_s,
+                stats=stuck_recovery_stats,
+            ),
+            name="stuck-trade-recovery",
+        ))
 
     # API server always runs
     tasks.append(asyncio.create_task(api.serve(), name="api-server"))
@@ -1121,6 +1216,7 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
             mapping_store=mapping_store,
             shared_session=shared_session,
             retry_scheduler=retry_scheduler,
+            failure_tracker=failure_tracker,
         )
         raise
 
@@ -1145,6 +1241,7 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
         mapping_store=mapping_store,
         shared_session=shared_session,
         retry_scheduler=retry_scheduler,
+        failure_tracker=failure_tracker,
     )
 
     # Final stats

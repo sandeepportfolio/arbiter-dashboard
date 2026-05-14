@@ -84,6 +84,7 @@ class AutoExecutorStats:
     skipped_edge_collapsed: int = 0
     skipped_depth_low: int = 0
     skipped_failed_cooldown: int = 0
+    skipped_failure_pattern: int = 0
     auto_disabled_loss_streak: int = 0
     failures: int = 0
     last_considered_ts: float = 0.0
@@ -105,6 +106,7 @@ class AutoExecutorStats:
             "skipped_edge_collapsed": self.skipped_edge_collapsed,
             "skipped_depth_low": self.skipped_depth_low,
             "skipped_failed_cooldown": self.skipped_failed_cooldown,
+            "skipped_failure_pattern": self.skipped_failure_pattern,
             "auto_disabled_loss_streak": self.auto_disabled_loss_streak,
             "failures": self.failures,
             "last_considered_ts": self.last_considered_ts,
@@ -125,6 +127,7 @@ class AutoExecutor:
         config: AutoExecutorConfig,
         price_store=None,
         adapters_provider: Optional[Callable[[], Dict[str, object]]] = None,
+        failure_tracker=None,
     ):
         self._scanner = scanner
         self._engine = engine
@@ -135,6 +138,7 @@ class AutoExecutor:
         # (the engine still performs its own re-quote + depth check).
         self._price_store = price_store
         self._adapters_provider = adapters_provider
+        self._failure_tracker = failure_tracker
         self._queue: asyncio.Queue = scanner.subscribe()
         self._task: Optional[asyncio.Task] = None
         self._running = False
@@ -244,6 +248,37 @@ class AutoExecutor:
                 remaining=round(cooldown_until - now, 1),
             )
             return
+
+        # Failure-pattern backoff: if (canonical, side, price-bucket) has
+        # tipped over the threshold in the trailing hour, skip both legs.
+        if self._failure_tracker is not None:
+            blocked_reason = ""
+            for side_name, price in (
+                ("yes", float(getattr(opp, "yes_price", 0.0) or 0.0)),
+                ("no", float(getattr(opp, "no_price", 0.0) or 0.0)),
+            ):
+                try:
+                    skip, reason = self._failure_tracker.should_skip(
+                        opp.canonical_id, side_name, price,
+                    )
+                except Exception as exc:  # noqa: BLE001 — tracker must not break trading
+                    log.warning(
+                        "auto_executor.failure_tracker_error",
+                        canonical_id=opp.canonical_id,
+                        err=str(exc),
+                    )
+                    skip, reason = False, ""
+                if skip:
+                    blocked_reason = f"{side_name}: {reason}"
+                    break
+            if blocked_reason:
+                self.stats.skipped_failure_pattern += 1
+                log.info(
+                    "auto_executor.skip.failure_pattern",
+                    canonical_id=opp.canonical_id,
+                    reason=blocked_reason,
+                )
+                return
 
         dedup_key = self._dedup_key(opp, now)
         if dedup_key in self._seen_dedup_keys:
@@ -773,6 +808,7 @@ def make_auto_executor_from_env(
     config_env: dict,
     price_store=None,
     adapters_provider: Optional[Callable[[], Dict[str, object]]] = None,
+    failure_tracker=None,
 ) -> AutoExecutor:
     """Factory that reads env-style overrides without pulling in Pydantic."""
     def _bool(value: Optional[str], default: bool = False) -> bool:
@@ -823,4 +859,5 @@ def make_auto_executor_from_env(
         config=cfg,
         price_store=price_store,
         adapters_provider=adapters_provider,
+        failure_tracker=failure_tracker,
     )

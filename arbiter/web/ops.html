@@ -472,6 +472,8 @@ window.MOCK = (() => {
         expected_vs_realized: asNumber(e.expected_vs_realized, asNumber(e.realized_pnl, 0) - expectedProfit),
         status_group: e.status_group || ((['filled','closed','settled','simulated'].includes(String(e.status || '').toLowerCase())) ? 'completed' : (['pending','submitted','recovering'].includes(String(e.status || '').toLowerCase()) ? 'open' : (['failed','aborted','rejected'].includes(String(e.status || '').toLowerCase()) ? 'failed' : String(e.status || 'unknown').toLowerCase()))),
         timestamp: asNumber(e.timestamp, Math.floor(Date.now() / 1000)),
+        last_checked_at: asNumber(e.last_checked_at, 0),
+        recovery_notes: e.recovery_notes || '',
         opportunity: normalizedOpp,
         leg_yes: {
           status: (e.leg_yes && e.leg_yes.status) || 'filled',
@@ -2816,6 +2818,15 @@ function PageTrades() {
           { label: 'YES', w: '160px', render: r => <LegCell leg={r.leg_yes} platform={r.opportunity.yes_platform}/> },
           { label: 'NO', w: '160px', render: r => <LegCell leg={r.leg_no} platform={r.opportunity.no_platform}/> },
           { label: 'Status', w: '100px', render: r => <window.StatusBadge status={r.status}/> },
+          { label: 'Last checked', w: '120px', render: r => {
+              const lc = Number(r.last_checked_at || 0);
+              const isOpen = r.status_group === 'open' || ['pending','submitted','recovering'].includes(String(r.status || '').toLowerCase());
+              if (!lc) {
+                return <span style={{ fontFamily: window.FONTS.mono, fontSize: 11, color: t.textMuted }}>{isOpen ? '—' : ''}</span>;
+              }
+              const tip = r.recovery_notes ? r.recovery_notes : '';
+              return <span title={tip} style={{ fontFamily: window.FONTS.mono, fontSize: 11.5, color: t.textDim }}>{window.ago(lc)}</span>;
+          } },
           { label: 'Expected', w: '105px', align: 'right', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12.5, color: Number(r.expected_profit || 0) >= 0 ? t.green : t.red, fontWeight: 600 }}>{window.fmt$Sign(Number(r.expected_profit || 0))}</span> },
           { label: 'Actual P&L', w: '110px', align: 'right', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12.5, color: r.realized_pnl > 0 ? t.green : r.realized_pnl < 0 ? t.red : t.textDim, fontWeight: 600 }}>{window.fmt$Sign(r.realized_pnl)}</span> },
           { label: 'Delta', w: '100px', align: 'right', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12, color: Number(r.expected_vs_realized || 0) >= 0 ? t.green : t.red }}>{window.fmt$Sign(Number(r.expected_vs_realized || 0))}</span> },
