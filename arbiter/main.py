@@ -30,7 +30,11 @@ from .scanner.arbitrage import ArbitrageScanner
 from .monitor.balance import BalanceMonitor, BalanceSnapshot
 from .execution.engine import ExecutionEngine
 from .execution.adapters import KalshiAdapter, PolymarketAdapter
-from .execution.recovery import RecoveryInitError, reconcile_non_terminal_orders
+from .execution.recovery import (
+    RecoveryInitError,
+    reconcile_half_recorded_arbs,
+    reconcile_non_terminal_orders,
+)
 from .execution.store import ExecutionStore
 from .portfolio import PortfolioConfig, PortfolioMonitor
 from .profitability import ProfitabilityConfig, ProfitabilityValidator
@@ -829,6 +833,31 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
                 )
             except Exception as exc:
                 logger.warning("Failed to emit orphaned-order incident: %s", exc)
+
+        # Half-recorded-arb reconciliation: a process kill between primary
+        # fill and the atomic ``record_arb`` (both-legs upsert) leaves an
+        # ``execution_arbs`` stub with only one leg persisted. The engine's
+        # exception-escape guard now prevents the synchronous source of
+        # these orphans, but genuine SIGKILL / OOM / power-loss between
+        # writes can still produce them — and any pre-fix rows already
+        # in the DB also need flagging.
+        try:
+            await reconcile_half_recorded_arbs(store)
+        except RecoveryInitError as exc:
+            logger.critical(
+                "Half-recorded arb reconciliation failed (%s) — arming SafetySupervisor",
+                exc,
+            )
+            try:
+                await safety.trip_kill(
+                    by="system:recovery",
+                    reason=f"half_recorded_arb_recovery_failed: {exc}",
+                )
+            except Exception as arm_exc:  # noqa: BLE001
+                logger.error(
+                    "Failed to arm SafetySupervisor after half-recorded-arb error: %s",
+                    arm_exc,
+                )
 
     # ── Rehydrate execution history from database ──────────────
     # Populates the in-memory execution_history so the dashboard

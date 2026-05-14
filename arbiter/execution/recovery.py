@@ -11,10 +11,12 @@ engine.run is called, so the engine begins with a coherent view of state.
 from __future__ import annotations
 
 import logging
-from typing import Dict, List
+import time
+import uuid
+from typing import Any, Dict, List
 
 from .adapters.base import PlatformAdapter
-from .engine import Order, OrderStatus
+from .engine import ExecutionIncident, Order, OrderStatus
 from .store import ExecutionStore
 
 logger = logging.getLogger("arbiter.execution.recovery")
@@ -147,3 +149,83 @@ def _derive_arb_id(order_id: str) -> str:
     if len(parts) >= 2:
         return f"{parts[0]}-{parts[1]}"
     return order_id
+
+
+async def reconcile_half_recorded_arbs(
+    store: ExecutionStore,
+) -> List[Dict[str, Any]]:
+    """Detect ``execution_arbs`` rows with fewer than 2 leg orders persisted.
+
+    These are crash / exception-escape orphans: ``record_arb_stub`` and the
+    primary leg's ``upsert_order`` ran, but ``record_arb`` (the atomic
+    both-legs upsert) never completed. Caused historically by an exception
+    escaping ``_live_execution`` between primary fill and secondary order
+    construction — that path is now wrapped in try/except, but a true
+    process kill (SIGKILL / OOM / power-loss between writes) can still
+    leave this footprint.
+
+    For each half-recorded arb, persist a critical ``half_recorded_arb``
+    ``ExecutionIncident`` so the operator is paged and can manually
+    reconcile against the venue. Best-effort: a per-row insert failure
+    must not abort the rest of the loop.
+
+    Raises ``RecoveryInitError`` if the underlying query fails — callers
+    should refuse to start the engine and arm SafetySupervisor (no new
+    trades) until the operator clears the underlying problem.
+
+    Returns the list of half-recorded arb summaries (same shape as
+    ``ExecutionStore.list_half_recorded_arbs``).
+    """
+    try:
+        orphans = await store.list_half_recorded_arbs()
+    except Exception as exc:
+        logger.critical(
+            "recovery: failed to list half-recorded arbs — aborting startup: %s",
+            exc,
+        )
+        raise RecoveryInitError(
+            f"failed to enumerate half-recorded arbs during recovery: {exc}"
+        ) from exc
+
+    if not orphans:
+        logger.info("recovery: no half-recorded arbs to reconcile")
+        return []
+
+    logger.warning(
+        "recovery: detected %d half-recorded arb(s) — emitting critical incidents",
+        len(orphans),
+    )
+
+    for orphan in orphans:
+        arb_id = orphan["arb_id"]
+        leg_count = int(orphan.get("leg_count") or 0)
+        leg_ids = list(orphan.get("leg_order_ids") or [])
+        incident = ExecutionIncident(
+            incident_id=f"INC-HALF-{uuid.uuid4().hex[:8]}",
+            arb_id=arb_id,
+            canonical_id=(orphan.get("canonical_id") or ""),
+            severity="critical",
+            message=(
+                f"Half-recorded arb {arb_id}: only {leg_count} leg(s) persisted. "
+                "Engine crashed or an exception escaped between primary fill and "
+                "secondary order construction. Check the venue for an unmatched "
+                "fill and reconcile manually."
+            ),
+            timestamp=time.time(),
+            metadata={
+                "event_type": "half_recorded_arb",
+                "arb_id": arb_id,
+                "leg_count": leg_count,
+                "leg_order_ids": leg_ids,
+                "stuck_status": orphan.get("status"),
+            },
+        )
+        try:
+            await store.insert_incident(incident)
+        except Exception as exc:
+            logger.error(
+                "recovery: failed to persist half-recorded incident for %s: %s",
+                arb_id, exc,
+            )
+
+    return orphans

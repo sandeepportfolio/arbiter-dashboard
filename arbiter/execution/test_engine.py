@@ -2948,5 +2948,123 @@ def test_daily_loss_trip_kill_is_idempotent():
         # Once is_armed flips True after the first trip_kill, subsequent
         # calls must short-circuit.
         assert engine._safety.trip_kill.await_count == 1
+# ─────────────────────────────────────────────────────────────────────────
+# Exception-escape gap (silent-naked bug): if an exception raises between
+# primary fill and secondary order construction (e.g. best_executable_price
+# blows up on a network blip, compute_fee KeyErrors on a new platform),
+# the engine MUST still persist an ABORTED-EXCEPTION secondary placeholder,
+# write both legs via record_arb, route through one-leg-exposure recovery
+# so the supervisor fanout fires, then re-raise. Without this, primary sat
+# FILLED in DB with no secondary record and no naked incident was raised.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_secondary_exception_after_primary_fill_persists_naked_and_reraises():
+    """Primary FILLs on Kalshi; Polymarket's ``best_executable_price`` raises.
+    Without the fix the exception escapes ``_live_execution`` entirely:
+    the primary row sits FILLED in DB and no second leg row, naked-incident,
+    or supervisor call is recorded. With the fix the engine constructs an
+    ABORTED ``-EXCEPTION`` placeholder for the secondary, persists both
+    legs through ``record_arb``, fires the one-leg-exposure recovery path
+    (which raises the structured incident and calls the supervisor), and
+    re-raises the original exception so callers still see the failure."""
+    from arbiter.execution.engine import Order, OrderStatus
+
+    async def runner():
+        import os as _os_test
+        _old_exec_order = _os_test.environ.get("EXECUTION_ORDER")
+        _os_test.environ["EXECUTION_ORDER"] = "kalshi_first"
+        try:
+            engine = _build_live_engine_for_safe02_gap()
+
+            kalshi = MagicMock()
+            kalshi.platform = "kalshi"
+            _wire_live_depth(kalshi, 0.60)
+            kalshi.place_fok = AsyncMock(
+                return_value=Order(
+                    order_id="ARB-000999-YES-KALSHI",
+                    platform="kalshi",
+                    market_id="K-MKT1",
+                    canonical_id="MKT1",
+                    side="yes",
+                    price=0.60,
+                    quantity=100,
+                    status=OrderStatus.FILLED,
+                    fill_qty=100,
+                    fill_price=0.60,
+                    timestamp=time.time(),
+                )
+            )
+            kalshi.cancel_order = AsyncMock(return_value=True)
+            _wire_unwind_failed(kalshi)
+
+            poly = MagicMock()
+            poly.platform = "polymarket"
+            poly.check_depth = AsyncMock(return_value=(True, 0.30))
+            # The bug surface: secondary path calls
+            # secondary_adapter.best_executable_price(...) BEFORE constructing
+            # any Order for the secondary leg. A raise here previously
+            # escaped _live_execution outright.
+            poly.best_executable_price = AsyncMock(
+                side_effect=RuntimeError("simulated poly network blip")
+            )
+            _wire_unwind_failed(poly)
+
+            engine.adapters = {"kalshi": kalshi, "polymarket": poly}
+            engine.store = AsyncMock()
+            engine._safety = AsyncMock()
+
+            opp = _make_safety_opp(
+                canonical_id="MKT1",
+                yes_platform="kalshi",
+                no_platform="polymarket",
+                yes_price=0.60,
+                no_price=0.30,
+                suggested_qty=100,
+            )
+
+            with pytest.raises(RuntimeError, match="simulated poly network blip"):
+                await engine._live_execution("ARB-000999", opp)
+
+            # record_arb must have been called with both legs — the primary
+            # FILLED on Kalshi and an ABORTED ``-EXCEPTION`` placeholder on
+            # Polymarket — so the audit trail reflects the naked state.
+            engine.store.record_arb.assert_awaited()
+            persisted = engine.store.record_arb.await_args.args[0]
+            assert persisted.status == "recovering"
+            assert persisted.leg_yes.status == OrderStatus.FILLED
+            assert persisted.leg_yes.platform == "kalshi"
+            assert persisted.leg_no.status == OrderStatus.ABORTED
+            assert persisted.leg_no.platform == "polymarket"
+            assert "-EXCEPTION" in persisted.leg_no.order_id
+            assert "simulated poly network blip" in (persisted.leg_no.error or "")
+
+            # The supervisor's one-leg-exposure fanout MUST be invoked so
+            # Telegram + WS channels page the operator. ``_recover_one_leg_risk``
+            # is the only call site for this hook and runs inside the same
+            # _live_execution invocation that re-raised.
+            engine._safety.handle_one_leg_exposure.assert_called_once()
+            args = engine._safety.handle_one_leg_exposure.call_args.args
+            incident_arg, filled_arg, failed_arg, _opp_arg = args
+            assert filled_arg.status == OrderStatus.FILLED
+            assert failed_arg.status == OrderStatus.ABORTED
+            assert incident_arg.metadata.get("event_type") == "one_leg_exposure"
+
+            # A dedicated ``secondary_execution_exception`` incident with
+            # the exception type captured in metadata must also be emitted
+            # so the operator can distinguish exception-escape naked legs
+            # from venue-rejection naked legs in the post-mortem.
+            exception_incidents = [
+                i for i in engine._incidents
+                if i.metadata.get("event_type") == "secondary_execution_exception"
+            ]
+            assert len(exception_incidents) == 1
+            assert exception_incidents[0].severity == "critical"
+            assert exception_incidents[0].metadata.get("exception_type") == "RuntimeError"
+        finally:
+            if _old_exec_order is None:
+                _os_test.environ.pop("EXECUTION_ORDER", None)
+            else:
+                _os_test.environ["EXECUTION_ORDER"] = _old_exec_order
 
     asyncio.run(runner())
