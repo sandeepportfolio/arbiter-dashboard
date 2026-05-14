@@ -226,6 +226,13 @@ class ArbiterAPI:
         self.safety_store = getattr(safety, "_safety_store", None)
         self.started_at = time.time()
         self._ws_clients: list[web.WebSocketResponse] = []
+        # Short freshness cache for /api/balances so the dashboard polling rate
+        # doesn't hammer the platform APIs while still letting operators force a
+        # fresh hit via ?force_refresh=1. Past incident: WebSocket fanout +
+        # operator dashboard refresh caused redundant /account/balances calls
+        # within the same second and tripped Polymarket US rate limits.
+        self._balances_cache_ts: float = 0.0
+        self._balances_cache_ttl: float = 5.0
         self._site_index = Path(__file__).resolve().parent.parent / "index.html"
         self._dashboard_dir = Path(__file__).resolve().parent / "web"
         self.auto_executor = None
@@ -602,16 +609,100 @@ class ArbiterAPI:
         return web.json_response([opportunity.to_dict() for opportunity in self.scanner.current_opportunities])
 
     async def handle_balances(self, request):
-        return web.json_response(
-            {
-                platform: {
-                    "balance": snapshot.balance,
-                    "is_low": snapshot.is_low,
-                    "timestamp": snapshot.timestamp,
-                }
-                for platform, snapshot in self.monitor.current_balances.items()
+        """Return current platform balances with explicit freshness metadata.
+
+        Query params:
+          - ``force_refresh=1`` triggers a live re-fetch (subject to a single
+            in-flight serialisation lock in BalanceMonitor) bypassing the
+            5-second cache.
+
+        Response shape: ``{platforms: {kalshi: {...}, polymarket: {...}}, ...}``
+        with per-platform ``age_seconds``, ``source`` (where the number came
+        from — e.g. ``polymarket:proxy-erc20(0x123…)``), and a separate
+        ``errors`` map so operators can see *why* a balance is stale.
+
+        Legacy shape — the bare ``{platform: {...}}`` map the old dashboard
+        consumed — is preserved at the top level for backwards compatibility.
+        """
+        now = time.time()
+        force = (request.query.get("force_refresh", "") or "").strip().lower() in {
+            "1", "true", "yes", "on"
+        }
+        # Allow the freshness window to be quoted in the response so the UI can
+        # display "cached / 3s old" or "live" accurately.
+        cache_ttl = self._balances_cache_ttl
+        cache_age = now - self._balances_cache_ts if self._balances_cache_ts else float("inf")
+        cache_hit = (not force) and cache_age < cache_ttl
+
+        if not cache_hit:
+            try:
+                await self.monitor.refresh_balances()
+                self._balances_cache_ts = time.time()
+            except Exception as exc:
+                logger.error("handle_balances: refresh failed: %s", exc)
+
+        snapshots = self.monitor.current_balances
+        last_errors = self.monitor.last_errors
+
+        now_after = time.time()
+        platforms: dict[str, dict] = {}
+        for platform, snapshot in snapshots.items():
+            age = max(0.0, now_after - snapshot.timestamp)
+            err = last_errors.get(platform)
+            platforms[platform] = {
+                "balance": round(snapshot.balance, 2),
+                "is_low": snapshot.is_low,
+                "timestamp": snapshot.timestamp,
+                "age_seconds": round(age, 2),
+                "source": snapshot.source or "",
+                "stale": age > max(cache_ttl * 6, 30.0),
+                "error": (err.get("message") if err else None),
+                "error_timestamp": (err.get("timestamp") if err else None),
             }
-        )
+
+        # Platforms that errored before producing any snapshot still need to
+        # show up so the UI can render their failure mode.
+        for platform, err in last_errors.items():
+            if platform in platforms:
+                continue
+            platforms[platform] = {
+                "balance": None,
+                "is_low": None,
+                "timestamp": None,
+                "age_seconds": None,
+                "source": "",
+                "stale": True,
+                "error": err.get("message"),
+                "error_timestamp": err.get("timestamp"),
+            }
+
+        # Legacy fields keyed by platform stay at the top level so older
+        # dashboards keep working. New consumers should use ``platforms`` /
+        # ``errors`` / ``cache``.
+        response: dict[str, object] = {
+            platform: {
+                "balance": data.get("balance"),
+                "is_low": data.get("is_low"),
+                "timestamp": data.get("timestamp"),
+            }
+            for platform, data in platforms.items()
+        }
+        response["platforms"] = platforms
+        response["errors"] = {
+            platform: {
+                "message": err.get("message"),
+                "timestamp": err.get("timestamp"),
+            }
+            for platform, err in last_errors.items()
+        }
+        response["cache"] = {
+            "hit": cache_hit,
+            "ttl_seconds": cache_ttl,
+            "age_seconds": (round(cache_age, 2) if cache_age != float("inf") else None),
+            "force_refresh": force,
+            "served_at": now_after,
+        }
+        return web.json_response(response)
 
     async def handle_trades(self, request):
         """Return the durable execution ledger newest-first.
@@ -1687,6 +1778,24 @@ class ArbiterAPI:
 
         Includes deployed capital (money in open positions) so the UI can
         distinguish between actual losses and capital currently at work.
+
+        ── P&L invariant ──────────────────────────────────────────────────────
+        The headline ``net_trading_pnl`` MUST exclude deposits. It is computed
+        two independent ways and the implementation prefers the more robust
+        of the two:
+
+          (a) ledger:   sum of recorded execution P&L from the reconciler
+                        (this is the ground truth — it can only move when a
+                        trade fills).
+          (b) balance:  (current_balance + expected_settlement)
+                        − (original_starting_balance + total_deposits)
+                        i.e. capital-flow-adjusted balance change.
+
+        Both are surfaced so the UI can sanity-check (a) against (b), but the
+        dashboard's "Total profit/loss" reads ``net_trading_pnl`` which uses
+        the ledger when it disagrees with the balance method by more than a
+        cent — the past bug was that the dashboard showed (current −
+        original) and reported deposits as profit.
         """
         balances = {
             platform: snapshot.balance
@@ -1709,6 +1818,9 @@ class ArbiterAPI:
             - total_deposits.get(platform, 0.0)
             for platform in balances
         }
+        # Balance-method trading P&L per platform = current − adjusted_starting.
+        # adjusted_starting already includes deposits, so subtracting it
+        # excludes deposits from the P&L number.
         cash_trading_pnl = {}
         for platform in balances:
             start = adjusted_starting_balances.get(platform, 0.0)
@@ -1717,7 +1829,12 @@ class ArbiterAPI:
 
         total_current = sum(balances.values())
         total_start = sum(adjusted_starting_balances.get(p, 0) for p in balances)
+        total_original_start = sum(
+            original_starting_balances.get(p, 0) for p in balances
+        )
         total_dep = sum(total_deposits.get(p, 0) for p in balances)
+        # ``net_cash_change`` excludes deposits because total_start already
+        # includes them (current − (original + deposits)).
         net_cash_change = round(total_current - total_start, 2)
 
         # Calculate deployed capital (money in open/submitted positions)
@@ -1745,7 +1862,22 @@ class ArbiterAPI:
 
         expected_profit_at_settlement = round(expected_settlement - deployed_capital, 2)
         estimated_equity = round(total_current + expected_settlement, 2)
-        net_trading_pnl = round(estimated_equity - total_start, 2)
+        # Balance-method P&L (settles-included). Excludes deposits because
+        # total_start = original + deposits.
+        net_balance_change = round(estimated_equity - total_start, 2)
+
+        # Ledger-method P&L: sum of recorded execution P&L. Cannot move on
+        # deposits/withdrawals — only trade fills mutate it — so this is the
+        # robust "P&L excluding deposits" number. Falls back to the balance
+        # method when no recorded P&L is available (early operation, ledger
+        # rehydrate pending, etc.).
+        ledger_trading_pnl = round(
+            sum(float(v or 0.0) for v in recorded_pnl.values()), 2
+        )
+        if recorded_pnl:
+            net_trading_pnl = ledger_trading_pnl
+        else:
+            net_trading_pnl = net_balance_change
 
         return web.json_response({
             "current_balances": {k: round(v, 2) for k, v in balances.items()},
@@ -1756,6 +1888,7 @@ class ArbiterAPI:
             "original_starting_balances": {
                 k: round(v, 2) for k, v in original_starting_balances.items()
             },
+            "original_capital_basis": round(total_original_start, 2),
             "total_deposits": total_deposits,
             "total_deposits_all_platforms": round(total_dep, 2),
             "recorded_trading_pnl": recorded_pnl,
@@ -1765,8 +1898,11 @@ class ArbiterAPI:
             "estimated_equity": estimated_equity,
             "capital_basis": round(total_start, 2),
             "net_cash_change": net_cash_change,
-            "net_balance_change": net_trading_pnl,
+            "net_balance_change": net_balance_change,
             "net_trading_pnl": net_trading_pnl,
+            "ledger_trading_pnl": ledger_trading_pnl,
+            "pnl_excludes_deposits": True,
+            "pnl_method": "ledger" if recorded_pnl else "balance",
             "deposit_count": recon_stats.get("deposit_count", 0),
             # New: deployed capital context
             "deployed_capital": round(deployed_capital, 2),

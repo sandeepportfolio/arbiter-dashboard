@@ -271,3 +271,52 @@ async def test_close_cleans_session(client):
     # Calling close again should be idempotent (no exception)
     await client.close()
     assert client.session is None or client.session.closed
+
+
+# ---------------------------------------------------------------------------
+# test_collector_balance_returns_trading_account_balance
+# ---------------------------------------------------------------------------
+async def test_collector_fetch_balance_returns_trading_account_balance(client):
+    """The collector must read the trading-account balance (the one Polymarket
+    returns from /account/balances) — NOT the on-chain EOA USDC balance. This
+    is what operators see in the app and trade against; surfacing the EOA
+    instead would mislead them by hundreds of dollars after every deposit.
+    """
+    config = PolymarketUSConfig(api_key_id="kid", api_secret=SECRET)
+    store = PriceStore()
+    collector = PolymarketUSCollector(config=config, store=store, client=client)
+
+    with aioresponses() as m:
+        m.get(
+            f"{BASE_URL}/account/balances",
+            payload={
+                "balances": [
+                    {"currency": "USD", "currentBalance": "742.18"},
+                    {"currency": "USDC", "currentBalance": "0"},
+                ]
+            },
+        )
+        balance = await collector.fetch_balance()
+
+    assert balance == pytest.approx(742.18)
+    assert collector.balance_source == "polymarket-us:/account/balances"
+    await client.close()
+
+
+# ---------------------------------------------------------------------------
+# test_collector_fetch_balance_propagates_errors
+# ---------------------------------------------------------------------------
+async def test_collector_fetch_balance_propagates_errors(client):
+    """A signed-balance call that fails should propagate so BalanceMonitor can
+    record it on _last_errors and the dashboard can show the operator *why*
+    a balance is stale instead of returning the prior cached value silently.
+    """
+    config = PolymarketUSConfig(api_key_id="kid", api_secret=SECRET)
+    store = PriceStore()
+    collector = PolymarketUSCollector(config=config, store=store, client=client)
+
+    with aioresponses() as m:
+        m.get(f"{BASE_URL}/account/balances", status=503, repeat=True)
+        with pytest.raises(Exception):
+            await collector.fetch_balance()
+    await client.close()

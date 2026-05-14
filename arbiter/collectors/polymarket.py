@@ -410,6 +410,13 @@ class PolymarketCollector:
             total += _safe_float(level.get("size", 0.0))
         return total
 
+    @property
+    def balance_source(self) -> str:
+        funder = (getattr(self.config, "funder", "") or "").strip()
+        if funder:
+            return f"polymarket:proxy-erc20({funder[:10]}…)"
+        return "polymarket:eoa-erc20"
+
     async def fetch_balance(self) -> Optional[float]:
         if not self.config.private_key:
             logger.debug("Polymarket wallet key not configured, skipping balance")
@@ -430,7 +437,22 @@ class PolymarketCollector:
                 logger.warning("Polymarket balance: cannot connect to Polygon RPC")
                 return None
 
-            wallet_address = Account.from_key(self.config.private_key).address
+            # For Polymarket signature_type 2 (proxy wallet), trading collateral
+            # lives at the funder/proxy address, not the EOA. Prefer that when
+            # configured so the displayed balance matches what's tradable in
+            # the app. Falls back to the EOA only when no proxy is configured.
+            funder = (getattr(self.config, "funder", "") or "").strip()
+            if funder:
+                try:
+                    wallet_address = Web3.to_checksum_address(funder)
+                except (ValueError, TypeError) as exc:
+                    logger.warning(
+                        "Polymarket balance: invalid POLY_FUNDER %r (%s); falling back to EOA",
+                        funder, exc,
+                    )
+                    wallet_address = Account.from_key(self.config.private_key).address
+            else:
+                wallet_address = Account.from_key(self.config.private_key).address
             usdc_addresses = (
                 Web3.to_checksum_address("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"),
                 Web3.to_checksum_address("0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"),

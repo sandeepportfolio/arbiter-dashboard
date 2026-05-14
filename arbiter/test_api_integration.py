@@ -422,6 +422,217 @@ def test_trades_endpoint_returns_complete_newest_first_expected_actual_ledger():
     asyncio.run(_run())
 
 
+def test_balances_endpoint_surfaces_age_source_and_errors():
+    """/api/balances must return age_seconds and per-platform errors so the
+    UI can render staleness explicitly instead of letting operators trade
+    against a silently-frozen balance.
+    """
+    async def _run():
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from arbiter.monitor.balance import BalanceSnapshot
+
+        api = await _make_rate_limit_api()
+        now = time.time()
+        snapshots = {
+            "kalshi": BalanceSnapshot(
+                platform="kalshi", balance=450.0, timestamp=now - 2.0,
+                is_low=False, source="kalshi:portfolio",
+            ),
+            "polymarket": BalanceSnapshot(
+                platform="polymarket", balance=120.0, timestamp=now - 1.0,
+                is_low=False, source="polymarket-us:/account/balances",
+            ),
+        }
+        last_errors = {
+            "polymarket": {"message": "503 from /account/balances", "timestamp": now - 1.0},
+        }
+        api.monitor = SimpleNamespace(
+            current_balances=snapshots,
+            last_errors=last_errors,
+            refresh_balances=AsyncMock(return_value=snapshots),
+        )
+
+        class Req:
+            query = {}
+
+        response = await api.handle_balances(Req())
+        payload = json.loads(response.text)
+
+        assert "platforms" in payload
+        assert payload["platforms"]["kalshi"]["source"] == "kalshi:portfolio"
+        assert payload["platforms"]["kalshi"]["age_seconds"] >= 0
+        assert payload["platforms"]["polymarket"]["source"] == "polymarket-us:/account/balances"
+        assert payload["platforms"]["polymarket"]["error"] == "503 from /account/balances"
+        assert payload["errors"]["polymarket"]["message"] == "503 from /account/balances"
+        # Legacy top-level shape preserved for older dashboards
+        assert payload["kalshi"]["balance"] == 450.0
+        assert payload["cache"]["force_refresh"] is False
+        # No cache hit on first call (cache empty), so we hit refresh once.
+        assert api.monitor.refresh_balances.await_count == 1
+
+    asyncio.run(_run())
+
+
+def test_balances_endpoint_uses_cache_under_ttl():
+    """Repeat calls within the 5s window must NOT trigger another refresh —
+    that's the whole point of the freshness cache.
+    """
+    async def _run():
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from arbiter.monitor.balance import BalanceSnapshot
+
+        api = await _make_rate_limit_api()
+        snapshots = {
+            "kalshi": BalanceSnapshot(
+                platform="kalshi", balance=10.0,
+                timestamp=time.time(), is_low=True, source="x",
+            ),
+        }
+        api.monitor = SimpleNamespace(
+            current_balances=snapshots,
+            last_errors={},
+            refresh_balances=AsyncMock(return_value=snapshots),
+        )
+
+        class Req:
+            query = {}
+
+        await api.handle_balances(Req())
+        await api.handle_balances(Req())
+        await api.handle_balances(Req())
+
+        # First call refreshed; subsequent two used the cache.
+        assert api.monitor.refresh_balances.await_count == 1
+
+    asyncio.run(_run())
+
+
+def test_balances_endpoint_force_refresh_bypasses_cache():
+    """?force_refresh=1 must trigger a live re-fetch even when the cache is
+    warm. This is the operator's escape hatch when they suspect a stale
+    balance is wrong.
+    """
+    async def _run():
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from arbiter.monitor.balance import BalanceSnapshot
+
+        api = await _make_rate_limit_api()
+        snapshots = {
+            "kalshi": BalanceSnapshot(
+                platform="kalshi", balance=10.0,
+                timestamp=time.time(), is_low=True, source="x",
+            ),
+        }
+        api.monitor = SimpleNamespace(
+            current_balances=snapshots,
+            last_errors={},
+            refresh_balances=AsyncMock(return_value=snapshots),
+        )
+
+        class Req:
+            def __init__(self, query):
+                self.query = query
+
+        # Warm the cache
+        await api.handle_balances(Req({}))
+        # Force a refresh
+        await api.handle_balances(Req({"force_refresh": "1"}))
+
+        assert api.monitor.refresh_balances.await_count == 2
+
+    asyncio.run(_run())
+
+
+def test_pnl_summary_excludes_deposits_when_ledger_has_no_movement():
+    """A deposit alone (no trades) must NOT show up as profit/loss. Before
+    this fix, the dashboard counted incoming deposits as P&L because the
+    starting baseline lagged behind the deposit shift.
+    """
+    async def _run():
+        from types import SimpleNamespace
+
+        from arbiter.audit.pnl_reconciler import PnLReconciler
+
+        api = await _make_rate_limit_api()
+        reconciler = PnLReconciler(log_to_disk=False)
+        reconciler.set_starting_balance("kalshi", 100.0)
+        reconciler.set_starting_balance("polymarket", 200.0)
+        # Operator deposits $500 to Kalshi. No trades happen.
+        reconciler.record_deposit("kalshi", 500.0, balance_before=100.0, balance_after=600.0)
+
+        api.reconciler = reconciler
+        api.monitor.current_balances = {
+            "kalshi": SimpleNamespace(balance=600.0),
+            "polymarket": SimpleNamespace(balance=200.0),
+        }
+
+        response = await api.handle_pnl_summary(None)
+        payload = json.loads(response.text)
+
+        # The headline trading P&L must be ZERO — no trades have happened,
+        # so the $500 deposit shouldn't show up as profit.
+        assert payload["net_trading_pnl"] == 0.0
+        assert payload["ledger_trading_pnl"] == 0.0
+        assert payload["pnl_excludes_deposits"] is True
+        assert payload["total_deposits"]["kalshi"] == 500.0
+        # Balance method should also be zero — the starting baseline was
+        # shifted forward by the deposit.
+        assert payload["net_balance_change"] == 0.0
+        # Original capital basis = pre-deposit baseline. With expected_settlement=0,
+        # net_balance_change = (current+0) - adjusted_start = (800) - (600+200) = 0.
+
+    asyncio.run(_run())
+
+
+def test_pnl_summary_reports_ledger_pnl_after_trades():
+    """When trades have executed, the headline P&L should come from the
+    ledger (sum of recorded execution P&L) — not balance changes that can be
+    polluted by deposits.
+    """
+    async def _run():
+        from types import SimpleNamespace
+
+        from arbiter.audit.pnl_reconciler import PnLReconciler
+
+        api = await _make_rate_limit_api()
+        reconciler = PnLReconciler(log_to_disk=False)
+        reconciler.set_starting_balance("kalshi", 1000.0)
+        reconciler.set_starting_balance("polymarket", 1000.0)
+        # Two trades: +$15 win on kalshi, -$5 loss on polymarket. Net +$10.
+        reconciler.record_execution_pnl("kalshi", 15.0)
+        reconciler.record_execution_pnl("polymarket", -5.0)
+        # Mid-way through, operator deposits $1000 more to kalshi.
+        reconciler.record_deposit("kalshi", 1000.0, balance_before=1015.0, balance_after=2015.0)
+
+        api.reconciler = reconciler
+        # Balances reflect: kalshi=$2015, polymarket=$995. Total=$3010.
+        # If P&L counted deposits it would be ~$1010. Real P&L = $10.
+        api.monitor.current_balances = {
+            "kalshi": SimpleNamespace(balance=2015.0),
+            "polymarket": SimpleNamespace(balance=995.0),
+        }
+
+        response = await api.handle_pnl_summary(None)
+        payload = json.loads(response.text)
+
+        assert payload["ledger_trading_pnl"] == 10.0
+        assert payload["net_trading_pnl"] == 10.0
+        assert payload["pnl_method"] == "ledger"
+        assert payload["total_deposits"]["kalshi"] == 1000.0
+        # The naive "current - original_start" would be wildly wrong:
+        #   (2015 - 1000) + (995 - 1000) = 1015 - 5 = 1010
+        # Confirm we're not reporting that number.
+        assert payload["net_trading_pnl"] != 1010.0
+
+    asyncio.run(_run())
+
+
 def test_pnl_summary_does_not_double_subtract_deposit_adjusted_baseline():
     async def _run():
         from types import SimpleNamespace

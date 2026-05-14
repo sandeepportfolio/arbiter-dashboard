@@ -508,6 +508,11 @@ class PolymarketUSCollector:
 
         return results
 
+    # Surface where the displayed Polymarket balance actually came from so the
+    # dashboard can flag the difference between the on-chain EOA wallet and
+    # the trading account.
+    balance_source: str = field(default="polymarket-us:/account/balances", init=False)
+
     async def fetch_balance(self) -> Optional[float]:
         if not (self.config.api_key_id and self.config.api_secret):
             logger.debug("Polymarket US API credentials not configured, skipping balance")
@@ -520,7 +525,7 @@ class PolymarketUSCollector:
             return balance
         except Exception as exc:
             logger.error("Polymarket US balance error: %s", exc)
-            return None
+            raise
 
     async def run(self) -> None:
         self._running = True

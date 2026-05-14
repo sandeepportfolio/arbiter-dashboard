@@ -218,6 +218,10 @@ class BalanceSnapshot:
     balance: float
     timestamp: float
     is_low: bool = False
+    # Optional source descriptor — e.g. "polymarket-us:/account/balances" or
+    # "polymarket:funder-erc20" — so the dashboard can tell which surface the
+    # number actually came from. Stays "" for legacy callers.
+    source: str = ""
 
 
 class TelegramNotifier:
@@ -354,6 +358,12 @@ class BalanceMonitor:
         }
         # Manual balance overrides (for platforms without balance API)
         self._manual_balances: Dict[str, float] = {}
+        # Per-platform last-error message + timestamp so the dashboard can tell
+        # operators *why* a balance number looks stale. None = no recent error.
+        self._last_errors: Dict[str, dict] = {}
+        # Serialize check_balances() calls so concurrent /api/balances requests
+        # with force_refresh=1 don't hammer the platform APIs.
+        self._refresh_lock = asyncio.Lock()
 
     def set_manual_balance(self, platform: str, balance: float):
         """Set balance manually for platforms without API."""
@@ -361,7 +371,12 @@ class BalanceMonitor:
         logger.info(f"Manual balance set: {platform} = ${balance:.2f}")
 
     async def check_balances(self) -> Dict[str, BalanceSnapshot]:
-        """Fetch balances from all platforms."""
+        """Fetch balances from all platforms.
+
+        Records the per-platform last error (with timestamp) on failure so
+        operators can see *why* a displayed balance is stale instead of just
+        watching the age tick up silently.
+        """
         snapshots = {}
 
         for platform, collector in self.collectors.items():
@@ -380,18 +395,44 @@ class BalanceMonitor:
                         balance=balance,
                         timestamp=time.time(),
                         is_low=is_low,
+                        source=getattr(collector, "balance_source", ""),
                     )
                     snapshots[platform] = snap
                     self._balances[platform] = snap
+                    # Successful fetch clears any prior error
+                    self._last_errors.pop(platform, None)
 
                     # Send alert if low and cooldown elapsed
                     if is_low:
                         await self._maybe_alert_low_balance(platform, balance, threshold)
+                else:
+                    # fetch_balance() returned None — collector swallowed the
+                    # error or has no credentials; surface that to the UI.
+                    self._last_errors[platform] = {
+                        "message": "balance unavailable (no credentials or fetch returned None)",
+                        "timestamp": time.time(),
+                    }
 
             except Exception as e:
                 logger.error(f"Balance check error for {platform}: {e}")
+                self._last_errors[platform] = {
+                    "message": str(e),
+                    "timestamp": time.time(),
+                }
 
         return snapshots
+
+    async def refresh_balances(self) -> Dict[str, BalanceSnapshot]:
+        """Force a balance refresh, serialised so concurrent callers share a
+        single platform hit. Used by the /api/balances?force_refresh=1 path.
+        """
+        async with self._refresh_lock:
+            return await self.check_balances()
+
+    @property
+    def last_errors(self) -> Dict[str, dict]:
+        """Snapshot of the most recent error per platform (empty if none)."""
+        return dict(self._last_errors)
 
     async def _maybe_alert_low_balance(self, platform: str, balance: float, threshold: float):
         """Send low balance alert if cooldown has elapsed."""
