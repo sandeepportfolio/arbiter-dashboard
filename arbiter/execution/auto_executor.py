@@ -48,7 +48,7 @@ class AutoExecutorConfig:
     # Pre-flight thresholds (applied only when price_store + adapters wired).
     max_quote_age_s: float = 30.0
     min_depth_usd: float = 25.0
-    min_edge_cents_preflight: float = 3.0
+    min_edge_cents_preflight: float = 7.0
     require_mapping_confirmed: bool = False  # opt-in stricter mapping gate
     # Auto-disable a mapping after this many consecutive losing recoveries.
     # Catches markets like DEM_HOUSE_2026 (2026-05-08 cascade: 22 trades /
@@ -780,7 +780,12 @@ def make_auto_executor_from_env(
         max_quote_age_s=_float(config_env.get("PREFLIGHT_MAX_QUOTE_AGE_S"), 30.0),
         min_depth_usd=_float(config_env.get("PREFLIGHT_MIN_DEPTH_USD"), 25.0),
         min_edge_cents_preflight=_float(
-            config_env.get("PREFLIGHT_MIN_EDGE_CENTS"), 3.0,
+            # PREFLIGHT_MIN_EDGE_CENTS overrides if set; otherwise fall back to
+            # MIN_EDGE_CENTS so the scanner / preflight / engine gates stay in
+            # lockstep. Default 7.0 reflects the 2026-05 forensic audit.
+            config_env.get("PREFLIGHT_MIN_EDGE_CENTS")
+            or config_env.get("MIN_EDGE_CENTS"),
+            7.0,
         ),
         require_mapping_confirmed=_bool(
             config_env.get("PREFLIGHT_REQUIRE_MAPPING_CONFIRMED"), default=False,

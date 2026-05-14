@@ -588,7 +588,13 @@ class AlertConfig:
 
 
 def _env_float(name: str, default: float) -> float:
-    """Read float env var with graceful fallback on missing / unparseable."""
+    """Read float env var with graceful fallback on missing / unparseable.
+
+    Shared by ScannerConfig for both balance-proportional sizing knobs
+    (MAX_BALANCE_FRACTION_PER_TRADE, etc.) and the cross-cutting
+    profitability gate (MIN_EDGE_CENTS). If the env var is unset or
+    malformed, the default is returned unchanged.
+    """
     raw = os.getenv(name)
     if raw is None or str(raw).strip() == "":
         return default
@@ -607,7 +613,13 @@ def _env_bool(name: str, default: bool) -> bool:
 
 @dataclass
 class ScannerConfig:
-    min_edge_cents: float = 3.0
+    # PhD research + 2026-05 forensic audit: with current Poly latency
+    # (median 3.66¢ adverse move), the minimum viable net edge is ≥7¢.
+    # Single env var ``MIN_EDGE_CENTS`` governs scanner, AutoExecutor
+    # preflight, and engine profitability gate so they can't drift apart.
+    min_edge_cents: float = field(
+        default_factory=lambda: _env_float("MIN_EDGE_CENTS", 7.0)
+    )
     max_position_usd: float = 100.0
     scan_interval: float = 1.0
     confidence_threshold: float = 0.5
