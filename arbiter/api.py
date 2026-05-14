@@ -230,6 +230,14 @@ class ArbiterAPI:
         self._dashboard_dir = Path(__file__).resolve().parent / "web"
         self.auto_executor = None
         self.retry_scheduler = None
+        self.failure_tracker = None
+        self.stuck_recovery_stats = None
+        # Map of arb_id -> last_checked_at epoch. Populated by /api/trades
+        # from the DB; cached so the endpoint doesn't have to read the
+        # column for every request burst.
+        self._last_checked_cache: Dict[str, float] = {}
+        self._last_checked_cache_notes: Dict[str, str] = {}
+        self._last_checked_cache_ts: float = 0.0
         self._broadcast_task: Optional[asyncio.Task] = None
         self._operator_settings_store = OperatorSettingsStore()
         self._market_discovery_settings = load_market_discovery_settings(self._operator_settings_store)
@@ -371,6 +379,18 @@ class ArbiterAPI:
         """Wire the RetryScheduler so /api/failed-trades can surface its records."""
         self.retry_scheduler = retry_scheduler
 
+    def attach_failure_tracker(self, failure_tracker) -> None:
+        """Wire the FailureTracker so /api/metrics + /api/failure-patterns
+        can surface the active backoff state.
+        """
+        self.failure_tracker = failure_tracker
+
+    def attach_stuck_recovery_stats(self, stats) -> None:
+        """Wire StuckTradeRecoveryStats so /api/metrics can show the last
+        reconciliation pass's results.
+        """
+        self.stuck_recovery_stats = stats
+
     async def serve(self):
         # Fail loudly at startup if the session secret is missing — a
         # silent insecure default would let anyone forge auth cookies.
@@ -395,6 +415,8 @@ class ArbiterAPI:
         app.router.add_get("/api/executions/{arb_id}/analysis", self.handle_execution_analysis)
         app.router.add_get("/api/failed-trades", self.handle_failed_trades)
         app.router.add_post("/api/failed-trades/{arb_id}/retry", self.handle_failed_trade_retry)
+        app.router.add_get("/api/failure-patterns", self.handle_failure_patterns)
+        app.router.add_get("/api/stuck-trade-recovery", self.handle_stuck_recovery_status)
         app.router.add_get("/api/live-prices/{canonical_id}", self.handle_live_prices_for_market)
         app.router.add_get("/api/stats", self.handle_system)
         app.router.add_get("/api/markets", self.handle_market_mappings)
@@ -626,12 +648,55 @@ class ArbiterAPI:
             limit = 500
         limit = max(1, min(limit, 1000))
 
-        rows = [self._execution_payload(execution) for execution in getattr(self.engine, "execution_history", [])]
+        # Refresh the last_checked / recovery_notes cache from DB at most
+        # once every 5s so the trades endpoint can show "checked Ns ago"
+        # without spamming the DB on every dashboard tick.
+        await self._refresh_last_checked_cache()
+
+        rows = [
+            self._execution_payload(execution)
+            for execution in getattr(self.engine, "execution_history", [])
+        ]
         rows.sort(key=lambda x: x.get("timestamp") or 0, reverse=True)
         return web.json_response(rows[:limit])
 
-    @staticmethod
-    def _execution_payload(execution) -> dict:
+    async def _refresh_last_checked_cache(self) -> None:
+        """Populate ``self._last_checked_cache`` from the DB at most every 5s.
+
+        Cached per arb so the per-row payload stays cheap when the dashboard
+        polls /api/trades every few seconds.
+        """
+        store = getattr(self.engine, "store", None)
+        if store is None or getattr(store, "_pool", None) is None:
+            return
+        now = time.time()
+        if now - self._last_checked_cache_ts < 5.0 and self._last_checked_cache:
+            return
+        try:
+            async with store._pool.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT arb_id, last_checked_at, recovery_notes "
+                    "FROM execution_arbs "
+                    "WHERE last_checked_at IS NOT NULL "
+                    "ORDER BY last_checked_at DESC LIMIT 1000"
+                )
+        except Exception as exc:
+            logger.warning("last_checked refresh failed: %s", exc)
+            return
+        cache: Dict[str, float] = {}
+        notes_cache: Dict[str, str] = {}
+        for row in rows:
+            ts = row["last_checked_at"]
+            if ts is not None:
+                cache[row["arb_id"]] = ts.timestamp()
+            note = row["recovery_notes"] or ""
+            if note:
+                notes_cache[row["arb_id"]] = note
+        self._last_checked_cache = cache
+        self._last_checked_cache_notes = notes_cache
+        self._last_checked_cache_ts = now
+
+    def _execution_payload(self, execution) -> dict:
         payload = execution.to_dict()
         opp = payload.get("opportunity") or {}
 
@@ -663,6 +728,15 @@ class ArbiterAPI:
         # "view analysis" button without round-tripping the full markdown
         # for every row in the list.
         payload["analysis_available"] = bool(payload.get("analysis_md"))
+        # Stuck-trade recovery: when the 5-min loop polled this arb, the
+        # last_checked_at column was stamped. UI shows it as "checked Ns ago"
+        # so operators can tell whether the loop is alive without reading logs.
+        arb_id = payload.get("arb_id") or ""
+        last_checked = (self._last_checked_cache or {}).get(arb_id)
+        payload["last_checked_at"] = last_checked
+        notes = getattr(self, "_last_checked_cache_notes", {})
+        if arb_id in notes:
+            payload["recovery_notes"] = notes[arb_id]
         return payload
 
     async def handle_execution_analysis(self, request):
@@ -921,6 +995,33 @@ class ArbiterAPI:
                 "current_net_edge_cents": net_edge_cents,
             }
         )
+
+    async def handle_failure_patterns(self, request):
+        """Expose the FailureTracker snapshot so the dashboard can show which
+        (market, side, price-bucket) tuples are currently in backoff.
+        """
+        if self.failure_tracker is None:
+            return web.json_response({
+                "config": {},
+                "stats": {},
+                "patterns": [],
+                "enabled": False,
+            })
+        snapshot = self.failure_tracker.snapshot()
+        snapshot["enabled"] = True
+        return web.json_response(snapshot)
+
+    async def handle_stuck_recovery_status(self, request):
+        """Surface the latest stuck-trade reconciliation pass results.
+
+        Operators check this when they want to know whether the 5-min loop
+        is alive (``last_run_ts``) and whether anything was updated on the
+        last pass.
+        """
+        stats = self.stuck_recovery_stats
+        payload = stats.to_dict() if stats is not None else {}
+        payload["enabled"] = stats is not None
+        return web.json_response(payload)
 
     async def handle_live_prices_for_market(self, request):
         """Return fresh per-platform quotes for a single canonical market.
