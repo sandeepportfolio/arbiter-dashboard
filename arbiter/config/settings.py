@@ -592,11 +592,11 @@ class ScannerConfig:
     min_edge_cents: float = 3.0
     max_position_usd: float = 100.0
     scan_interval: float = 1.0
-    confidence_threshold: float = 0.8
-    persistence_scans: int = 3
-    max_quote_age_seconds: float = 120.0
+    confidence_threshold: float = 0.5
+    persistence_scans: int = 5
+    max_quote_age_seconds: float = 15.0
     min_liquidity: float = 25.0
-    slippage_tolerance: float = 0.01
+    slippage_tolerance: float = 0.005
     # Reject opportunities where either venue's bid-ask spread (in cents)
     # exceeds this threshold on the side we'd buy. The DEM_HOUSE_2026 cascade
     # of 2026-05-08 lost $105 because kalshi quoted YES at 27¢/74¢ — every
