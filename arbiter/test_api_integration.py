@@ -807,6 +807,126 @@ def test_market_mappings_prefers_live_mapping_store():
     asyncio.run(_run())
 
 
+def test_market_mappings_metrics_uses_store_when_available():
+    """GET /api/mappings/metrics returns the live aggregate payload from the
+    durable store when one is wired in. The dashboard reads these fields
+    directly, so the contract here must match what PageMappings expects."""
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+
+    free_port()
+
+    expected_payload = {
+        "total": 1024,
+        "active_total": 256,
+        "status_counts": {
+            "confirmed": 200,
+            "candidate": 40,
+            "review": 16,
+            "rejected": 8,
+            "expired": 760,
+        },
+        "review_backlog": 56,
+        "auto_trade": {"enabled": 180, "eligible": 200, "rate": 0.9},
+        "confirmation_rate": 0.806,
+        "quality": {
+            "active_total": 256,
+            "avg_score": 0.81,
+            "avg_confidence": 0.79,
+            "buckets": [
+                {"label": "Excellent", "range": "0.90 – 1.00", "count": 100},
+                {"label": "Good",      "range": "0.70 – 0.90", "count": 96},
+                {"label": "Moderate",  "range": "0.50 – 0.70", "count": 50},
+                {"label": "Low",       "range": "< 0.50",      "count": 10},
+            ],
+        },
+        "criteria_match": {"identical": 180, "similar": 20, "pending_operator_review": 56},
+        "categories": [
+            {"name": "sports", "count": 150, "confirmed": 120, "pending": 30},
+        ],
+        "platform_coverage": {"kalshi_markets": 220, "polymarket_markets": 198},
+        "trade_accuracy": {
+            "mappings_traded": 25,
+            "total_arbs": 80,
+            "live_arbs": 12,
+            "profitable": 60,
+            "losing": 12,
+            "decided_arbs": 72,
+            "profitable_rate": 0.8333333333333334,
+            "realized_pnl": 142.5,
+        },
+    }
+
+    async def _run():
+        api = await _make_mapping_api()
+
+        class StubStore:
+            def __init__(self):
+                self.calls = 0
+
+            async def compute_metrics(self):
+                self.calls += 1
+                return expected_payload
+
+        store = StubStore()
+        api.mapping_store = store
+
+        app = web.Application()
+        app.router.add_get("/api/mappings/metrics", api.handle_market_mappings_metrics)
+        async with TestClient(TestServer(app)) as client:
+            response = await client.get("/api/mappings/metrics")
+            assert response.status == 200
+            payload = await response.json()
+            assert store.calls == 1
+            for key, value in expected_payload.items():
+                assert payload[key] == value, f"mismatch on {key}: {payload[key]} != {value}"
+            assert "generated_at" in payload
+
+    asyncio.run(_run())
+
+
+def test_market_mappings_metrics_falls_back_when_store_fails():
+    """When the durable store is unreachable, the metrics endpoint still
+    returns a non-empty payload computed from the in-process MARKET_MAP so
+    the dashboard never renders blank cards."""
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+
+    free_port()
+
+    async def _run():
+        api = await _make_mapping_api()
+
+        class BrokenStore:
+            async def compute_metrics(self):
+                raise RuntimeError("simulated DB outage")
+
+        api.mapping_store = BrokenStore()
+
+        app = web.Application()
+        app.router.add_get("/api/mappings/metrics", api.handle_market_mappings_metrics)
+        async with TestClient(TestServer(app)) as client:
+            response = await client.get("/api/mappings/metrics")
+            assert response.status == 200
+            payload = await response.json()
+            # Shape must match what the frontend expects, even on fallback.
+            for key in (
+                "status_counts", "active_total", "review_backlog", "auto_trade",
+                "confirmation_rate", "quality", "criteria_match", "categories",
+                "platform_coverage", "trade_accuracy", "generated_at",
+            ):
+                assert key in payload, f"fallback payload missing {key}"
+            assert isinstance(payload["status_counts"], dict)
+            assert isinstance(payload["quality"]["buckets"], list)
+            assert len(payload["quality"]["buckets"]) == 4
+            assert isinstance(payload["categories"], list)
+            # trade_accuracy is intentionally None on the runtime fallback —
+            # the in-process MARKET_MAP has no DB join available.
+            assert payload["trade_accuracy"] is None
+
+    asyncio.run(_run())
+
+
 def test_market_mapping_validation_history_and_run_are_read_only(monkeypatch):
     """Row-click validation must show real replayable events without changing status."""
     from aiohttp import web
