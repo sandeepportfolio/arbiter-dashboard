@@ -101,14 +101,31 @@ class ExecutionStore:
         """
         if self._pool is None:
             await self.connect()
+        async with self._pool.acquire() as conn:
+            await self._upsert_order_on_conn(
+                conn, order, arb_id=arb_id, client_order_id=client_order_id,
+            )
 
+    async def _upsert_order_on_conn(
+        self,
+        conn: asyncpg.Connection,
+        order: Order,
+        *,
+        arb_id: Optional[str] = None,
+        client_order_id: Optional[str] = None,
+    ) -> None:
+        """Execute the upsert against an already-acquired connection.
+
+        Extracted so ``record_arb`` can wrap the arb INSERT and both leg
+        upserts in a single ``conn.transaction()`` (C4.1) — three separate
+        ``pool.acquire`` blocks would let a Postgres bounce leave orphan rows.
+        """
         # terminal_clause is chosen from two fixed literals based on enum membership -- no user input.
         terminal_clause = (
             "terminal_at = NOW()"
             if order.status in _TERMINAL_STATUSES
             else "terminal_at = execution_orders.terminal_at"
         )
-
         sql = f"""
         INSERT INTO execution_orders (
             order_id, arb_id, client_order_id, platform,
@@ -127,30 +144,27 @@ class ExecutionStore:
             updated_at  = NOW(),
             {terminal_clause}
         """
-        # arb_id resolution: prefer explicit, then derive from order_id prefix "ARB-NNNNNN-..."
         derived_arb_id = arb_id or _derive_arb_id(order.order_id)
         if derived_arb_id is None:
             raise ValueError(
                 f"upsert_order requires arb_id (could not derive from order_id={order.order_id!r})"
             )
-
-        async with self._pool.acquire() as conn:
-            await conn.execute(
-                sql,
-                order.order_id,
-                derived_arb_id,
-                client_order_id,
-                order.platform,
-                order.market_id,
-                order.canonical_id,
-                order.side,
-                Decimal(str(order.price)),
-                Decimal(str(order.quantity)),
-                order.status.value,
-                Decimal(str(order.fill_price)),
-                Decimal(str(order.fill_qty)),
-                order.error or "",
-            )
+        await conn.execute(
+            sql,
+            order.order_id,
+            derived_arb_id,
+            client_order_id,
+            order.platform,
+            order.market_id,
+            order.canonical_id,
+            order.side,
+            Decimal(str(order.price)),
+            Decimal(str(order.quantity)),
+            order.status.value,
+            Decimal(str(order.fill_price)),
+            Decimal(str(order.fill_qty)),
+            order.error or "",
+        )
 
     async def get_order(self, order_id: str) -> Optional[Order]:
         if self._pool is None:
@@ -255,36 +269,48 @@ class ExecutionStore:
             )
 
     async def record_arb(self, arb_execution: ArbExecution) -> None:
+        """Persist the arb row plus both leg upserts atomically (C4.1).
+
+        All three writes live in a single ``conn.transaction()`` block on one
+        connection: either every row commits or none do. Previously each call
+        opened its own ``pool.acquire`` block, so a Postgres bounce between
+        them could leave an orphan ``execution_arbs`` row with no legs, or
+        legs with no parent — destroying the audit trail.
+        """
         if self._pool is None:
             await self.connect()
         opp_json = _opp_to_jsonb(arb_execution.opportunity)
         is_sim = bool(arb_execution.status == "simulated")
         net_edge = getattr(arb_execution.opportunity, "net_edge", None)
         async with self._pool.acquire() as conn:
-            await conn.execute(
-                """
-                INSERT INTO execution_arbs (
-                    arb_id, canonical_id, status, net_edge, realized_pnl,
-                    opportunity_json, is_simulation
-                ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
-                ON CONFLICT (arb_id) DO UPDATE SET
-                    status         = EXCLUDED.status,
-                    realized_pnl   = EXCLUDED.realized_pnl,
-                    updated_at     = NOW(),
-                    closed_at      = CASE WHEN EXCLUDED.status IN ('filled','failed','simulated','recovering')
-                                         THEN NOW() ELSE execution_arbs.closed_at END
-                """,
-                arb_execution.arb_id,
-                arb_execution.opportunity.canonical_id if arb_execution.opportunity else "",
-                arb_execution.status,
-                Decimal(str(net_edge)) if net_edge is not None else None,
-                Decimal(str(arb_execution.realized_pnl)),
-                opp_json,
-                is_sim,
-            )
-        # Persist both legs (delegates to upsert_order)
-        await self.upsert_order(arb_execution.leg_yes, arb_id=arb_execution.arb_id)
-        await self.upsert_order(arb_execution.leg_no, arb_id=arb_execution.arb_id)
+            async with conn.transaction():
+                await conn.execute(
+                    """
+                    INSERT INTO execution_arbs (
+                        arb_id, canonical_id, status, net_edge, realized_pnl,
+                        opportunity_json, is_simulation
+                    ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
+                    ON CONFLICT (arb_id) DO UPDATE SET
+                        status         = EXCLUDED.status,
+                        realized_pnl   = EXCLUDED.realized_pnl,
+                        updated_at     = NOW(),
+                        closed_at      = CASE WHEN EXCLUDED.status IN ('filled','failed','simulated','recovering')
+                                             THEN NOW() ELSE execution_arbs.closed_at END
+                    """,
+                    arb_execution.arb_id,
+                    arb_execution.opportunity.canonical_id if arb_execution.opportunity else "",
+                    arb_execution.status,
+                    Decimal(str(net_edge)) if net_edge is not None else None,
+                    Decimal(str(arb_execution.realized_pnl)),
+                    opp_json,
+                    is_sim,
+                )
+                await self._upsert_order_on_conn(
+                    conn, arb_execution.leg_yes, arb_id=arb_execution.arb_id,
+                )
+                await self._upsert_order_on_conn(
+                    conn, arb_execution.leg_no, arb_id=arb_execution.arb_id,
+                )
 
         # Persist a trade analysis if the engine attached one. Best-effort:
         # a generation failure must never block the lifecycle write above.

@@ -1725,3 +1725,523 @@ def test_dry_run_record_trade_unchanged_after_fix():
         assert engine.risk._open_positions.get(opp.canonical_id) == expected_total
 
     asyncio.run(runner())
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# C4.2: DB write failures escalate to critical incident + SafetySupervisor
+# trip + execution block. Engine MUST NOT continue placing live orders if
+# it can't write to the DB — silent persistence loss would leave real
+# orders with no audit trail.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_db_write_failure_arms_safety_supervisor():
+    """C4.2: When store.upsert_order raises in _place_order_for_leg, the
+    engine escalates: critical log, in-memory critical incident, and
+    SafetySupervisor.trip_kill is invoked so the kill switch arms and
+    subsequent opportunities are blocked."""
+    from arbiter.execution.engine import OrderStatus, Order as _Order
+
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+
+        adapter = MagicMock()
+        adapter.platform = "kalshi"
+        adapter.place_fok = AsyncMock(return_value=_Order(
+            order_id="KALSHI-SERVER-X",
+            platform="kalshi", market_id="M", canonical_id="C", side="yes",
+            price=0.5, quantity=1,
+            status=OrderStatus.FILLED, fill_price=0.5, fill_qty=1,
+            external_client_order_id="ARB-1-YES-deadbeef",
+        ))
+        engine.adapters = {"kalshi": adapter}
+
+        # Store raises on every upsert — simulates Postgres bounce.
+        engine.store = AsyncMock()
+        engine.store.upsert_order.side_effect = RuntimeError(
+            "postgres connection reset",
+        )
+
+        # Wire a SafetySupervisor mock so we can assert trip_kill was called.
+        engine._safety = AsyncMock()
+
+        order = await engine._place_order_for_leg(
+            arb_id="ARB-1", platform="kalshi",
+            market_id="M", canonical_id="C", side="yes",
+            price=0.5, qty=1,
+        )
+
+        # The adapter's order still came back FILLED (the leg DID place at the
+        # platform) — but the engine must arm the kill switch so no SECOND
+        # leg or SECOND opportunity proceeds without an audit trail.
+        engine._safety.trip_kill.assert_awaited_once()
+        kwargs = engine._safety.trip_kill.call_args.kwargs
+        # trip_kill is invoked by the engine itself (not an operator)
+        assert kwargs.get("by", "").startswith("execution_engine")
+        # reason must identify the broken write
+        assert "upsert_order" in (kwargs.get("reason") or "")
+        # Engine surfaces a critical block flag so downstream gates can see it.
+        assert engine._db_write_failed is True
+        # A critical incident is broadcast on the in-memory deque (the store
+        # is broken, so persistence is not attempted).
+        critical = [
+            i for i in engine._incidents
+            if i.severity == "critical"
+            and "db" in (i.metadata.get("event_type", "") or "").lower()
+        ]
+        assert critical, "expected a critical db-failure incident in memory"
+
+    asyncio.run(runner())
+
+
+def test_db_write_failure_blocks_subsequent_order_placement():
+    """C4.2: After a DB write failure has armed the engine, the next
+    _place_order_for_leg call MUST NOT reach the adapter — it returns an
+    ABORTED order tagged with the db-failure reason. Prevents real money
+    from moving while the audit trail is broken."""
+    from arbiter.execution.engine import OrderStatus
+
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        engine._db_write_failed = True  # simulate prior failure
+
+        adapter = MagicMock()
+        adapter.platform = "kalshi"
+        adapter.place_fok = AsyncMock()
+        engine.adapters = {"kalshi": adapter}
+
+        order = await engine._place_order_for_leg(
+            arb_id="ARB-X", platform="kalshi",
+            market_id="M", canonical_id="C", side="yes",
+            price=0.5, qty=1,
+        )
+
+        # Adapter MUST NOT be invoked after a DB failure has armed the engine.
+        adapter.place_fok.assert_not_awaited()
+        assert order.status == OrderStatus.ABORTED
+        assert "db write" in order.error.lower()
+
+    asyncio.run(runner())
+
+
+def test_db_write_failure_is_idempotent():
+    """C4.2: Repeated DB failures don't double-arm the kill switch or spam
+    the incident deque. The first failure trips and broadcasts; subsequent
+    failures just log."""
+    from arbiter.execution.engine import OrderStatus, Order as _Order
+
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+
+        adapter = MagicMock()
+        adapter.platform = "kalshi"
+        adapter.place_fok = AsyncMock(return_value=_Order(
+            order_id="KALSHI-SERVER-Y",
+            platform="kalshi", market_id="M", canonical_id="C", side="yes",
+            price=0.5, quantity=1, status=OrderStatus.FILLED,
+            fill_price=0.5, fill_qty=1,
+            external_client_order_id="ARB-2-YES-cafebabe",
+        ))
+        engine.adapters = {"kalshi": adapter}
+
+        engine.store = AsyncMock()
+        engine.store.upsert_order.side_effect = RuntimeError("pg down")
+        engine._safety = AsyncMock()
+
+        # First failure -> trip
+        await engine._place_order_for_leg(
+            arb_id="ARB-2", platform="kalshi",
+            market_id="M", canonical_id="C", side="yes",
+            price=0.5, qty=1,
+        )
+        # Second time should be blocked by the gate (no adapter call, no
+        # second trip).
+        await engine._place_order_for_leg(
+            arb_id="ARB-3", platform="kalshi",
+            market_id="M", canonical_id="C", side="yes",
+            price=0.5, qty=1,
+        )
+
+        # Only the first call hit the adapter; trip_kill fired once.
+        assert adapter.place_fok.await_count == 1
+        assert engine._safety.trip_kill.await_count == 1
+
+    asyncio.run(runner())
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# C3: Triple-submit hazard on engine-side timeout.
+# When _place_order_for_leg times out, the order's true state on the
+# platform is unknown — the lookup may have raced, the cancel may have
+# raced. Until we have positive proof that no fill happened, no fallback
+# may fire (a retry with a new client_order_id would stack fresh
+# exposure on top of any latent fill from attempt 1).
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_order_has_idempotency_ambiguous_field_default_false():
+    """C3 dataclass smoke: Order carries an ``idempotency_ambiguous`` flag
+    so _place_order_for_leg can signal the fallback chain that the leg's
+    state is uncertain and retry is unsafe. Defaults to False on normal
+    placements; only set True on timeout."""
+    from arbiter.execution.engine import Order, OrderStatus
+    o = Order(
+        order_id="x", platform="kalshi",
+        market_id="M", canonical_id="C", side="yes",
+        price=0.5, quantity=1, status=OrderStatus.PENDING,
+    )
+    assert o.idempotency_ambiguous is False
+
+
+def test_timeout_with_cancelled_orphan_marks_ambiguous():
+    """C3: when the timeout-recovery path successfully cancels an orphaned
+    order, the leg is still ambiguous — Kalshi's cancel returning success
+    does NOT prove zero fill (a partial fill could have raced ahead of the
+    cancel). The returned Order MUST carry idempotency_ambiguous=True
+    so _execute_with_fallbacks refuses to retry."""
+    from arbiter.execution.engine import OrderStatus, Order
+
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        engine.execution_timeout_s = 0.05
+
+        adapter = MagicMock()
+        adapter.platform = "kalshi"
+
+        async def _hangs(*args, **kwargs):
+            await asyncio.sleep(10.0)
+
+        real_order = Order(
+            order_id="KALSHI-SERVER-CR3",
+            platform="kalshi",
+            market_id="M", canonical_id="C", side="yes",
+            price=0.5, quantity=1,
+            status=OrderStatus.SUBMITTED,
+            external_client_order_id="ARB-C3-YES-deadbeef",
+        )
+        adapter.place_fok = _hangs
+        adapter.list_open_orders_by_client_id = AsyncMock(return_value=[real_order])
+        adapter.cancel_order = AsyncMock(return_value=True)
+        engine.adapters = {"kalshi": adapter}
+
+        result = await engine._place_order_for_leg(
+            arb_id="ARB-C3", platform="kalshi",
+            market_id="M", canonical_id="C", side="yes",
+            price=0.5, qty=1,
+        )
+        assert result.status == OrderStatus.CANCELLED
+        assert result.idempotency_ambiguous is True, (
+            "cancel-after-timeout is ambiguous: partial fill may have raced"
+        )
+
+    asyncio.run(runner())
+
+
+def test_timeout_with_lookup_exception_marks_ambiguous():
+    """C3: when the recovery lookup raises, we have no information about
+    platform state — must be flagged ambiguous so no retry fires."""
+    from arbiter.execution.engine import OrderStatus
+
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        engine.execution_timeout_s = 0.05
+
+        adapter = MagicMock()
+        adapter.platform = "kalshi"
+
+        async def _hangs(*args, **kwargs):
+            await asyncio.sleep(10.0)
+
+        adapter.place_fok = _hangs
+        adapter.list_open_orders_by_client_id = AsyncMock(
+            side_effect=RuntimeError("network blip"),
+        )
+        adapter.cancel_order = AsyncMock(return_value=False)
+        engine.adapters = {"kalshi": adapter}
+
+        result = await engine._place_order_for_leg(
+            arb_id="ARB-LOOKUP-EXC", platform="kalshi",
+            market_id="M", canonical_id="C", side="yes",
+            price=0.5, qty=1,
+        )
+        assert result.status == OrderStatus.FAILED
+        assert result.idempotency_ambiguous is True
+
+    asyncio.run(runner())
+
+
+def test_timeout_with_cancel_failure_marks_ambiguous():
+    """C3: lookup finds an open order but cancel fails — the order may
+    still be resting or already filled. Definitely ambiguous."""
+    from arbiter.execution.engine import OrderStatus, Order
+
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        engine.execution_timeout_s = 0.05
+
+        adapter = MagicMock()
+        adapter.platform = "kalshi"
+
+        async def _hangs(*args, **kwargs):
+            await asyncio.sleep(10.0)
+
+        real_order = Order(
+            order_id="KALSHI-SERVER-CF",
+            platform="kalshi", market_id="M", canonical_id="C", side="yes",
+            price=0.5, quantity=1, status=OrderStatus.SUBMITTED,
+        )
+        adapter.place_fok = _hangs
+        adapter.list_open_orders_by_client_id = AsyncMock(return_value=[real_order])
+        adapter.cancel_order = AsyncMock(return_value=False)
+        engine.adapters = {"kalshi": adapter}
+
+        result = await engine._place_order_for_leg(
+            arb_id="ARB-CF", platform="kalshi",
+            market_id="M", canonical_id="C", side="yes",
+            price=0.5, qty=1,
+        )
+        assert result.status == OrderStatus.FAILED
+        assert result.idempotency_ambiguous is True
+
+    asyncio.run(runner())
+
+
+def test_timeout_with_empty_lookup_still_ambiguous_by_default():
+    """C3 fail-closed: empty lookup is NOT positive proof that the order
+    never reached the platform — a filled order would have been removed
+    from the open list already. Without a separate filled-order check,
+    treat empty as ambiguous so retry is blocked. (When we add a true
+    'get_order confirms no fill' check via the adapter, this can flip
+    to non-ambiguous; until then, conservative wins.)"""
+    from arbiter.execution.engine import OrderStatus
+
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        engine.execution_timeout_s = 0.05
+
+        adapter = MagicMock()
+        adapter.platform = "kalshi"
+
+        async def _hangs(*args, **kwargs):
+            await asyncio.sleep(10.0)
+
+        adapter.place_fok = _hangs
+        adapter.list_open_orders_by_client_id = AsyncMock(return_value=[])
+        adapter.cancel_order = AsyncMock(return_value=False)
+        engine.adapters = {"kalshi": adapter}
+
+        result = await engine._place_order_for_leg(
+            arb_id="ARB-EMPTY", platform="kalshi",
+            market_id="M", canonical_id="C", side="yes",
+            price=0.5, qty=1,
+        )
+        assert result.status == OrderStatus.FAILED
+        assert result.idempotency_ambiguous is True
+
+    asyncio.run(runner())
+
+
+def test_fallback_chain_refuses_retry_when_idempotency_ambiguous():
+    """C3 (main): when attempt 1 returns idempotency_ambiguous=True, the
+    fallback chain (_execute_with_fallbacks) MUST NOT fire attempt 2 or 3.
+    Otherwise a fill that raced the cancel would stack with a fresh
+    -F2/-F3 order, producing double exposure.
+
+    Setup: place_fok hangs forever -> timeout -> lookup returns one
+    orphan -> cancel succeeds -> attempt 1 returns CANCELLED with
+    idempotency_ambiguous=True. _execute_with_fallbacks should return
+    immediately without making a second adapter call.
+    """
+    from arbiter.execution.engine import OrderStatus, Order
+
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        engine.execution_timeout_s = 0.05
+
+        adapter = MagicMock()
+        adapter.platform = "kalshi"
+
+        # Count how many times place_fok / place_ioc are invoked.
+        place_calls: List[str] = []
+
+        async def _hangs(arb_id, *args, **kwargs):
+            place_calls.append(arb_id)
+            await asyncio.sleep(10.0)
+
+        real_order = Order(
+            order_id="KALSHI-SERVER-FB",
+            platform="kalshi", market_id="M", canonical_id="C", side="yes",
+            price=0.5, quantity=1, status=OrderStatus.SUBMITTED,
+            external_client_order_id="ARB-FB-YES-abcd",
+        )
+        adapter.place_fok = _hangs
+        # place_ioc is what _execute_with_fallbacks actually calls first
+        adapter.place_ioc = _hangs
+        adapter.list_open_orders_by_client_id = AsyncMock(return_value=[real_order])
+        adapter.cancel_order = AsyncMock(return_value=True)
+        engine.adapters = {"kalshi": adapter}
+
+        primary_leg = Order(
+            order_id="ARB-FB-NO-primary",
+            platform="polymarket",
+            market_id="P", canonical_id="C", side="no",
+            price=0.5, quantity=1, status=OrderStatus.FILLED,
+            fill_price=0.5, fill_qty=1,
+        )
+        # Build a minimal opp matching the leg
+        opp = _make_safety_opp(
+            canonical_id="C",
+            yes_platform="kalshi", no_platform="polymarket",
+            yes_price=0.50, no_price=0.50, suggested_qty=1,
+        )
+
+        order = await engine._execute_with_fallbacks(
+            arb_id="ARB-FB",
+            secondary_platform="kalshi",
+            secondary_market="M",
+            canonical_id="C",
+            secondary_side="yes",
+            initial_price=0.5,
+            qty=1,
+            max_affordable_price=0.55,  # enough room for fallback-2 to be tempting
+            primary_leg=primary_leg,
+            primary_platform="polymarket",
+            opp=opp,
+        )
+
+        # Exactly one place attempt — fallback must NOT fire because the
+        # leg is idempotency_ambiguous.
+        assert len(place_calls) == 1, (
+            f"expected 1 placement attempt; got {len(place_calls)}: {place_calls}"
+        )
+        # The order itself is whatever attempt 1 produced; the test cares
+        # that the chain didn't retry.
+        assert order.idempotency_ambiguous is True
+
+    asyncio.run(runner())
+
+
+def test_fallback_chain_still_retries_when_idempotency_proven():
+    """C3: when attempt 1 returns FAILED *without* idempotency_ambiguous
+    (i.e. a synchronous adapter rejection — order definitively never
+    reached the platform), the fallback chain DOES fire attempt 2/3.
+    This guards against over-correction: we still want to retry through
+    the safer paths after a clean reject."""
+    from arbiter.execution.engine import OrderStatus, Order
+
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+
+        adapter = MagicMock()
+        adapter.platform = "kalshi"
+
+        # Track call count; flip to FILLED on attempt 2 so we can confirm
+        # the fallback actually fired.
+        attempt = {"n": 0}
+
+        async def _place(arb_id, market_id, canonical_id, side, price, qty):
+            attempt["n"] += 1
+            if attempt["n"] == 1:
+                return Order(
+                    order_id=f"{arb_id}-{side.upper()}-rejected",
+                    platform="kalshi", market_id=market_id,
+                    canonical_id=canonical_id, side=side,
+                    price=price, quantity=qty,
+                    status=OrderStatus.FAILED,
+                    fill_price=0.0, fill_qty=0,
+                    error="kalshi rejected: market closed (synchronous, idempotency proven)",
+                )
+            # Attempt 2 succeeds at the wider limit
+            return Order(
+                order_id=f"{arb_id}-{side.upper()}-filled",
+                platform="kalshi", market_id=market_id,
+                canonical_id=canonical_id, side=side,
+                price=price, quantity=qty,
+                status=OrderStatus.FILLED,
+                fill_price=price, fill_qty=qty,
+            )
+
+        adapter.place_fok = _place
+        adapter.place_ioc = _place
+        adapter.list_open_orders_by_client_id = AsyncMock(return_value=[])
+        adapter.cancel_order = AsyncMock(return_value=False)
+        engine.adapters = {"kalshi": adapter}
+
+        primary_leg = Order(
+            order_id="ARB-OK-NO-primary",
+            platform="polymarket",
+            market_id="P", canonical_id="C", side="no",
+            price=0.5, quantity=1, status=OrderStatus.FILLED,
+            fill_price=0.5, fill_qty=1,
+        )
+        opp = _make_safety_opp(
+            canonical_id="C",
+            yes_platform="kalshi", no_platform="polymarket",
+            yes_price=0.50, no_price=0.50, suggested_qty=1,
+        )
+
+        order = await engine._execute_with_fallbacks(
+            arb_id="ARB-OK",
+            secondary_platform="kalshi",
+            secondary_market="M",
+            canonical_id="C",
+            secondary_side="yes",
+            initial_price=0.50,
+            qty=1,
+            # Big enough delta so fallback-2 actually fires (>0.005)
+            max_affordable_price=0.55,
+            primary_leg=primary_leg,
+            primary_platform="polymarket",
+            opp=opp,
+        )
+        assert attempt["n"] == 2, (
+            "synchronous reject is idempotency-proven — fallback SHOULD fire"
+        )
+        assert order.status == OrderStatus.FILLED
+
+    asyncio.run(runner())
+
+
+def test_handle_db_failure_records_critical_incident_and_trips_safety():
+    """C4.2: The _handle_db_failure helper is the single entrypoint that
+    every `try/except` around a `self.store.*` call funnels into. It must:
+      - set ``self._db_write_failed = True`` (block flag)
+      - append a critical incident to the in-memory deque with
+        ``metadata.event_type == 'db_write_failure'``
+      - invoke ``SafetySupervisor.trip_kill`` exactly once
+
+    No DB writes are attempted to record the incident — the store is
+    presumed broken, so the in-memory deque is the source of truth.
+    """
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        engine._safety = AsyncMock()
+
+        await engine._handle_db_failure(
+            op="record_arb",
+            arb_id="ARB-7",
+            canonical_id="MKT1",
+            exc=RuntimeError("pg down"),
+        )
+
+        assert engine._db_write_failed is True
+        engine._safety.trip_kill.assert_awaited_once()
+        critical = [
+            i for i in engine._incidents
+            if i.severity == "critical"
+            and i.metadata.get("event_type") == "db_write_failure"
+        ]
+        assert len(critical) == 1, "expected exactly one critical db incident"
+        assert critical[0].metadata.get("op") == "record_arb"
+
+    asyncio.run(runner())
