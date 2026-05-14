@@ -1050,6 +1050,15 @@ class ExecutionEngine:
             )
             # Skip straight to status determination below
         else:
+            # Exception-escape guard: any raise between primary fill and
+            # secondary order construction (best_executable_price, compute_fee,
+            # adapter call) used to escape _live_execution entirely, leaving
+            # primary FILLED in DB with no secondary row and no naked incident.
+            # The try/except around the secondary block below captures the
+            # exception into this local, builds an ABORTED ``-EXCEPTION``
+            # placeholder so the downstream naked detection / supervisor
+            # fanout still fire, and we re-raise after record_arb completes.
+            _secondary_exception: Optional[BaseException] = None
             # POLY-FIRST STRATEGY: Execute Polymarket first because it
             # reprices faster than Kalshi. Historical data shows 0/118
             # trades completed both legs with Kalshi-first — the Polymarket
@@ -1228,189 +1237,254 @@ class ExecutionEngine:
                     primary_platform, secondary_side.upper(),
                 )
 
-                # No inter-leg delay — every millisecond between primary fill
-                # and secondary submit is a window for the secondary book to
-                # move past our limit price and turn the IOC into a non-
-                # marketable order that Polymarket REJECTS outright.  Live
-                # logs show a 500ms delay producing 5-10¢ book shifts on
-                # fast-settling sports markets, which is enough to make the
-                # secondary IOC reject and strand the primary as naked.
-                # Skip the delay entirely; the recovery loop is the safety
-                # net if the secondary still moves under us.
-                if self._inter_leg_delay_ms > 0:
-                    await asyncio.sleep(self._inter_leg_delay_ms / 1000.0)
+                try:
+                    # No inter-leg delay — every millisecond between primary fill
+                    # and secondary submit is a window for the secondary book to
+                    # move past our limit price and turn the IOC into a non-
+                    # marketable order that Polymarket REJECTS outright.  Live
+                    # logs show a 500ms delay producing 5-10¢ book shifts on
+                    # fast-settling sports markets, which is enough to make the
+                    # secondary IOC reject and strand the primary as naked.
+                    # Skip the delay entirely; the recovery loop is the safety
+                    # net if the secondary still moves under us.
+                    if self._inter_leg_delay_ms > 0:
+                        await asyncio.sleep(self._inter_leg_delay_ms / 1000.0)
 
-                # Walk the secondary book IMMEDIATELY before submit — the
-                # walk-to-submit latency was the single biggest source of
-                # rejected secondaries (Polymarket's IOC requires the limit
-                # to be marketable on receipt, and a 500ms-stale walk often
-                # priced us BELOW the live ASK after the book moved up).
-                # Place the IOC at the walked price exactly: walked is the
-                # WORST price needed to absorb effective_qty given the book
-                # we just observed, so submitting AT walked corresponds to
-                # the most aggressive marketable limit we can place without
-                # paying through the spread.
-                secondary_fok_price = secondary_price
-                secondary_adapter = self.adapters.get(secondary_platform)
-                walked_exec_price = None
-                if secondary_adapter is not None and hasattr(
-                    secondary_adapter, "best_executable_price",
-                ):
-                    s_fillable, s_exec = await secondary_adapter.best_executable_price(
-                        secondary_market, secondary_side, effective_qty,
+                    # Walk the secondary book IMMEDIATELY before submit — the
+                    # walk-to-submit latency was the single biggest source of
+                    # rejected secondaries (Polymarket's IOC requires the limit
+                    # to be marketable on receipt, and a 500ms-stale walk often
+                    # priced us BELOW the live ASK after the book moved up).
+                    # Place the IOC at the walked price exactly: walked is the
+                    # WORST price needed to absorb effective_qty given the book
+                    # we just observed, so submitting AT walked corresponds to
+                    # the most aggressive marketable limit we can place without
+                    # paying through the spread.
+                    secondary_fok_price = secondary_price
+                    secondary_adapter = self.adapters.get(secondary_platform)
+                    walked_exec_price = None
+                    if secondary_adapter is not None and hasattr(
+                        secondary_adapter, "best_executable_price",
+                    ):
+                        s_fillable, s_exec = await secondary_adapter.best_executable_price(
+                            secondary_market, secondary_side, effective_qty,
+                        )
+                        if s_fillable and s_exec > 0:
+                            walked_exec_price = s_exec
+                            secondary_fok_price = s_exec
+
+                    # Compute the absolute most we can pay on the secondary while
+                    # still booking AT LEAST ``MIN_NET_EDGE_CENTS`` of net edge
+                    # against the primary's actual fill price.  This is the IOC
+                    # limit ceiling — anything above and the trade is unprofitable
+                    # so we'd rather take the naked-leg recovery path than fill at
+                    # a guaranteed loss.
+                    primary_fill_price = float(primary_leg.fill_price)
+                    primary_yes_price = (
+                        primary_fill_price if primary_side == "yes" else 0.0
                     )
-                    if s_fillable and s_exec > 0:
-                        walked_exec_price = s_exec
-                        secondary_fok_price = s_exec
-
-                # Compute the absolute most we can pay on the secondary while
-                # still booking AT LEAST ``MIN_NET_EDGE_CENTS`` of net edge
-                # against the primary's actual fill price.  This is the IOC
-                # limit ceiling — anything above and the trade is unprofitable
-                # so we'd rather take the naked-leg recovery path than fill at
-                # a guaranteed loss.
-                primary_fill_price = float(primary_leg.fill_price)
-                primary_yes_price = (
-                    primary_fill_price if primary_side == "yes" else 0.0
-                )
-                primary_no_price = (
-                    primary_fill_price if primary_side == "no" else 0.0
-                )
-                # Re-derive fees per unit at the qty we actually filled.
-                primary_fee_per = (
-                    compute_fee(
-                        opp.yes_platform if primary_side == "yes" else opp.no_platform,
-                        primary_fill_price,
-                        int(primary_leg.fill_qty) or effective_qty,
-                        opp.yes_fee_rate if primary_side == "yes" else opp.no_fee_rate,
+                    primary_no_price = (
+                        primary_fill_price if primary_side == "no" else 0.0
                     )
-                    / max(int(primary_leg.fill_qty) or effective_qty, 1)
-                )
-                # Worst price we'd take on the secondary at exactly break-even,
-                # before any safety margin.  Solve:
-                #   1 - primary - secondary - primary_fee - secondary_fee >= MIN_EDGE/100
-                # Approximating secondary_fee at the walked/quoted price (the
-                # fee curve is shallow over the small slippage window we
-                # tolerate, so this approximation is fine).
-                approx_sec_fee_per = (
-                    compute_fee(
-                        secondary_platform,
-                        secondary_fok_price,
-                        effective_qty,
-                        opp.yes_fee_rate if secondary_side == "yes" else opp.no_fee_rate,
+                    # Re-derive fees per unit at the qty we actually filled.
+                    primary_fee_per = (
+                        compute_fee(
+                            opp.yes_platform if primary_side == "yes" else opp.no_platform,
+                            primary_fill_price,
+                            int(primary_leg.fill_qty) or effective_qty,
+                            opp.yes_fee_rate if primary_side == "yes" else opp.no_fee_rate,
+                        )
+                        / max(int(primary_leg.fill_qty) or effective_qty, 1)
                     )
-                    / max(effective_qty, 1)
-                )
-                edge_floor = MIN_NET_EDGE_CENTS / 100.0
-                max_affordable_secondary = max(
-                    1.0
-                    - primary_fill_price
-                    - primary_fee_per
-                    - approx_sec_fee_per
-                    - edge_floor,
-                    0.0,
-                )
+                    # Worst price we'd take on the secondary at exactly break-even,
+                    # before any safety margin.  Solve:
+                    #   1 - primary - secondary - primary_fee - secondary_fee >= MIN_EDGE/100
+                    # Approximating secondary_fee at the walked/quoted price (the
+                    # fee curve is shallow over the small slippage window we
+                    # tolerate, so this approximation is fine).
+                    approx_sec_fee_per = (
+                        compute_fee(
+                            secondary_platform,
+                            secondary_fok_price,
+                            effective_qty,
+                            opp.yes_fee_rate if secondary_side == "yes" else opp.no_fee_rate,
+                        )
+                        / max(effective_qty, 1)
+                    )
+                    edge_floor = MIN_NET_EDGE_CENTS / 100.0
+                    max_affordable_secondary = max(
+                        1.0
+                        - primary_fill_price
+                        - primary_fee_per
+                        - approx_sec_fee_per
+                        - edge_floor,
+                        0.0,
+                    )
 
-                # IOC fills at LIMIT-OR-BETTER, so the most-aggressive
-                # marketable limit we can place without crossing our edge
-                # floor is ``max_affordable_secondary`` itself.  We pay
-                # only what the actual book asks (= walked); the higher
-                # limit just guarantees marketability over a wider window
-                # of book movement.  Earlier strategies (walked + buffer
-                # capped at max_affordable) under-priced the order and
-                # left ~5¢ of book-shift headroom uncovered, so the IOC
-                # would expire when the top YES bid moved by even one
-                # tick between walk and submit.  Now we always submit at
-                # the maximum profitable price; Polymarket fills us at
-                # the visible book level (walked) and the smart-unwind
-                # path catches whatever slips through.  Abort only when
-                # the walked price already crosses our edge floor — at
-                # that point the trade is guaranteed-loss before any
-                # book movement, so we want the recovery path instead.
-                # Only hard-abort if walked price exceeds max_affordable by
-                # more than 5¢ ("hopeless" threshold).  If within 5¢, still
-                # try the IOC at max_affordable — the book might move back
-                # by the time the order hits.
-                HOPELESS_THRESHOLD = 0.05
-                abort_secondary = secondary_fok_price > (max_affordable_secondary + HOPELESS_THRESHOLD)
-                buffered_limit = max_affordable_secondary if not abort_secondary else secondary_fok_price
+                    # IOC fills at LIMIT-OR-BETTER, so the most-aggressive
+                    # marketable limit we can place without crossing our edge
+                    # floor is ``max_affordable_secondary`` itself.  We pay
+                    # only what the actual book asks (= walked); the higher
+                    # limit just guarantees marketability over a wider window
+                    # of book movement.  Earlier strategies (walked + buffer
+                    # capped at max_affordable) under-priced the order and
+                    # left ~5¢ of book-shift headroom uncovered, so the IOC
+                    # would expire when the top YES bid moved by even one
+                    # tick between walk and submit.  Now we always submit at
+                    # the maximum profitable price; Polymarket fills us at
+                    # the visible book level (walked) and the smart-unwind
+                    # path catches whatever slips through.  Abort only when
+                    # the walked price already crosses our edge floor — at
+                    # that point the trade is guaranteed-loss before any
+                    # book movement, so we want the recovery path instead.
+                    # Only hard-abort if walked price exceeds max_affordable by
+                    # more than 5¢ ("hopeless" threshold).  If within 5¢, still
+                    # try the IOC at max_affordable — the book might move back
+                    # by the time the order hits.
+                    HOPELESS_THRESHOLD = 0.05
+                    abort_secondary = secondary_fok_price > (max_affordable_secondary + HOPELESS_THRESHOLD)
+                    buffered_limit = max_affordable_secondary if not abort_secondary else secondary_fok_price
 
-                logger.info(
-                    "  Secondary IOC limit: walked=%.4f buffered=%.4f "
-                    "max_affordable=%.4f primary_fill=%.4f abort=%s",
-                    secondary_fok_price, buffered_limit,
-                    max_affordable_secondary, primary_fill_price, abort_secondary,
-                )
+                    logger.info(
+                        "  Secondary IOC limit: walked=%.4f buffered=%.4f "
+                        "max_affordable=%.4f primary_fill=%.4f abort=%s",
+                        secondary_fok_price, buffered_limit,
+                        max_affordable_secondary, primary_fill_price, abort_secondary,
+                    )
 
-                if abort_secondary:
-                    logger.error(
-                        "  ✗ ABORT secondary: walked=%.4f > max_affordable=%.4f "
-                        "(primary_fill=%.4f).  Primary will be unwound on %s.",
-                        secondary_fok_price, max_affordable_secondary,
-                        primary_fill_price, primary_platform,
+                    if abort_secondary:
+                        logger.error(
+                            "  ✗ ABORT secondary: walked=%.4f > max_affordable=%.4f "
+                            "(primary_fill=%.4f).  Primary will be unwound on %s.",
+                            secondary_fok_price, max_affordable_secondary,
+                            primary_fill_price, primary_platform,
+                        )
+                        secondary_leg = Order(
+                            order_id=f"{arb_id}-{secondary_side.upper()}-EDGE-LOST",
+                            platform=secondary_platform,
+                            market_id=secondary_market,
+                            canonical_id=opp.canonical_id,
+                            side=secondary_side,
+                            price=secondary_fok_price,
+                            quantity=effective_qty,
+                            status=OrderStatus.ABORTED,
+                            timestamp=time.time(),
+                            error=(
+                                f"Secondary live-book exec price {secondary_fok_price:.4f} "
+                                f"exceeds max-affordable {max_affordable_secondary:.4f} "
+                                f"after primary fill at {primary_fill_price:.4f}"
+                            ),
+                        )
+
+                    # Recompute the actual post-walk net edge for visibility.
+                    if (
+                        not abort_secondary
+                        and walked_exec_price is not None
+                        and walked_exec_price > secondary_price
+                    ):
+                        actual_yes_price = (
+                            primary_fill_price if primary_side == "yes" else walked_exec_price
+                        )
+                        actual_no_price = (
+                            primary_fill_price if primary_side == "no" else walked_exec_price
+                        )
+                        actual_total = actual_yes_price + actual_no_price
+                        actual_gross = 1.0 - actual_total
+                        actual_yes_fee = compute_fee(
+                            opp.yes_platform, actual_yes_price,
+                            effective_qty, opp.yes_fee_rate,
+                        ) / max(effective_qty, 1)
+                        actual_no_fee = compute_fee(
+                            opp.no_platform, actual_no_price,
+                            effective_qty, opp.no_fee_rate,
+                        ) / max(effective_qty, 1)
+                        actual_net = actual_gross - actual_yes_fee - actual_no_fee
+                        logger.info(
+                            "  ↑ Secondary price walked %.4f→%.4f; "
+                            "post-walk net edge %.2f¢",
+                            secondary_price, walked_exec_price, actual_net * 100,
+                        )
+
+                    if abort_secondary:
+                        pass  # secondary_leg already constructed as ABORTED above
+                    else:
+                        secondary_leg = await self._execute_with_fallbacks(
+                            arb_id=arb_id,
+                            secondary_platform=secondary_platform,
+                            secondary_market=secondary_market,
+                            canonical_id=opp.canonical_id,
+                            secondary_side=secondary_side,
+                            initial_price=buffered_limit,
+                            qty=effective_qty,
+                            max_affordable_price=max_affordable_secondary,
+                            primary_leg=primary_leg,
+                            primary_platform=primary_platform,
+                            opp=opp,
+                        )
+                except Exception as _secondary_exc:
+                    # Silent-naked bug fix: anything in the block above —
+                    # ``best_executable_price``, ``compute_fee``, the adapter
+                    # call inside ``_execute_with_fallbacks`` — can raise and
+                    # previously escaped ``_live_execution`` outright, leaving
+                    # the primary FILLED in DB with no secondary row and no
+                    # naked incident. Build an ABORTED ``-EXCEPTION``
+                    # placeholder so the downstream naked detection and
+                    # ``_recover_one_leg_risk`` supervisor fanout still fire;
+                    # the original exception is re-raised after ``record_arb``
+                    # so callers still see the failure.
+                    logger.exception(
+                        "Secondary execution raised after primary %s FILLED on %s "
+                        "(arb=%s); building ABORTED-EXCEPTION placeholder. "
+                        "exc=%s: %s",
+                        primary_side.upper(), primary_platform, arb_id,
+                        type(_secondary_exc).__name__, _secondary_exc,
                     )
                     secondary_leg = Order(
-                        order_id=f"{arb_id}-{secondary_side.upper()}-EDGE-LOST",
+                        order_id=f"{arb_id}-{secondary_side.upper()}-EXCEPTION",
                         platform=secondary_platform,
                         market_id=secondary_market,
                         canonical_id=opp.canonical_id,
                         side=secondary_side,
-                        price=secondary_fok_price,
+                        price=secondary_price,
                         quantity=effective_qty,
                         status=OrderStatus.ABORTED,
                         timestamp=time.time(),
                         error=(
-                            f"Secondary live-book exec price {secondary_fok_price:.4f} "
-                            f"exceeds max-affordable {max_affordable_secondary:.4f} "
-                            f"after primary fill at {primary_fill_price:.4f}"
+                            f"Secondary execution raised before order construction: "
+                            f"{type(_secondary_exc).__name__}: {_secondary_exc}"
                         ),
                     )
-
-                # Recompute the actual post-walk net edge for visibility.
-                if (
-                    not abort_secondary
-                    and walked_exec_price is not None
-                    and walked_exec_price > secondary_price
-                ):
-                    actual_yes_price = (
-                        primary_fill_price if primary_side == "yes" else walked_exec_price
+                    primary_filled_usd = (
+                        float(primary_leg.fill_qty) * float(primary_leg.fill_price)
                     )
-                    actual_no_price = (
-                        primary_fill_price if primary_side == "no" else walked_exec_price
-                    )
-                    actual_total = actual_yes_price + actual_no_price
-                    actual_gross = 1.0 - actual_total
-                    actual_yes_fee = compute_fee(
-                        opp.yes_platform, actual_yes_price,
-                        effective_qty, opp.yes_fee_rate,
-                    ) / max(effective_qty, 1)
-                    actual_no_fee = compute_fee(
-                        opp.no_platform, actual_no_price,
-                        effective_qty, opp.no_fee_rate,
-                    ) / max(effective_qty, 1)
-                    actual_net = actual_gross - actual_yes_fee - actual_no_fee
-                    logger.info(
-                        "  ↑ Secondary price walked %.4f→%.4f; "
-                        "post-walk net edge %.2f¢",
-                        secondary_price, walked_exec_price, actual_net * 100,
-                    )
-
-                if abort_secondary:
-                    pass  # secondary_leg already constructed as ABORTED above
-                else:
-                    secondary_leg = await self._execute_with_fallbacks(
-                        arb_id=arb_id,
-                        secondary_platform=secondary_platform,
-                        secondary_market=secondary_market,
-                        canonical_id=opp.canonical_id,
-                        secondary_side=secondary_side,
-                        initial_price=buffered_limit,
-                        qty=effective_qty,
-                        max_affordable_price=max_affordable_secondary,
-                        primary_leg=primary_leg,
-                        primary_platform=primary_platform,
-                        opp=opp,
-                    )
+                    try:
+                        await self._record_incident(
+                            arb_id,
+                            opp,
+                            "critical",
+                            (
+                                "Secondary execution raised before order construction "
+                                f"({type(_secondary_exc).__name__}) — naked position"
+                            ),
+                            metadata={
+                                "event_type": "secondary_execution_exception",
+                                "primary_platform": primary_platform,
+                                "primary_side": primary_side,
+                                "primary_filled_qty": primary_leg.fill_qty,
+                                "primary_filled_price": primary_leg.fill_price,
+                                "primary_exposure_usd": primary_filled_usd,
+                                "secondary_platform": secondary_platform,
+                                "secondary_side": secondary_side,
+                                "exception_type": type(_secondary_exc).__name__,
+                                "exception_message": str(_secondary_exc),
+                            },
+                        )
+                    except Exception as _inc_exc:  # noqa: BLE001
+                        logger.warning(
+                            "secondary_execution_exception incident emit failed: %s",
+                            _inc_exc,
+                        )
+                    _secondary_exception = _secondary_exc
 
                 if secondary_leg.status not in {OrderStatus.FILLED, OrderStatus.SUBMITTED, OrderStatus.PARTIAL}:
                     # Secondary failed — we have a naked position. Log critical
@@ -1701,6 +1775,13 @@ class ExecutionEngine:
                     canonical_id=getattr(opp, "canonical_id", None),
                     exc=exc,
                 )
+        # Re-raise the secondary-path exception (if any) AFTER the audit
+        # trail is durably persisted and the supervisor fanout has fired.
+        # Callers (auto_executor / api) see the failure and can take
+        # downstream action; the engine has already booked the naked
+        # exposure and notified operators.
+        if _secondary_exception is not None:
+            raise _secondary_exception
         return execution
 
     async def _execute_with_fallbacks(

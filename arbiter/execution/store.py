@@ -186,6 +186,57 @@ class ExecutionStore:
             )
         return [self._row_to_order(r) for r in rows if r is not None]
 
+    async def list_half_recorded_arbs(self) -> List[Dict[str, Any]]:
+        """Find arbs whose ``execution_arbs`` row exists in a non-terminal
+        status but whose ``execution_orders`` count is less than 2.
+
+        These are crash / exception-escape orphans: ``record_arb_stub`` ran
+        and the primary leg's ``upsert_order`` persisted, but ``record_arb``
+        (the atomic both-legs upsert) never completed. The exception-escape
+        fix in ``_live_execution`` closes the synchronous source of these
+        orphans; this query catches legacy rows and genuine process crashes
+        on startup so a venue-side fill never sits silent in DB.
+
+        Returned dicts: ``arb_id``, ``canonical_id``, ``status``,
+        ``created_at``, ``leg_count``, ``leg_order_ids``.
+        """
+        if self._pool is None:
+            await self.connect()
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT
+                    a.arb_id,
+                    a.canonical_id,
+                    a.status,
+                    a.created_at,
+                    COUNT(o.order_id) AS leg_count,
+                    COALESCE(
+                        ARRAY_AGG(o.order_id ORDER BY o.submitted_at)
+                            FILTER (WHERE o.order_id IS NOT NULL),
+                        ARRAY[]::text[]
+                    ) AS leg_order_ids
+                FROM execution_arbs a
+                LEFT JOIN execution_orders o ON o.arb_id = a.arb_id
+                WHERE a.status NOT IN
+                    ('filled', 'failed', 'simulated', 'recovering')
+                GROUP BY a.arb_id, a.canonical_id, a.status, a.created_at
+                HAVING COUNT(o.order_id) < 2
+                ORDER BY a.created_at ASC
+                """
+            )
+        return [
+            {
+                "arb_id": r["arb_id"],
+                "canonical_id": r["canonical_id"],
+                "status": r["status"],
+                "created_at": r["created_at"],
+                "leg_count": int(r["leg_count"] or 0),
+                "leg_order_ids": list(r["leg_order_ids"] or []),
+            }
+            for r in rows
+        ]
+
     # ─── Fill persistence ────────────────────────────────────────────────────
 
     async def insert_fill(
