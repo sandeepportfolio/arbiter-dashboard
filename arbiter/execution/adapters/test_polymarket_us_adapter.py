@@ -264,3 +264,140 @@ async def test_partially_filled_status_maps_to_partial(monkeypatch):
     order = await adapter.place_ioc("ARB-PF", "mkt", "CAN", "yes", 0.50, 10)
     assert order.status == OrderStatus.PARTIAL
     assert order.fill_qty == 7.0
+
+
+# ─── Marketability clamp + tick snap (Fix 1 / Fix 2) ─────────────────────────
+
+def _make_client_with_bbo(
+    *,
+    best_bid: float = 0.0,
+    best_ask: float = 0.0,
+    tick: float = 0.01,
+    place_response: dict | None = None,
+) -> MagicMock:
+    """Helper: client with realistic ``get_market_by_slug`` + ``get_orderbook``."""
+    client = MagicMock()
+    client.get_market_by_slug = AsyncMock(
+        return_value={"orderPriceMinTickSize": str(tick)}
+    )
+    bids = [{"px": str(best_bid), "qty": "100"}] if best_bid > 0 else []
+    offers = [{"px": str(best_ask), "qty": "100"}] if best_ask > 0 else []
+    client.get_orderbook = AsyncMock(
+        return_value={"marketData": {"bids": bids, "offers": offers}}
+    )
+    client.place_order = AsyncMock(
+        return_value=place_response or {"id": "ord-clamp", "state": "ORDER_STATE_FILLED"}
+    )
+    return client
+
+
+async def test_marketability_clamp_raises_buy_long_to_ask():
+    """BUY_LONG (buy YES) below best_ask gets lifted to best_ask before submit."""
+    client = _make_client_with_bbo(best_bid=0.40, best_ask=0.45, tick=0.01)
+    adapter = _make_adapter(client=client)
+
+    await adapter.place_ioc("ARB-CLAMP", "slug-1", "CAN-1", "yes", 0.30, 10)
+
+    assert client.place_order.await_count == 1
+    sent_price = float(client.place_order.await_args.kwargs["price"])
+    assert sent_price == 0.45, f"expected 0.45, got {sent_price}"
+
+
+async def test_marketability_clamp_lowers_buy_short_to_bid():
+    """BUY_SHORT (buy NO) maps to selling YES; wire price must be <= best_bid.
+
+    Engine passes ``no_price``; adapter flips to ``1 - no_price`` for the
+    YES-axis wire field, then clamps that DOWN to ``best_bid`` if it sits
+    above the bid.
+    """
+    # no_price=0.30  → wire request_price = 1 - 0.30 = 0.70.  best_bid=0.55 so
+    # the clamp pushes the wire price DOWN to 0.55.
+    client = _make_client_with_bbo(best_bid=0.55, best_ask=0.60, tick=0.01)
+    adapter = _make_adapter(client=client)
+
+    await adapter.place_ioc("ARB-CLAMP-NO", "slug-2", "CAN-2", "no", 0.30, 10)
+
+    sent_price = float(client.place_order.await_args.kwargs["price"])
+    assert sent_price == 0.55, f"expected 0.55, got {sent_price}"
+
+
+async def test_tick_snap_rounds_to_market_tick():
+    """0.5-cent tick markets: a 0.4533 limit snaps to 0.455, not 0.4533."""
+    client = _make_client_with_bbo(best_bid=0.40, best_ask=0.40, tick=0.005)
+    adapter = _make_adapter(client=client)
+
+    # best_ask=0.40 caps the BUY_LONG clamp; nothing to lift.  Pass an above-ask
+    # limit so the clamp does NOT activate and we observe pure tick-snap.
+    # 0.4533 snapped to 0.005 grid -> 0.455.
+    await adapter.place_ioc("ARB-SNAP", "slug-3", "CAN-3", "yes", 0.4533, 10)
+
+    sent_price = float(client.place_order.await_args.kwargs["price"])
+    assert sent_price == 0.455, f"expected 0.455, got {sent_price}"
+
+
+async def test_marketability_clamp_aborts_when_above_max_affordable():
+    """Clamp lifting BUY_LONG above ``max_affordable`` must raise OrderRejected.
+
+    Best ask is 0.60 but the engine can only afford 0.50; placing at 0.60
+    guarantees a loss, so the adapter aborts before signing.
+    """
+    client = _make_client_with_bbo(best_bid=0.55, best_ask=0.60, tick=0.01)
+    adapter = _make_adapter(client=client)
+
+    with pytest.raises(OrderRejected, match="marketability"):
+        await adapter.place_ioc(
+            "ARB-CLAMP-ABORT", "slug-4", "CAN-4", "yes", 0.40, 10,
+            max_affordable=0.50,
+        )
+    assert client.place_order.await_count == 0, "must not sign after abort"
+
+
+async def test_marketability_clamp_no_bbo_falls_through():
+    """Missing BBO (empty book) is not a reason to abort — submit as-is."""
+    client = _make_client_with_bbo(best_bid=0.0, best_ask=0.0, tick=0.01)
+    adapter = _make_adapter(client=client)
+
+    await adapter.place_ioc("ARB-NOBBO", "slug-5", "CAN-5", "yes", 0.50, 10)
+
+    sent_price = float(client.place_order.await_args.kwargs["price"])
+    assert sent_price == 0.50
+
+
+async def test_tick_snap_defaults_to_one_cent_when_meta_missing():
+    """Adapter defaults to 0.01 tick when the market metadata is unavailable."""
+    client = MagicMock()
+    client.get_market_by_slug = AsyncMock(return_value={})  # no tick field
+    client.get_orderbook = AsyncMock(
+        return_value={"marketData": {"bids": [], "offers": []}}
+    )
+    client.place_order = AsyncMock(
+        return_value={"id": "ord-default-tick", "state": "ORDER_STATE_FILLED"}
+    )
+    adapter = _make_adapter(client=client)
+
+    # 0.5037 → snap to 1¢ grid → 0.50
+    await adapter.place_ioc("ARB-TICK-DEFAULT", "slug-6", "CAN-6", "yes", 0.5037, 10)
+    sent_price = float(client.place_order.await_args.kwargs["price"])
+    assert sent_price == 0.50
+
+
+async def test_rejected_response_sets_order_error():
+    """When the API returns REJECTED, the Order.error field carries the reason
+    so retry classification can route it instead of bucketing as 'Platform error'.
+    """
+    client = MagicMock()
+    client.place_order = AsyncMock(
+        return_value={
+            "id": "ord-rej",
+            "state": "ORDER_STATE_REJECTED",
+            "rejectionReason": "ORDER_PRICE_OUTSIDE_TICK_GRID",
+        }
+    )
+    adapter = _make_adapter(client=client)
+
+    order = await adapter.place_ioc("ARB-REJ", "slug-r", "CAN-R", "yes", 0.50, 10)
+
+    assert order.status == OrderStatus.FAILED
+    assert order.error is not None
+    assert "polymarket_us" in order.error
+    assert "REJECTED" in order.error.upper()

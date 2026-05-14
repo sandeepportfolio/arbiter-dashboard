@@ -841,6 +841,13 @@ class ExecutionEngine:
 
         yes_price = current_yes.yes_price
         no_price = current_no.no_price
+
+        # Quote-sanity check: compare the PriceStore quote against a fresh BBO
+        # from the platform adapter. Polymarket rejections trace back to stale quotes.
+        if not await self._sanity_check_quote(arb_id, opp, "yes", current_yes, yes_price):
+            return None
+        if not await self._sanity_check_quote(arb_id, opp, "no", current_no, no_price):
+            return None
         if abs(yes_price - opp.yes_price) > self.scanner_config.slippage_tolerance or abs(no_price - opp.no_price) > self.scanner_config.slippage_tolerance:
             await self._record_incident(
                 arb_id,
@@ -888,6 +895,74 @@ class ExecutionEngine:
             yes_fee_rate=current_yes.fee_rate,
             no_fee_rate=current_no.fee_rate,
         )
+
+
+    async def _sanity_check_quote(
+        self,
+        arb_id: str,
+        opp: ArbitrageOpportunity,
+        side: str,
+        price_point: PricePoint,
+        store_price: float,
+    ) -> bool:
+        """Verify store_price matches a fresh BBO from the platform adapter.
+
+        Returns True when the quote is sane (or the adapter can't supply a
+        fresh BBO). Returns False when discrepancy exceeds tolerance.
+        """
+        QUOTE_DESYNC_TOLERANCE = 0.02  # 2c
+
+        platform = opp.yes_platform if side == "yes" else opp.no_platform
+        adapter = self.adapters.get(platform)
+        if adapter is None or not hasattr(adapter, "_get_bbo"):
+            return True
+
+        market_id = (
+            getattr(price_point, "yes_market_id", "") if side == "yes"
+            else getattr(price_point, "no_market_id", "")
+        ) or opp.canonical_id
+
+        try:
+            best_bid, best_ask = await adapter._get_bbo(market_id)
+        except Exception as exc:
+            logger.debug(
+                "  quote_sanity.bbo_fetch_failed platform=%s market=%s err=%s",
+                platform, market_id, exc,
+            )
+            return True
+
+        if best_bid <= 0.0 and best_ask <= 0.0:
+            return True
+
+        if side == "yes":
+            fresh_ask = best_ask if best_ask > 0.0 else (1.0 - best_bid)
+        else:
+            fresh_ask = (1.0 - best_bid) if best_bid > 0.0 else (1.0 - best_ask)
+
+        delta = abs(store_price - fresh_ask)
+        if delta > QUOTE_DESYNC_TOLERANCE:
+            logger.warning(
+                "  quote_sanity.desync arb_id=%s platform=%s side=%s "
+                "market=%s store=%.4f fresh=%.4f delta=%.4f — aborting",
+                arb_id, platform, side, market_id,
+                store_price, fresh_ask, delta,
+            )
+            await self._record_incident(
+                arb_id, opp, "warning",
+                f"Quote desync on {platform} {side}: store={store_price:.4f} "
+                f"fresh={fresh_ask:.4f} delta={delta:.4f}",
+                metadata={
+                    "platform": platform,
+                    "side": side,
+                    "market_id": market_id,
+                    "store_price": store_price,
+                    "fresh_ask": fresh_ask,
+                    "best_bid": best_bid,
+                    "best_ask": best_ask,
+                },
+            )
+            return False
+        return True
 
     async def _audit_opportunity(self, arb_id: str, opp: ArbitrageOpportunity) -> bool:
         audit_result = self._auditor.audit_opportunity(opp.to_audit_dict())
@@ -1165,6 +1240,12 @@ class ExecutionEngine:
                 fillable, exec_price = await primary_adapter.best_executable_price(
                     primary_market, primary_side, effective_qty,
                 )
+                logger.info(
+                    "  book_walk.primary platform=%s market=%s side=%s "
+                    "fillable=%s exec_price=%.4f quoted=%.4f qty=%d",
+                    primary_platform, primary_market, primary_side,
+                    fillable, float(exec_price), float(primary_price), effective_qty,
+                )
                 if fillable and exec_price > 0:
                     primary_fok_price = exec_price
                     if exec_price > primary_price:
@@ -1269,6 +1350,12 @@ class ExecutionEngine:
                         s_fillable, s_exec = await secondary_adapter.best_executable_price(
                             secondary_market, secondary_side, effective_qty,
                         )
+                        logger.info(
+                            "  book_walk.secondary platform=%s market=%s side=%s "
+                            "fillable=%s exec_price=%.4f quoted=%.4f qty=%d",
+                            secondary_platform, secondary_market, secondary_side,
+                            s_fillable, float(s_exec), float(secondary_price), effective_qty,
+                        )
                         if s_fillable and s_exec > 0:
                             walked_exec_price = s_exec
                             secondary_fok_price = s_exec
@@ -1341,7 +1428,10 @@ class ExecutionEngine:
                     # more than 5¢ ("hopeless" threshold).  If within 5¢, still
                     # try the IOC at max_affordable — the book might move back
                     # by the time the order hits.
-                    HOPELESS_THRESHOLD = 0.05
+                    if secondary_platform == "polymarket":
+                        HOPELESS_THRESHOLD = 0.0
+                    else:
+                        HOPELESS_THRESHOLD = 0.01
                     abort_secondary = secondary_fok_price > (max_affordable_secondary + HOPELESS_THRESHOLD)
                     buffered_limit = max_affordable_secondary if not abort_secondary else secondary_fok_price
 

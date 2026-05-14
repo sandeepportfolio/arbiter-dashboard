@@ -165,12 +165,20 @@ class RetrySchedulerConfig:
     retry_delay_s: float = 30.0
     min_edge_cents_retry: float = 3.0
     max_quote_age_seconds: float = 30.0
+    # Suppress retries of the same (slug, side, price-bucket) tuple within
+    # this window.  Without this, a stale-book opportunity that fails on
+    # rejection gets re-queued by the scanner every scan tick and rejected
+    # again at the same price — observed today as 19-identical-rejection
+    # loops.  Bucketing price to the nearest cent keeps the dedup useful
+    # even when scanner output jitters by sub-tick amounts.
+    rejected_cooldown_s: float = 60.0
 
 
 @dataclass
 class RetrySchedulerStats:
     considered: int = 0
     skipped_not_failed: int = 0
+    skipped_cooldown: int = 0
     retries_attempted: int = 0
     retried_success: int = 0
     retry_exhausted: int = 0
@@ -181,6 +189,7 @@ class RetrySchedulerStats:
         return {
             "considered": self.considered,
             "skipped_not_failed": self.skipped_not_failed,
+            "skipped_cooldown": self.skipped_cooldown,
             "retries_attempted": self.retries_attempted,
             "retried_success": self.retried_success,
             "retry_exhausted": self.retry_exhausted,
@@ -221,6 +230,9 @@ class RetryScheduler:
         self._running = False
         self._failed_trades: Deque[FailedTradeRecord] = deque(maxlen=200)
         self.stats = RetrySchedulerStats()
+        # Map (slug-or-market-id, side, price_cents) -> last-rejected ts.
+        # Pruned lazily inside ``_in_cooldown`` to bound memory.
+        self._rejected_cooldowns: Dict[Tuple[str, str, int], float] = {}
 
     # ─── lifecycle ────────────────────────────────────────────────
 
@@ -282,6 +294,27 @@ class RetryScheduler:
         opp = execution.opportunity
         side, platform, reason = classify_failure(execution)
         primary_leg = execution.leg_yes if side == "yes" else execution.leg_no
+
+        # Cooldown: if this same (market, side, price-cent) tuple was
+        # rejected in the last ``rejected_cooldown_s``, suppress the retry.
+        # The book hasn't moved enough for a re-quote to land any better.
+        cooldown_key = self._cooldown_key(primary_leg)
+        if cooldown_key is not None and self._in_cooldown(cooldown_key):
+            self.stats.skipped_cooldown += 1
+            log.info(
+                "retry_scheduler.cooldown_suppressed",
+                arb_id=execution.arb_id,
+                market=cooldown_key[0],
+                side=cooldown_key[1],
+                price_cents=cooldown_key[2],
+                cooldown_s=self._config.rejected_cooldown_s,
+            )
+            # Still record the cooldown rejection itself so the operator
+            # sees the rejected tuple, but skip the retry loop.
+            self._note_rejection(cooldown_key)
+            return None
+        if cooldown_key is not None:
+            self._note_rejection(cooldown_key)
         record = FailedTradeRecord(
             arb_id=execution.arb_id,
             canonical_id=opp.canonical_id,
@@ -403,6 +436,50 @@ class RetryScheduler:
         except Exception:
             return False
 
+    @staticmethod
+    def _cooldown_key(leg) -> Optional[Tuple[str, str, int]]:
+        """Build the cooldown dedup key for the leg that just rejected.
+
+        Returns None when the leg has no usable ``market_id`` so callers
+        skip cooldown bookkeeping rather than poison the map with empty
+        keys.  ``price_cents`` is rounded to the nearest cent so sub-tick
+        scanner jitter doesn't bypass the cooldown.
+        """
+        market = str(getattr(leg, "market_id", "") or "")
+        side = str(getattr(leg, "side", "") or "").lower()
+        try:
+            price = float(getattr(leg, "price", 0.0))
+        except (TypeError, ValueError):
+            price = 0.0
+        if not market or not side:
+            return None
+        return (market, side, int(round(price * 100)))
+
+    def _in_cooldown(self, key: Tuple[str, str, int]) -> bool:
+        ts = self._rejected_cooldowns.get(key)
+        if ts is None:
+            return False
+        age = time.time() - ts
+        if age >= self._config.rejected_cooldown_s:
+            # Stale — drop it so the map doesn't accumulate dead entries.
+            self._rejected_cooldowns.pop(key, None)
+            return False
+        return True
+
+    def _note_rejection(self, key: Tuple[str, str, int]) -> None:
+        self._rejected_cooldowns[key] = time.time()
+        # Cheap prune: if the map has grown past a sensible limit, drop
+        # everything that's already expired.  Avoids unbounded growth on
+        # a long-running session that sees many distinct (market, side,
+        # price) buckets reject.
+        if len(self._rejected_cooldowns) > 512:
+            now = time.time()
+            ttl = self._config.rejected_cooldown_s
+            self._rejected_cooldowns = {
+                k: ts for k, ts in self._rejected_cooldowns.items()
+                if (now - ts) < ttl
+            }
+
     async def _requote(
         self, opp: ArbitrageOpportunity
     ) -> Tuple[Optional[ArbitrageOpportunity], str]:
@@ -495,6 +572,7 @@ def make_retry_scheduler_from_env(
         retry_delay_s=_float(config_env.get("RETRY_DELAY_SECONDS"), 30.0),
         min_edge_cents_retry=_float(config_env.get("RETRY_MIN_EDGE_CENTS"), 3.0),
         max_quote_age_seconds=_float(config_env.get("RETRY_MAX_QUOTE_AGE_SECONDS"), 30.0),
+        rejected_cooldown_s=_float(config_env.get("RETRY_REJECTED_COOLDOWN_S"), 60.0),
     )
     return RetryScheduler(
         engine=engine,

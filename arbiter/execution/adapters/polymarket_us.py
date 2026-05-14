@@ -19,6 +19,7 @@ arguments).  Never duplicated from ``arbiter.config.settings``.
 from __future__ import annotations
 
 import logging
+import math
 import time
 from typing import Any, Optional
 
@@ -30,6 +31,11 @@ from ..engine import Order, OrderStatus
 from .exceptions import OrderRejected
 
 logger = structlog.get_logger("arbiter.adapters.polymarket_us")
+
+# Polymarket US default tick is 1¢. If the market metadata exposes a smaller
+# tick (e.g. 0.001) we use that instead, but never below ``_MIN_TICK``.
+_DEFAULT_TICK = 0.01
+_MIN_TICK = 1e-4
 
 
 class PolymarketUSAdapter:
@@ -79,6 +85,7 @@ class PolymarketUSAdapter:
         side: str,
         price: float,
         qty: int,
+        max_affordable: Optional[float] = None,
     ) -> Order:
         """Submit a fill-or-kill order.  Runs three hard-lock gates in sequence
         before touching the network.
@@ -126,7 +133,10 @@ class PolymarketUSAdapter:
             raise OrderRejected("supervisor armed")
 
         # Only NOW construct, sign, and send.
-        return await self._sign_and_send(arb_id, market_id, canonical_id, side, price, qty)
+        return await self._sign_and_send(
+            arb_id, market_id, canonical_id, side, price, qty,
+            max_affordable=max_affordable,
+        )
 
     async def _sign_and_send(
         self,
@@ -137,6 +147,7 @@ class PolymarketUSAdapter:
         price: float,
         qty: int,
         tif: str = "FILL_OR_KILL",
+        max_affordable: Optional[float] = None,
     ) -> Order:
         """Build the order body, call the client, and map the response to Order.
 
@@ -148,8 +159,28 @@ class PolymarketUSAdapter:
         FOK rejects the entire order if even one contract can't fill at the
         limit, while IOC fills what's available and the engine then unwinds
         the unfilled excess on the primary venue.
+
+        ``max_affordable`` is the highest price (in YES-leg units) we can
+        pay before the trade goes negative.  When passed, the marketability
+        clamp aborts (raises ``OrderRejected``) rather than crossing it.
         """
         intent, request_price = self._us_order_params(side, price)
+
+        # Marketability + tick-size guard (P0).  Polymarket US instantly
+        # rejects IOC/FOK orders whose limit is non-marketable on receipt
+        # (e.g. selling YES above the best bid, buying YES below the best
+        # ask).  We fetch live BBO + tick metadata, clamp to the touch,
+        # and snap to the market's tick before signing.
+        request_price = await self._marketability_clamp_and_snap(
+            arb_id=arb_id,
+            slug=market_id,
+            intent=intent,
+            side=side,
+            original_price=price,
+            request_price=request_price,
+            max_affordable=max_affordable,
+        )
+
         response = await self._client.place_order(
             slug=market_id,
             intent=intent,
@@ -216,11 +247,18 @@ class PolymarketUSAdapter:
                 # whatever field the API actually used.
                 import json as _json
                 try:
-                    raw = _json.dumps(response, default=str)[:1500]
+                    raw = _json.dumps(response, default=str)[:5000]
                 except Exception:
-                    raw = str(response)[:1500]
+                    raw = str(response)[:5000]
                 log_payload["raw_response"] = raw
                 logger.warning("polymarket_us.order.rejected", **log_payload)
+                # Surface the rejection on the Order so retry classification
+                # and the dashboard see a non-empty reason.  Previously the
+                # Order returned with ``error=None`` and downstream classifiers
+                # bucketed every rejection as "Platform error".
+                if "REJECTED" in api_status.upper() and not order.error:
+                    suffix = f": {str(rejection_reason)[:200]}" if rejection_reason else ""
+                    order.error = f"polymarket_us {api_status}{suffix}"
             else:
                 logger.info("polymarket_us.order.placed", **log_payload)
         return order
@@ -235,6 +273,7 @@ class PolymarketUSAdapter:
         side: str,
         price: float,
         qty: int,
+        max_affordable: Optional[float] = None,
     ) -> Order:
         """Submit an immediate-or-cancel order.
 
@@ -271,6 +310,7 @@ class PolymarketUSAdapter:
         return await self._sign_and_send(
             arb_id, market_id, canonical_id, side, price, qty,
             tif="IMMEDIATE_OR_CANCEL",
+            max_affordable=max_affordable,
         )
 
     # ─── get_order_status ─────────────────────────────────────────────────
@@ -444,6 +484,190 @@ class PolymarketUSAdapter:
         return []
 
     # ─── helpers ──────────────────────────────────────────────────────────
+
+    async def _fetch_market_meta(self, slug: str) -> dict:
+        """Return market metadata dict (or empty dict on failure).
+
+        Reads tick size from the same ``get_market_by_slug`` response that
+        scanner code already calls, so a cached/memoized client cuts the
+        cost to zero on the hot path.
+        """
+        if not hasattr(self._client, "get_market_by_slug"):
+            return {}
+        try:
+            payload = await self._client.get_market_by_slug(slug)
+        except Exception as exc:
+            logger.warning(
+                "polymarket_us.market_meta.failed",
+                slug=slug,
+                err=str(exc),
+            )
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        # API returns the market either at top-level or under "market" /
+        # "marketData".  Probe each location.
+        for key in ("market", "marketData"):
+            sub = payload.get(key)
+            if isinstance(sub, dict):
+                return sub
+        return payload
+
+    @staticmethod
+    def _tick_from_meta(meta: dict) -> float:
+        """Extract the minimum price tick from market metadata.
+
+        Polymarket US returns ``orderPriceMinTickSize`` (sometimes nested
+        as ``{"value": "0.01"}``).  Default to ``_DEFAULT_TICK`` (1¢) when
+        absent.  Never returns below ``_MIN_TICK`` to guard against zero
+        / negative values that would break the snap math.
+        """
+        if not meta:
+            return _DEFAULT_TICK
+        raw = (
+            meta.get("orderPriceMinTickSize")
+            or meta.get("minTickSize")
+            or meta.get("priceIncrement")
+        )
+        tick = _amount_value(raw) if raw is not None else 0.0
+        if tick <= 0.0:
+            return _DEFAULT_TICK
+        return max(tick, _MIN_TICK)
+
+    @staticmethod
+    def _snap_to_tick(price: float, tick: float) -> float:
+        """Round ``price`` to the nearest ``tick`` increment, clipped to [0,1].
+
+        Polymarket rejects prices that don't sit on the tick grid (the API
+        replies REJECTED with no fill).  We round-to-nearest rather than
+        floor/ceil because rounding away from the touch would push the IOC
+        non-marketable again — exactly the bug we are fixing.
+        """
+        if tick <= 0.0:
+            return max(0.0, min(price, 1.0))
+        snapped = round(price / tick) * tick
+        snapped = round(snapped, 6)
+        return max(0.0, min(snapped, 1.0))
+
+    async def _get_bbo(self, slug: str) -> tuple[float, float]:
+        """Return (best_bid_yes, best_ask_yes) from the live book.
+
+        Both values are on the YES probability scale (0..1).  Returns
+        (0.0, 0.0) when the book is empty or the fetch fails — callers
+        treat that as "no BBO available, skip the clamp" rather than
+        aborting the trade entirely (a missing BBO is not by itself a
+        reason to reject the order).
+        """
+        try:
+            book = await self._client.get_orderbook(slug, depth=1)
+        except Exception as exc:
+            logger.warning(
+                "polymarket_us.bbo.fetch_failed",
+                slug=slug,
+                err=str(exc),
+            )
+            return (0.0, 0.0)
+        market_data = book.get("marketData", book) if isinstance(book, dict) else {}
+        bids = list(market_data.get("bids") or [])
+        offers = list(market_data.get("offers") or [])
+        best_bid = _amount_value((bids[0] or {}).get("px")) if bids else 0.0
+        best_ask = _amount_value((offers[0] or {}).get("px")) if offers else 0.0
+        return (best_bid, best_ask)
+
+    async def _marketability_clamp_and_snap(
+        self,
+        *,
+        arb_id: str,
+        slug: str,
+        intent: str,
+        side: str,
+        original_price: float,
+        request_price: float,
+        max_affordable: Optional[float],
+    ) -> float:
+        """Clamp ``request_price`` to the live BBO and snap it to the tick grid.
+
+        ``request_price`` is already on the YES-scale (``_us_order_params``
+        flipped NO-leg prices via ``1 - p``).  ``intent`` tells us which
+        side of the book we'll cross:
+
+          - BUY_LONG / BUY_SHORT  → we are TAKING liquidity (buying YES
+            with BUY_LONG, buying NO via BUY_SHORT which sells YES short).
+            For BUY_LONG we need ``price >= best_ask`` to be marketable;
+            we therefore lift the wire price up to ``best_ask`` if it is
+            below.  For BUY_SHORT we need ``(1 - no_price) <= best_bid``
+            which means ``request_price <= best_bid``; clamp DOWN.
+
+        Aborts with ``OrderRejected`` when the clamp would cross
+        ``max_affordable`` (a guaranteed-loss trade).
+        """
+        meta = await self._fetch_market_meta(slug)
+        tick = self._tick_from_meta(meta)
+        best_bid, best_ask = await self._get_bbo(slug)
+
+        clamped = request_price
+        clamp_direction = "none"
+
+        # BUY_LONG: limit must be >= best_ask to cross the book.
+        if intent in ("BUY_LONG", "ORDER_INTENT_BUY_LONG"):
+            if best_ask > 0.0 and clamped < best_ask:
+                clamped = best_ask
+                clamp_direction = "raised_to_ask"
+        # BUY_SHORT: we're selling YES; limit must be <= best_bid.
+        elif intent in ("BUY_SHORT", "ORDER_INTENT_BUY_SHORT"):
+            if best_bid > 0.0 and clamped > best_bid:
+                clamped = best_bid
+                clamp_direction = "lowered_to_bid"
+        # SELL_LONG / SELL_SHORT — keep the limit as-is; we're not currently
+        # using those paths from the engine but the tick-snap still applies.
+
+        snapped = self._snap_to_tick(clamped, tick)
+
+        # Convert wire-side ``snapped`` back to the original side's view
+        # (NO-leg = 1 - yes_price) so the max_affordable check is on the
+        # same axis the engine passed in.
+        if intent in ("BUY_SHORT", "ORDER_INTENT_BUY_SHORT", "SELL_SHORT", "ORDER_INTENT_SELL_SHORT"):
+            user_side_price = max(1.0 - snapped, 0.0)
+        else:
+            user_side_price = snapped
+
+        if (
+            max_affordable is not None
+            and user_side_price > max_affordable + 1e-9
+        ):
+            logger.warning(
+                "polymarket_us.marketability.aborted_unprofitable",
+                arb_id=arb_id,
+                slug=slug,
+                intent=intent,
+                side=side,
+                original_price=original_price,
+                clamped_user_price=user_side_price,
+                max_affordable=max_affordable,
+                best_bid=best_bid,
+                best_ask=best_ask,
+                tick=tick,
+            )
+            raise OrderRejected(
+                f"polymarket_us marketability clamp pushed price to "
+                f"{user_side_price:.4f} > max_affordable {max_affordable:.4f}"
+            )
+
+        if clamp_direction != "none" or abs(snapped - request_price) > 1e-9:
+            logger.info(
+                "polymarket_us.price_clamped",
+                arb_id=arb_id,
+                slug=slug,
+                intent=intent,
+                side=side,
+                old=request_price,
+                new=snapped,
+                bbo_bid=best_bid,
+                bbo_ask=best_ask,
+                tick=tick,
+                clamp=clamp_direction,
+            )
+        return snapped
 
     @staticmethod
     def _us_order_params(side: str, price: float) -> tuple[str, float]:
