@@ -365,6 +365,7 @@ class PortfolioMonitor:
 
         hedge_complete = yes_qty > 0 and no_qty > 0 and abs(yes_qty - no_qty) <= 1e-9
         return {
+            "arb_id": getattr(arb_exec, "arb_id", ""),
             "canonical_id": getattr(opp, "canonical_id", getattr(arb_exec, "arb_id", "unknown")),
             "description": getattr(opp, "description", ""),
             "quantity": qty,
@@ -496,11 +497,15 @@ class PortfolioMonitor:
                 if isinstance(pos.get("updated_at"), datetime):
                     age = now - pos["updated_at"].timestamp()
                 if age > self.config.max_hedge_age_seconds:
+                    position_id = pos.get("arb_id") or pos.get("canonical_id")
                     violations.append(RiskViolation(
-                        violation_id=f"stale_hedge:{pos.get('canonical_id')}",
+                        violation_id=f"stale_hedge:{position_id}",
                         level=RiskLevel.WARNING,
                         category="stale",
-                        message=f"Position {pos.get('canonical_id')} unhedged for {age/3600:.1f}h",
+                        message=(
+                            f"Position {position_id} ({pos.get('canonical_id')}) "
+                            f"unhedged for {age/3600:.1f}h"
+                        ),
                         canonical_id=pos.get("canonical_id"),
                         platform=pos.get("yes_platform"),
                         current_value=age,

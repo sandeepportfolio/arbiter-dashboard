@@ -7,6 +7,7 @@ import sys
 import tempfile
 import time
 import urllib.request
+from datetime import datetime, timezone
 
 import aiohttp
 import pytest
@@ -1162,6 +1163,81 @@ def test_market_mappings_metrics_falls_back_when_store_fails():
             # trade_accuracy is intentionally None on the runtime fallback —
             # the in-process MARKET_MAP has no DB join available.
             assert payload["trade_accuracy"] is None
+
+    asyncio.run(_run())
+
+
+def test_half_recorded_recovery_endpoint_groups_manual_blockers():
+    """Half-recorded filled legs must be visible as exact manual blockers.
+
+    The endpoint is intentionally read-only: it may identify the exposure, but
+    it must not imply auto-trade can resume or that recovery closed the rows.
+    """
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+
+    free_port()
+
+    async def _run():
+        api = await _make_mapping_api()
+
+        class StubExecutionStore:
+            async def list_half_recorded_arbs(self):
+                return [
+                    {
+                        "arb_id": "ARB-ONE",
+                        "canonical_id": "CAN-EXPOSURE",
+                        "status": "pending",
+                        "created_at": datetime(2026, 5, 15, 12, 0, tzinfo=timezone.utc),
+                        "leg_count": 1,
+                        "filled_leg_count": 1,
+                        "filled_notional": 8.75,
+                        "leg_order_ids": ["K-ORDER-1"],
+                    },
+                    {
+                        "arb_id": "ARB-TWO",
+                        "canonical_id": "CAN-EXPOSURE",
+                        "status": "recovering",
+                        "created_at": datetime(2026, 5, 15, 12, 5, tzinfo=timezone.utc),
+                        "leg_count": 1,
+                        "filled_leg_count": 1,
+                        "filled_notional": 1.25,
+                        "leg_order_ids": ["K-ORDER-2"],
+                    },
+                ]
+
+        api.execution_store = StubExecutionStore()
+
+        app = web.Application()
+        app.router.add_get("/api/recovery/half-recorded", api.handle_half_recorded_recovery)
+        async with TestClient(TestServer(app)) as client:
+            response = await client.get("/api/recovery/half-recorded")
+            assert response.status == 200
+            payload = await response.json()
+
+        assert payload["available"] is True
+        assert payload["status"] == "blocked"
+        assert payload["allow_auto_trade"] is False
+        assert payload["action_required"] == "manual_venue_reconciliation_required"
+        assert payload["count"] == 2
+        assert payload["filled_leg_count"] == 2
+        assert payload["total_filled_notional"] == pytest.approx(10.0)
+        assert payload["by_canonical"] == [
+            {
+                "canonical_id": "CAN-EXPOSURE",
+                "count": 2,
+                "filled_leg_count": 2,
+                "filled_notional": 10.0,
+                "statuses": {"pending": 1, "recovering": 1},
+                "arb_ids": ["ARB-ONE", "ARB-TWO"],
+            }
+        ]
+        assert payload["arbs"][0]["created_at"] == "2026-05-15T12:00:00+00:00"
+        assert all(row["allow_auto_trade"] is False for row in payload["arbs"])
+        assert all(
+            row["action_required"] == "manual_venue_reconciliation_required"
+            for row in payload["arbs"]
+        )
 
     asyncio.run(_run())
 

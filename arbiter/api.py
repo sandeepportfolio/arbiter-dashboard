@@ -426,6 +426,7 @@ class ArbiterAPI:
         app.router.add_post("/api/failed-trades/{arb_id}/retry", self.handle_failed_trade_retry)
         app.router.add_get("/api/failure-patterns", self.handle_failure_patterns)
         app.router.add_get("/api/stuck-trade-recovery", self.handle_stuck_recovery_status)
+        app.router.add_get("/api/recovery/half-recorded", self.handle_half_recorded_recovery)
         app.router.add_get("/api/live-prices/{canonical_id}", self.handle_live_prices_for_market)
         app.router.add_get("/api/stats", self.handle_system)
         app.router.add_get("/api/markets", self.handle_market_mappings)
@@ -1115,6 +1116,106 @@ class ArbiterAPI:
         payload = stats.to_dict() if stats is not None else {}
         payload["enabled"] = stats is not None
         return web.json_response(payload)
+
+    async def handle_half_recorded_recovery(self, request):
+        """Return exact half-recorded execution blockers for manual recovery.
+
+        This endpoint is intentionally read-only. A half-recorded arb with a
+        filled leg is live exposure until a venue-backed operator action closes
+        it, so every payload fails closed and keeps auto-trade disabled.
+        """
+        if self.execution_store is None:
+            return web.json_response({
+                "available": False,
+                "status": "unavailable",
+                "allow_auto_trade": False,
+                "action_required": "execution_store_unavailable",
+                "count": 0,
+                "filled_leg_count": 0,
+                "total_filled_notional": 0.0,
+                "by_canonical": [],
+                "arbs": [],
+            }, status=503)
+
+        try:
+            rows = await self.execution_store.list_half_recorded_arbs()
+        except Exception as exc:
+            logger.warning("Failed to load half-recorded arbs: %s", exc)
+            return web.json_response({
+                "available": False,
+                "status": "error",
+                "allow_auto_trade": False,
+                "action_required": "execution_store_query_failed",
+                "error": str(exc),
+                "count": 0,
+                "filled_leg_count": 0,
+                "total_filled_notional": 0.0,
+                "by_canonical": [],
+                "arbs": [],
+            }, status=503)
+
+        blockers = []
+        grouped: Dict[str, dict] = {}
+        total_notional = 0.0
+        total_filled_legs = 0
+        for row in rows:
+            filled_notional = float(row.get("filled_notional") or 0.0)
+            filled_leg_count = int(row.get("filled_leg_count") or 0)
+            total_notional += filled_notional
+            total_filled_legs += filled_leg_count
+
+            canonical_id = str(row.get("canonical_id") or "unknown")
+            status = str(row.get("status") or "unknown")
+            group = grouped.setdefault(
+                canonical_id,
+                {
+                    "canonical_id": canonical_id,
+                    "count": 0,
+                    "filled_leg_count": 0,
+                    "filled_notional": 0.0,
+                    "statuses": {},
+                    "arb_ids": [],
+                },
+            )
+            group["count"] += 1
+            group["filled_leg_count"] += filled_leg_count
+            group["filled_notional"] += filled_notional
+            group["statuses"][status] = int(group["statuses"].get(status, 0)) + 1
+            group["arb_ids"].append(str(row.get("arb_id") or ""))
+
+            blockers.append({
+                "arb_id": row.get("arb_id"),
+                "canonical_id": canonical_id,
+                "status": status,
+                "created_at": self._json_timestamp(row.get("created_at")),
+                "leg_count": int(row.get("leg_count") or 0),
+                "filled_leg_count": filled_leg_count,
+                "filled_notional": round(filled_notional, 4),
+                "leg_order_ids": list(row.get("leg_order_ids") or []),
+                "allow_auto_trade": False,
+                "action_required": "manual_venue_reconciliation_required",
+            })
+
+        by_canonical = []
+        for group in grouped.values():
+            group["filled_notional"] = round(float(group["filled_notional"]), 4)
+            by_canonical.append(group)
+        by_canonical.sort(key=lambda item: (-item["filled_notional"], item["canonical_id"]))
+
+        blocked = bool(blockers)
+        return web.json_response({
+            "available": True,
+            "status": "blocked" if blocked else "clear",
+            "allow_auto_trade": False,
+            "action_required": (
+                "manual_venue_reconciliation_required" if blocked else None
+            ),
+            "count": len(blockers),
+            "filled_leg_count": total_filled_legs,
+            "total_filled_notional": round(total_notional, 4),
+            "by_canonical": by_canonical,
+            "arbs": blockers,
+        })
 
     async def handle_live_prices_for_market(self, request):
         """Return fresh per-platform quotes for a single canonical market.
@@ -3482,6 +3583,14 @@ class ArbiterAPI:
             "unrealized_pnl": 0.0,
             "dry_run": dry_run,
         }
+
+    @staticmethod
+    def _json_timestamp(value) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value.isoformat()
+        return str(value)
 
     @staticmethod
     def _parse_unwind_reason(reason: str) -> str:

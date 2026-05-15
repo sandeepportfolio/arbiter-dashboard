@@ -97,3 +97,38 @@ def test_one_filled_leg_counts_only_surviving_exposure():
     assert snapshot.total_exposure == pytest.approx(2.5)
     assert snapshot.by_venue["kalshi"].total_exposure == pytest.approx(2.5)
     assert "polymarket" not in snapshot.by_venue
+
+
+def test_stale_unhedged_violations_are_execution_specific():
+    executions = [
+        ArbExecution(
+            arb_id="ARB-ONELEG-A",
+            opportunity=make_opportunity(qty=10, yes_price=0.25, no_price=0.5),
+            leg_yes=make_order("yes", status=OrderStatus.FILLED, fill_qty=10, fill_price=0.25),
+            leg_no=make_order("no", status=OrderStatus.PENDING, fill_qty=0),
+            status="pending",
+            realized_pnl=0.0,
+            timestamp=0.0,
+        ),
+        ArbExecution(
+            arb_id="ARB-ONELEG-B",
+            opportunity=make_opportunity(qty=10, yes_price=0.25, no_price=0.5),
+            leg_yes=make_order("yes", status=OrderStatus.FILLED, fill_qty=10, fill_price=0.25),
+            leg_no=make_order("no", status=OrderStatus.PENDING, fill_qty=0),
+            status="recovering",
+            realized_pnl=0.0,
+            timestamp=0.0,
+        ),
+    ]
+
+    snapshot = make_monitor(executions).compute_snapshot(dry_run=False)
+
+    stale_ids = {
+        violation.violation_id
+        for violation in snapshot.violations
+        if violation.category == "stale"
+    }
+    assert stale_ids == {
+        "stale_hedge:ARB-ONELEG-A",
+        "stale_hedge:ARB-ONELEG-B",
+    }

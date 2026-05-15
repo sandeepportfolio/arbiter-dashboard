@@ -226,6 +226,21 @@ window.MOCK = (() => {
     // Portfolio snapshot ─ /api/portfolio
     portfolio: { positions: [], violations: [], total_exposure: 0, unrealized_pnl: 0 },
 
+    // Recovery blockers ─ /api/recovery/half-recorded
+    recovery: {
+      halfRecorded: {
+        available: false,
+        status: 'unknown',
+        allow_auto_trade: false,
+        action_required: null,
+        count: 0,
+        filled_leg_count: 0,
+        total_filled_notional: 0,
+        by_canonical: [],
+        arbs: [],
+      },
+    },
+
     // Operator settings ─ /api/settings (nested: scanner, alerts,
     // auto_executor, mapping, mode, meta). Null until first fetch.
     settings: null,
@@ -635,6 +650,18 @@ window.MOCK = (() => {
     };
   }
 
+  function mergeHalfRecordedRecovery(M, recovery) {
+    if (!recovery || typeof recovery !== 'object') return;
+    M.recovery = M.recovery || {};
+    M.recovery.halfRecorded = {
+      ...M.recovery.halfRecorded,
+      ...recovery,
+      by_canonical: Array.isArray(recovery.by_canonical) ? recovery.by_canonical : [],
+      arbs: Array.isArray(recovery.arbs) ? recovery.arbs : [],
+      allow_auto_trade: false,
+    };
+  }
+
   function currentTradingPnl(M) {
     const pnl = M && M.pnl ? M.pnl : {};
     const direct = Number(pnl.net_trading_pnl);
@@ -842,7 +869,7 @@ window.MOCK = (() => {
            confirmedMappings, candidateMappings, reviewMappings, rejectedMappings, expiredMappings,
            mappingMetrics,
            settings, reconciliation, readiness, profitability,
-           failedTrades, errors, portfolio, discovery] = await Promise.all([
+           failedTrades, errors, portfolio, halfRecordedRecovery, discovery] = await Promise.all([
       safeJson('/api/health'),
       safeJson('/api/balances'),
       safeJson('/api/opportunities'),
@@ -862,6 +889,7 @@ window.MOCK = (() => {
       safeJson('/api/failed-trades'),
       safeJson('/api/errors'),
       safeJson('/api/portfolio'),
+      safeJson('/api/recovery/half-recorded'),
       safeJson('/api/discovery/status'),
     ]);
     mergeHealth(M, health);
@@ -885,6 +913,7 @@ window.MOCK = (() => {
     mergeFailedTrades(M, failedTrades);
     mergeErrors(M, errors);
     mergePortfolio(M, portfolio);
+    mergeHalfRecordedRecovery(M, halfRecordedRecovery);
     mergeDiscovery(M, discovery);
     // Keep live chart buffers moving between backend series snapshots.
     ensureEquityFallback(M);
@@ -3476,29 +3505,41 @@ function KV({ k, v }) {
 function PageAudit() {
   const { t, tradingMode, setTradingMode, setConfirm, toast } = window.useApp();
   const M = window.MOCK;
+  const halfRecorded = (M.recovery && M.recovery.halfRecorded) || {};
+  const halfRows = Array.isArray(halfRecorded.by_canonical) ? halfRecorded.by_canonical : [];
+  const criticalOpen = (Array.isArray(M.errors) ? M.errors : []).filter((incident) =>
+    (incident.status || 'open') !== 'resolved' && String(incident.severity || '').toLowerCase() === 'critical'
+  ).length;
+  const profitVerdict = String(M.health.profitability.verdict || 'unknown');
+  const profitabilityOk = profitVerdict === 'validated_profitable' || profitVerdict === 'profitable';
+  const reconFlags = Number(M.health.reconciliation.flag_count || 0);
+  const readinessReady = !!M.health.readiness.ready;
   const gates = [
     { name: 'Configuration valid', ok: true, detail: 'All required env vars set; API keys reachable.' },
     { name: 'Authentication healthy', ok: true, detail: 'Kalshi token refreshed 8m ago · Polymarket signed via wallet.' },
-    { name: 'Profitability verdict', ok: true, detail: `Verdict: profitable · cumulative ${window.fmt$Sign(M.health.profitability.cumulative_pnl)}` },
-    { name: 'Reconciliation flags', ok: true, detail: '0 outstanding discrepancies · last run 12s ago.' },
+    { name: 'Profitability verdict', ok: profitabilityOk, detail: `Verdict: ${profitVerdict} · cumulative ${window.fmt$Sign(M.health.profitability.cumulative_pnl)}` },
+    { name: 'Reconciliation flags', ok: reconFlags === 0, detail: `${reconFlags.toLocaleString()} outstanding discrepancies.` },
+    { name: 'Exposure recovery blockers', ok: Number(halfRecorded.count || 0) === 0 && criticalOpen === 0, detail: `${Number(halfRecorded.count || 0).toLocaleString()} half-recorded arbs · ${criticalOpen.toLocaleString()} open critical incidents.` },
     { name: 'Scanner heartbeat', ok: true, detail: `${M.health.scanner.scan_time_ms}ms p50 · last scan 1s ago.` },
     { name: 'Audit score', ok: true, detail: `${(M.health.audit.audit_score * 100).toFixed(2)}% above 99% threshold.` },
     { name: 'Kill switch armed', ok: true, detail: 'Manual override available · automatic halt on flag count > 5.' },
   ];
   const readinessGates = M.health.readiness.gates || gates.length;
   const readinessPassing = M.health.readiness.passing || (M.health.readiness.ready ? readinessGates : gates.filter(g => g.ok).length);
+  const readinessTone = readinessReady ? t.green : t.red;
+  const readinessToneSoft = readinessReady ? t.greenSoft : t.redSoft;
 
   return (
     <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto' }}>
       <window.PageHeader kicker="System integrity" title="Audit & Readiness" sub={`Live trading is gated behind ${readinessGates} health checks. Failure of any blocking gate forces standby mode.`}/>
 
       <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 28, marginBottom: 18, display:'flex', alignItems:'center', gap: 24 }}>
-        <div style={{ width: 96, height: 96, borderRadius: '50%', background: t.greenSoft, border: `3px solid ${t.green}`, display:'flex', alignItems:'center', justifyContent:'center', flexShrink: 0 }}>
-          <div style={{ fontSize: 36, fontWeight: 600, color: t.green, fontFamily: window.FONTS.mono }}>✓</div>
+        <div style={{ width: 96, height: 96, borderRadius: '50%', background: readinessToneSoft, border: `3px solid ${readinessTone}`, display:'flex', alignItems:'center', justifyContent:'center', flexShrink: 0 }}>
+          <div style={{ fontSize: 36, fontWeight: 600, color: readinessTone, fontFamily: window.FONTS.mono }}>{readinessReady ? '✓' : '!'}</div>
         </div>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom: 4 }}>Status</div>
-          <div style={{ fontSize: 24, fontWeight: 600, color: t.text, marginBottom: 4 }}>Live trading authorized</div>
+          <div style={{ fontSize: 24, fontWeight: 600, color: t.text, marginBottom: 4 }}>{readinessReady ? 'Live trading authorized' : 'Live trading blocked'}</div>
           <div style={{ fontSize: 13, color: t.textDim }}>{readinessPassing}/{readinessGates} readiness gates passing · audit score {(M.health.audit.audit_score * 100).toFixed(2)}% · uptime {(M.health.uptime_seconds/3600).toFixed(1)}h</div>
         </div>
         <window.Btn variant="danger" size="md" hint="Emergency halt — stops scanner, cancels open orders, locks trading. Requires manual re-arm." onClick={() => setConfirm({
@@ -3531,6 +3572,25 @@ function PageAudit() {
             <window.StatusBadge status={g.ok ? 'pass' : 'fail'}/>
           </div>
         ))}
+      </window.Card>
+
+      <div style={{ height: 14 }}/>
+      <window.Card title="Half-recorded exposure blockers" padding={0}>
+        {halfRows.length ? halfRows.slice(0, 6).map((row, i) => (
+          <div key={row.canonical_id || i} style={{ padding: '16px 22px', borderBottom: i < Math.min(halfRows.length, 6) - 1 ? `1px solid ${t.border}` : 'none', display:'grid', gridTemplateColumns:'minmax(180px, 1fr) 120px 160px 1.4fr', gap: 14, alignItems:'center' }}>
+            <div>
+              <div style={{ fontSize: 13, color: t.text, fontWeight: 600 }}>{row.canonical_id || 'unknown'}</div>
+              <div style={{ fontSize: 11.5, color: t.textDim }}>{(row.arb_ids || []).slice(0, 4).join(', ')}</div>
+            </div>
+            <div style={{ fontSize: 12, color: t.textDim }}>{Number(row.count || 0).toLocaleString()} arbs</div>
+            <div style={{ fontSize: 12, color: t.textDim }}>{window.fmt$(Number(row.filled_notional || 0))} filled</div>
+            <div style={{ fontSize: 12, color: t.textDim }}>Manual venue reconciliation required before auto-trade can resume.</div>
+          </div>
+        )) : (
+          <div style={{ padding: '18px 22px', fontSize: 13, color: t.textDim }}>
+            No half-recorded exposure blockers reported by the recovery endpoint.
+          </div>
+        )}
       </window.Card>
     </div>
   );
