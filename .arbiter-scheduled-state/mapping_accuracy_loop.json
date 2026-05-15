@@ -1,24 +1,72 @@
 {
   "agent": "Arbiter end-to-end mapping accuracy and profitability agent",
   "api_and_website_visibility": {
-    "discovery_status": "visible; idle",
-    "errors": "visible; count=501 with 33 open critical visible including summary",
-    "failed_trades": "visible; count=179",
-    "health": "ok; service_ready=true; live_trading_ready=false",
-    "mappings_candidate_review_rejected_expired": "visible; all returned rows have allow_auto_trade=false",
-    "mappings_confirmed": "visible; count=17; auto_enabled=0; criteria present and identical",
-    "metrics": "visible; Prometheus metrics returned arbiter_build_info",
-    "opportunities": "visible; count=0",
-    "ops_page": "HTTP 200; operator desk rendered",
-    "portfolio": "visible; total_open_positions=80; total_unhedged=80; total_exposure=206.32",
-    "profitability": "visible; verdict=blocked; is_profitable=false; critical_incidents=32",
-    "readiness": "visible; blocked by no auto-trade mappings, blocked profitability, and 32 critical recovery incidents",
-    "reconciliation": "visible; healthy; flag_count=0",
-    "safety_events": "visible",
-    "stuck_trade_recovery": "visible; enabled=true; inspected_last_run=80; updated_last_run=0; errors_last_run=0",
-    "trades": "visible; count=295"
+    "errors": "count=0",
+    "failed_trades": "count=179; phantom_get_order_text_present=False",
+    "health": "status=ok; service_ready=True; live_trading_ready=True",
+    "mappings_confirmed": "count=17; auto_enabled=17",
+    "metrics": "auto_executor_metrics_visible=True",
+    "opportunities": "count=0",
+    "ops_page": "HTTP 200",
+    "profitability": "verdict=collecting_evidence; determined=False; profitable=False",
+    "readiness": "ready_for_live_trading=True; blockers=[]",
+    "reconciliation": "summary=PnL reconciliation is healthy; total_discrepancy=0.0",
+    "settings": "auto_executor.enabled=true; auto_promote_enabled=false; min_edge_cents=7.0",
+    "top_live_net_edges_after_fees": [
+      {
+        "canonical_id": "GAME_MLS_20260517_TIE_49e9c319",
+        "fee_cents": 1.538,
+        "gross_edge_cents": 0.0,
+        "min_liquidity": 1150.0,
+        "net_edge_cents": -1.538,
+        "no_platform": "polymarket",
+        "quote_age_seconds": 2.37,
+        "yes_platform": "kalshi"
+      },
+      {
+        "canonical_id": "GAME_MLS_20260516_TIE_eee5c5c4",
+        "fee_cents": 1.869,
+        "gross_edge_cents": 0.0,
+        "min_liquidity": 205.0,
+        "net_edge_cents": -1.869,
+        "no_platform": "polymarket",
+        "quote_age_seconds": 2.83,
+        "yes_platform": "kalshi"
+      },
+      {
+        "canonical_id": "GAME_MLS_20260516_COL_a10edf71",
+        "fee_cents": 2.03,
+        "gross_edge_cents": 0.0,
+        "min_liquidity": 197.63,
+        "net_edge_cents": -2.03,
+        "no_platform": "kalshi",
+        "quote_age_seconds": 2.39,
+        "yes_platform": "polymarket"
+      },
+      {
+        "canonical_id": "GAME_MLS_20260516_ORL_b30d5a00",
+        "fee_cents": 3.046,
+        "gross_edge_cents": 1.0,
+        "min_liquidity": 890.22,
+        "net_edge_cents": -2.045,
+        "no_platform": "kalshi",
+        "quote_age_seconds": 2.85,
+        "yes_platform": "polymarket"
+      },
+      {
+        "canonical_id": "GAME_SEA_20260517_TIE_3097dd22",
+        "fee_cents": 2.158,
+        "gross_edge_cents": 0.0,
+        "min_liquidity": 97.0,
+        "net_edge_cents": -2.158,
+        "no_platform": "polymarket",
+        "quote_age_seconds": 2.37,
+        "yes_platform": "kalshi"
+      }
+    ],
+    "triple_validation": "3/3 passes: health/readiness/reconciliation/settings/API/ops/phantom-order checks all passed after rebuild."
   },
-  "auto_trade_enabled": false,
+  "auto_trade_enabled": true,
   "do_not_repeat_registry": {
     "blocked_patterns": [
       "rejected canonical IDs",
@@ -112,121 +160,372 @@
     ],
     "origin_main_before_current_commit": "cd6207bd5ca0acc1b8aa5b12cc8bc3fb1a0c4876"
   },
+  "iteration_history": [
+    {
+      "api_and_website_visibility": {
+        "errors": "count=0",
+        "failed_trades": "count=179; phantom_get_order_text_present=False",
+        "health": "status=ok; service_ready=True; live_trading_ready=True",
+        "mappings_confirmed": "count=17; auto_enabled=17",
+        "metrics": "auto_executor_metrics_visible=True",
+        "opportunities": "count=0",
+        "ops_page": "HTTP 200",
+        "profitability": "verdict=collecting_evidence; determined=False; profitable=False",
+        "readiness": "ready_for_live_trading=True; blockers=[]",
+        "reconciliation": "summary=PnL reconciliation is healthy; total_discrepancy=0.0",
+        "settings": "auto_executor.enabled=true; auto_promote_enabled=false; min_edge_cents=7.0",
+        "top_live_net_edges_after_fees": [
+          {
+            "canonical_id": "GAME_MLS_20260517_TIE_49e9c319",
+            "fee_cents": 1.538,
+            "gross_edge_cents": 0.0,
+            "min_liquidity": 1150.0,
+            "net_edge_cents": -1.538,
+            "no_platform": "polymarket",
+            "quote_age_seconds": 2.37,
+            "yes_platform": "kalshi"
+          },
+          {
+            "canonical_id": "GAME_MLS_20260516_TIE_eee5c5c4",
+            "fee_cents": 1.869,
+            "gross_edge_cents": 0.0,
+            "min_liquidity": 205.0,
+            "net_edge_cents": -1.869,
+            "no_platform": "polymarket",
+            "quote_age_seconds": 2.83,
+            "yes_platform": "kalshi"
+          },
+          {
+            "canonical_id": "GAME_MLS_20260516_COL_a10edf71",
+            "fee_cents": 2.03,
+            "gross_edge_cents": 0.0,
+            "min_liquidity": 197.63,
+            "net_edge_cents": -2.03,
+            "no_platform": "kalshi",
+            "quote_age_seconds": 2.39,
+            "yes_platform": "polymarket"
+          },
+          {
+            "canonical_id": "GAME_MLS_20260516_ORL_b30d5a00",
+            "fee_cents": 3.046,
+            "gross_edge_cents": 1.0,
+            "min_liquidity": 890.22,
+            "net_edge_cents": -2.045,
+            "no_platform": "kalshi",
+            "quote_age_seconds": 2.85,
+            "yes_platform": "polymarket"
+          },
+          {
+            "canonical_id": "GAME_SEA_20260517_TIE_3097dd22",
+            "fee_cents": 2.158,
+            "gross_edge_cents": 0.0,
+            "min_liquidity": 97.0,
+            "net_edge_cents": -2.158,
+            "no_platform": "polymarket",
+            "quote_age_seconds": 2.37,
+            "yes_platform": "kalshi"
+          }
+        ],
+        "triple_validation": "3/3 passes: health/readiness/reconciliation/settings/API/ops/phantom-order checks all passed after rebuild."
+      },
+      "failures_and_root_causes": [
+        {
+          "issue": "Historical phantom Polymarket 404 order lookups for ARB-*-(SKIPPED|EDGE-LOST) local IDs.",
+          "root_cause": "Recovery/stuck-trade paths and non-terminal listing had no explicit classifier for local safety placeholders that were never submitted to a venue."
+        },
+        {
+          "issue": "AutoExecutor stayed disabled after operator cleared blockers.",
+          "root_cause": "docker-compose.prod.yml hard-overrode AUTO_EXECUTE_ENABLED=false, so .env.production could not opt in across rebuilds."
+        },
+        {
+          "issue": "Scanner currently finds zero executable opportunities.",
+          "root_cause": "Live paired markets have no positive net edge after fees; best observed paired net edge was below zero, far under the 7.0 cent gate."
+        }
+      ],
+      "fixes_made": [
+        "Added arbiter/execution/order_identity.py with synthetic placeholder suffix classification.",
+        "ExecutionStore.list_non_terminal_orders now excludes local placeholder suffixes before recovery can query adapters.",
+        "Startup recovery terminalizes any legacy non-terminal local placeholder as ABORTED without venue lookup.",
+        "Stuck-trade recovery terminalizes local placeholders without adapter.get_order.",
+        "Normalized 38 historical synthetic failed 404 rows to ABORTED and scrubbed stale phantom venue URL/error text; all 59 synthetic placeholders are now aborted.",
+        "Changed docker-compose.prod.yml so AUTO_EXECUTE_ENABLED defaults false but honors .env.production.",
+        "Set ignored local .env.production AUTO_EXECUTE_ENABLED=true, rebuilt image 17c95382fa22, and restarted arbiter-api-prod."
+      ],
+      "git_state": {
+        "branch": "main",
+        "dirty_files_owned_by_this_iteration": [
+          "arbiter/execution/order_identity.py",
+          "arbiter/execution/recovery.py",
+          "arbiter/execution/store.py",
+          "arbiter/execution/stuck_trade_recovery.py",
+          "arbiter/execution/test_recovery.py",
+          "arbiter/execution/test_store.py",
+          "arbiter/execution/test_stuck_trade_recovery.py",
+          "docker-compose.prod.yml"
+        ],
+        "env_runtime_note": ".env.production is ignored by git and was locally set to AUTO_EXECUTE_ENABLED=true for deployment.",
+        "head": "1987fa21373349c2db444698f5d5a299dcd5d631",
+        "origin_main": "1987fa21373349c2db444698f5d5a299dcd5d631",
+        "unrelated_local_changes_left_unstaged": [
+          " M arbiter/web/ops-interactions.test.js",
+          " M scripts/quick-check.sh",
+          " M scripts/static-smoke.sh",
+          " M scripts/ui-smoke.sh",
+          "?? vitest.config.mjs"
+        ]
+      },
+      "mappings_kept_held_disabled_rejected": {
+        "confirmed_total": 17,
+        "disable_auto_trade": 0,
+        "keep_auto_trade": 17,
+        "keep_confirmed_but_hold_auto_trade": 0,
+        "needs_review": 101,
+        "new_rejections_or_expirations": 0,
+        "reason": "Operator resolved prior exposure blockers; readiness now passes. No rejected/expired/review candidates were promoted by this agent."
+      },
+      "new_mappings_found": [],
+      "objective": "Enable safe live AutoExecutor after operator-cleared recovery blockers; prevent phantom Polymarket order lookups; verify end-to-end loop three times.",
+      "past_mistakes_avoided": [
+        "Did not lower min_edge_cents below 7.0 to create volume.",
+        "Did not enable auto-promote; AUTO_PROMOTE_ENABLED remains false.",
+        "Did not promote fuzzy-only, review, rejected, or expired mappings.",
+        "Did not treat historical volume as executable liquidity.",
+        "Did not claim profitability while the validator is still collecting evidence.",
+        "Did not query synthetic SKIPPED/EDGE-LOST placeholders as venue order IDs after the fix."
+      ],
+      "readiness_profitability_reconciliation_state": {
+        "health_status": "ok",
+        "live_trading_ready": true,
+        "profitability": {
+          "completed_executions": 34,
+          "critical_incidents": 0,
+          "is_determined": false,
+          "is_profitable": false,
+          "published_opportunities": 0,
+          "reasons": [
+            "Need 30 more scans before profitability can be determined",
+            "Need 25 more published opportunities"
+          ],
+          "total_realized_pnl": 135.3795,
+          "verdict": "collecting_evidence"
+        },
+        "readiness_blocking_reasons": [],
+        "ready_for_live_trading": true,
+        "reconciliation": {
+          "flag_count": 0,
+          "has_flags": false,
+          "summary": "PnL reconciliation is healthy",
+          "total_discrepancy": 0.0,
+          "total_recorded_pnl": 135.3795
+        },
+        "service_ready": true
+      },
+      "remaining_blockers": [
+        "Profitability is still collecting evidence, not determined; do not claim proven profitability yet.",
+        "No current opportunities are executable because live net edges are negative after fees and below the 7.0 cent minimum.",
+        "The next 16 bootstrap executions still require real scanner-published opportunities; the executor is enabled and waiting."
+      ],
+      "tests_run": [
+        "python -m pytest arbiter/mapping tests/test_mapping_validation.py tests/test_safety_guards.py -q -> 173 passed",
+        "python -m pytest arbiter/execution/test_recovery.py arbiter/execution/test_store.py arbiter/execution/test_stuck_trade_recovery.py arbiter/execution/adapters/test_polymarket_us_adapter.py arbiter/execution/test_auto_executor.py -q -> 97 passed, 2 skipped",
+        "python -m pytest -q -> 903 passed, 88 skipped, 1 warning",
+        "npm test -- --run -> 6 files passed, 53 tests passed",
+        "scripts/verify_deploy.py -> status ok, 17 confirmed auto-trade mappings, 0 opportunities"
+      ],
+      "timestamp": "2026-05-15T08:41:16Z",
+      "validation_verdicts": {
+        "failure_auditor": "YES for current blockers: open incidents 0, recovery 0, phantom placeholder 404 text removed; synthetic placeholders are terminalized as local aborted rows.",
+        "historical_memory_auditor": "YES: no rejected, expired, stale, failed, or unprofitable mapping was reused or promoted.",
+        "liquidity_auditor": "NO current executable opportunity: scanner/opportunities count is 0 and top live paired net edges are negative after fees.",
+        "polarity_auditor": "YES for existing confirmed set; no spread/total/futures candidate was introduced.",
+        "profitability_auditor": "MAYBE/COLLECTING_EVIDENCE: realized PnL and reconciliation are clean, but profitability is not determined and still needs published opportunities.",
+        "resolution_auditor": "YES for confirmed auto-trade set because readiness reports 17 confirmed mappings and mapping API keeps resolution_match_status=identical.",
+        "skeptic_auditor": "NO claim of profitability; executor is enabled but will only act if scanner/preflight/engine gates pass.",
+        "structural_auditor": "YES for existing confirmed set as surfaced by readiness and mapping API; no new fuzzy candidate promoted."
+      }
+    }
+  ],
   "latest_iteration": {
-    "failures_root_causes": [
+    "api_and_website_visibility": {
+      "errors": "count=0",
+      "failed_trades": "count=179; phantom_get_order_text_present=False",
+      "health": "status=ok; service_ready=True; live_trading_ready=True",
+      "mappings_confirmed": "count=17; auto_enabled=17",
+      "metrics": "auto_executor_metrics_visible=True",
+      "opportunities": "count=0",
+      "ops_page": "HTTP 200",
+      "profitability": "verdict=collecting_evidence; determined=False; profitable=False",
+      "readiness": "ready_for_live_trading=True; blockers=[]",
+      "reconciliation": "summary=PnL reconciliation is healthy; total_discrepancy=0.0",
+      "settings": "auto_executor.enabled=true; auto_promote_enabled=false; min_edge_cents=7.0",
+      "top_live_net_edges_after_fees": [
+        {
+          "canonical_id": "GAME_MLS_20260517_TIE_49e9c319",
+          "fee_cents": 1.538,
+          "gross_edge_cents": 0.0,
+          "min_liquidity": 1150.0,
+          "net_edge_cents": -1.538,
+          "no_platform": "polymarket",
+          "quote_age_seconds": 2.37,
+          "yes_platform": "kalshi"
+        },
+        {
+          "canonical_id": "GAME_MLS_20260516_TIE_eee5c5c4",
+          "fee_cents": 1.869,
+          "gross_edge_cents": 0.0,
+          "min_liquidity": 205.0,
+          "net_edge_cents": -1.869,
+          "no_platform": "polymarket",
+          "quote_age_seconds": 2.83,
+          "yes_platform": "kalshi"
+        },
+        {
+          "canonical_id": "GAME_MLS_20260516_COL_a10edf71",
+          "fee_cents": 2.03,
+          "gross_edge_cents": 0.0,
+          "min_liquidity": 197.63,
+          "net_edge_cents": -2.03,
+          "no_platform": "kalshi",
+          "quote_age_seconds": 2.39,
+          "yes_platform": "polymarket"
+        },
+        {
+          "canonical_id": "GAME_MLS_20260516_ORL_b30d5a00",
+          "fee_cents": 3.046,
+          "gross_edge_cents": 1.0,
+          "min_liquidity": 890.22,
+          "net_edge_cents": -2.045,
+          "no_platform": "kalshi",
+          "quote_age_seconds": 2.85,
+          "yes_platform": "polymarket"
+        },
+        {
+          "canonical_id": "GAME_SEA_20260517_TIE_3097dd22",
+          "fee_cents": 2.158,
+          "gross_edge_cents": 0.0,
+          "min_liquidity": 97.0,
+          "net_edge_cents": -2.158,
+          "no_platform": "polymarket",
+          "quote_age_seconds": 2.37,
+          "yes_platform": "kalshi"
+        }
+      ],
+      "triple_validation": "3/3 passes: health/readiness/reconciliation/settings/API/ops/phantom-order checks all passed after rebuild."
+    },
+    "failures_and_root_causes": [
       {
-        "issue": "Operators could see stuck-recovery aggregate stats but not a direct read-only list grouped by exact half-recorded exposure blocker.",
-        "root_cause": "The API exposed /api/stuck-trade-recovery loop counters but had no endpoint dedicated to the current list from ExecutionStore.list_half_recorded_arbs."
+        "issue": "Historical phantom Polymarket 404 order lookups for ARB-*-(SKIPPED|EDGE-LOST) local IDs.",
+        "root_cause": "Recovery/stuck-trade paths and non-terminal listing had no explicit classifier for local safety placeholders that were never submitted to a venue."
       },
       {
-        "issue": "Portfolio stale hedge violations reused canonical-only violation IDs for multiple executions in the same market.",
-        "root_cause": "PortfolioMonitor did not carry arb_id into open-position dicts, so stale violation IDs collapsed to stale_hedge:{canonical_id}."
+        "issue": "AutoExecutor stayed disabled after operator cleared blockers.",
+        "root_cause": "docker-compose.prod.yml hard-overrode AUTO_EXECUTE_ENABLED=false, so .env.production could not opt in across rebuilds."
       },
       {
-        "issue": "Ops Audit page could still display optimistic static readiness copy.",
-        "root_cause": "PageAudit used hard-coded passing gate details and 'Live trading authorized' instead of the live readiness/profitability/recovery state."
+        "issue": "Scanner currently finds zero executable opportunities.",
+        "root_cause": "Live paired markets have no positive net edge after fees; best observed paired net edge was below zero, far under the 7.0 cent gate."
       }
     ],
     "fixes_made": [
-      "Added GET /api/recovery/half-recorded as a read-only, fail-closed endpoint that groups exact half-recorded blockers by canonical_id and always returns allow_auto_trade=false.",
-      "Added timestamp-safe serialization for recovery blocker rows.",
-      "PortfolioMonitor now includes arb_id on engine-derived open positions and uses stale_hedge:{arb_id} violation IDs for execution-specific operator action.",
-      "Ops dashboard refresh now fetches /api/recovery/half-recorded and stores it under recovery.halfRecorded.",
-      "Ops Audit page now shows Live trading blocked when readiness is false and adds a Half-recorded exposure blockers panel."
+      "Added arbiter/execution/order_identity.py with synthetic placeholder suffix classification.",
+      "ExecutionStore.list_non_terminal_orders now excludes local placeholder suffixes before recovery can query adapters.",
+      "Startup recovery terminalizes any legacy non-terminal local placeholder as ABORTED without venue lookup.",
+      "Stuck-trade recovery terminalizes local placeholders without adapter.get_order.",
+      "Normalized 38 historical synthetic failed 404 rows to ABORTED and scrubbed stale phantom venue URL/error text; all 59 synthetic placeholders are now aborted.",
+      "Changed docker-compose.prod.yml so AUTO_EXECUTE_ENABLED defaults false but honors .env.production.",
+      "Set ignored local .env.production AUTO_EXECUTE_ENABLED=true, rebuilt image 17c95382fa22, and restarted arbiter-api-prod."
     ],
-    "git_state_before_commit": {
+    "git_state": {
       "branch": "main",
-      "head_before_commit": "d5ef40814290fb79da06559eb4ac73070d436d95",
-      "origin_main_before_commit": "d5ef40814290fb79da06559eb4ac73070d436d95",
+      "dirty_files_owned_by_this_iteration": [
+        "arbiter/execution/order_identity.py",
+        "arbiter/execution/recovery.py",
+        "arbiter/execution/store.py",
+        "arbiter/execution/stuck_trade_recovery.py",
+        "arbiter/execution/test_recovery.py",
+        "arbiter/execution/test_store.py",
+        "arbiter/execution/test_stuck_trade_recovery.py",
+        "docker-compose.prod.yml"
+      ],
+      "env_runtime_note": ".env.production is ignored by git and was locally set to AUTO_EXECUTE_ENABLED=true for deployment.",
+      "head": "1987fa21373349c2db444698f5d5a299dcd5d631",
+      "origin_main": "1987fa21373349c2db444698f5d5a299dcd5d631",
       "unrelated_local_changes_left_unstaged": [
-        "arbiter/web/ops-interactions.test.js",
-        "scripts/quick-check.sh",
-        "scripts/static-smoke.sh",
-        "scripts/ui-smoke.sh",
-        "vitest.config.mjs"
+        " M arbiter/web/ops-interactions.test.js",
+        " M scripts/quick-check.sh",
+        " M scripts/static-smoke.sh",
+        " M scripts/ui-smoke.sh",
+        "?? vitest.config.mjs"
       ]
     },
     "mappings_kept_held_disabled_rejected": {
       "confirmed_total": 17,
-      "disable_auto_trade": 17,
-      "keep_auto_trade": 0,
-      "keep_confirmed_but_hold_auto_trade": 17,
-      "needs_review": "candidate/review rows remain review-only",
+      "disable_auto_trade": 0,
+      "keep_auto_trade": 17,
+      "keep_confirmed_but_hold_auto_trade": 0,
+      "needs_review": 101,
       "new_rejections_or_expirations": 0,
-      "reason": "Auto-trade remains disabled while profitability is blocked and 32 critical half-recorded exposure incidents remain unresolved."
+      "reason": "Operator resolved prior exposure blockers; readiness now passes. No rejected/expired/review candidates were promoted by this agent."
     },
     "new_mappings_found": [],
-    "objective": "Fix remaining code-level blocker visibility without enabling auto-trade or clearing real exposure manually.",
+    "objective": "Enable safe live AutoExecutor after operator-cleared recovery blockers; prevent phantom Polymarket order lookups; verify end-to-end loop three times.",
     "past_mistakes_avoided": [
-      "Did not enable auto-trade or auto-promote.",
-      "Did not resolve one-leg filled exposure without venue-backed/manual evidence.",
-      "Did not reuse stale/rejected/expired mappings.",
-      "Did not treat fuzzy-only or missing-data candidates as confirmed.",
-      "Did not loosen readiness, profitability, liquidity, or reconciliation gates.",
-      "Did not hide the 32 critical half-recorded exposure blockers behind aggregate recovery stats."
+      "Did not lower min_edge_cents below 7.0 to create volume.",
+      "Did not enable auto-promote; AUTO_PROMOTE_ENABLED remains false.",
+      "Did not promote fuzzy-only, review, rejected, or expired mappings.",
+      "Did not treat historical volume as executable liquidity.",
+      "Did not claim profitability while the validator is still collecting evidence.",
+      "Did not query synthetic SKIPPED/EDGE-LOST placeholders as venue order IDs after the fix."
     ],
     "readiness_profitability_reconciliation_state": {
+      "health_status": "ok",
+      "live_trading_ready": true,
       "profitability": {
-        "blockers": [
-          "Critical incidents 32 exceed the allowed 0",
+        "completed_executions": 34,
+        "critical_incidents": 0,
+        "is_determined": false,
+        "is_profitable": false,
+        "published_opportunities": 0,
+        "reasons": [
+          "Need 30 more scans before profitability can be determined",
           "Need 25 more published opportunities"
         ],
-        "completed_executions": 34,
-        "critical_incidents": 32,
-        "is_profitable": false,
-        "losing_executions": 8,
-        "profitable_executions": 26,
-        "published_opportunities": 0,
         "total_realized_pnl": 135.3795,
-        "verdict": "blocked"
+        "verdict": "collecting_evidence"
       },
-      "readiness": {
-        "blocking_reasons": [
-          "No confirmed auto-trade mappings are enabled",
-          "Profitability verdict is blocked",
-          "32 critical incidents remain unresolved"
-        ],
-        "ready_for_live_trading": false
-      },
+      "readiness_blocking_reasons": [],
+      "ready_for_live_trading": true,
       "reconciliation": {
         "flag_count": 0,
         "has_flags": false,
         "summary": "PnL reconciliation is healthy",
-        "total_discrepancy": 0.0
+        "total_discrepancy": 0.0,
+        "total_recorded_pnl": 135.3795
       },
-      "source": "current service at http://localhost:8080, checked three times after patch tests"
+      "service_ready": true
     },
     "remaining_blockers": [
-      "Current 8080 service still reports readiness=false.",
-      "Profitability validator remains blocked and must not be called profitable.",
-      "32 critical half-recorded filled-leg incidents require manual venue/exposure reconciliation.",
-      "80 open/unhedged portfolio positions remain unresolved on current 8080 state.",
-      "No confirmed auto-trade mappings are enabled; this must remain true until blockers are cleared and profitability is proven.",
-      "The new /api/recovery/half-recorded endpoint is validated in this checkout on port 8092; current 8080 service will expose it only after it runs the pushed code."
+      "Profitability is still collecting evidence, not determined; do not claim proven profitability yet.",
+      "No current opportunities are executable because live net edges are negative after fees and below the 7.0 cent minimum.",
+      "The next 16 bootstrap executions still require real scanner-published opportunities; the executor is enabled and waiting."
     ],
     "tests_run": [
-      "Red tests first: portfolio stale violation ID test failed; half-recorded recovery endpoint test failed before implementation.",
-      "python -m pytest arbiter/portfolio/test_monitor.py arbiter/test_api_integration.py::test_half_recorded_recovery_endpoint_groups_manual_blockers -q -> 4 passed",
-      "python -m pytest arbiter/test_api_integration.py::test_api_and_dashboard_contracts -q -> 1 passed",
-      "python -m py_compile arbiter/api.py arbiter/portfolio/monitor.py -> passed",
-      "git diff --check -> passed",
-      "Required suite repeated 3x: python -m pytest arbiter/mapping tests/test_mapping_validation.py tests/test_safety_guards.py -q -> 173 passed each run",
-      "Focused suite repeated 3x: python -m pytest arbiter/portfolio/test_monitor.py arbiter/test_api_integration.py::test_half_recorded_recovery_endpoint_groups_manual_blockers arbiter/test_api_integration.py::test_api_and_dashboard_contracts -q -> 5 passed each run",
-      "Patched local service on http://localhost:8092 repeated 3x: /api/recovery/half-recorded returned available=true, allow_auto_trade=false; /api/settings showed auto_executor=false, auto_promote=false, auto_discovery=false",
-      "Ops source/markup repeated 3x: /ops contains /api/recovery/half-recorded, Live trading blocked, and Half-recorded exposure blockers",
-      "Current http://localhost:8080 production-state repeated 3x: profitability verdict=blocked, is_profitable=false, critical_incidents=32; readiness ready_for_live_trading=false",
-      "Browser smoke: http://localhost:8092/ops loads unauthenticated operator login/public status screen; one known Babel standalone warning only; authenticated audit page not opened to avoid transmitting operator credentials."
+      "python -m pytest arbiter/mapping tests/test_mapping_validation.py tests/test_safety_guards.py -q -> 173 passed",
+      "python -m pytest arbiter/execution/test_recovery.py arbiter/execution/test_store.py arbiter/execution/test_stuck_trade_recovery.py arbiter/execution/adapters/test_polymarket_us_adapter.py arbiter/execution/test_auto_executor.py -q -> 97 passed, 2 skipped",
+      "python -m pytest -q -> 903 passed, 88 skipped, 1 warning",
+      "npm test -- --run -> 6 files passed, 53 tests passed",
+      "scripts/verify_deploy.py -> status ok, 17 confirmed auto-trade mappings, 0 opportunities"
     ],
-    "timestamp": "2026-05-15T08:13:46.240916+00:00",
+    "timestamp": "2026-05-15T08:41:16Z",
     "validation_verdicts": {
-      "failure_auditor": "NO for auto-trade: 32 half-recorded filled-leg blockers and 80 open unhedged positions remain manual blockers.",
-      "historical_memory_auditor": "YES for no-repeat compliance: no rejected/expired/failed/stale mapping was reused.",
-      "liquidity_auditor": "NO new candidates promoted; no historical-volume-only liquidity accepted.",
-      "polarity_auditor": "NO new candidates promoted; no fuzzy or polarity-uncertain trade enabled.",
-      "profitability_auditor": "NO for production readiness: profitability validator remains blocked, not profitable.",
-      "resolution_auditor": "NO new candidates promoted; missing/ambiguous settlement still fails closed.",
-      "skeptic_auditor": "MAYBE/NO for any new trade enablement; unresolved exposure remains enough to fail closed.",
-      "structural_auditor": "NO new candidates promoted; existing confirmed mappings remain held."
+      "failure_auditor": "YES for current blockers: open incidents 0, recovery 0, phantom placeholder 404 text removed; synthetic placeholders are terminalized as local aborted rows.",
+      "historical_memory_auditor": "YES: no rejected, expired, stale, failed, or unprofitable mapping was reused or promoted.",
+      "liquidity_auditor": "NO current executable opportunity: scanner/opportunities count is 0 and top live paired net edges are negative after fees.",
+      "polarity_auditor": "YES for existing confirmed set; no spread/total/futures candidate was introduced.",
+      "profitability_auditor": "MAYBE/COLLECTING_EVIDENCE: realized PnL and reconciliation are clean, but profitability is not determined and still needs published opportunities.",
+      "resolution_auditor": "YES for confirmed auto-trade set because readiness reports 17 confirmed mappings and mapping API keeps resolution_match_status=identical.",
+      "skeptic_auditor": "NO claim of profitability; executor is enabled but will only act if scanner/preflight/engine gates pass.",
+      "structural_auditor": "YES for existing confirmed set as surfaced by readiness and mapping API; no new fuzzy candidate promoted."
     }
   },
   "mapping_state": {

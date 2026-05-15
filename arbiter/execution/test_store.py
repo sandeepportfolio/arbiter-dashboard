@@ -568,6 +568,12 @@ async def test_list_non_terminal_orders_filters_correctly(mock_pool):
     method, sql, _ = mock_pool.conn.calls[-1]
     assert method == "fetch"
     assert "WHERE status IN ('pending', 'submitted', 'partial')" in sql
+    assert "order_id NOT LIKE '%-SKIPPED'" in sql
+    assert "order_id NOT LIKE '%-EDGE-LOST'" in sql
+    assert "order_id NOT LIKE '%-UNPROFITABLE'" in sql
+    assert "order_id NOT LIKE '%-EXCEPTION'" in sql
+    assert "order_id NOT LIKE '%-NOADAPTER'" in sql
+    assert "order_id NOT LIKE '%-DBFAIL'" in sql
 
 
 # ─── Integration tier (real Postgres) ─────────────────────────────────────

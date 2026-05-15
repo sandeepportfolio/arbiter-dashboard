@@ -16,6 +16,7 @@ from typing import Any, Dict, List
 
 from .adapters.base import PlatformAdapter
 from .engine import ExecutionIncident, Order, OrderStatus
+from .order_identity import is_synthetic_placeholder_order_id
 from .store import ExecutionStore
 
 logger = logging.getLogger("arbiter.execution.recovery")
@@ -69,6 +70,25 @@ async def reconcile_non_terminal_orders(
     logger.info("recovery: reconciling %d non-terminal orders", len(orders))
 
     for order in orders:
+        if is_synthetic_placeholder_order_id(order.order_id):
+            logger.info(
+                "recovery: terminalizing local synthetic placeholder %s",
+                order.order_id,
+            )
+            order.status = OrderStatus.ABORTED
+            order.error = (
+                (order.error + "; ") if order.error else ""
+            ) + "local synthetic placeholder; never submitted to venue"
+            try:
+                await store.upsert_order(order, arb_id=_derive_arb_id(order.order_id))
+            except Exception as upsert_exc:
+                logger.error(
+                    "recovery: failed to terminalize synthetic placeholder %s: %s",
+                    order.order_id,
+                    upsert_exc,
+                )
+            continue
+
         adapter = adapters.get(order.platform)
         if adapter is None:
             logger.warning(

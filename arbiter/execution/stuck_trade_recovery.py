@@ -33,6 +33,7 @@ import asyncpg
 
 from .adapters.base import PlatformAdapter
 from .engine import Order, OrderStatus
+from .order_identity import is_synthetic_placeholder_order_id
 from .store import ExecutionStore
 
 logger = logging.getLogger("arbiter.execution.stuck_trade_recovery")
@@ -212,6 +213,14 @@ async def _query_leg_state(
     adapter: Optional[PlatformAdapter], order: Order,
 ) -> tuple[Order, str]:
     """Return (possibly updated Order, note). Never raises across the boundary."""
+    if is_synthetic_placeholder_order_id(order.order_id):
+        if order.status not in _TERMINAL_LEG_STATUSES:
+            order.status = OrderStatus.ABORTED
+            order.error = (
+                (order.error + "; ") if order.error else ""
+            ) + "local synthetic placeholder; never submitted to venue"
+            return order, "local synthetic placeholder terminalized without venue lookup"
+        return order, "local synthetic placeholder; no venue lookup"
     if adapter is None:
         return order, f"no adapter for platform={order.platform}"
     try:

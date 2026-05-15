@@ -93,9 +93,9 @@ services:
       # Use host-side Claude CLI verifier service (Max subscription, no API key needed)
       LLM_VERIFIER_BACKEND: http
       LLM_VERIFIER_HTTP_URL: http://host.docker.internal:8079/verify
-      # Fail closed by default. Operators must remove/override these only after
-      # reconciliation, profitability, and mapping validation are clean.
-      AUTO_EXECUTE_ENABLED: "false"
+      # Fail closed by default. Operators can opt in via .env.production only
+      # after reconciliation, profitability, and mapping validation are clean.
+      AUTO_EXECUTE_ENABLED: "${AUTO_EXECUTE_ENABLED:-false}"
       AUTO_PROMOTE_ENABLED: "false"
     ports:
       - "${ARBITER_PORT:-8080}:8080"

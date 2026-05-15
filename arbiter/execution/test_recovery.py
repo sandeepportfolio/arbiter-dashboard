@@ -91,6 +91,25 @@ async def test_reconcile_marks_orphaned_when_get_order_raises():
 
 
 @pytest.mark.asyncio
+async def test_reconcile_terminalizes_synthetic_placeholder_without_venue_lookup():
+    db_order = _order(
+        order_id="ARB-000001-YES-EDGE-LOST",
+        platform="polymarket",
+        status=OrderStatus.SUBMITTED,
+    )
+    store = _make_store(non_terminal=[db_order])
+    adapter = _make_adapter(get_order_raises=RuntimeError("should not query"))
+    result = await reconcile_non_terminal_orders(store, {"polymarket": adapter})
+
+    assert result == []
+    assert not adapter.get_order.called
+    store.upsert_order.assert_awaited()
+    upserted_order = store.upsert_order.await_args.args[0]
+    assert upserted_order.status == OrderStatus.ABORTED
+    assert "local synthetic placeholder" in (upserted_order.error or "")
+
+
+@pytest.mark.asyncio
 async def test_reconcile_marks_orphaned_when_adapter_returns_not_found():
     db_order = _order(status=OrderStatus.SUBMITTED)
     not_found = _order(status=OrderStatus.FAILED)

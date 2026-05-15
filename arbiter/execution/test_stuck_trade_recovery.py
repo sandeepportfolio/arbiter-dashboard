@@ -220,6 +220,45 @@ async def test_recover_marks_orphan_when_adapter_raises(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_recover_terminalizes_synthetic_placeholder_without_venue_lookup(monkeypatch):
+    rows = [
+        _stuck_arb(
+            arb_id="ARB-4",
+            status="pending",
+            legs=[
+                _leg_row(
+                    order_id="ARB-4-NO-SKIPPED",
+                    platform="polymarket",
+                    side="no",
+                    status="submitted",
+                ),
+            ],
+        ),
+    ]
+    monkeypatch.setattr(
+        "arbiter.execution.stuck_trade_recovery.list_stuck_arbs",
+        AsyncMock(return_value=rows),
+    )
+    persist = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        "arbiter.execution.stuck_trade_recovery._persist_outcome", persist,
+    )
+    adapter = _make_adapter(get_order_raises=RuntimeError("should not query"))
+    store = _make_store()
+
+    outcomes = await recover_stuck_trades(store, {"polymarket": adapter})
+
+    assert len(outcomes) == 1
+    assert not adapter.get_order.called
+    upserted = store.upsert_order.await_args.args[0]
+    assert upserted.status == OrderStatus.ABORTED
+    assert "local synthetic placeholder" in (upserted.error or "")
+    assert outcomes[0].new_status == "failed"
+    assert "local synthetic placeholder" in outcomes[0].leg_updates[0]["note"]
+    persist.assert_awaited()
+
+
+@pytest.mark.asyncio
 async def test_recover_preserves_original_status_in_persist_note(monkeypatch):
     """The original status must end up in the note text so the audit trail
     is preserved even when ``status`` is overwritten."""

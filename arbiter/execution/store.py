@@ -21,6 +21,7 @@ import asyncpg
 from ..sql.connection import create_pool
 from ..sql.migrate import apply_pending
 from .engine import ArbExecution, ExecutionIncident, Order, OrderStatus
+from .order_identity import SYNTHETIC_PLACEHOLDER_ORDER_SUFFIXES
 
 logger = logging.getLogger("arbiter.execution.store")
 
@@ -178,10 +179,15 @@ class ExecutionStore:
     async def list_non_terminal_orders(self) -> List[Order]:
         if self._pool is None:
             await self.connect()
+        synthetic_filters = " ".join(
+            f"AND order_id NOT LIKE '%{suffix}'"
+            for suffix in SYNTHETIC_PLACEHOLDER_ORDER_SUFFIXES
+        )
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT * FROM execution_orders "
                 "WHERE status IN ('pending', 'submitted', 'partial') "
+                f"{synthetic_filters} "
                 "ORDER BY submitted_at ASC"
             )
         return [self._row_to_order(r) for r in rows if r is not None]
