@@ -1,26 +1,24 @@
 {
-  "timestamp": "2026-05-15T00:33:47Z",
+  "timestamp": "2026-05-15T07:54:54Z",
   "agent": "Arbiter end-to-end mapping accuracy and profitability agent",
   "git_state": {
     "branch": "main",
-    "head_before_current_commit": "cb43d99e722be8f59d9517517eeb2203e43fee5b",
-    "origin_main_before_current_commit": "cb43d99e722be8f59d9517517eeb2203e43fee5b",
+    "head_before_current_commit": "cd6207bd5ca0acc1b8aa5b12cc8bc3fb1a0c4876",
+    "origin_main_before_current_commit": "cd6207bd5ca0acc1b8aa5b12cc8bc3fb1a0c4876",
     "ahead_before_current_commit": 0,
     "behind_before_current_commit": 0,
     "dirty_tracked_files": [
-      "arbiter/execution/incidents.py",
-      "arbiter/profitability/validator.py",
-      "arbiter/profitability/test_validator.py",
-      "arbiter/readiness.py",
-      "arbiter/test_readiness.py",
-      "arbiter/tests/test_readiness_bootstrap.py",
+      "arbiter/execution/stuck_trade_recovery.py",
+      "arbiter/execution/test_stuck_trade_recovery.py",
       ".arbiter-scheduled-state/mapping_accuracy_loop.json"
     ],
     "notes": [
       "Fetched origin/main and confirmed local main matched origin/main before this continuation.",
       "No unrelated local changes were present or overwritten.",
       "Auto-execute and auto-promote remained disabled throughout validation.",
-      "Added a second hardening pass so readiness/profitability expand half-recorded summary incidents to their underlying blocker count."
+      "Added a second hardening pass so readiness/profitability expand half-recorded summary incidents to their underlying blocker count.",
+      "Fixed stuck-trade recovery SQL type inference and closed-status terminal handling on 2026-05-15.",
+      "Restored ARB-000053, ARB-000056, and ARB-000203 to closed after the prior faulty live recovery cycle changed them to filled; restoration was guarded by recovery_notes proving original=closed."
     ]
   },
   "runtime_state": {
@@ -52,7 +50,7 @@
       "progress": 0.7705,
       "scan_count": 448,
       "published_opportunities": 0,
-      "completed_executions": 55,
+      "completed_executions": 34,
       "profitable_executions": 26,
       "losing_executions": 8,
       "breakeven_executions": 21,
@@ -63,7 +61,7 @@
         "Need 25 more published opportunities",
         "Profitable execution ratio 47.27% is below the required 65.00%"
       ],
-      "claim": "Not profitable; bootstrap cannot override blocked or not_profitable verdicts."
+      "claim": "Not profitable; recovery loop is clean but critical exposure blockers remain."
     },
     "reconciliation": {
       "configured": true,
@@ -74,9 +72,9 @@
       "total_discrepancy": 0.0
     },
     "portfolio": {
-      "total_exposure": 213.1,
-      "total_open_positions": 83,
-      "total_unhedged": 83,
+      "total_exposure": 206.32,
+      "total_open_positions": 80,
+      "total_unhedged": 80,
       "note": "Open portfolio exposure remains visible and must be reconciled manually before auto-trade can be considered."
     },
     "execution_db": {
@@ -106,6 +104,15 @@
       "errors": 501,
       "open_critical_errors_visible": 33,
       "opportunities": 0
+    },
+    "stuck_trade_recovery": {
+      "enabled": true,
+      "runs_after_rebuild": 1,
+      "inspected_last_run": 80,
+      "updated_last_run": 0,
+      "errors_last_run": 0,
+      "last_duration_s": 60.533,
+      "log_verification": "stuck_trade_recovery: complete inspected=80 updated=0 errors=0; no inconsistent-types or raised errors in post-fix log window"
     }
   },
   "mapping_state": {
@@ -188,6 +195,18 @@
     {
       "issue": "True one-leg filled arbs remain unresolved.",
       "root_cause": "32 pending arbs each have one filled leg and require manual venue/exposure reconciliation; these were intentionally not auto-resolved."
+    },
+    {
+      "issue": "Stuck-trade recovery reported 35 errors per run.",
+      "root_cause": "Recovery persistence used an uncast $2 parameter in multiple Postgres type contexts, producing asyncpg inconsistent type inference errors."
+    },
+    {
+      "issue": "Stuck-trade recovery tried to process closed arbs and briefly changed three closed rows to filled during live verification.",
+      "root_cause": "closed was missing from list_stuck_arbs terminal status filter; code now treats closed as terminal and the three rows were restored to closed with an audit note."
+    },
+    {
+      "issue": "A half-recorded one-leg filled arb could derive to filled if the SQL error did not stop persistence.",
+      "root_cause": "_derive_arb_status_from_legs did not fail closed for fewer than two persisted legs with a FILLED leg; it now leaves those as manual blockers."
     }
   ],
   "fixes_made": [
@@ -200,7 +219,11 @@
     "Added shared effective_critical_incident_count helper to expand half-recorded summary incidents to their underlying blocker count.",
     "Readiness incident gate now reports critical_incident_count=32 and blocks with \"32 critical incidents remain unresolved\" instead of one terse summary incident.",
     "Profitability validator now counts half-recorded summary incidents by underlying blocker count, so critical_incidents=32 and the blocked reason is explicit.",
-    "Phase 5 bootstrap readiness override now only applies to collecting_evidence; blocked and not_profitable verdicts fail closed."
+    "Phase 5 bootstrap readiness override now only applies to collecting_evidence; blocked and not_profitable verdicts fail closed.",
+    "Stuck-trade recovery now leaves single filled-leg arbs unchanged as manual exposure blockers instead of deriving them to filled.",
+    "Stuck-trade recovery persistence casts the status parameter as text to avoid asyncpg/Postgres inconsistent type inference errors.",
+    "Stuck-trade recovery now excludes closed arbs from the stuck set and treats closed as terminal.",
+    "Restored ARB-000053, ARB-000056, and ARB-000203 to closed after verifying the prior recovery note recorded original=closed."
   ],
   "tests_run": [
     {
@@ -242,6 +265,26 @@
       "command": "live API/DB validation after rebuild against readiness, profitability, reconciliation, settings, mappings, /ops, and Postgres recovery summaries",
       "passes": 3,
       "result": "passed in each pass; readiness=false; readiness blocks profitability and 32 critical incidents; profitability=blocked; critical_incidents=32; confirmed_auto_trade_enabled=0"
+    },
+    {
+      "command": "python -m pytest arbiter/execution/test_stuck_trade_recovery.py -q",
+      "passes": 3,
+      "result": "13 passed in each pass"
+    },
+    {
+      "command": "python -m pytest arbiter/mapping tests/test_mapping_validation.py tests/test_safety_guards.py -q",
+      "passes": 3,
+      "result": "173 passed in each pass after stuck-recovery hardening"
+    },
+    {
+      "command": "python -m pytest -q",
+      "passes": 3,
+      "result": "899 passed, 88 skipped, 1 warning in each pass"
+    },
+    {
+      "command": "live API/DB validation after rebuild against readiness, profitability, reconciliation, mappings, portfolio, stuck-trade recovery, /ops, and Postgres recovery summaries",
+      "passes": 3,
+      "result": "passed in each pass; stuck recovery errors_last_run=0 updated_last_run=0 inspected_last_run=80; readiness=false; profitability=blocked; critical_incidents=32; confirmed_auto_trade_enabled=0"
     }
   ],
   "api_and_website_visibility": {
@@ -258,7 +301,9 @@
     "discovery_status": "visible; idle",
     "mappings_confirmed": "visible; count=17; auto_enabled=0; criteria present and identical",
     "mappings_candidate_review_rejected_expired": "visible; all returned rows have allow_auto_trade=false",
-    "ops_page": "HTTP 200; operator desk rendered"
+    "ops_page": "HTTP 200; operator desk rendered",
+    "stuck_trade_recovery": "visible; enabled=true; inspected_last_run=80; updated_last_run=0; errors_last_run=0",
+    "portfolio": "visible; total_open_positions=80; total_unhedged=80; total_exposure=206.32"
   },
   "remaining_blockers": [
     "32 true one-leg filled half-recorded arbs remain pending with filled notional 38.56 and require manual venue/exposure reconciliation.",
@@ -266,6 +311,8 @@
     "Profitability verdict is blocked; do not claim profitability.",
     "No confirmed mappings have allow_auto_trade=true; auto-trade remains intentionally disabled.",
     "There are no active/published opportunities; live profitable executable liquidity is not proven.",
-    "Bootstrap no longer masks blocked/not_profitable validator verdicts; profitability must become genuinely unblocked before readiness can pass."
+    "Bootstrap no longer masks blocked/not_profitable validator verdicts; profitability must become genuinely unblocked before readiness can pass.",
+    "Stuck-trade recovery loop is now clean, but 32 true one-leg half-recorded arbs remain manual critical blockers.",
+    "80 open/unhedged portfolio positions remain after restoring closed rows and excluding closed arbs from stuck recovery."
   ]
 }

@@ -16,6 +16,8 @@ from arbiter.execution.engine import Order, OrderStatus
 from arbiter.execution.stuck_trade_recovery import (
     StuckTradeRecoveryStats,
     _derive_arb_status_from_legs,
+    _persist_outcome,
+    list_stuck_arbs,
     recover_stuck_trades,
 )
 
@@ -117,6 +119,12 @@ def test_derive_status_one_filled_one_aborted_is_recovering():
     assert _derive_arb_status_from_legs(
         [OrderStatus.FILLED, OrderStatus.ABORTED]
     ) == "recovering"
+
+
+def test_derive_status_single_filled_leg_stays_manual():
+    # A half-recorded arb with one filled leg is real exposure, not a filled
+    # arb. Startup recovery must keep it as a manual blocker.
+    assert _derive_arb_status_from_legs([OrderStatus.FILLED]) == ""
 
 
 def test_derive_status_unchanged_when_leg_nonterminal():
@@ -280,3 +288,86 @@ async def test_recover_returns_empty_list_when_list_raises(monkeypatch):
     out = await recover_stuck_trades(_make_store(), {}, stats=stats)
     assert out == []
     assert stats.errors_last_run == 1
+
+
+@pytest.mark.asyncio
+async def test_persist_outcome_casts_new_status_for_postgres_type_inference():
+    class CaptureConn:
+        def __init__(self):
+            self.calls = []
+
+        async def execute(self, sql, *params):
+            self.calls.append((sql, params))
+
+    class AcquireCtx:
+        def __init__(self, conn):
+            self.conn = conn
+
+        async def __aenter__(self):
+            return self.conn
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class CapturePool:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def acquire(self):
+            return AcquireCtx(self.conn)
+
+    conn = CaptureConn()
+    store = MagicMock()
+    store._pool = CapturePool(conn)
+
+    await _persist_outcome(
+        store,
+        arb_id="ARB-1",
+        new_status="filled",
+        original_status="pending",
+        note="recovery_check",
+        now_ts=123.0,
+    )
+
+    sql, params = conn.calls[0]
+    assert "$2::text" in sql
+    assert params[:2] == ("ARB-1", "filled")
+
+
+@pytest.mark.asyncio
+async def test_list_stuck_arbs_treats_closed_as_terminal():
+    class CaptureConn:
+        def __init__(self):
+            self.calls = []
+
+        async def fetch(self, sql, *params):
+            self.calls.append((sql, params))
+            return []
+
+    class AcquireCtx:
+        def __init__(self, conn):
+            self.conn = conn
+
+        async def __aenter__(self):
+            return self.conn
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class CapturePool:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def acquire(self):
+            return AcquireCtx(self.conn)
+
+    conn = CaptureConn()
+    store = MagicMock()
+    store._pool = CapturePool(conn)
+
+    rows = await list_stuck_arbs(store, max_age_seconds=86400)
+
+    assert rows == []
+    sql, params = conn.calls[0]
+    assert "'closed'" in sql
+    assert params == (86400.0,)

@@ -38,7 +38,13 @@ from .store import ExecutionStore
 logger = logging.getLogger("arbiter.execution.stuck_trade_recovery")
 
 
-_TERMINAL_ARB_STATUSES = frozenset({"filled", "failed", "simulated", "cancelled"})
+_TERMINAL_ARB_STATUSES = frozenset({
+    "filled",
+    "failed",
+    "simulated",
+    "cancelled",
+    "closed",
+})
 _TERMINAL_LEG_STATUSES = frozenset({
     OrderStatus.FILLED,
     OrderStatus.CANCELLED,
@@ -111,7 +117,7 @@ async def list_stuck_arbs(
                    last_checked_at, recovery_notes,
                    EXTRACT(EPOCH FROM (NOW() - created_at)) AS age_seconds
               FROM execution_arbs
-             WHERE status NOT IN ('filled','failed','simulated','cancelled')
+             WHERE status NOT IN ('filled','failed','simulated','cancelled','closed')
                AND EXTRACT(EPOCH FROM (NOW() - created_at)) >= $1
              ORDER BY created_at ASC
             """,
@@ -179,10 +185,17 @@ def _derive_arb_status_from_legs(leg_statuses: List[OrderStatus]) -> str:
       - either FAILED/CANCELLED/ABORTED with no surviving FILLED → ``failed``
       - one FILLED + the other terminal-not-filled → ``recovering`` stays put
         UNLESS the survivor is already aborted/cancelled — then ``failed``
+      - fewer than two persisted legs plus a FILLED leg → manual blocker
       - any leg still non-terminal → leave the status alone (we did not get
         a clean answer from the venue and the operator must investigate)
     """
     filled = sum(1 for s in leg_statuses if s == OrderStatus.FILLED)
+    if len(leg_statuses) < 2:
+        if filled:
+            return ""
+        if leg_statuses and all(s in _TERMINAL_LEG_STATUSES for s in leg_statuses):
+            return "failed"
+        return ""
     has_nonterminal = any(s not in _TERMINAL_LEG_STATUSES for s in leg_statuses)
     if has_nonterminal:
         return ""  # caller keeps original status; will retry on next run
@@ -234,10 +247,10 @@ async def _persist_outcome(
     if new_status:
         sql = """
             UPDATE execution_arbs
-               SET status = $2,
+               SET status = $2::text,
                    last_checked_at = NOW(),
                    updated_at = NOW(),
-                   closed_at = CASE WHEN $2 IN ('filled','failed','simulated','cancelled')
+                   closed_at = CASE WHEN $2::text IN ('filled','failed','simulated','cancelled','closed')
                                     THEN COALESCE(closed_at, NOW())
                                     ELSE closed_at END,
                    recovery_notes = CASE
