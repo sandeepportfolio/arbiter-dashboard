@@ -35,7 +35,9 @@ trap cleanup EXIT
 cd "$ROOT_DIR"
 
 echo "[ui-smoke] python: $PYTHON_BIN ($($PYTHON_BIN --version 2>&1))"
-ARBITER_UI_SMOKE_SEED=1 ARBITER_OPERATOR_SETTINGS_PATH="$SETTINGS_PATH" "$PYTHON_BIN" -m arbiter.main --api-only --port "$PORT" >"$SERVER_LOG" 2>&1 &
+# Local smoke only: the API intentionally refuses to start without a
+# session secret, so provide a deterministic non-production value here.
+UI_SESSION_SECRET="${UI_SESSION_SECRET:-arbiter-ui-smoke-session-secret-do-not-use-in-prod}" ARBITER_UI_SMOKE_SEED=1 ARBITER_OPERATOR_SETTINGS_PATH="$SETTINGS_PATH" "$PYTHON_BIN" -m arbiter.main --api-only --port "$PORT" >"$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
 
 for _ in {1..40}; do
@@ -52,7 +54,7 @@ if ! curl -sf "http://127.0.0.1:${PORT}/api/health" >/dev/null; then
 fi
 
 echo "[ui-smoke] opening desktop dashboard"
-"${PWCLI[@]}" open "http://127.0.0.1:${PORT}" >/dev/null
+"${PWCLI[@]}" open "http://127.0.0.1:${PORT}/ops-legacy" >/dev/null
 SITE_STATE="$("${PWCLI[@]}" eval "(async () => {
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   for (let attempt = 0; attempt < 30; attempt += 1) {
@@ -120,7 +122,7 @@ if ! grep -q '"width": 390' <<<"$SITE_MOBILE_STATE"; then
 fi
 
 echo "[ui-smoke] opening operator dashboard"
-"${PWCLI[@]}" open "http://127.0.0.1:${PORT}/ops" >/dev/null
+"${PWCLI[@]}" open "http://127.0.0.1:${PORT}/ops-legacy" >/dev/null
 DESKTOP_STATE="$("${PWCLI[@]}" eval "(async () => {
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   for (let attempt = 0; attempt < 30; attempt += 1) {

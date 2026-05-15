@@ -50,6 +50,9 @@ else
 fi
 
 echo "[quick-check] smoke test API server"
+# Local smoke only: the API now correctly fails closed without a session
+# secret, so provide a deterministic non-production value for this check.
+export UI_SESSION_SECRET="${UI_SESSION_SECRET:-arbiter-quick-check-session-secret-do-not-use-in-prod}"
 "$PYTHON_BIN" -m arbiter.main --api-only --port "$PORT" >"$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
 

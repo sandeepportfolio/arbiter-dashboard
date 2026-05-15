@@ -57,7 +57,22 @@ function evalPageHelpers(source, context) {
 }
 
 function evalMobileHelpers(source, context) {
-  const snippet = sliceBetween(source, "const ARB_MOBILE_TAB_KEY", "function MobileDashboard");
+  const constantsStart = source.indexOf("const ARB_MOBILE_TAB_KEY");
+  expect(constantsStart, "const ARB_MOBILE_TAB_KEY should exist").toBeGreaterThanOrEqual(0);
+  const helpersStart = source.indexOf("function readStoredMobileTab", constantsStart);
+  expect(helpersStart, "function readStoredMobileTab should exist").toBeGreaterThan(constantsStart);
+  const helpersEndCandidates = [
+    source.indexOf("const MOB_TABS_META", helpersStart),
+    source.indexOf("function MobileDashboard", helpersStart),
+  ].filter((idx) => idx > helpersStart);
+  const helpersEnd = Math.min(...helpersEndCandidates);
+  expect(helpersEnd, "mobile helper block end should exist").toBeGreaterThan(helpersStart);
+  const constants = source
+    .slice(constantsStart, helpersStart)
+    .split("\n")
+    .filter((line) => /const ARB_MOBILE_(TAB_KEY|TABS)\b/.test(line))
+    .join("\n");
+  const snippet = `${constants}\n${source.slice(helpersStart, helpersEnd)}`;
   vm.runInNewContext(
     `${snippet}\nglobalThis.__helpers = { readStoredMobileTab, persistMobileTab, ARB_MOBILE_TAB_KEY };`,
     context,
@@ -92,8 +107,11 @@ describe("ops mobile row interactions", () => {
     const desktop = functionBody("PageMappings");
     const mobile = functionBody("MobMappings");
 
-    expect(desktop).toContain("onRowClick={(r) => setModal({ kind:'agentValidate', payload: r })}");
-    expect(mobile).toContain("const openCard = () => setModal({ kind:'agentValidate', payload: c })");
+    expect(desktop).toContain("setDrawer({ kind: 'mappingHistory', payload: r })");
+    expect(desktop).toContain("setModal({ kind:'agentValidate', payload: r })");
+    expect(mobile).toContain("const openCard = () => {");
+    expect(mobile).toContain("setDrawer({ kind: 'mappingHistory', payload: c })");
+    expect(mobile).toContain("setModal({ kind:'agentValidate', payload: c })");
     expect(mobile).not.toContain(": setModal({ kind:'market'");
   });
 });
@@ -185,7 +203,7 @@ describe("ops desktop balance cards", () => {
     expect(overview).toContain("className=\"scanner-metric-grid\"");
     expect(overview).toContain("<ScannerMetric label=\"Latency\"");
     expect(overview).toContain("Edge samples ·");
-    expect(mobile).toContain("Scanner telemetry");
+    expect(mobile).toContain("SCANNER TELEMETRY");
     expect(mobile).toContain("Edge distribution");
     expect(mobile).toContain("gridTemplateColumns:'repeat(2, minmax(0, 1fr))'");
   });

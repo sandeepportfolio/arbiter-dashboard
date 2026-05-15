@@ -41,7 +41,9 @@ trap cleanup EXIT
 cd "$ROOT_DIR"
 
 echo "[static-smoke] python: $PYTHON_BIN ($($PYTHON_BIN --version 2>&1))"
-ARBITER_UI_SMOKE_SEED=1 ARBITER_OPERATOR_SETTINGS_PATH="$SETTINGS_PATH" "$PYTHON_BIN" -m arbiter.main --api-only --port "$API_PORT" >"$API_LOG" 2>&1 &
+# Local smoke only: the API intentionally refuses to start without a
+# session secret, so provide a deterministic non-production value here.
+UI_SESSION_SECRET="${UI_SESSION_SECRET:-arbiter-static-smoke-session-secret-do-not-use-in-prod}" ARBITER_UI_SMOKE_SEED=1 ARBITER_OPERATOR_SETTINGS_PATH="$SETTINGS_PATH" "$PYTHON_BIN" -m arbiter.main --api-only --port "$API_PORT" >"$API_LOG" 2>&1 &
 API_PID=$!
 "$PYTHON_BIN" -m http.server "$STATIC_PORT" >"$STATIC_LOG" 2>&1 &
 STATIC_PID=$!

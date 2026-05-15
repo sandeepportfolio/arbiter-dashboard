@@ -31,6 +31,10 @@ _CRYPTO_POLY_REACH_RE = re.compile(
     r"-by-(?P<month>[a-z]+)-(?P<day>\d{1,2})-(?P<year>20\d{2})$"
 )
 _GDP_KALSHI_RE = re.compile(r"^KXGDP-(?P<yy>\d{2})(?P<mon>[A-Z]{3})(?P<dd>\d{2})-T(?P<threshold>[0-9.]+)$")
+# New Kalshi GDP annual format: KXGDPYEAR-YY-T{threshold} or KXGDPYEAR-YY-B{threshold}
+_GDP_KALSHI_YEAR_RE = re.compile(
+    r"^KXGDPYEAR-(?P<yy>\d{2})-(?:T|B)(?P<threshold>[0-9]+(?:\.[0-9]+)?)$"
+)
 _GDP_POLY_RE = re.compile(
     r"^will-us-gdp-growth-in-(?P<period>q[1-4]-20\d{2}|20\d{2})-be-"
     r"(?P<direction>greater-than|less-than|between)-(?P<threshold>[0-9]+pt[0-9]+)"
@@ -43,6 +47,23 @@ _FED_KALSHI_RE = re.compile(
 _FED_POLY_RE = re.compile(
     r"^rdc-usfed-fomc-(?P<date>20\d{2}-\d{2}-\d{2})-"
     r"(?P<outcome>maintains|cut25bps|cutgt25bps|hike25bps|hikegt25bps)$"
+)
+# Fed rate-threshold markets — "will the rate be/reach X by date"
+# Kalshi format: KXFED-YYMON-T{threshold}  (e.g. KXFED-26DEC-T4.25)
+_FED_KALSHI_RATE_RE = re.compile(
+    r"^KXFED-(?P<yy>\d{2})(?P<mon>[A-Z]{3})-T(?P<threshold>[0-9]+(?:\.[0-9]+)?)$"
+)
+# Poly format A: will-the-upper-bound-of-the-target-federal-funds-rate-be-Xpt25-at-the-end-of-YYYY
+_FED_POLY_RATE_EOY_RE = re.compile(
+    r"^will-the-upper-bound-of-the-target-federal-funds-rate-be-"
+    r"(?P<threshold>[0-9]+pt[0-9]+)-at-the-end-of-(?P<year>20\d{2})"
+    r"(?:-\d+)*$"
+)
+# Poly format B: will-the-feds-{upper|lower}-bound-reach-Xpt25-or-{higher|lower}-before-YYYY
+_FED_POLY_REACH_RE = re.compile(
+    r"^will-the-feds-(?P<bound>upper|lower)-bound-reach-"
+    r"(?P<threshold>[0-9]+pt[0-9]+)-or-(?:higher|lower)-before-(?P<year>20\d{2})"
+    r"(?:-\d+)*$"
 )
 _CPI_KALSHI_RE = re.compile(
     r"^KXCPI(?P<basis>YOY|MOM)?-(?P<yy>\d{2})(?P<mon>[A-Z]{3})(?P<dd>\d{2})-"
@@ -179,6 +200,7 @@ def fingerprint_kalshi_market(market: dict) -> MarketFingerprint | None:
         or _fingerprint_kalshi_crypto(market)
         or _fingerprint_kalshi_gdp(market)
         or _fingerprint_kalshi_fed_decision(market)
+        or _fingerprint_kalshi_fed_rate(market)
         or _fingerprint_kalshi_cpi(market)
         or _fingerprint_kalshi_unemployment(market)
     )
@@ -215,6 +237,7 @@ def fingerprint_polymarket_market(market: dict) -> MarketFingerprint | None:
         or _fingerprint_poly_crypto(market)
         or _fingerprint_poly_gdp(market)
         or _fingerprint_poly_fed_decision(market)
+        or _fingerprint_poly_fed_rate(market)
         or _fingerprint_poly_cpi(market)
         or _fingerprint_poly_unemployment(market)
     )
@@ -358,27 +381,51 @@ def _fingerprint_poly_crypto(market: dict) -> MarketFingerprint | None:
 
 
 def _fingerprint_kalshi_gdp(market: dict) -> MarketFingerprint | None:
-    match = _GDP_KALSHI_RE.match(str(market.get("ticker", "") or "").upper())
-    if not match:
-        return None
-    title = normalize_market_text(
-        " ".join(str(market.get(field, "") or "") for field in ("title", "subtitle", "rules_primary"))
-    )
-    period_match = re.search(r"\b(q[1-4])\s*(20\d{2})\b", title)
-    period = f"{period_match.group(1)}-{period_match.group(2)}" if period_match else f"20{match.group('yy')}"
-    direction = "above"
-    if "less than" in title or "below" in title:
-        direction = "below"
-    return MarketFingerprint(
-        category="economics",
-        subcategory="us",
-        entity=f"gdp-growth-{period}",
-        date=_kalshi_date(match.group("yy"), match.group("mon"), match.group("dd")) or "",
-        metric=direction,
-        threshold=_normalize_decimal(match.group("threshold")),
-        outcome="yes",
-        source="bea",
-    )
+    ticker = str(market.get("ticker", "") or "").upper()
+    # Try original quarterly format first: KXGDP-YYMONDD-T{threshold}
+    match = _GDP_KALSHI_RE.match(ticker)
+    if match:
+        title = normalize_market_text(
+            " ".join(str(market.get(field, "") or "") for field in ("title", "subtitle", "rules_primary"))
+        )
+        period_match = re.search(r"\b(q[1-4])\s*(20\d{2})\b", title)
+        period = f"{period_match.group(1)}-{period_match.group(2)}" if period_match else f"20{match.group('yy')}"
+        direction = "above"
+        if "less than" in title or "below" in title:
+            direction = "below"
+        return MarketFingerprint(
+            category="economics",
+            subcategory="us",
+            entity=f"gdp-growth-{period}",
+            date=_kalshi_date(match.group("yy"), match.group("mon"), match.group("dd")) or "",
+            metric=direction,
+            threshold=_normalize_decimal(match.group("threshold")),
+            outcome="yes",
+            source="bea",
+        )
+    # Try new annual format: KXGDPYEAR-YY-T/B{threshold}
+    match = _GDP_KALSHI_YEAR_RE.match(ticker)
+    if match:
+        year = f"20{match.group('yy')}"
+        title = normalize_market_text(
+            " ".join(str(market.get(field, "") or "") for field in ("title", "subtitle", "rules_primary"))
+        )
+        direction = "above"
+        if "less than" in title or "below" in title or "under" in title:
+            direction = "below"
+        elif "between" in title:
+            direction = "between"
+        return MarketFingerprint(
+            category="economics",
+            subcategory="us",
+            entity=f"gdp-growth-{year}",
+            date="",
+            metric=direction,
+            threshold=_normalize_decimal(match.group("threshold")),
+            outcome="yes",
+            source="bea",
+        )
+    return None
 
 
 def _fingerprint_poly_gdp(market: dict) -> MarketFingerprint | None:
@@ -440,6 +487,74 @@ def _fingerprint_poly_fed_decision(market: dict) -> MarketFingerprint | None:
         outcome=_normalize_fed_outcome(match.group("outcome")),
         source="federal_reserve",
     )
+
+
+def _fingerprint_kalshi_fed_rate(market: dict) -> MarketFingerprint | None:
+    """Fed rate-threshold markets: KXFED-YYMON-T{threshold}."""
+    ticker = str(market.get("ticker", "") or "").upper()
+    match = _FED_KALSHI_RATE_RE.match(ticker)
+    if not match:
+        return None
+    yy, mon = match.group("yy"), match.group("mon")
+    month_num = _KALSHI_MONTHS.get(mon)
+    if not month_num:
+        return None
+    threshold = _normalize_decimal(match.group("threshold"))
+    # Date is year-month (no day in these tickers)
+    date_str = f"20{yy}-{month_num}"
+    return MarketFingerprint(
+        category="economics",
+        subcategory="us",
+        entity="fed-rate-level",
+        date=date_str,
+        metric="fed-rate-threshold",
+        threshold=threshold,
+        outcome="yes",
+        source="federal_reserve",
+    )
+
+
+def _fingerprint_poly_fed_rate(market: dict) -> MarketFingerprint | None:
+    """Fed rate-threshold Polymarket slugs (end-of-year and reach-before variants)."""
+    slug = str(market.get("slug", "") or "").lower()
+    # Try end-of-year format first
+    match = _FED_POLY_RATE_EOY_RE.match(slug)
+    if match:
+        threshold = _normalize_decimal(match.group("threshold"))
+        year = match.group("year")
+        return MarketFingerprint(
+            category="economics",
+            subcategory="us",
+            entity="fed-rate-level",
+            date=f"{year}-12",  # end-of-year → December
+            metric="fed-rate-threshold",
+            threshold=threshold,
+            outcome="yes",
+            source="federal_reserve",
+        )
+    # Try reach-before format
+    match = _FED_POLY_REACH_RE.match(slug)
+    if match:
+        threshold = _normalize_decimal(match.group("threshold"))
+        year = match.group("year")
+        bound = match.group("bound")
+        # "before 2027" with upper-bound → maps to year-end of previous year (Dec)
+        # or could be any month; Kalshi encodes the specific month.
+        # Use "YYYY-04" for April deadlines (common pattern) or just year
+        # Actually: Kalshi KXFED-27APR-T4.25 = "reach 4.25 before Apr 2027"
+        # Poly "reach-4pt25-or-higher-before-2027" = same, deadline is ~end of year
+        # For matching, encode as YYYY + bound info in entity
+        return MarketFingerprint(
+            category="economics",
+            subcategory="us",
+            entity=f"fed-rate-{bound}-reach",
+            date=year,
+            metric="fed-rate-threshold",
+            threshold=threshold,
+            outcome="yes",
+            source="federal_reserve",
+        )
+    return None
 
 
 def _fingerprint_kalshi_cpi(market: dict) -> MarketFingerprint | None:
