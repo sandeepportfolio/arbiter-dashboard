@@ -1,23 +1,26 @@
 {
-  "timestamp": "2026-05-14T23:03:22Z",
+  "timestamp": "2026-05-15T00:33:47Z",
   "agent": "Arbiter end-to-end mapping accuracy and profitability agent",
   "git_state": {
     "branch": "main",
-    "head_before_current_commit": "8c823e785f69f9e92d0c2afc844c1990d483c92b",
-    "origin_main_before_current_commit": "8c823e785f69f9e92d0c2afc844c1990d483c92b",
+    "head_before_current_commit": "cb43d99e722be8f59d9517517eeb2203e43fee5b",
+    "origin_main_before_current_commit": "cb43d99e722be8f59d9517517eeb2203e43fee5b",
     "ahead_before_current_commit": 0,
     "behind_before_current_commit": 0,
     "dirty_tracked_files": [
-      "arbiter/execution/recovery.py",
-      "arbiter/execution/store.py",
-      "arbiter/execution/test_recovery.py",
-      "arbiter/execution/test_store.py",
+      "arbiter/execution/incidents.py",
+      "arbiter/profitability/validator.py",
+      "arbiter/profitability/test_validator.py",
+      "arbiter/readiness.py",
+      "arbiter/test_readiness.py",
+      "arbiter/tests/test_readiness_bootstrap.py",
       ".arbiter-scheduled-state/mapping_accuracy_loop.json"
     ],
     "notes": [
       "Fetched origin/main and confirmed local main matched origin/main before this continuation.",
       "No unrelated local changes were present or overwritten.",
-      "Auto-execute and auto-promote remained disabled throughout validation."
+      "Auto-execute and auto-promote remained disabled throughout validation.",
+      "Added a second hardening pass so readiness/profitability expand half-recorded summary incidents to their underlying blocker count."
     ]
   },
   "runtime_state": {
@@ -37,8 +40,10 @@
       "blocking_reasons": [
         "No confirmed auto-trade mappings are enabled",
         "Profitability verdict is blocked",
-        "1 critical incidents remain unresolved"
-      ]
+        "32 critical incidents remain unresolved"
+      ],
+      "profitability_check": "fail: Profitability verdict is blocked",
+      "incidents_check": "fail: 32 critical incidents remain unresolved"
     },
     "profitability": {
       "verdict": "blocked",
@@ -52,13 +57,13 @@
       "losing_executions": 8,
       "breakeven_executions": 21,
       "total_realized_pnl": 135.3795,
-      "critical_incidents": 1,
+      "critical_incidents": 32,
       "reasons": [
         "Critical incidents 1 exceed the allowed 0",
         "Need 25 more published opportunities",
         "Profitable execution ratio 47.27% is below the required 65.00%"
       ],
-      "claim": "Not profitable; do not enable auto-trade."
+      "claim": "Not profitable; bootstrap cannot override blocked or not_profitable verdicts."
     },
     "reconciliation": {
       "configured": true,
@@ -166,9 +171,9 @@
     "resolution_auditor": "HOLD: confirmed mappings have resolution criteria and identical status; candidates/review rows are not promoted.",
     "polarity_auditor": "HOLD: no polarity mismatch was promoted or auto-enabled.",
     "liquidity_auditor": "NO_AUTO_TRADE: no active executable opportunities; live liquidity/profitability not proven.",
-    "profitability_auditor": "NO: profitability verdict is blocked and is_profitable=false.",
+    "profitability_auditor": "NO: profitability verdict is blocked, is_profitable=false, and critical_incidents=32.",
     "failure_auditor": "NO_AUTO_TRADE: 32 true one-leg exposure blockers and 179 failed-trade rows remain visible.",
-    "skeptic_auditor": "NO: unresolved critical recovery incident summary remains; fail closed.",
+    "skeptic_auditor": "NO: startup recovery summary expands to 32 critical blockers; bootstrap cannot override blocked/not_profitable verdicts.",
     "promotion_rule": "No mapping promoted because all validators did not return YES."
   },
   "failures_and_root_causes": [
@@ -191,7 +196,11 @@
     "Added ExecutionStore.resolve_half_recorded_incidents to resolve incidents for auto-closed no-exposure stubs.",
     "Added ExecutionStore.resolve_stale_half_recorded_incidents to clear open half-recorded incidents no longer present in active recovery output.",
     "reconcile_half_recorded_arbs now partitions no-exposure stubs from exposure-bearing blockers and emits critical incidents only for the latter.",
-    "Recovery incident metadata now includes filled_leg_count and filled_notional so operators can prioritize real exposure."
+    "Recovery incident metadata now includes filled_leg_count and filled_notional so operators can prioritize real exposure.",
+    "Added shared effective_critical_incident_count helper to expand half-recorded summary incidents to their underlying blocker count.",
+    "Readiness incident gate now reports critical_incident_count=32 and blocks with \"32 critical incidents remain unresolved\" instead of one terse summary incident.",
+    "Profitability validator now counts half-recorded summary incidents by underlying blocker count, so critical_incidents=32 and the blocked reason is explicit.",
+    "Phase 5 bootstrap readiness override now only applies to collecting_evidence; blocked and not_profitable verdicts fail closed."
   ],
   "tests_run": [
     {
@@ -213,12 +222,32 @@
       "command": "live API/DB validation against health, readiness, profitability, reconciliation, metrics, opportunities, trades, failed-trades, errors, safety events, discovery status, settings, portfolio, mapping endpoints, /ops, and Postgres recovery summaries",
       "passes": 3,
       "result": "passed in each pass; readiness=false, profitability=blocked, reconciliation healthy, confirmed_auto_trade_enabled=0, open_half_recorded=32, stale_half_incidents=0"
+    },
+    {
+      "command": "python -m pytest arbiter/test_readiness.py arbiter/tests/test_readiness_bootstrap.py arbiter/profitability/test_validator.py -q",
+      "passes": 3,
+      "result": "19 passed in each pass"
+    },
+    {
+      "command": "python -m pytest arbiter/mapping tests/test_mapping_validation.py tests/test_safety_guards.py -q",
+      "passes": 3,
+      "result": "173 passed in each pass after readiness/profitability hardening"
+    },
+    {
+      "command": "python -m pytest -q",
+      "passes": 3,
+      "result": "896 passed, 88 skipped, 1 warning in each pass"
+    },
+    {
+      "command": "live API/DB validation after rebuild against readiness, profitability, reconciliation, settings, mappings, /ops, and Postgres recovery summaries",
+      "passes": 3,
+      "result": "passed in each pass; readiness=false; readiness blocks profitability and 32 critical incidents; profitability=blocked; critical_incidents=32; confirmed_auto_trade_enabled=0"
     }
   ],
   "api_and_website_visibility": {
     "health": "ok; service_ready=true; live_trading_ready=false",
-    "readiness": "visible; blocked by no auto-trade mappings, blocked profitability, and critical recovery incident summary",
-    "profitability": "visible; verdict=blocked; is_profitable=false",
+    "readiness": "visible; blocked by no auto-trade mappings, blocked profitability, and 32 critical recovery incidents",
+    "profitability": "visible; verdict=blocked; is_profitable=false; critical_incidents=32",
     "reconciliation": "visible; healthy; flag_count=0",
     "metrics": "visible; Prometheus metrics returned arbiter_build_info",
     "opportunities": "visible; count=0",
@@ -236,6 +265,7 @@
     "83 open/unhedged portfolio positions remain visible and must be understood before any auto-trade consideration.",
     "Profitability verdict is blocked; do not claim profitability.",
     "No confirmed mappings have allow_auto_trade=true; auto-trade remains intentionally disabled.",
-    "There are no active/published opportunities; live profitable executable liquidity is not proven."
+    "There are no active/published opportunities; live profitable executable liquidity is not proven.",
+    "Bootstrap no longer masks blocked/not_profitable validator verdicts; profitability must become genuinely unblocked before readiness can pass."
   ]
 }

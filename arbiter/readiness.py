@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from .config.settings import ArbiterConfig, PolymarketUSConfig, iter_confirmed_market_mappings
+from .execution.incidents import effective_critical_incident_count
 
 
 @dataclass
@@ -267,16 +268,16 @@ class OperationalReadiness:
         # ``collecting_evidence`` once the historical count reaches the
         # original cap.  Cap raised to 50 to leave operator headroom for tuning
         # ``min_profitable_execution_ratio`` evidence.
-        # This bootstrap short-circuits BEFORE the validated_profitable and
-        # blocked branches: operator setting the env var = accepting the
-        # override (05-RESEARCH.md Open Question #6).
+        # This bootstrap only bypasses the initial collecting_evidence
+        # chicken-and-egg state. A blocked/not_profitable validator verdict is
+        # hard evidence of a NO and must fail closed.
         bootstrap_raw = os.getenv("PHASE5_BOOTSTRAP_TRADES")
         if bootstrap_raw:
             try:
                 bootstrap_limit = int(bootstrap_raw)
             except ValueError:
                 bootstrap_limit = 0
-            if 1 <= bootstrap_limit <= 50:
+            if snapshot.verdict == "collecting_evidence" and 1 <= bootstrap_limit <= 50:
                 completed = int(getattr(snapshot, "completed_executions", 0) or 0)
                 if completed < bootstrap_limit:
                     remaining = bootstrap_limit - completed
@@ -335,12 +336,17 @@ class OperationalReadiness:
         open_incidents = [incident for incident in incidents if getattr(incident, "status", "open") != "resolved"]
         critical = [incident for incident in open_incidents if str(getattr(incident, "severity", "")).lower() == "critical"]
         if critical:
+            critical_count = effective_critical_incident_count(critical)
             return ReadinessCheck(
                 key="incidents",
                 status="fail",
-                summary=f"{len(critical)} critical incidents remain unresolved",
+                summary=f"{critical_count} critical incidents remain unresolved",
                 blocking=True,
-                details={"critical_incidents": [incident.to_dict() for incident in critical[:5]]},
+                details={
+                    "critical_incident_count": critical_count,
+                    "runtime_critical_incident_count": len(critical),
+                    "critical_incidents": [incident.to_dict() for incident in critical[:5]],
+                },
             )
         if open_incidents:
             return ReadinessCheck(

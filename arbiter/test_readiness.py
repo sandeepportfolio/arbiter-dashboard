@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from arbiter.config.settings import ArbiterConfig, MARKET_MAP, load_config
+from arbiter.execution.engine import ExecutionIncident
 from arbiter.readiness import OperationalReadiness
 from arbiter.scanner.arbitrage import ArbitrageOpportunity
 
@@ -152,3 +153,30 @@ def test_allow_execution_stays_closed_until_profitability_validates():
             MARKET_MAP.pop("TEST_READY", None)
         else:
             MARKET_MAP["TEST_READY"] = original
+
+
+def test_incident_check_counts_half_recorded_summary_arb_count():
+    incident = ExecutionIncident(
+        incident_id="INC-HALF-RECORDED-SUMMARY",
+        arb_id="MULTIPLE",
+        canonical_id="HALF_RECORDED_ARBS",
+        severity="critical",
+        message="32 half-recorded arb(s) remain unresolved after startup recovery.",
+        timestamp=1.0,
+        metadata={
+            "event_type": "half_recorded_arb_summary",
+            "count": 32,
+            "sample_arb_ids": ["ARB-000220"],
+        },
+    )
+    readiness = OperationalReadiness(
+        ArbiterConfig(),
+        engine=SimpleNamespace(incidents=[incident]),
+    )
+
+    check = readiness._check_incidents()
+
+    assert check.status == "fail"
+    assert check.summary == "32 critical incidents remain unresolved"
+    assert check.details["critical_incident_count"] == 32
+    assert check.details["runtime_critical_incident_count"] == 1

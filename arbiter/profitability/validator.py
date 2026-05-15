@@ -20,6 +20,7 @@ from statistics import mean
 from typing import Deque, Dict, List, Optional
 
 from ..execution.engine import ArbExecution, ExecutionEngine, ExecutionIncident
+from ..execution.incidents import effective_critical_incident_count
 from ..scanner.arbitrage import ArbitrageOpportunity, ArbitrageScanner
 
 logger = logging.getLogger("arbiter.profitability")
@@ -208,9 +209,7 @@ class ProfitabilityValidator:
             default=0.0,
         )
 
-        critical_incidents = sum(
-            1 for incident in incidents if str(incident.severity).lower() == "critical"
-        )
+        critical_incidents = effective_critical_incident_count(incidents)
         total_executions = max(engine_stats.get("total_executions", len(executions)), 0)
         # Use opportunity-evaluations (executions + aborted attempts) as the
         # denominator. The engine aborts opportunities for many legitimate

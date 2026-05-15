@@ -123,6 +123,21 @@ def make_incident(severity: str) -> ExecutionIncident:
     )
 
 
+def make_half_recorded_summary(count: int) -> ExecutionIncident:
+    return ExecutionIncident(
+        incident_id="INC-HALF-RECORDED-SUMMARY",
+        arb_id="MULTIPLE",
+        canonical_id="HALF_RECORDED_ARBS",
+        severity="critical",
+        message=f"{count} half-recorded arb(s) remain unresolved.",
+        timestamp=time.time(),
+        metadata={
+            "event_type": "half_recorded_arb_summary",
+            "count": count,
+        },
+    )
+
+
 def test_validator_marks_profitable_after_strict_thresholds_are_met():
     executions = [
         make_execution("ARB-1", 0.6, 5.0),
@@ -260,6 +275,49 @@ def test_validator_blocks_when_audit_or_critical_incidents_fail():
     assert snapshot.verdict == "blocked"
     assert snapshot.is_determined is True
     assert any("Audit pass rate" in reason for reason in snapshot.reasons)
+
+
+def test_validator_counts_half_recorded_summary_as_underlying_critical_incidents():
+    executions = [make_execution("ARB-1", 0.8, 6.0)]
+    scanner = StubScanner(
+        stats={
+            "scan_count": 30,
+            "published": 12,
+            "active_opportunities": 1,
+            "best_edge_cents": 6.0,
+        },
+        opportunities=[make_opportunity("LIVE-1", 6.0)],
+    )
+    engine = StubEngine(
+        stats={
+            "total_executions": 1,
+            "audit": {"pass_rate": 1.0},
+        },
+        executions=executions,
+        incidents=[make_half_recorded_summary(32)],
+    )
+    validator = ProfitabilityValidator(
+        ProfitabilityConfig(
+            min_scan_count=10,
+            min_published_opportunities=5,
+            min_completed_executions=1,
+            min_total_realized_pnl=0.1,
+            min_average_realized_pnl=0.1,
+            min_average_edge_cents=1.0,
+            min_profitable_execution_ratio=1.0,
+            min_audit_pass_rate=0.99,
+            max_incident_rate=1.0,
+            max_critical_incidents=0,
+        ),
+        scanner,
+        engine,
+    )
+
+    snapshot = validator.get_snapshot()
+
+    assert snapshot.verdict == "blocked"
+    assert snapshot.critical_incidents == 32
+    assert any("Critical incidents 32 exceed" in reason for reason in snapshot.reasons)
 
 
 def test_min_profitable_ratio_env_override(monkeypatch):

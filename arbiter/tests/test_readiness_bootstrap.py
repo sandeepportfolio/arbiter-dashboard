@@ -16,9 +16,9 @@ Contract:
 - Out-of-range values (``0``, ``1000``) and unparseable values fall through
   to existing logic (treat as absent). Preflight check #8 is the second
   belt that catches invalid values before startup.
-- Bootstrap short-circuits BEFORE ``validated_profitable`` and ``blocked``
-  branches. This is intentional: bootstrap is the ONLY escape hatch; if
-  the operator has set it they have accepted the override.
+- Bootstrap only bypasses ``collecting_evidence`` while the first live-trade
+  sample is being collected. A ``blocked`` or ``not_profitable`` validator
+  verdict is a hard fail and cannot be overridden.
 
 Tests follow the root-conftest async dispatch style for async methods
 but ``_check_profitability`` is synchronous so test functions here are
@@ -180,17 +180,10 @@ def test_bootstrap_unparseable_falls_through(monkeypatch):
     assert check.blocking is True
 
 
-# ─── 8: Bootstrap short-circuits BEFORE validated_profitable branch ─────────
+# ─── 8: Validated profitability takes precedence over bootstrap ─────────────
 
 
-def test_bootstrap_short_circuits_even_over_validated_profitable(monkeypatch):
-    """With bootstrap active and completed < limit, the bootstrap summary
-    wins over the validated_profitable branch.
-
-    Both outcomes happen to be non-blocking passes, but the summary must be
-    the bootstrap variant so operators see the bootstrap state in the
-    dashboard.
-    """
+def test_validated_profitable_takes_precedence_over_bootstrap(monkeypatch):
     monkeypatch.setenv("PHASE5_BOOTSTRAP_TRADES", "1")
     snap = _make_snapshot(verdict="validated_profitable", completed=0)
     readiness = _make_readiness(_make_profitability(snap))
@@ -198,25 +191,32 @@ def test_bootstrap_short_circuits_even_over_validated_profitable(monkeypatch):
     check = readiness._check_profitability()
 
     assert check.status == "pass"
-    assert check.blocking is False
-    # Bootstrap summary, not the validated_profitable summary.
-    assert "bootstrap" in check.summary.lower()
-    assert "validated" not in check.summary.lower()
+    assert check.blocking is True
+    assert check.summary == "Profitability gate is validated"
 
 
-# ─── 9: Bootstrap overrides blocked verdict (documented escape hatch) ───────
+# ─── 9: Bootstrap cannot override blocked verdict ──────────────────────────
 
 
-def test_bootstrap_wins_over_blocked_verdict(monkeypatch):
-    """Bootstrap is the ONLY escape hatch; operator setting it = accepting the
-    override. Documented in 05-RESEARCH.md Open Question #6.
-    """
+def test_bootstrap_cannot_override_blocked_verdict(monkeypatch):
     monkeypatch.setenv("PHASE5_BOOTSTRAP_TRADES", "1")
     snap = _make_snapshot(verdict="blocked", completed=0)
     readiness = _make_readiness(_make_profitability(snap))
 
     check = readiness._check_profitability()
 
-    assert check.status == "pass"
-    assert check.blocking is False
-    assert "bootstrap" in check.summary.lower()
+    assert check.status == "fail"
+    assert check.blocking is True
+    assert check.summary == "Profitability verdict is blocked"
+
+
+def test_bootstrap_cannot_override_not_profitable_verdict(monkeypatch):
+    monkeypatch.setenv("PHASE5_BOOTSTRAP_TRADES", "1")
+    snap = _make_snapshot(verdict="not_profitable", completed=0)
+    readiness = _make_readiness(_make_profitability(snap))
+
+    check = readiness._check_profitability()
+
+    assert check.status == "fail"
+    assert check.blocking is True
+    assert check.summary == "Profitability verdict is not_profitable"
