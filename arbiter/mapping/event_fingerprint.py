@@ -87,6 +87,52 @@ _KALSHI_SPORT_EVENT_RE = re.compile(
     r"^KX([A-Z0-9]+?)(?:GAME|MATCH)-(\d{2})([A-Z]{3})(\d{2})(\d*)([A-Z]+)$"
 )
 
+# Championship / futures regexes
+# Kalshi: KXSB-YY-TEAM (Super Bowl), KXNFLAFCCHAMP-YY-TEAM, KXNFLNFCCHAMP-YY-TEAM,
+#         KXNCAAF-YY-TEAM (College Football), KXNCAAFFINALIST-YY-TEAM, etc.
+_KALSHI_CHAMP_RE = re.compile(
+    r"^KX(?P<competition>[A-Z0-9]+)-(?P<year>\d{2})-(?P<team>[A-Z]+)$"
+)
+# Map Kalshi championship competition codes to canonical names
+_KALSHI_CHAMP_MAP = {
+    "SB": "nfl-super-bowl",
+    "NFLAFCCHAMP": "nfl-afc-championship",
+    "NFLNFCCHAMP": "nfl-nfc-championship",
+    "NCAAF": "cfp-national-championship",
+    "NCAAFFINALIST": "cfp-finalist",
+    "NBACHAMP": "nba-championship",
+    "MLBWS": "mlb-world-series",
+    "MLBALCS": "mlb-alcs",
+    "MLBNLCS": "mlb-nlcs",
+    "NHLSC": "nhl-stanley-cup",
+    "MLSSC": "mls-cup",
+}
+
+# Polymarket championship slug pattern:
+# "will-{team-name}-win-the-{year}-{competition}-{random-suffix}"
+_POLY_CHAMP_RE = re.compile(
+    r"^will-(?P<team>.+?)-win-the-(?P<year>20\d{2})-(?P<competition>.+?)(?:-\d+)?$"
+)
+# Map Polymarket competition text to canonical names
+_POLY_CHAMP_MAP = {
+    "nfl-super-bowl": "nfl-super-bowl",
+    "super-bowl": "nfl-super-bowl",
+    "nfl-afc-championship": "nfl-afc-championship",
+    "nfl-nfc-championship": "nfl-nfc-championship",
+    "cfp-national-championship": "cfp-national-championship",
+    "cfp-finalist": "cfp-finalist",
+    "college-football-playoff-national-championship": "cfp-national-championship",
+    "nba-championship": "nba-championship",
+    "nba-finals": "nba-championship",
+    "mlb-world-series": "mlb-world-series",
+    "world-series": "mlb-world-series",
+    "mlb-alcs": "mlb-alcs",
+    "mlb-nlcs": "mlb-nlcs",
+    "nhl-stanley-cup": "nhl-stanley-cup",
+    "stanley-cup": "nhl-stanley-cup",
+    "mls-cup": "mls-cup",
+}
+
 _MONTHS = {
     "jan": "01",
     "january": "01",
@@ -196,6 +242,7 @@ class StructuralMatch:
 def fingerprint_kalshi_market(market: dict) -> MarketFingerprint | None:
     return (
         _fingerprint_kalshi_sports(market)
+        or _fingerprint_kalshi_championship(market)
         or _fingerprint_kalshi_politics(market)
         or _fingerprint_kalshi_crypto(market)
         or _fingerprint_kalshi_gdp(market)
@@ -233,6 +280,7 @@ def fingerprint_kalshi_event(event: dict) -> MarketFingerprint | None:
 def fingerprint_polymarket_market(market: dict) -> MarketFingerprint | None:
     return (
         _fingerprint_poly_sports(market)
+        or _fingerprint_poly_championship(market)
         or _fingerprint_poly_politics(market)
         or _fingerprint_poly_crypto(market)
         or _fingerprint_poly_gdp(market)
@@ -621,6 +669,65 @@ def _fingerprint_poly_unemployment(market: dict) -> MarketFingerprint | None:
         threshold=_normalize_percent_bucket(match.group("bucket")),
         outcome="yes",
         source="bls",
+    )
+
+
+def _fingerprint_kalshi_championship(market: dict) -> MarketFingerprint | None:
+    """Parse Kalshi championship/futures tickers like KXSB-27-LAR, KXNFLAFCCHAMP-27-NYJ."""
+    ticker = str(market.get("ticker", "") or "").strip().upper()
+    match = _KALSHI_CHAMP_RE.match(ticker)
+    if not match:
+        return None
+    competition_code = match.group("competition")
+    canonical_comp = _KALSHI_CHAMP_MAP.get(competition_code)
+    if not canonical_comp:
+        return None
+    year = f"20{match.group('year')}"
+    team = normalize_entity_code(match.group("team"))
+    if not team:
+        return None
+    return MarketFingerprint(
+        category="sports",
+        subcategory="championship",
+        entity=f"{canonical_comp}:{team}",
+        date=year,
+        metric="championship-winner",
+        threshold="futures",
+        outcome="yes",
+        direction="same",
+        source="official_sports_result",
+    )
+
+
+def _fingerprint_poly_championship(market: dict) -> MarketFingerprint | None:
+    """Parse Polymarket championship slugs like will-{team}-win-the-{year}-{competition}."""
+    slug = str(market.get("slug", "") or "").strip().lower()
+    match = _POLY_CHAMP_RE.match(slug)
+    if not match:
+        return None
+    competition_text = match.group("competition")
+    canonical_comp = _POLY_CHAMP_MAP.get(competition_text)
+    if not canonical_comp:
+        return None
+    year = match.group("year")
+    # Convert team name slug to abbreviated code for matching.
+    # This requires team_aliases for cross-reference.
+    team_slug = match.group("team")
+    # Try to resolve team slug to a code via team_aliases
+    from arbiter.mapping.team_aliases import resolve_slug_to_code
+    team_code = resolve_slug_to_code(team_slug)
+    if not team_code:
+        return None
+    return MarketFingerprint(
+        category="sports",
+        subcategory="championship",
+        entity=f"{canonical_comp}:{team_code}",
+        date=year,
+        metric="championship-winner",
+        threshold="futures",
+        outcome="yes",
+        direction="same",
+        source="official_sports_result",
     )
 
 

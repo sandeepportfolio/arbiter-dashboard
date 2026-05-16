@@ -206,10 +206,11 @@ class TestAutoPromoteGate2:
 class TestAutoPromoteGate3:
     """Gate 3: resolution_check must return IDENTICAL."""
 
-    def test_unstructured_candidate_rejects_before_llm(self):
+    def test_unstructured_low_score_candidate_rejects(self):
+        """Unstructured candidates below semantic threshold still reject."""
         result = asyncio.run(
             maybe_promote(
-                _make_candidate(structural_match=False),
+                _make_candidate(structural_match=False, score=0.85),
                 settings=_make_settings(),
                 orderbooks=_make_orderbooks(),
                 llm_verifier=_yes_verifier,
@@ -220,6 +221,23 @@ class TestAutoPromoteGate3:
         )
         assert not result.promoted
         assert result.reason == "structural_unverified"
+
+    def test_unstructured_high_score_promotes_via_semantic_path(self):
+        """Unstructured candidates with high similarity can promote via semantic path
+        when resolution_check=IDENTICAL and LLM=YES."""
+        result = asyncio.run(
+            maybe_promote(
+                _make_candidate(structural_match=False, score=0.95),
+                settings=_make_settings(),
+                orderbooks=_make_orderbooks(),
+                llm_verifier=_yes_verifier,
+                today_promoted_count=0,
+                cooling_state={},
+                resolution_checker=_identical_checker,
+            )
+        )
+        assert result.promoted
+        assert result.reason == "promoted"
 
     def test_divergent_rejects(self):
         result = asyncio.run(

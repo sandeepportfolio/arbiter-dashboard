@@ -178,11 +178,20 @@ async def maybe_promote(
     if score < min_score:
         return _reject("score_low")
 
-    # ── Gate 3: category parser/fingerprint must have proven the pair ───────
-    # Fuzzy text + LLM is good enough for review candidates, not live trading.
-    # Auto-trade promotion requires the deterministic category-specific parser
-    # to prove same event/outcome/date/type/source first.
-    if not bool(candidate.get("structural_match")):
+    # ── Gate 3: structural match OR high-confidence semantic match ──────────
+    # Primary path: deterministic category-specific parser proves same
+    # event/outcome/date/type/source.
+    # Bypass path: for categories without parsers, allow promotion when
+    # similarity_score >= SEMANTIC_PROMOTE_MIN_SCORE (default 0.92).
+    # The bypass STILL requires Gates 4+5 (resolution IDENTICAL + LLM YES),
+    # which provide equivalent safety to structural matching.
+    semantic_min = float(_setting(
+        settings, "SEMANTIC_PROMOTE_MIN_SCORE", "semantic_promote_min_score",
+        default=_env_float("SEMANTIC_PROMOTE_MIN_SCORE", 0.92),
+    ))
+    is_structural = bool(candidate.get("structural_match"))
+    is_semantic = score >= semantic_min and not is_structural
+    if not is_structural and not is_semantic:
         return _reject("structural_unverified")
 
     # ── Gate 4: resolution_check must return IDENTICAL ───────────────────────
@@ -277,5 +286,6 @@ async def maybe_promote(
             return _reject("cooling_off")
 
     # ── All gates passed ──────────────────────────────────────────────────────
-    logger.info("auto_promote PROMOTED candidate=%s score=%.3f", ticker, score)
+    match_type = "structural" if is_structural else "semantic"
+    logger.info("auto_promote PROMOTED candidate=%s score=%.3f match=%s", ticker, score, match_type)
     return PromotionResult(promoted=True, reason="promoted")
