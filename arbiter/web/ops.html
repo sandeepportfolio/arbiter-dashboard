@@ -5440,8 +5440,8 @@ function RefetchSession({ job = {}, onClose, onDone, mobile }) {
   const reasonEntries = Object.entries(reasons).sort((a, b) => Number(b[1]) - Number(a[1])).slice(0, 5);
 
   return (
-    <div>
-      <div style={{ padding: '20px 24px', borderBottom: `1px solid ${t.border}` }}>
+    <div style={{ display:'flex', flexDirection:'column', height:'100%', minHeight: 0 }}>
+      <div style={{ padding: '20px 24px', borderBottom: `1px solid ${t.border}`, flexShrink: 0 }}>
         <div style={{ display:'flex', alignItems:'center', gap: 8, marginBottom: 6 }}>
           <span style={{ width: 8, height: 8, borderRadius:'50%', background: failed ? t.red : completed ? t.green : t.accent, animation: completed || failed ? 'none' : 'pulse 1.4s infinite' }}/>
           <span style={{ fontSize: 11, color: failed ? t.red : t.textMuted, letterSpacing:'0.08em', textTransform:'uppercase', fontWeight: 600 }}>{statusLabel}</span>
@@ -5450,7 +5450,7 @@ function RefetchSession({ job = {}, onClose, onDone, mobile }) {
         <div style={{ fontSize: 12, color: t.textDim, marginTop: 4 }}>{latestMessage}</div>
       </div>
 
-      <div style={{ padding: 24 }}>
+      <div style={{ padding: 24, flex: 1, minHeight: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
         <div style={{ display:'flex', justifyContent:'space-between', marginBottom: 6, fontSize: 11, color: t.textDim }}>
           <span>Overall</span>
           <span style={{ fontFamily: window.FONTS.mono, color: t.text }}>{pct}%</span>
@@ -5514,7 +5514,7 @@ function RefetchSession({ job = {}, onClose, onDone, mobile }) {
         </div>
       </div>
 
-      <div style={{ padding: '14px 24px', borderTop: `1px solid ${t.border}`, background: t.bgSubtle, display:'flex', justifyContent:'space-between', alignItems:'center', gap: 8 }}>
+      <div style={{ padding: '14px 24px', borderTop: `1px solid ${t.border}`, background: t.bgSubtle, display:'flex', justifyContent:'space-between', alignItems:'center', gap: 8, flexShrink: 0 }}>
         <span style={{ fontSize: 11, color: failed ? t.red : t.textMuted, fontFamily: window.FONTS.mono }}>{completed ? `${Number(counts.candidates_written || 0).toLocaleString()} written · ${Number(counts.confirmed_total || 0).toLocaleString()} confirmed total` : failed ? latestMessage : !autoStart && run.status !== 'running' ? 'Inspecting history - run manually when ready' : 'Running in background - safe to close'}</span>
         <div style={{ display:'flex', gap: 8, alignItems:'center' }}>
           {!autoStart && run.status !== 'running' && !starting && <window.Btn variant="primary" size="sm" onClick={startDiscoveryRun}>Run now</window.Btn>}
