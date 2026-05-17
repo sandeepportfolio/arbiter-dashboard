@@ -96,7 +96,8 @@ services:
       # AUTO_EXECUTE_ENABLED is set in .env.production (loaded via env_file above).
       # Do NOT override it here — `environment:` takes precedence over `env_file:`,
       # which was causing .env.production's value to be silently ignored.
-      AUTO_PROMOTE_ENABLED: "false"
+      # AUTO_PROMOTE_ENABLED is set in .env.production (loaded via env_file above).
+      # Do NOT override it here — same env_file precedence issue as AUTO_EXECUTE.
     ports:
       - "${ARBITER_PORT:-8080}:8080"
     depends_on:
