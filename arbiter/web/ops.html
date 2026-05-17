@@ -3100,7 +3100,7 @@ function PageMarkets() {
           { label: 'Category', w: '110px', render: r => <span style={{ fontSize: 12, color: t.textDim }}>{r.category}</span> },
           { label: 'Kalshi', w: '210px', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 11.5, color: t.text, overflowWrap:'anywhere' }}>{r.kalshi_market_id || '—'}</span> },
           { label: 'Polymarket', w: '250px', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 11.5, color: t.textDim, overflowWrap:'anywhere' }}>{r.polymarket_slug || '—'}</span> },
-          { label: 'Criteria', w: '135px', render: r => <window.Pill tone={r.resolution_match_status === 'identical' ? 'green' : r.resolution_match_status === 'divergent' ? 'red' : 'amber'}>{r.resolution_match_status}</window.Pill> },
+          { label: 'Criteria', w: '135px', render: r => <window.Pill tone={r.resolution_match_status === 'identical' ? 'green' : r.resolution_match_status === 'divergent' ? 'red' : 'amber'}>{String(r.resolution_match_status || '').replace(/_/g, ' ')}</window.Pill> },
           { label: 'Confidence', w: '105px', align:'right', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12.5, color: r.confidence >= 0.9 ? t.green : t.textDim, fontWeight: 600 }}>{r.confidence ? r.confidence.toFixed(2) : '—'}</span> },
           { label: 'Live edge', w: '105px', align:'right', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12.5, color: r.live ? (r.net_edge_cents >= 1 ? t.green : t.textDim) : t.textMuted, fontWeight: r.live ? 600 : 400 }}>{r.live ? window.fmtC(r.net_edge_cents) : 'No quote'}</span> },
         ]} rows={visibleRows} onRowClick={(r) => setModal({ kind: 'market', payload: r })} emptyTitle="No mapped markets" emptyHint={category === 'All' ? 'No confirmed mapping rows are loaded from /api/mappings yet.' : `No confirmed ${category} mappings are loaded.`} emptyIcon="◈"/>
@@ -3281,7 +3281,7 @@ function PageMappings() {
                   const color = palette[key] || t.textDim;
                   return (
                     <div key={key} style={{ display:'grid', gridTemplateColumns:'160px 1fr 80px', alignItems:'center', gap: 8 }}>
-                      <span style={{ fontSize: 11.5, color: t.textDim, fontFamily: window.FONTS.mono }}>{key}</span>
+                      <span style={{ fontSize: 11.5, color: t.textDim, fontFamily: window.FONTS.mono, textTransform:'capitalize' }}>{key.replace(/_/g, ' ')}</span>
                       <div style={{ height: 8, background: t.bgSubtle, borderRadius: 4, overflow:'hidden' }}>
                         <div style={{ width: `${pct}%`, height:'100%', background: color, transition:'width 0.3s ease' }}/>
                       </div>
@@ -4464,7 +4464,7 @@ function MarketDetailModal() {
         <div style={{ background: t.bgSubtle, borderRadius: 10, padding: 16, fontFamily: window.FONTS.mono, fontSize: 12.5, marginBottom: 14 }}>
           {loading && <Row k="Live quote" v="Fetching fresh prices..."/>}
           {!loading && error && <Row k="Live quote" v={error}/>}
-          <Row k="Criteria match" v={criteriaStatus} bold tone={criteriaStatus === 'identical' ? 'green' : criteriaStatus === 'divergent' ? 'red' : 'amber'}/>
+          <Row k="Criteria match" v={criteriaStatus.replace(/_/g, ' ')} bold tone={criteriaStatus === 'identical' ? 'green' : criteriaStatus === 'divergent' ? 'red' : 'amber'}/>
           <Row k="Auto-trade" v={o.allow_auto_trade ? 'enabled' : 'disabled'}/>
           <Row k="Polarity" v={o.polarity_flipped ? 'flipped' : 'same'}/>
           <Row k="Confidence" v={o.confidence ? o.confidence.toFixed(4) : '—'}/>
@@ -6592,8 +6592,13 @@ function MobMappings() {
                 <MapLine label="K" value={kalshiLabel} tone={t.text}/>
                 <MapLine label="P" value={polyLabel} tone={t.textDim}/>
                 <div style={{ display:'flex', gap: 6, alignItems:'center', flexWrap:'wrap', marginTop: 8 }}>
-                  <span style={{ fontSize: 10.5, color: c.match === 'identical' ? t.green : c.match === 'divergent' ? t.red : t.textDim, background: t.bgSubtle, border:`1px solid ${t.border}`, borderRadius: 999, padding:'3px 7px' }}>{c.match}</span>
-                  {c.auto && <span style={{ fontSize: 10.5, color: t.green, background: t.greenSoft, borderRadius: 999, padding:'3px 7px' }}>auto-trade</span>}
+                  {(() => {
+                    const matchLabel = String(c.match || '').replace(/_/g, ' ');
+                    const matchColor = c.match === 'identical' ? t.green : c.match === 'divergent' ? t.red : c.match === 'pending_operator_review' ? t.amber : t.textDim;
+                    const matchBg = c.match === 'identical' ? t.greenSoft : c.match === 'divergent' ? t.redSoft : c.match === 'pending_operator_review' ? t.amberSoft : t.bgSubtle;
+                    return <span style={{ fontSize: 10.5, color: matchColor, background: matchBg, borderRadius: 999, padding:'3px 8px', fontWeight: 600, textTransform:'capitalize' }}>{matchLabel}</span>;
+                  })()}
+                  {c.auto && <span style={{ fontSize: 10.5, color: t.green, background: t.greenSoft, borderRadius: 999, padding:'3px 7px', fontWeight: 600 }}>auto-trade</span>}
                 </div>
               </div>
             </div>
