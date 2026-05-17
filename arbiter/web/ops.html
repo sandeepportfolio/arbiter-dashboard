@@ -7489,34 +7489,328 @@ function EhStatusBadge({ cls, status }) {
 window.EdgeHistoryView = EdgeHistoryView;
 
 // ────────────────────────────────────────────────────────────────────
-// PageOpportunities wrapper — Live / History tab toggle
+// LiveTradesView — active/open positions on Kalshi + Polymarket
+// ────────────────────────────────────────────────────────────────────
+
+function LiveTradesView() {
+  const { t, setModal } = window.useApp();
+  const M = window.MOCK;
+  const [isMob, setIsMob] = mhUseState(() => typeof window !== 'undefined' && window.innerWidth < 760);
+  mhUseEffect(() => {
+    const onR = () => setIsMob(window.innerWidth < 760);
+    window.addEventListener('resize', onR);
+    return () => window.removeEventListener('resize', onR);
+  }, []);
+  const rawExecutions = Array.isArray(M.executions) ? M.executions : [];
+  const failedTrades = Array.isArray(M.failedTrades) ? M.failedTrades : [];
+  const failureIndex = mhUseMemo(() => {
+    const idx = {};
+    failedTrades.forEach((row) => {
+      if (row && row.arb_id) idx[row.arb_id] = row.failure_details || row;
+    });
+    return idx;
+  }, [failedTrades]);
+  const executions = mhUseMemo(() => rawExecutions.map((e) => {
+    if (!e || !e.arb_id) return e;
+    if (e.failure_details) return e;
+    const extra = failureIndex[e.arb_id];
+    return extra ? Object.assign({}, e, { failure_details: extra }) : e;
+  }), [rawExecutions, failureIndex]);
+
+  // Split into live (open) vs recently archived (completed/failed in the last 60 min)
+  const now = Date.now() / 1000;
+  const ARCHIVE_WINDOW = 3600; // 60 minutes
+
+  const { liveTrades, recentArchived } = mhUseMemo(() => {
+    const live = [];
+    const archived = [];
+    executions.forEach(e => {
+      const cls = classifyExecution(e);
+      if (cls === 'partial') {
+        live.push(e);
+      } else {
+        const ts = Number(e.timestamp || 0);
+        if (ts > 0 && (now - ts) < ARCHIVE_WINDOW) {
+          archived.push(e);
+        }
+      }
+    });
+    live.sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0));
+    archived.sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0));
+    return { liveTrades: live, recentArchived: archived.slice(0, 20) };
+  }, [executions, now]);
+
+  // Stats summary
+  const liveStats = mhUseMemo(() => {
+    let totalExposure = 0;
+    let totalExpected = 0;
+    liveTrades.forEach(e => {
+      const o = e.opportunity || {};
+      const yQty = Number((e.leg_yes || {}).fill_qty || (e.leg_yes || {}).quantity || 0);
+      const yPx = Number((e.leg_yes || {}).fill_price || (e.leg_yes || {}).price || 0);
+      const nQty = Number((e.leg_no || {}).fill_qty || (e.leg_no || {}).quantity || 0);
+      const nPx = Number((e.leg_no || {}).fill_price || (e.leg_no || {}).price || 0);
+      totalExposure += (yQty * yPx) + (nQty * nPx);
+      totalExpected += Number(e.expected_profit || 0);
+    });
+    return { count: liveTrades.length, exposure: totalExposure, expected: totalExpected };
+  }, [liveTrades]);
+
+  return (
+    <div>
+      {/* Summary cards */}
+      <div style={{ display:'grid', gridTemplateColumns: isMob ? '1fr' : 'repeat(3, 1fr)', gap: isMob ? 10 : 14, marginBottom: 18 }}>
+        <window.Card padding={18}>
+          <window.Stat label="Active positions" value={liveStats.count.toString()} sub={liveStats.count === 0 ? 'No open trades' : `${liveStats.count} trade${liveStats.count > 1 ? 's' : ''} in flight`} tone={liveStats.count > 0 ? 'amber' : 'default'} mono/>
+        </window.Card>
+        <window.Card padding={18}>
+          <window.Stat label="Total exposure" value={window.fmt$(liveStats.exposure)} sub="Notional across all open legs" mono/>
+        </window.Card>
+        <window.Card padding={18}>
+          <window.Stat label="Expected P&L" value={window.fmt$Sign(liveStats.expected)} tone={liveStats.expected >= 0 ? 'green' : 'red'} sub="If all legs fill at target prices" mono/>
+        </window.Card>
+      </div>
+
+      {/* Live trades */}
+      <window.Card padding={0} title="Active trades" action={<span style={{ fontSize: 11, color: liveStats.count > 0 ? t.amber : t.textMuted, fontWeight: 600 }}>{liveStats.count > 0 ? `● ${liveStats.count} live` : '○ No active trades'}</span>}>
+        {liveTrades.length === 0 ? (
+          <div style={{ padding: 42, textAlign:'center', color: t.textDim, fontSize: 12.5 }}>
+            <div style={{ fontSize: 28, color: t.textMuted, marginBottom: 8 }}>◇</div>
+            <div>No active trades right now.</div>
+            <div style={{ fontSize: 11, color: t.textMuted, marginTop: 4 }}>When the engine executes an arbitrage opportunity, both legs will appear here in real time. Completed trades auto-archive below.</div>
+          </div>
+        ) : (
+          <div style={{ display:'flex', flexDirection:'column', gap: 0 }}>
+            {liveTrades.map((e, idx) => (
+              <LiveTradeCard key={e.arb_id || idx} trade={e} isLast={idx === liveTrades.length - 1} isMob={isMob}/>
+            ))}
+          </div>
+        )}
+      </window.Card>
+
+      {/* Recently archived */}
+      {recentArchived.length > 0 && (
+        <div style={{ marginTop: 18 }}>
+          <window.Card padding={0} title="Recently completed" action={<span style={{ fontSize: 11, color: t.textMuted }}>{recentArchived.length} in last hour</span>}>
+            <div style={{ overflowX:'auto' }}>
+              <table style={{ width:'100%', borderCollapse:'collapse', minWidth: isMob ? 500 : 700 }}>
+                <thead>
+                  <tr style={{ background: t.bgSubtle }}>
+                    <EhTh>When</EhTh>
+                    <EhTh>Market</EhTh>
+                    <EhTh align="right">Edge</EhTh>
+                    <EhTh>Kalshi</EhTh>
+                    <EhTh>Polymarket</EhTh>
+                    <EhTh align="right">P&L</EhTh>
+                    <EhTh>Result</EhTh>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recentArchived.map((e, idx) => {
+                    const o = e.opportunity || {};
+                    const ly = e.leg_yes || {};
+                    const ln = e.leg_no || {};
+                    const cls = classifyExecution(e);
+                    const pnl = Number(e.realized_pnl || 0);
+                    // Determine which leg is Kalshi and which is Polymarket
+                    const kalshiLeg = String(ly.platform || '').toLowerCase().includes('kalshi') ? ly : String(ln.platform || '').toLowerCase().includes('kalshi') ? ln : ly;
+                    const polyLeg = String(ly.platform || '').toLowerCase().includes('poly') ? ly : String(ln.platform || '').toLowerCase().includes('poly') ? ln : ln;
+                    return (
+                      <tr key={e.arb_id || idx} onClick={() => setModal({ kind: 'trade', payload: e })} style={{ cursor:'pointer', borderBottom: `1px solid ${t.border}` }}>
+                        <td style={{ padding: '10px 14px', fontSize: 11, color: t.textDim, fontFamily: window.FONTS.mono, whiteSpace:'nowrap' }}>{window.ago ? window.ago(e.timestamp) : '—'}</td>
+                        <td style={{ padding: '10px 14px', fontSize: 12, color: t.text, maxWidth: 200, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{o.description || o.canonical_id || '—'}</td>
+                        <td style={{ padding: '10px 14px', textAlign:'right', fontFamily: window.FONTS.mono, fontSize: 12, fontWeight: 600, color: Number(o.net_edge_cents || 0) >= 2 ? t.green : t.textDim }}>{window.fmtC ? window.fmtC(Number(o.net_edge_cents || 0)) : `${Number(o.net_edge_cents || 0).toFixed(1)}¢`}</td>
+                        <td style={{ padding: '10px 14px' }}><ArchiveLegChip leg={kalshiLeg} label="K"/></td>
+                        <td style={{ padding: '10px 14px' }}><ArchiveLegChip leg={polyLeg} label="P"/></td>
+                        <td style={{ padding: '10px 14px', textAlign:'right', fontFamily: window.FONTS.mono, fontSize: 12, fontWeight: 600, color: pnl > 0 ? t.green : pnl < 0 ? t.red : t.textDim }}>{window.fmt$Sign(pnl)}</td>
+                        <td style={{ padding: '10px 14px' }}><EhStatusBadge cls={cls} status={e.status}/></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </window.Card>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LiveTradeCard({ trade, isLast, isMob }) {
+  const { t, setModal } = window.useApp();
+  const o = trade.opportunity || {};
+  const ly = trade.leg_yes || {};
+  const ln = trade.leg_no || {};
+  const elapsed = Date.now() / 1000 - Number(trade.timestamp || 0);
+  const elapsedLabel = elapsed < 60 ? `${Math.floor(elapsed)}s` : elapsed < 3600 ? `${Math.floor(elapsed / 60)}m ${Math.floor(elapsed % 60)}s` : `${Math.floor(elapsed / 3600)}h ${Math.floor((elapsed % 3600) / 60)}m`;
+  const edgeCents = Number(o.net_edge_cents || 0);
+  const expectedPnl = Number(trade.expected_profit || 0);
+
+  // Determine which leg is Kalshi and which is Polymarket
+  const kalshiLeg = String(ly.platform || '').toLowerCase().includes('kalshi') ? ly : String(ln.platform || '').toLowerCase().includes('kalshi') ? ln : ly;
+  const polyLeg = String(ly.platform || '').toLowerCase().includes('poly') ? ly : String(ln.platform || '').toLowerCase().includes('poly') ? ln : ln;
+  const kalshiSide = kalshiLeg === ly ? 'YES' : 'NO';
+  const polySide = polyLeg === ly ? 'YES' : 'NO';
+
+  return (
+    <div onClick={() => setModal({ kind: 'trade', payload: trade })} style={{ padding: '16px 20px', cursor:'pointer', borderBottom: isLast ? 'none' : `1px solid ${t.border}` }}>
+      {/* Header: market name + elapsed + edge */}
+      <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap: 12, marginBottom: 12 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13.5, color: t.text, fontWeight: 600, marginBottom: 3 }}>{o.description || o.canonical_id || 'Unknown market'}</div>
+          <div style={{ fontSize: 10.5, color: t.textMuted, fontFamily: window.FONTS.mono, display:'flex', gap: 8, flexWrap:'wrap' }}>
+            <span>{trade.arb_id}</span>
+            <span>·</span>
+            <span style={{ color: t.amber }}>⏱ {elapsedLabel} ago</span>
+          </div>
+        </div>
+        <div style={{ textAlign:'right', flexShrink: 0 }}>
+          <div style={{ fontSize: 14, fontFamily: window.FONTS.mono, fontWeight: 700, color: edgeCents >= 2 ? t.green : edgeCents >= 1 ? t.amber : t.textDim }}>{window.fmtC ? window.fmtC(edgeCents) : `${edgeCents.toFixed(1)}¢`}</div>
+          <div style={{ fontSize: 10, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase' }}>net edge</div>
+        </div>
+      </div>
+
+      {/* Leg cards side by side */}
+      <div style={{ display:'grid', gridTemplateColumns: isMob ? '1fr' : '1fr 1fr', gap: 10, marginBottom: 10 }}>
+        <LiveLegCard label="Kalshi" side={kalshiSide} leg={kalshiLeg} platform="kalshi"/>
+        <LiveLegCard label="Polymarket" side={polySide} leg={polyLeg} platform="polymarket"/>
+      </div>
+
+      {/* Expected profit */}
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', fontSize: 11, color: t.textDim, fontFamily: window.FONTS.mono }}>
+        <span>Expected P&L: <span style={{ color: expectedPnl >= 0 ? t.green : t.red, fontWeight: 600 }}>{window.fmt$Sign(expectedPnl)}</span></span>
+        <span style={{ color: t.textMuted }}>qty {Number(o.suggested_qty || ly.quantity || ln.quantity || 0)}</span>
+      </div>
+    </div>
+  );
+}
+
+function LiveLegCard({ label, side, leg, platform }) {
+  const { t } = window.useApp();
+  const status = String(leg.status || '').toLowerCase();
+  const fillQty = Number(leg.fill_qty || 0);
+  const fillPx = Number(leg.fill_price || 0);
+  const targetQty = Number(leg.quantity || 0);
+  const targetPx = Number(leg.price || 0);
+  const filled = status === 'filled';
+  const pending = status === 'pending' || status === 'submitted';
+  const failed = status === 'failed' || status === 'rejected' || status === 'aborted' || status === 'cancelled';
+
+  const statusColor = filled ? t.green : pending ? t.amber : failed ? t.red : t.textDim;
+  const statusLabel = filled ? 'Filled' : pending ? 'Pending' : failed ? 'Failed' : status || '—';
+  const displayQty = fillQty > 0 ? fillQty : targetQty;
+  const displayPx = fillPx > 0 ? fillPx : targetPx;
+
+  return (
+    <div style={{ border: `1px solid ${statusColor}30`, borderRadius: 8, padding: '10px 12px', background: `${statusColor}08` }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom: 6 }}>
+        <div style={{ display:'flex', alignItems:'center', gap: 6 }}>
+          <span style={{ fontSize: 10, color: t.textMuted, letterSpacing:'0.08em', fontWeight: 700 }}>{label}</span>
+          <span style={{ fontSize: 10, color: t.textDim, fontFamily: window.FONTS.mono, background: t.bgSubtle, padding:'1px 5px', borderRadius: 4 }}>{side}</span>
+        </div>
+        <div style={{ display:'flex', alignItems:'center', gap: 4 }}>
+          <span style={{ width: 6, height: 6, borderRadius:'50%', background: statusColor, animation: pending ? 'pulse 1.4s infinite' : 'none' }}/>
+          <span style={{ fontSize: 10, color: statusColor, fontWeight: 600, textTransform:'uppercase' }}>{statusLabel}</span>
+        </div>
+      </div>
+      <div style={{ fontSize: 13, color: t.text, fontFamily: window.FONTS.mono, fontWeight: 600 }}>
+        {displayQty} @ ${displayPx.toFixed(2)}
+      </div>
+      {filled && fillQty > 0 && (
+        <div style={{ fontSize: 10, color: t.green, fontFamily: window.FONTS.mono, marginTop: 2 }}>
+          ✓ {fillQty} filled @ ${fillPx.toFixed(2)}
+        </div>
+      )}
+      {failed && leg.error && (
+        <div style={{ fontSize: 10, color: t.red, marginTop: 3, wordBreak:'break-word' }}>{String(leg.error).slice(0, 80)}</div>
+      )}
+    </div>
+  );
+}
+
+function ArchiveLegChip({ leg, label }) {
+  const { t } = window.useApp();
+  const status = String(leg.status || '').toLowerCase();
+  const qty = Number(leg.fill_qty || leg.quantity || 0);
+  const px = Number(leg.fill_price || leg.price || 0);
+  const filled = status === 'filled';
+  const failed = status === 'failed' || status === 'rejected' || status === 'aborted' || status === 'cancelled';
+  const tone = filled ? t.green : failed ? t.red : t.amber;
+  return (
+    <div style={{ display:'inline-flex', alignItems:'center', gap: 5, fontSize: 11, fontFamily: window.FONTS.mono }}>
+      <span style={{ fontWeight: 700, color: t.textMuted, fontSize: 10 }}>{label}</span>
+      <span style={{ width: 5, height: 5, borderRadius:'50%', background: tone }}/>
+      <span style={{ color: t.text }}>{qty}@${px.toFixed(2)}</span>
+      <span style={{ color: tone, fontSize: 10, fontWeight: 600 }}>{filled ? '✓' : failed ? '✗' : '…'}</span>
+    </div>
+  );
+}
+
+window.LiveTradesView = LiveTradesView;
+
+// ────────────────────────────────────────────────────────────────────
+// PageOpportunities wrapper — Live / Active trades / History tab toggle
 // ────────────────────────────────────────────────────────────────────
 
 const OriginalPageOpportunities = window.PageOpportunities;
 
 function PageOpportunitiesWithHistory() {
   const { t } = window.useApp();
+  const M = window.MOCK;
   const [tab, setTab] = mhUseState('live');
+  const [mob, setMob] = mhUseState(() => typeof window !== 'undefined' && window.innerWidth < 760);
+  mhUseEffect(() => {
+    const onR = () => setMob(window.innerWidth < 760);
+    window.addEventListener('resize', onR);
+    return () => window.removeEventListener('resize', onR);
+  }, []);
+
+  // Count active trades for the badge
+  const activeCount = mhUseMemo(() => {
+    const execs = Array.isArray(M.executions) ? M.executions : [];
+    return execs.filter(e => classifyExecution(e) === 'partial').length;
+  }, [M.executions]);
+
+  const px = mob ? '14px 16px 0' : '20px 32px 0';
+  const cpx = mob ? '10px 16px 20px' : '14px 32px 28px';
+
   return (
     <div>
-      <div style={{ padding: '20px 32px 0', maxWidth: 1400, margin: '0 auto', display:'flex', alignItems:'center', gap: 4 }}>
-        <div style={{ display:'inline-flex', alignItems:'center', gap: 4, padding: 4, background: t.bgCard, border:`1px solid ${t.border}`, borderRadius: 9 }}>
-          {[['live', 'Live edges'], ['history', 'Trade history']].map(([k, l]) => (
+      <div style={{ padding: px, maxWidth: 1400, margin: '0 auto', display:'flex', alignItems:'center', gap: 4, overflowX:'auto' }}>
+        <div style={{ display:'inline-flex', alignItems:'center', gap: 4, padding: 4, background: t.bgCard, border:`1px solid ${t.border}`, borderRadius: 9, flexShrink: 0 }}>
+          {[
+            ['live', 'Live edges', null],
+            ['active', 'Active trades', activeCount > 0 ? activeCount : null],
+            ['history', 'Trade history', null],
+          ].map(([k, l, badge]) => (
             <button key={k} onClick={() => setTab(k)} style={{
-              padding: '7px 14px',
+              padding: mob ? '6px 10px' : '7px 14px',
               background: tab === k ? t.bgSubtle : 'transparent',
-              border:'none', fontSize: 12.5,
+              border:'none', fontSize: mob ? 11.5 : 12.5,
               color: tab === k ? t.text : t.textDim,
               fontWeight: tab === k ? 600 : 500,
               borderRadius: 6, cursor:'pointer',
-            }}>{l}</button>
+              display:'flex', alignItems:'center', gap: 6,
+              whiteSpace:'nowrap',
+            }}>
+              {l}
+              {badge != null && (
+                <span style={{ fontSize: 10, background: t.amber, color: '#fff', borderRadius: 999, padding:'1px 6px', fontWeight: 700, fontFamily: window.FONTS.mono, minWidth: 16, textAlign:'center' }}>{badge}</span>
+              )}
+            </button>
           ))}
         </div>
       </div>
       {tab === 'live' ? (
         OriginalPageOpportunities ? <OriginalPageOpportunities/> : null
+      ) : tab === 'active' ? (
+        <div style={{ padding: cpx, maxWidth: 1400, margin: '0 auto' }}>
+          <window.PageHeader kicker="Execution monitor" title="Active trades" sub="Real-time view of open positions on Kalshi and Polymarket. Both legs shown together with edge and expected profitability. Completed trades auto-archive below."/>
+          <LiveTradesView/>
+        </div>
       ) : (
-        <div style={{ padding: '14px 32px 28px', maxWidth: 1400, margin: '0 auto' }}>
+        <div style={{ padding: cpx, maxWidth: 1400, margin: '0 auto' }}>
           <window.PageHeader kicker="Execution ledger" title="Trade history" sub="Granular log of every opportunity that fired. Click a row to inspect leg-by-leg fills, errors, and recovery state."/>
           <EdgeHistoryView/>
         </div>
