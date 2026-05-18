@@ -171,14 +171,16 @@ class ProfitabilityValidator:
         executions = list(self.engine.execution_history)
         all_incidents = list(self.engine.incidents)
         # Match readiness._check_incidents semantics: only unresolved incidents
-        # represent active issues. Also drop "Trade gate blocked execution:
-        # Profitability verdict is blocked" warnings — those are a downstream
-        # symptom of this verdict and would create a self-reinforcing block.
+        # represent active issues. Drop ALL "Trade gate blocked execution:"
+        # warnings — they are downstream symptoms (profitability verdict,
+        # kill switch restored from persisted state, etc.) and would create
+        # a self-reinforcing block where gate-blocks inflate the incident
+        # rate which keeps the gate closed.
         incidents = [
             incident
             for incident in all_incidents
             if str(getattr(incident, "status", "open")).lower() != "resolved"
-            and "Trade gate blocked execution: Profitability verdict"
+            and "Trade gate blocked execution:"
             not in str(getattr(incident, "message", ""))
         ]
         current_opportunities = list(self.scanner.current_opportunities)
