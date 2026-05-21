@@ -6815,6 +6815,7 @@ function LoginScreen({ onSignIn }) {
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 12, marginBottom: 24 }}>
           <StatusTile ok={M.health.status === 'ok'} label="Kalshi gateway" detail={M.balances.kalshi.timestamp ? `balance updated ${window.ago(M.balances.kalshi.timestamp)}` : 'awaiting public status'}/>
           <StatusTile ok={M.health.status === 'ok'} label="Polymarket CLOB" detail={M.balances.polymarket.timestamp ? `balance updated ${window.ago(M.balances.polymarket.timestamp)}` : 'awaiting public status'}/>
+          <StatusTile ok={M.health.status === 'ok'} label="ForecastEx (IBKR)" detail={M.balances.forecastex.timestamp ? `balance updated ${window.ago(M.balances.forecastex.timestamp)}` : 'awaiting public status'}/>
           <StatusTile ok={!M.health.scanner.paused} label="Scanner cluster" detail={`${(M.health.scanner.scan_count || 0).toLocaleString()} scans · ${M.health.scanner.tradable_opportunities || 0} tradable`}/>
           <StatusTile ok={(M.health.reconciliation.flag_count || 0) === 0} label="Reconciliation" detail={`${M.health.reconciliation.flag_count || 0} outstanding flags`}/>
         </div>

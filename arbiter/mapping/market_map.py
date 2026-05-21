@@ -256,7 +256,12 @@ CREATE TABLE IF NOT EXISTS market_mappings (
 CREATE INDEX IF NOT EXISTS idx_mappings_status ON market_mappings(status);
 CREATE INDEX IF NOT EXISTS idx_mappings_kalshi ON market_mappings(kalshi_market_id) WHERE kalshi_market_id != '';
 CREATE INDEX IF NOT EXISTS idx_mappings_poly ON market_mappings(polymarket_slug) WHERE polymarket_slug != '';
-CREATE INDEX IF NOT EXISTS idx_mappings_forecastex ON market_mappings(forecastex_contract_id) WHERE forecastex_contract_id != '';
+-- NOTE: idx_mappings_forecastex is created further down, AFTER the
+-- ADD COLUMN IF NOT EXISTS forecastex_contract_id migration. Creating it here
+-- would crash upgrades from a pre-ForecastEx schema: CREATE TABLE IF NOT EXISTS
+-- is a no-op for the existing table, so the column hasn't been added yet, and
+-- asyncpg runs the whole SQL_INIT block as one transaction — the failed index
+-- creation rolls back the later ADD COLUMN too.
 CREATE INDEX IF NOT EXISTS idx_mappings_expires ON market_mappings(expires_at) WHERE expires_at IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS mapping_candidates (

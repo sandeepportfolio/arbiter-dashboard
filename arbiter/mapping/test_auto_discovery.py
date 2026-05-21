@@ -580,6 +580,11 @@ async def test_auto_promote_rejects_high_score_fuzzy_pair_without_structural_mat
                 "auto_promote_advisory_scans": 0,
                 "auto_promote_max_days": 400,
                 "phase5_max_order_usd": 10,
+                # Disable the score>=0.92 semantic bypass (b34c00d) so this test
+                # deterministically exercises the structural_unverified reject
+                # path — the identical question text would otherwise score ~1.0
+                # and slip through Gate 3 via the semantic path.
+                "semantic_promote_min_score": 1.01,
             },
         )
 
