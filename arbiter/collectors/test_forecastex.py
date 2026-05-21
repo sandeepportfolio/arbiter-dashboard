@@ -346,6 +346,106 @@ async def test_collector_disables_404_conids(patched_market_map):
     await client.close()
 
 
+def test_is_tradeable_snapshot_recognises_empty_parent_event(client):
+    # FORECASTX parent event snapshot — has metadata but no bid/ask/last.
+    parent = {
+        "55": "HORC",
+        "conidEx": "733131966",
+        "conid": 733131966,
+        "7295": "0.00",
+        "7283": "N/A",
+    }
+    assert ForecastExClient.is_tradeable_snapshot(parent) is False
+
+    # Tradable child — at least one of 31/84/86 is positive.
+    child = {"31": "0.45", "84": "0.44", "86": "0.46", "7295": "10"}
+    assert ForecastExClient.is_tradeable_snapshot(child) is True
+
+    # Half-warmed — last is "C" (close marker, no value) but ask is set.
+    half = {"31": "Cnone", "84": "0", "86": "0.50"}
+    assert ForecastExClient.is_tradeable_snapshot(half) is True
+
+    # Bad input types — must not raise.
+    assert ForecastExClient.is_tradeable_snapshot({}) is False
+    assert ForecastExClient.is_tradeable_snapshot(None) is False  # type: ignore[arg-type]
+
+
+async def test_collector_disables_parent_event_conids_after_probes(patched_market_map):
+    """Parent FORECASTX event conids return only metadata. Polling them
+    forever burns rate-limit budget; after 3 non-tradeable snapshots the
+    collector must mark the conid inactive and stop probing.
+    """
+    store = PriceStore()
+    client = ForecastExClient(gateway_url=GATEWAY, account_id=ACCOUNT)
+    collector = ForecastExCollector(
+        config=ForecastExConfig(), store=store, client=client,
+    )
+    parent_snapshot = [{
+        "55": "HORC",
+        "conidEx": "733131966",
+        "conid": 733131966,
+        "7295": "0.00",
+    }]
+    with aioresponses() as m:
+        for _ in range(4):
+            m.get(
+                re.compile(r".*/iserver/marketdata/snapshot.*"),
+                payload=parent_snapshot,
+            )
+        for _ in range(3):
+            await collector.fetch_markets()
+    # The patched_market_map fixture binds conid "111222" to the canonical id.
+    assert "111222" in collector._inactive_conids
+    assert collector._parent_probe_counts["111222"] >= 3
+    await client.close()
+
+
+async def test_resolve_event_children_returns_empty_when_all_endpoints_fail(client):
+    """IBKR returns 503 for FORECASTX EC info on weekends; the resolver must
+    swallow those failures and return [] rather than raising.
+    """
+    with aioresponses() as m:
+        # Every /iserver/secdef/info call returns 503.
+        m.post(re.compile(r".*/iserver/secdef/info.*"), status=503, body="", repeat=True)
+        m.get(re.compile(r".*/iserver/secdef/info.*"), status=503, body="", repeat=True)
+        # /trsrv/secdef returns a parent entry with no ticker, so the search
+        # fallback won't trigger either.
+        m.get(re.compile(r".*/trsrv/secdef.*"), payload={"secdef": [{"conid": 733131966}]})
+        # secdef/search fallback returns just the parent itself.
+        m.post(
+            re.compile(r".*/iserver/secdef/search.*"),
+            payload=[{"conid": "733131966", "symbol": "HORC"}],
+        )
+        children = await client.resolve_event_children("733131966")
+    assert children == []
+    await client.close()
+
+
+async def test_resolve_event_children_returns_children_when_secdef_info_works(client):
+    """When IBKR's secdef/info returns children for a working month, the
+    resolver returns them as conid+right+strike dicts.
+    """
+    with aioresponses() as m:
+        # First few months 503, then NOV26 returns two children (Y and N).
+        m.post(re.compile(r".*/iserver/secdef/info.*"), status=503, body="", repeat=True)
+        m.get(
+            re.compile(r".*/iserver/secdef/info.*"),
+            payload={"items": [
+                {"conid": "733131967", "right": "Y", "strike": 0.5},
+                {"conid": "733131968", "right": "N", "strike": 0.5},
+            ]},
+            repeat=True,
+        )
+        children = await client.resolve_event_children("733131966", months=("NOV26",))
+    # Resolver collects up to the first month that returns a non-empty list.
+    assert len(children) == 2
+    conids = {c["conid"] for c in children}
+    assert conids == {"733131967", "733131968"}
+    rights = {c["right"] for c in children}
+    assert "Y" in rights and "N" in rights
+    await client.close()
+
+
 async def test_collector_fetch_balance_returns_available_funds(patched_market_map):
     store = PriceStore()
     client = ForecastExClient(gateway_url=GATEWAY, account_id=ACCOUNT)
