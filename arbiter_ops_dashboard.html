@@ -147,6 +147,11 @@ a{color:var(--accent);text-decoration:none}
       <div class="card-sub" id="bal-poly-sub"></div>
     </div>
     <div class="card">
+      <div class="card-title">ForecastEx Balance</div>
+      <div class="card-value val-amber" id="bal-forecastex">--</div>
+      <div class="card-sub" id="bal-forecastex-sub"></div>
+    </div>
+    <div class="card">
       <div class="card-title">Total Balance</div>
       <div class="card-value" id="bal-total">--</div>
       <div class="card-sub" id="bal-total-sub"></div>
@@ -346,12 +351,14 @@ async function refresh() {
     }
   }
 
-  // Balances
+  // Balances — three platforms (Kalshi, Polymarket, ForecastEx)
   if (balances) {
-    const k = balances.kalshi, p = balances.polymarket;
+    const k = balances.kalshi, p = balances.polymarket, f = balances.forecastex;
     $('bal-kalshi').textContent = k ? fmt(k.balance) : '--';
     $('bal-poly').textContent = p ? fmt(p.balance) : '--';
-    const total = (k?.balance||0) + (p?.balance||0);
+    const fcEl = $('bal-forecastex');
+    if (fcEl) fcEl.textContent = f ? fmt(f.balance) : '--';
+    const total = (k?.balance||0) + (p?.balance||0) + (f?.balance||0);
     $('bal-total').textContent = fmt(total);
   }
 

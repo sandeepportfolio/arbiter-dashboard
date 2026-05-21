@@ -59,6 +59,12 @@ services:
     environment:
       DATABASE_URL: postgresql://${PG_USER:-arbiter}:${PG_PASSWORD:-arbiter_secret}@postgres:5432/${PG_DATABASE:-arbiter_dev}
       REDIS_URL: redis://redis:6379/0
+      # NOTE: do NOT add ForecastEx / IBKR env vars here. The `environment:`
+      # block overrides `env_file: .env.production` (see commits 48bf7cc /
+      # d53b973 — AUTO_EXECUTE_ENABLED and AUTO_PROMOTE_ENABLED hit the same
+      # bug). Configure FORECASTEX_ENABLED, IBKR_GATEWAY_URL, IBKR_ACCOUNT_ID,
+      # IBKR_PAPER_TRADING, IBKR_VERIFY_SSL and FORECASTEX_LOW in
+      # .env.production instead, where env_file actually picks them up.
     ports:
       - "${ARBITER_PORT:-8090}:${ARBITER_PORT:-8090}"
     depends_on:

@@ -120,6 +120,12 @@ class MockConn:
                 if m.get("polymarket_slug") == sid and sid:
                     return MockRecord(m)
             return None
+        if "forecastex_contract_id = $1" in compact_query:
+            fid = args[0]
+            for m in self._mappings.values():
+                if m.get("forecastex_contract_id") == fid and fid:
+                    return MockRecord(m)
+            return None
         if "SELECT * FROM mapping_candidates WHERE id" in query:
             cid = args[0]
             return MockRecord(self._candidates[cid]) if cid in self._candidates else None
@@ -236,6 +242,8 @@ class MockConn:
         return []
 
     def _build_mapping_dict(self, args) -> dict:
+        # ForecastEx third-platform support added ``forecastex_contract_id``
+        # right after polymarket_question, shifting every column after it by 1.
         payload = {
             "canonical_id": args[0],
             "description": args[1],
@@ -246,19 +254,20 @@ class MockConn:
             "kalshi_market_id": args[6] or "",
             "polymarket_slug": args[7] or "",
             "polymarket_question": args[8] or "",
-            "notes": args[9] or "",
-            "review_note": args[10] or "",
-            "mapping_score": float(args[11]) if args[11] else 0.0,
-            "confidence": float(args[12]) if args[12] else 0.0,
-            "expires_at": args[13],
-            "last_validated_at": args[14],
-            "created_at": args[15] if len(args) > 15 else utc_now(),
+            "forecastex_contract_id": args[9] or "",
+            "notes": args[10] or "",
+            "review_note": args[11] or "",
+            "mapping_score": float(args[12]) if args[12] else 0.0,
+            "confidence": float(args[13]) if args[13] else 0.0,
+            "expires_at": args[14],
+            "last_validated_at": args[15],
+            "created_at": args[16] if len(args) > 16 else utc_now(),
             "updated_at": utc_now(),
         }
-        if len(args) > 17:
-            payload["resolution_criteria"] = args[17]
         if len(args) > 18:
-            payload["resolution_match_status"] = args[18]
+            payload["resolution_criteria"] = args[18]
+        if len(args) > 19:
+            payload["resolution_match_status"] = args[19]
         return payload
 
 
@@ -723,6 +732,99 @@ async def test_upsert_confirmed_expires_duplicate_exact_pair(mock_pool, monkeypa
     assert pair_mapping.canonical_id == "GAME_MLB_20260502_A"
 
     await store.disconnect()
+
+
+# ─── ForecastEx (third-platform) coverage ───────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_upsert_with_forecastex_contract_id_roundtrip(mock_pool):
+    store = MarketMappingStore("postgres://mock/mock")
+    await store.connect()
+
+    m = MarketMapping(
+        canonical_id="FCST-RT-001",
+        description="Round-trip with ForecastEx",
+        status=MappingStatus.CONFIRMED,
+        kalshi_market_id="kalshi-rt",
+        polymarket_slug="poly-rt",
+        forecastex_contract_id="ibkr-conid-555",
+        mapping_score=0.91,
+    )
+    await store.upsert(m)
+    retrieved = await store.get("FCST-RT-001")
+    assert retrieved is not None
+    assert retrieved.forecastex_contract_id == "ibkr-conid-555"
+
+    await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_upsert_without_forecastex_leaves_field_blank(mock_pool):
+    """Two-platform mappings (no ForecastEx leg) must continue to roundtrip
+    with an empty forecastex_contract_id — this is what guarantees existing
+    deployments aren't disturbed by the third-platform schema migration."""
+    store = MarketMappingStore("postgres://mock/mock")
+    await store.connect()
+
+    m = MarketMapping(
+        canonical_id="TWO-ONLY-001",
+        description="Kalshi + Polymarket only",
+        status=MappingStatus.CONFIRMED,
+        kalshi_market_id="k-only",
+        polymarket_slug="p-only",
+    )
+    await store.upsert(m)
+    retrieved = await store.get("TWO-ONLY-001")
+    assert retrieved is not None
+    assert retrieved.forecastex_contract_id == ""
+
+    await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_get_by_platform_forecastex(mock_pool):
+    store = MarketMappingStore("postgres://mock/mock")
+    await store.connect()
+
+    m = MarketMapping(
+        canonical_id="FCST-LOOKUP-001",
+        description="Lookup test",
+        status=MappingStatus.CONFIRMED,
+        kalshi_market_id="kalshi-l",
+        polymarket_slug="poly-l",
+        forecastex_contract_id="ibkr-conid-777",
+    )
+    await store.upsert(m)
+
+    found = await store.get_by_platform("forecastex", "ibkr-conid-777")
+    assert found is not None
+    assert found.canonical_id == "FCST-LOOKUP-001"
+
+    missing = await store.get_by_platform("forecastex", "ibkr-conid-MISSING")
+    assert missing is None
+
+    await store.disconnect()
+
+
+def test_marketmapping_to_dict_exposes_forecastex():
+    m = MarketMapping(
+        canonical_id="X",
+        description="d",
+        status=MappingStatus.CONFIRMED,
+        kalshi_market_id="k",
+        polymarket_slug="p",
+        forecastex_contract_id="cf",
+    )
+    d = m.to_dict()
+    assert d["forecastex"] == "cf"
+
+
+def test_marketmapping_from_dict_reads_forecastex_field_or_alias():
+    a = MarketMapping.from_dict("X", {"status": "confirmed", "forecastex": "111"})
+    assert a.forecastex_contract_id == "111"
+    b = MarketMapping.from_dict("X", {"status": "confirmed", "forecastex_contract_id": "222"})
+    assert b.forecastex_contract_id == "222"
 
 
 if __name__ == "__main__":

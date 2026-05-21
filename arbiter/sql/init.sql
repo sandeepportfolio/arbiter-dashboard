@@ -66,6 +66,14 @@ ALTER TABLE market_mappings
     ADD COLUMN IF NOT EXISTS resolution_match_status VARCHAR(40)
         DEFAULT 'pending_operator_review';
 
+-- ForecastEx (IBKR-routed) third-platform support. Same idempotent ALTER
+-- pattern; older deployments pick up the column on next startup.
+ALTER TABLE market_mappings
+    ADD COLUMN IF NOT EXISTS forecastex_contract_id VARCHAR(100) DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_mappings_forecastex
+    ON market_mappings(forecastex_contract_id)
+    WHERE forecastex_contract_id != '';
+
 -- Widen canonical_id to VARCHAR(200); market_* tables always exist here,
 -- execution_* tables only exist after 001_execution_persistence migration.
 ALTER TABLE market_mappings    ALTER COLUMN canonical_id TYPE VARCHAR(200);

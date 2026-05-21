@@ -355,6 +355,7 @@ class BalanceMonitor:
         self._thresholds = {
             "kalshi": config.kalshi_low,
             "polymarket": config.polymarket_low,
+            "forecastex": getattr(config, "forecastex_low", 50.0),
         }
         # Manual balance overrides (for platforms without balance API)
         self._manual_balances: Dict[str, float] = {}

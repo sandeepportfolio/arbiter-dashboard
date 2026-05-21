@@ -180,16 +180,17 @@ window.MOCK = (() => {
     balances: {
       kalshi:     { balance: 0, timestamp: 0, is_low: false },
       polymarket: { balance: 0, timestamp: 0, is_low: false },
+      forecastex: { balance: 0, timestamp: 0, is_low: false },
     },
 
     // P&L ─ /api/pnl
     pnl: {
-      starting_balances: { kalshi: 0, polymarket: 0 },
-      current_balances:  { kalshi: 0, polymarket: 0 },
-      total_deposits:    { kalshi: 0, polymarket: 0 },
+      starting_balances: { kalshi: 0, polymarket: 0, forecastex: 0 },
+      current_balances:  { kalshi: 0, polymarket: 0, forecastex: 0 },
+      total_deposits:    { kalshi: 0, polymarket: 0, forecastex: 0 },
       total_deposits_all_platforms: 0,
-      recorded_trading_pnl: { kalshi: 0, polymarket: 0 },
-      balance_change_by_platform: { kalshi: 0, polymarket: 0 },
+      recorded_trading_pnl: { kalshi: 0, polymarket: 0, forecastex: 0 },
+      balance_change_by_platform: { kalshi: 0, polymarket: 0, forecastex: 0 },
       total_balance: 0,
       cash_balance: 0,
       estimated_equity: 0,
@@ -379,9 +380,14 @@ window.MOCK = (() => {
 
   function mergeBalances(M, balances) {
     if (!balances || typeof balances !== 'object') return;
-    for (const platform of ['kalshi', 'polymarket']) {
+    for (const platform of ['kalshi', 'polymarket', 'forecastex']) {
       const b = balances[platform];
       if (b && typeof b === 'object') {
+        // ensure the slot exists for third-platform entries that arrived
+        // before the runtime model was hydrated.
+        if (!M.balances[platform]) {
+          M.balances[platform] = { balance: 0, timestamp: 0, is_low: false };
+        }
         M.balances[platform] = {
           balance: asNumber(b.balance, M.balances[platform].balance),
           timestamp: asNumber(b.timestamp, M.balances[platform].timestamp),
@@ -671,10 +677,16 @@ window.MOCK = (() => {
     const cash = Number(pnl.net_cash_change);
     if (Number.isFinite(cash)) return +cash.toFixed(2);
     const byPlatform = pnl.balance_change_by_platform || {};
-    const platformTotal = asNumber(byPlatform.kalshi, 0) + asNumber(byPlatform.polymarket, 0);
+    const platformTotal = asNumber(byPlatform.kalshi, 0)
+      + asNumber(byPlatform.polymarket, 0)
+      + asNumber(byPlatform.forecastex, 0);
     if (platformTotal) return +platformTotal.toFixed(2);
     const recorded = pnl.recorded_trading_pnl || {};
-    return +(asNumber(recorded.kalshi, 0) + asNumber(recorded.polymarket, 0)).toFixed(2);
+    return +(
+      asNumber(recorded.kalshi, 0)
+      + asNumber(recorded.polymarket, 0)
+      + asNumber(recorded.forecastex, 0)
+    ).toFixed(2);
   }
 
   function capitalBasis(M) {
@@ -682,7 +694,9 @@ window.MOCK = (() => {
     const direct = Number(pnl.capital_basis);
     if (Number.isFinite(direct) && Math.abs(direct) > 0.005) return Math.abs(direct);
     const starts = pnl.starting_balances || {};
-    const startTotal = asNumber(starts.kalshi, 0) + asNumber(starts.polymarket, 0);
+    const startTotal = asNumber(starts.kalshi, 0)
+      + asNumber(starts.polymarket, 0)
+      + asNumber(starts.forecastex, 0);
     if (Math.abs(startTotal) > 0.005) return Math.abs(startTotal);
     const total = asNumber(pnl.total_balance, 0);
     const tradePnl = currentTradingPnl(M);
@@ -1686,12 +1700,17 @@ function StatusBadge({ status, size = 'sm', showIcon = true }) {
 }
 window.StatusBadge = StatusBadge;
 
-// ── PlatformChip — Kalshi / Polymarket ──────────────────────────────
+// ── PlatformChip — Kalshi / Polymarket / ForecastEx ──────────────────────────────
 function PlatformChip({ name, side }) {
   const { t } = window.useApp();
-  const cfg = name === 'kalshi'
-    ? { fg: t.green, bg: t.greenSoft, label: 'Kalshi' }
-    : { fg: t.purple, bg: t.purpleSoft, label: 'Polymarket' };
+  let cfg;
+  if (name === 'kalshi') {
+    cfg = { fg: t.green, bg: t.greenSoft, label: 'Kalshi' };
+  } else if (name === 'forecastex') {
+    cfg = { fg: t.amber, bg: t.amberSoft || t.bgSubtle, label: 'ForecastEx' };
+  } else {
+    cfg = { fg: t.purple, bg: t.purpleSoft, label: 'Polymarket' };
+  }
   return (
     <span style={{ display:'inline-flex', alignItems:'center', gap: 5, padding:'2px 8px', background: cfg.bg, color: cfg.fg, borderRadius: 5, fontSize: 11, fontWeight: 600, whiteSpace:'nowrap', flexShrink: 0 }}>
       <span style={{ width: 5, height: 5, borderRadius: '50%', background: cfg.fg, flexShrink: 0 }}/>
@@ -2211,8 +2230,13 @@ function PageOverview() {
   const execs = Array.isArray(M.executions) ? M.executions : [];
   const equity = Array.isArray(M.equity) && M.equity.length ? M.equity : [{ t: 0, v: 0 }];
   const equityRange = window.filterTimeSeries ? window.filterTimeSeries(equity, range) : equity;
-  const totalBal = M.balances.kalshi.balance + M.balances.polymarket.balance;
-  const totalPnl = window.currentTradingPnl ? window.currentTradingPnl(M) : (M.pnl.recorded_trading_pnl.kalshi + M.pnl.recorded_trading_pnl.polymarket);
+  const _forecastexBalance = (M.balances.forecastex && M.balances.forecastex.balance) || 0;
+  const totalBal = M.balances.kalshi.balance + M.balances.polymarket.balance + _forecastexBalance;
+  const totalPnl = window.currentTradingPnl
+    ? window.currentTradingPnl(M)
+    : (M.pnl.recorded_trading_pnl.kalshi
+       + M.pnl.recorded_trading_pnl.polymarket
+       + (M.pnl.recorded_trading_pnl.forecastex || 0));
   const tradable = opps.filter(o => o.status === 'tradable');
   const completedStatuses = ['filled','closed','settled','simulated'];
   const last24Execs = window.filterRowsByRange ? window.filterRowsByRange(execs, '24h', 'timestamp') : execs;
@@ -2223,7 +2247,11 @@ function PageOverview() {
   const rangeDelta = window.seriesDelta ? window.seriesDelta(equityRange) : 0;
   const rangeBase = window.capitalBasis ? window.capitalBasis(M) : Math.abs(Number(equityRange[0]?.v) || totalBal || 1);
   const confirmedMappings = window.marketRowsFromMappings ? window.marketRowsFromMappings(M, 'confirmed') : (M.mappings || []).filter(r => r.status === 'confirmed');
-  const latestBalanceTs = Math.max(Number(M.balances.kalshi.timestamp) || 0, Number(M.balances.polymarket.timestamp) || 0);
+  const latestBalanceTs = Math.max(
+    Number(M.balances.kalshi.timestamp) || 0,
+    Number(M.balances.polymarket.timestamp) || 0,
+    Number((M.balances.forecastex && M.balances.forecastex.timestamp)) || 0,
+  );
   const scannerHist = Array.isArray(M.health.scanner.history) ? M.health.scanner.history : [];
   const scanActive = Number(M.health.scanner.active_opportunities || 0) || opps.length;
   const scanTradable = Number(M.health.scanner.tradable_opportunities || 0) || tradable.length;
@@ -2235,8 +2263,8 @@ function PageOverview() {
 
   return (
     <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto' }}>
-      <window.PageHeader kicker="Operator desk" title="Overview" sub={`Live arbitrage activity across Kalshi and Polymarket. The scanner is monitoring ${confirmedMappings.length.toLocaleString()} confirmed mapped markets.`}>
-        <window.Btn variant="secondary" size="sm" icon="↓" hint="Add funds to Kalshi or Polymarket" onClick={() => setPage('deposits')}>Deposit</window.Btn>
+      <window.PageHeader kicker="Operator desk" title="Overview" sub={`Live arbitrage activity across Kalshi, Polymarket, and ForecastEx. The scanner is monitoring ${confirmedMappings.length.toLocaleString()} confirmed mapped markets.`}>
+        <window.Btn variant="secondary" size="sm" icon="↓" hint="Add funds to Kalshi, Polymarket, or ForecastEx" onClick={() => setPage('deposits')}>Deposit</window.Btn>
         <window.Btn variant="primary" size="sm" icon="◇" hint="Browse all detected cross-platform arb edges" onClick={() => setPage('opportunities')}>View opportunities</window.Btn>
       </window.PageHeader>
 
@@ -2246,6 +2274,7 @@ function PageOverview() {
         <KpiCard label="Total balance" value={window.fmt$(totalBal)} sub={latestBalanceTs ? `Balances updated ${window.ago(latestBalanceTs)}` : 'Waiting for live balances'} sparkData={[{ v: totalBal }]} sparkColor={t.accent} platformBalances={[
           { name: 'Kalshi', value: window.fmt$(M.balances.kalshi.balance), color: t.green, title: `Kalshi balance ${window.fmt$(M.balances.kalshi.balance)}` },
           { name: 'Polymarket', value: window.fmt$(M.balances.polymarket.balance), color: t.purple, title: `Polymarket balance ${window.fmt$(M.balances.polymarket.balance)}` },
+          { name: 'ForecastEx', value: window.fmt$(_forecastexBalance), color: t.amber, title: `ForecastEx balance ${window.fmt$(_forecastexBalance)}` },
         ]} />
         <KpiCard label="Trading P&L" value={window.fmt$Sign(totalPnl)} sub="Deposit-neutral · since inception" tone={totalPnl >= 0 ? 'green' : 'red'} sparkData={equity.slice(-48)} sparkColor={totalPnl >= 0 ? t.green : t.red} />
         <KpiCard label="Live opportunities" value={scanTradable} sub={`${scanActive} active · ${scanPublished} published · best ${bestEdge ? window.fmtC(bestEdge) : '—'}`} tone="accent" sparkData={(M.health.scanner.history || []).slice(-30).map(h => ({ v: h.tradable || 0 }))} sparkColor={t.accent} fallbackValue={scanTradable}/>
@@ -2301,12 +2330,15 @@ function PageOverview() {
               <window.Donut size={110} thickness={14} slices={[
                 { value: M.balances.kalshi.balance, color: t.green },
                 { value: M.balances.polymarket.balance, color: t.purple },
+                { value: _forecastexBalance, color: t.amber },
               ]} label={window.fmt$(totalBal, 0)} sublabel="TOTAL" labelColor={t.text} dimColor={t.textMuted}/>
             </div>
             <div style={{ flex: 1 }}>
               <BalanceLegendItem dot={t.green} label="Kalshi" value={window.fmt$(M.balances.kalshi.balance)} share={`${kShare}%`} pnl={(M.pnl.balance_change_by_platform && M.pnl.balance_change_by_platform.kalshi) ?? M.pnl.recorded_trading_pnl.kalshi} updated={M.balances.kalshi.timestamp} description="CFTC-regulated cash available for Kalshi ticker orders."/>
               <div style={{ height: 12 }}/>
               <BalanceLegendItem dot={t.purple} label="Polymarket" value={window.fmt$(M.balances.polymarket.balance)} share={`${pShare}%`} pnl={(M.pnl.balance_change_by_platform && M.pnl.balance_change_by_platform.polymarket) ?? M.pnl.recorded_trading_pnl.polymarket} updated={M.balances.polymarket.timestamp} description="Crypto wallet collateral available for Polymarket US slug orders."/>
+              <div style={{ height: 12 }}/>
+              <BalanceLegendItem dot={t.amber} label="ForecastEx" value={window.fmt$(_forecastexBalance)} share={`${totalBal ? (_forecastexBalance / totalBal * 100).toFixed(1) : '0.0'}%`} pnl={(M.pnl.balance_change_by_platform && M.pnl.balance_change_by_platform.forecastex) ?? (M.pnl.recorded_trading_pnl.forecastex || 0)} updated={(M.balances.forecastex && M.balances.forecastex.timestamp) || 0} description="IBKR Client Portal cash routed to ForecastEx event contracts."/>
               <div style={{ fontSize: 10.5, color: t.textMuted, marginTop: 12, lineHeight: 1.45 }}>Rows show live balance details, source share, and deposit-neutral trading P&L.</div>
             </div>
           </div>
@@ -2563,7 +2595,7 @@ function PageOpportunities() {
 
   return (
     <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto' }}>
-      <window.PageHeader kicker="Live scan" title="Opportunities" sub="Mispriced YES/NO pairs across Kalshi and Polymarket. Click any row to inspect leg-by-leg math.">
+      <window.PageHeader kicker="Live scan" title="Opportunities" sub="Mispriced YES/NO pairs across Kalshi, Polymarket, and ForecastEx. Click any row to inspect leg-by-leg math.">
         <ThresholdControl/>
         <AutoExecToggle/>
       </window.PageHeader>
@@ -2883,12 +2915,21 @@ function PagePnL() {
   const { t } = window.useApp();
   const M = window.MOCK;
   const [range, setRange] = React.useState('All');
-  const totalDeposits = M.pnl.total_deposits_all_platforms ?? (M.pnl.total_deposits.kalshi + M.pnl.total_deposits.polymarket);
-  const tradingPnl = window.currentTradingPnl ? window.currentTradingPnl(M) : (M.pnl.recorded_trading_pnl.kalshi + M.pnl.recorded_trading_pnl.polymarket);
+  const totalDeposits = M.pnl.total_deposits_all_platforms
+    ?? (M.pnl.total_deposits.kalshi + M.pnl.total_deposits.polymarket + (M.pnl.total_deposits.forecastex || 0));
+  const tradingPnl = window.currentTradingPnl
+    ? window.currentTradingPnl(M)
+    : (M.pnl.recorded_trading_pnl.kalshi + M.pnl.recorded_trading_pnl.polymarket + (M.pnl.recorded_trading_pnl.forecastex || 0));
   const equity = Array.isArray(M.equity) ? M.equity : [];
   const equityRange = window.filterTimeSeries ? window.filterTimeSeries(equity, range) : equity;
   const rangeDelta = window.seriesDelta ? window.seriesDelta(equityRange) : 0;
-  const startingCapital = window.capitalBasis ? window.capitalBasis(M) : Math.max(1, Math.abs((M.pnl.starting_balances.kalshi || 0) + (M.pnl.starting_balances.polymarket || 0)));
+  const startingCapital = window.capitalBasis
+    ? window.capitalBasis(M)
+    : Math.max(1, Math.abs(
+        (M.pnl.starting_balances.kalshi || 0)
+        + (M.pnl.starting_balances.polymarket || 0)
+        + (M.pnl.starting_balances.forecastex || 0)
+      ));
   const lifetimeReturn = tradingPnl / startingCapital;
 
   return (
@@ -3194,7 +3235,7 @@ function PageMappings() {
 
   return (
     <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto' }}>
-      <window.PageHeader kicker="Cross-platform" title="Mappings" sub="Semantic matches between Kalshi and Polymarket markets, scored by description similarity, dates, and resolution criteria.">
+      <window.PageHeader kicker="Cross-platform" title="Mappings" sub="Semantic matches across Kalshi, Polymarket, and ForecastEx markets, scored by description similarity, dates, and resolution criteria.">
         <window.Btn variant="secondary" size="sm" icon="↻" hint="Pull latest mapping data from the discovery pipeline" onClick={() => setModal({ kind:'refetchMappings' })}>Re-fetch mappings</window.Btn>
         <window.Btn variant="primary" size="sm" icon="◇" hint="Run the backend batch validation/discovery job without auto-promoting new rows" onClick={() => {
           if (reviewable.length) setModal({ kind:'refetchMappings', payload:{ title:'Validate pending mappings', autoPromote:false } });
@@ -3439,7 +3480,7 @@ function PageScanner() {
   ];
   return (
     <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto' }}>
-      <window.PageHeader kicker="Real-time" title="Scanner" sub="Continuously polls Kalshi and Polymarket order books, computes net edge, and publishes opportunities crossing the threshold.">
+      <window.PageHeader kicker="Real-time" title="Scanner" sub="Continuously polls Kalshi, Polymarket, and ForecastEx order books, computes net edge across every platform pair, and publishes opportunities crossing the threshold.">
         <window.Btn variant={scanner ? 'danger' : 'accent'} size="sm" hint={scanner ? 'Stop polling order books — opportunities will not refresh until resumed' : 'Resume polling Kalshi + Polymarket for cross-platform edges'} onClick={async () => {
           const next = !scanner;
           if (window.__arbiterScannerControl) {
@@ -4847,7 +4888,7 @@ function FilterModal() {
       <div style={{ padding: 22 }}>
         <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom: 8 }}>PLATFORM</div>
         <div style={{ display:'flex', gap: 6, marginBottom: 16 }}>
-          {['both','kalshi','polymarket'].map(p => (
+          {['both','kalshi','polymarket','forecastex'].map(p => (
             <button key={p} onClick={() => setF({...f, platform: p})} style={{ flex: 1, padding:'8px', background: f.platform === p ? t.bgSubtle : t.bgCard, border: `1px solid ${f.platform === p ? t.text : t.border}`, borderRadius: 6, fontSize: 11.5, color: t.text, cursor:'pointer', textTransform:'capitalize' }}>{p}</button>
           ))}
         </div>
@@ -5623,8 +5664,13 @@ function MobileDashboard() {
   const [meSub, setMeSub] = mobUseState(null); // 'funds' | 'pnl' | 'health' | 'settings' | null
   const M = window.MOCK;
   const isDark = themeName === 'dark';
-  const totalBal = M.balances.kalshi.balance + M.balances.polymarket.balance;
-  const totalPnl = window.currentTradingPnl ? window.currentTradingPnl(M) : (M.pnl.recorded_trading_pnl.kalshi + M.pnl.recorded_trading_pnl.polymarket);
+  const _forecastexBalance = (M.balances.forecastex && M.balances.forecastex.balance) || 0;
+  const totalBal = M.balances.kalshi.balance + M.balances.polymarket.balance + _forecastexBalance;
+  const totalPnl = window.currentTradingPnl
+    ? window.currentTradingPnl(M)
+    : (M.pnl.recorded_trading_pnl.kalshi
+       + M.pnl.recorded_trading_pnl.polymarket
+       + (M.pnl.recorded_trading_pnl.forecastex || 0));
 
   // When switching primary tabs, clear sub-page
   const switchTab = (k) => {
@@ -6093,9 +6139,10 @@ function MobTrades() {
 function MobMe({ onSub }) {
   const { t, name, toggle, setModal, signOut, profile } = window.useApp();
   const M = window.MOCK;
-  const totalBal = M.balances.kalshi.balance + M.balances.polymarket.balance;
-  const tradePnl = M.pnl.recorded_trading_pnl.kalshi + M.pnl.recorded_trading_pnl.polymarket;
-  const deposits = M.pnl.total_deposits_all_platforms ?? (M.pnl.total_deposits.kalshi + M.pnl.total_deposits.polymarket);
+  const _fcBal = (M.balances.forecastex && M.balances.forecastex.balance) || 0;
+  const totalBal = M.balances.kalshi.balance + M.balances.polymarket.balance + _fcBal;
+  const tradePnl = M.pnl.recorded_trading_pnl.kalshi + M.pnl.recorded_trading_pnl.polymarket + (M.pnl.recorded_trading_pnl.forecastex || 0);
+  const deposits = M.pnl.total_deposits_all_platforms ?? (M.pnl.total_deposits.kalshi + M.pnl.total_deposits.polymarket + (M.pnl.total_deposits.forecastex || 0));
   const gates = M.health.readiness.gates || 0;
   const passing = M.health.readiness.passing || 0;
   return (
@@ -6132,13 +6179,17 @@ function MobMe({ onSub }) {
 function MobFunds() {
   const { t, setModal } = window.useApp();
   const M = window.MOCK;
-  const total = M.balances.kalshi.balance + M.balances.polymarket.balance;
   const kBal = M.balances.kalshi.balance, pBal = M.balances.polymarket.balance;
+  const fBal = (M.balances.forecastex && M.balances.forecastex.balance) || 0;
+  const total = kBal + pBal + fBal;
+  const fTs  = (M.balances.forecastex && M.balances.forecastex.timestamp) || 0;
   const kPnl = Number(M.pnl.balance_change_by_platform && M.pnl.balance_change_by_platform.kalshi);
   const pPnl = Number(M.pnl.balance_change_by_platform && M.pnl.balance_change_by_platform.polymarket);
+  const fPnl = Number(M.pnl.balance_change_by_platform && M.pnl.balance_change_by_platform.forecastex);
   const platforms = [
     { name: 'Kalshi', key: 'kalshi', dot: t.green, bal: kBal, pnl: Number.isFinite(kPnl) ? kPnl : M.pnl.recorded_trading_pnl.kalshi, ts: M.balances.kalshi.timestamp },
     { name: 'Polymarket', key: 'polymarket', dot: t.purple, bal: pBal, pnl: Number.isFinite(pPnl) ? pPnl : M.pnl.recorded_trading_pnl.polymarket, ts: M.balances.polymarket.timestamp },
+    { name: 'ForecastEx', key: 'forecastex', dot: t.amber, bal: fBal, pnl: Number.isFinite(fPnl) ? fPnl : (M.pnl.recorded_trading_pnl.forecastex || 0), ts: fTs },
   ];
   return (
     <div style={{ paddingTop: 8 }}>
@@ -6190,7 +6241,7 @@ function MobPnL() {
   const { t } = window.useApp();
   const M = window.MOCK;
   const [range, setRange] = mobUseState('30d');
-  const tradePnl = window.currentTradingPnl ? window.currentTradingPnl(M) : (M.pnl.recorded_trading_pnl.kalshi + M.pnl.recorded_trading_pnl.polymarket);
+  const tradePnl = window.currentTradingPnl ? window.currentTradingPnl(M) : (M.pnl.recorded_trading_pnl.kalshi + M.pnl.recorded_trading_pnl.polymarket + (M.pnl.recorded_trading_pnl.forecastex || 0));
   const dep = M.pnl.total_deposits_all_platforms;
   const equity = window.filterTimeSeries ? window.filterTimeSeries(M.equity, range) : M.equity;
   const deployed = M.pnl.deployed_capital || 0;
@@ -6236,6 +6287,7 @@ function MobPnL() {
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 8, marginBottom: 12 }}>
         <PnLStat label="Kalshi P&L" value={(M.pnl.balance_change_by_platform && M.pnl.balance_change_by_platform.kalshi) ?? M.pnl.recorded_trading_pnl.kalshi} t={t}/>
         <PnLStat label="Polymarket P&L" value={(M.pnl.balance_change_by_platform && M.pnl.balance_change_by_platform.polymarket) ?? M.pnl.recorded_trading_pnl.polymarket} t={t}/>
+        <PnLStat label="ForecastEx P&L" value={(M.pnl.balance_change_by_platform && M.pnl.balance_change_by_platform.forecastex) ?? (M.pnl.recorded_trading_pnl.forecastex || 0)} t={t}/>
         <PnLStat label="Deposits" value={dep} t={t} neutral/>
         <PnLStat label="Deployed" value={deployed} t={t} neutral/>
       </div>

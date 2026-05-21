@@ -7,11 +7,13 @@ This package contains:
 - ``polymarket.PolymarketAdapter`` — Polymarket platform adapter (Plan 05)
 """
 from .base import PlatformAdapter
+from .forecastex import ForecastExAdapter
 from .kalshi import KalshiAdapter
 from .polymarket import PolymarketAdapter
 from .retry_policy import TRANSIENT_EXCEPTIONS, transient_retry
 
 __all__ = [
+    "ForecastExAdapter",
     "KalshiAdapter",
     "PlatformAdapter",
     "PolymarketAdapter",

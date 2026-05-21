@@ -1,0 +1,297 @@
+"""
+Tests for ForecastExAdapter — Protocol conformance, BUY-only constraint,
+the three hard-lock gates (PHASE4, PHASE5, supervisor), tick snapping, and
+order-status mapping.
+"""
+from __future__ import annotations
+
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from arbiter.execution.adapters import PlatformAdapter
+from arbiter.execution.adapters.exceptions import OrderRejected
+from arbiter.execution.adapters.forecastex import ForecastExAdapter
+from arbiter.execution.engine import Order, OrderStatus
+
+
+def _mock_client(place_response=None, place_exc=None):
+    client = MagicMock()
+    if place_exc is not None:
+        client.place_order = AsyncMock(side_effect=place_exc)
+    else:
+        client.place_order = AsyncMock(
+            return_value=place_response
+            if place_response is not None
+            else {"order_id": "abc", "order_status": "Filled", "filled_quantity": 10, "avg_price": 0.55},
+        )
+    client.get_order = AsyncMock(return_value={})
+    client.cancel_order = AsyncMock(return_value={"ok": True})
+    client.cancel_all_open_orders = AsyncMock(return_value=["x", "y"])
+    client.market_snapshot = AsyncMock(
+        return_value={"84": "44", "86": "47", "7295": "5", "7296": "20"},
+    )
+    client.live_rate_limiter = None
+    client.circuit = None
+    return client
+
+
+# ── Protocol conformance ──────────────────────────────────────────────────
+
+
+def test_adapter_satisfies_protocol():
+    adapter = ForecastExAdapter(client=_mock_client())
+    assert isinstance(adapter, PlatformAdapter)
+
+
+# ── BUY-only constraint ───────────────────────────────────────────────────
+
+
+async def test_adapter_rejects_sell():
+    adapter = ForecastExAdapter(client=_mock_client())
+    with pytest.raises(OrderRejected, match="only supports BUY"):
+        await adapter.place_fok(
+            arb_id="arb-1", market_id="111", canonical_id="X",
+            side="SELL_YES", price=0.5, qty=1,
+        )
+
+
+async def test_adapter_rejects_plain_sell():
+    adapter = ForecastExAdapter(client=_mock_client())
+    with pytest.raises(OrderRejected, match="only supports BUY"):
+        await adapter.place_ioc(
+            arb_id="arb-2", market_id="111", canonical_id="X",
+            side="SELL", price=0.5, qty=1,
+        )
+
+
+# ── Hard-lock gates ───────────────────────────────────────────────────────
+
+
+async def test_phase4_hardlock_blocks_oversized():
+    adapter = ForecastExAdapter(client=_mock_client(), phase4_max_usd=10.0)
+    with pytest.raises(OrderRejected, match="PHASE4 hard-lock"):
+        await adapter.place_fok(
+            arb_id="a", market_id="1", canonical_id="X",
+            side="BUY", price=0.50, qty=100,  # notional=$50 > $10
+        )
+
+
+async def test_phase4_hardlock_allows_within_cap():
+    client = _mock_client()
+    adapter = ForecastExAdapter(client=client, phase4_max_usd=100.0)
+    order = await adapter.place_fok(
+        arb_id="a", market_id="1", canonical_id="X",
+        side="BUY", price=0.50, qty=10,  # $5
+    )
+    assert order.status == OrderStatus.FILLED
+    client.place_order.assert_awaited_once()
+
+
+async def test_phase5_hardlock_blocks_oversized():
+    adapter = ForecastExAdapter(
+        client=_mock_client(),
+        phase4_max_usd=1000.0,
+        phase5_max_usd=20.0,
+    )
+    with pytest.raises(OrderRejected, match="PHASE5 hard-lock"):
+        await adapter.place_fok(
+            arb_id="a", market_id="1", canonical_id="X",
+            side="BUY", price=0.50, qty=100,
+        )
+
+
+async def test_phase4_evaluated_before_phase5():
+    adapter = ForecastExAdapter(
+        client=_mock_client(),
+        phase4_max_usd=10.0,
+        phase5_max_usd=20.0,
+    )
+    # Both would trip; PHASE4 must fire first.
+    with pytest.raises(OrderRejected, match="PHASE4 hard-lock"):
+        await adapter.place_fok(
+            arb_id="a", market_id="1", canonical_id="X",
+            side="BUY", price=0.50, qty=100,
+        )
+
+
+async def test_supervisor_armed_blocks():
+    supervisor = SimpleNamespace(is_armed=True)
+    adapter = ForecastExAdapter(client=_mock_client(), supervisor=supervisor)
+    with pytest.raises(OrderRejected, match="supervisor armed"):
+        await adapter.place_fok(
+            arb_id="a", market_id="1", canonical_id="X",
+            side="BUY", price=0.50, qty=1,
+        )
+
+
+async def test_supervisor_disarmed_allows():
+    supervisor = SimpleNamespace(is_armed=False)
+    client = _mock_client()
+    adapter = ForecastExAdapter(client=client, supervisor=supervisor)
+    order = await adapter.place_fok(
+        arb_id="a", market_id="1", canonical_id="X",
+        side="BUY", price=0.50, qty=1,
+    )
+    assert order.status == OrderStatus.FILLED
+
+
+# ── Price snapping / clamping ─────────────────────────────────────────────
+
+
+def test_snap_to_tick_clamps_to_cent_range():
+    assert ForecastExAdapter._snap_to_tick(0.00001) == 0.01
+    assert ForecastExAdapter._snap_to_tick(0.9999) == 0.99
+    assert ForecastExAdapter._snap_to_tick(0.5234) == 0.52
+    assert ForecastExAdapter._snap_to_tick(0.5256) == 0.53
+
+
+async def test_adapter_snaps_price_before_send():
+    client = _mock_client()
+    adapter = ForecastExAdapter(client=client)
+    await adapter.place_fok(
+        arb_id="a", market_id="1", canonical_id="X",
+        side="BUY", price=0.5733, qty=1,
+    )
+    kwargs = client.place_order.await_args.kwargs
+    assert kwargs["price"] == 0.57
+    assert kwargs["tif"] == "IOC"
+
+
+async def test_adapter_rejects_when_above_max_affordable():
+    adapter = ForecastExAdapter(client=_mock_client())
+    with pytest.raises(OrderRejected, match="max_affordable"):
+        await adapter.place_fok(
+            arb_id="a", market_id="1", canonical_id="X",
+            side="BUY", price=0.60, qty=1, max_affordable=0.50,
+        )
+
+
+# ── Status mapping ────────────────────────────────────────────────────────
+
+
+def test_map_status_filled():
+    assert ForecastExAdapter._map_status("Filled", OrderStatus.SUBMITTED) == OrderStatus.FILLED
+
+
+def test_map_status_partial():
+    assert ForecastExAdapter._map_status("PartiallyFilled", OrderStatus.SUBMITTED) == OrderStatus.PARTIAL
+
+
+def test_map_status_cancelled():
+    assert ForecastExAdapter._map_status("Cancelled", OrderStatus.SUBMITTED) == OrderStatus.CANCELLED
+
+
+def test_map_status_rejected_to_failed():
+    assert ForecastExAdapter._map_status("Rejected", OrderStatus.SUBMITTED) == OrderStatus.FAILED
+
+
+def test_map_status_unknown_fails_when_default_submitted():
+    # Unknown wire status must not silently leave order in SUBMITTED state.
+    assert ForecastExAdapter._map_status("WEIRD_NEW_STATE", OrderStatus.SUBMITTED) == OrderStatus.FAILED
+
+
+def test_map_status_unknown_preserves_terminal():
+    assert ForecastExAdapter._map_status("WEIRD_NEW_STATE", OrderStatus.FILLED) == OrderStatus.FILLED
+
+
+# ── Order construction from response ──────────────────────────────────────
+
+
+async def test_order_from_filled_response():
+    client = _mock_client(place_response={
+        "order_id": "id-42",
+        "order_status": "Filled",
+        "filled_quantity": 10,
+        "avg_price": 0.55,
+    })
+    adapter = ForecastExAdapter(client=client)
+    order = await adapter.place_fok(
+        arb_id="arb-1", market_id="111", canonical_id="X",
+        side="BUY", price=0.55, qty=10,
+    )
+    assert order.order_id == "id-42"
+    assert order.status == OrderStatus.FILLED
+    assert order.fill_qty == 10
+    assert abs(order.fill_price - 0.55) < 1e-9
+
+
+async def test_order_from_filled_response_rescales_avg_price_in_cents():
+    client = _mock_client(place_response={
+        "order_id": "id",
+        "order_status": "Filled",
+        "filled_quantity": 5,
+        "avg_price": "55.0",  # cents
+    })
+    adapter = ForecastExAdapter(client=client)
+    order = await adapter.place_fok(
+        arb_id="arb-1", market_id="111", canonical_id="X",
+        side="BUY", price=0.55, qty=5,
+    )
+    assert abs(order.fill_price - 0.55) < 1e-9
+
+
+async def test_place_order_exception_returns_failed_order():
+    client = _mock_client(place_exc=RuntimeError("gateway down"))
+    adapter = ForecastExAdapter(client=client)
+    order = await adapter.place_fok(
+        arb_id="arb-1", market_id="111", canonical_id="X",
+        side="BUY", price=0.55, qty=1,
+    )
+    assert order.status == OrderStatus.FAILED
+    assert "gateway down" in order.error
+
+
+# ── check_depth / best_executable_price ───────────────────────────────────
+
+
+async def test_check_depth_returns_true_when_size_sufficient():
+    client = _mock_client()  # ask=47 (cents), 7296 (ask size) = 20
+    adapter = ForecastExAdapter(client=client)
+    sufficient, price = await adapter.check_depth("111", "BUY", 10)
+    assert sufficient is True
+    assert 0.46 < price < 0.48
+
+
+async def test_check_depth_returns_false_when_size_insufficient():
+    client = _mock_client()
+    adapter = ForecastExAdapter(client=client)
+    sufficient, _ = await adapter.check_depth("111", "BUY", 100)
+    assert sufficient is False
+
+
+async def test_check_depth_returns_zero_when_no_quote():
+    client = _mock_client()
+    client.market_snapshot = AsyncMock(return_value={})
+    adapter = ForecastExAdapter(client=client)
+    sufficient, price = await adapter.check_depth("111", "BUY", 1)
+    assert sufficient is False
+    assert price == 0.0
+
+
+# ── cancel + list_open_orders pass-through ────────────────────────────────
+
+
+async def test_cancel_order_delegates():
+    client = _mock_client()
+    adapter = ForecastExAdapter(client=client)
+    order = Order(
+        order_id="o-1", platform="forecastex", market_id="m", canonical_id="X",
+        side="BUY", price=0.5, quantity=1, status=OrderStatus.SUBMITTED,
+    )
+    ok = await adapter.cancel_order(order)
+    assert ok is True
+    client.cancel_order.assert_awaited_with("o-1")
+
+
+async def test_cancel_all_delegates():
+    client = _mock_client()
+    adapter = ForecastExAdapter(client=client)
+    cancelled = await adapter.cancel_all()
+    assert cancelled == ["x", "y"]
+
+
+async def test_list_open_orders_by_client_id_returns_empty():
+    adapter = ForecastExAdapter(client=_mock_client())
+    assert await adapter.list_open_orders_by_client_id("ARB-") == []

@@ -16,6 +16,7 @@ import re
 from ..config.settings import (
     MARKET_MAP,
     ScannerConfig,
+    forecastex_order_fee,
     kalshi_order_fee,
     polymarket_order_fee,
 )
@@ -214,6 +215,14 @@ def compute_fee(platform: str, price: float, quantity: int, fee_rate: float = 0.
         return kalshi_order_fee(price, quantity=quantity)
     if platform == "polymarket":
         return polymarket_order_fee(price, quantity=quantity, fee_rate=fee_rate or None, category="politics")
+    if platform == "forecastex":
+        # Flat half-cent per contract; ``fee_rate`` carries the per-contract
+        # value when the collector populated it, otherwise the default
+        # half-cent floor applies inside forecastex_order_fee.
+        return forecastex_order_fee(
+            price, quantity=quantity,
+            fee_per_contract=fee_rate or 0.005,
+        )
     return 0.0
 
 

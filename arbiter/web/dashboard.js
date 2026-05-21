@@ -243,6 +243,7 @@ const SETTINGS_SECTIONS = [
     fields: [
       { path: "alerts.kalshi_low", type: "number", label: "Kalshi low-balance threshold (USD)", help: "Balance floor before Arbiter warns that Kalshi funding is low.", min: 0, max: 1000000, step: 1 },
       { path: "alerts.polymarket_low", type: "number", label: "Polymarket low-balance threshold (USD)", help: "Balance floor before Arbiter warns that Polymarket funding is low.", min: 0, max: 1000000, step: 1 },
+      { path: "alerts.forecastex_low", type: "number", label: "ForecastEx low-balance threshold (USD)", help: "Balance floor before Arbiter warns that ForecastEx (IBKR) funding is low.", min: 0, max: 1000000, step: 1 },
       { path: "alerts.cooldown", type: "number", label: "Alert cooldown (sec)", help: "Minimum time between repeated alerts for the same condition.", min: 0, max: 86400, step: 1 },
     ],
   },
@@ -662,6 +663,7 @@ function platformLabel(platform) {
     polymarket: "Polymarket",
     polymarket_us: "Polymarket US",
     "polymarket-us": "Polymarket US",
+    forecastex: "ForecastEx",
   };
   return labels[platform] || titleCase(String(platform).replace(/_/g, " "));
 }
@@ -672,6 +674,7 @@ function platformShortCode(platform) {
     polymarket: "POLY",
     polymarket_us: "POLY·US",
     "polymarket-us": "POLY·US",
+    forecastex: "FCST",
   };
   return codes[platform] || String(platform || "").slice(0, 4).toUpperCase();
 }
@@ -760,6 +763,7 @@ function mappingSearchText(mapping) {
     mapping?.canonical_id,
     mapping?.kalshi,
     mapping?.polymarket,
+    mapping?.forecastex,
     mapping?.review_note,
     mapping?.notes,
     mapping?.resolution_criteria?.operator_note,
@@ -1141,7 +1145,7 @@ function buildCollectorEntry(name, collector, index) {
 
 function buildMappingEntry(mapping, index) {
   const status = mappingStatus(mapping);
-  const platforms = [mapping.kalshi, mapping.polymarket]
+  const platforms = [mapping.kalshi, mapping.polymarket, mapping.forecastex]
     .filter(Boolean)
     .map(String)
     .join(" • ");
@@ -1638,9 +1642,14 @@ function renderHeroBalances() {
         .slice(0, 3)
         .map(([platform, snapshot]) => {
           const low = Boolean(snapshot?.is_low);
-          const threshold = Number(platform === "kalshi"
-            ? state.settings?.alerts?.kalshi_low
-            : state.settings?.alerts?.polymarket_low);
+          const thresholdMap = {
+            kalshi: state.settings?.alerts?.kalshi_low,
+            polymarket: state.settings?.alerts?.polymarket_low,
+            polymarket_us: state.settings?.alerts?.polymarket_low,
+            "polymarket-us": state.settings?.alerts?.polymarket_low,
+            forecastex: state.settings?.alerts?.forecastex_low,
+          };
+          const threshold = Number(thresholdMap[platform]);
           const updated = relTime(snapshot?.timestamp || state.system?.timestamp || Date.now() / 1000);
           return `
             <article class="hero-balance-card ${low ? "is-low" : "is-healthy"}">
@@ -1670,7 +1679,7 @@ function renderBalanceTicker(entries) {
     return;
   }
 
-  const preferredOrder = ["kalshi", "polymarket_us", "polymarket-us", "polymarket"];
+  const preferredOrder = ["kalshi", "polymarket_us", "polymarket-us", "polymarket", "forecastex"];
   const ordered = entries.slice().sort(([a], [b]) => {
     const ai = preferredOrder.indexOf(a);
     const bi = preferredOrder.indexOf(b);
@@ -2024,7 +2033,7 @@ function settingsSummaryCards(snapshot) {
     },
     {
       label: "Balance alerts",
-      value: `${formatUsd.format(snapshot.alerts?.kalshi_low || 0)} / ${formatUsd.format(snapshot.alerts?.polymarket_low || 0)}`,
+      value: `${formatUsd.format(snapshot.alerts?.kalshi_low || 0)} / ${formatUsd.format(snapshot.alerts?.polymarket_low || 0)} / ${formatUsd.format(snapshot.alerts?.forecastex_low || 0)}`,
       copy: `Cooldown ${Math.round(snapshot.alerts?.cooldown || 0)}s`,
     },
     {
@@ -2610,6 +2619,7 @@ function renderMappings() {
         <div class="mapping-platforms">
           ${mapping.kalshi ? `<span>${escapeHtml(`Kalshi ${mapping.kalshi}`)}</span>` : ""}
           ${mapping.polymarket ? `<span>${escapeHtml(`Polymarket ${mapping.polymarket}`)}</span>` : ""}
+          ${mapping.forecastex ? `<span>${escapeHtml(`ForecastEx ${mapping.forecastex}`)}</span>` : ""}
         </div>
         <div class="stack-item-meta mapping-card-note">${escapeHtml(reviewCopy)}</div>
       </article>

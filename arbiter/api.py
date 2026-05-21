@@ -1234,37 +1234,38 @@ class ArbiterAPI:
             payload["age_seconds"] = round(price.age_seconds, 2)
             out[platform] = payload
 
-        kalshi = prices.get("kalshi")
-        polymarket = prices.get("polymarket")
+        # Iterate over every distinct platform pair so the API surface tracks
+        # the scanner's three-platform fanout (Kalshi, Polymarket, ForecastEx).
+        # For N venues that's N*(N-1) directional combinations.
         edge_summary: Optional[dict] = None
-        if kalshi and polymarket:
-            # Both directions: kalshi YES + polymarket NO and vice versa.
+        venues = [(pf, pp) for pf, pp in prices.items() if pp]
+        if len(venues) >= 2:
             directions = []
-            for yes_pf, yes_pp, no_pf, no_pp in (
-                ("kalshi", kalshi, "polymarket", polymarket),
-                ("polymarket", polymarket, "kalshi", kalshi),
-            ):
-                yes_price = float(yes_pp.yes_price)
-                no_price = float(no_pp.no_price)
-                gross = 1.0 - yes_price - no_price
-                qty = 1
-                fees = (
-                    compute_fee(yes_pf, yes_price, qty, getattr(yes_pp, "fee_rate", 0.0))
-                    + compute_fee(no_pf, no_price, qty, getattr(no_pp, "fee_rate", 0.0))
-                )
-                net = gross - fees
-                directions.append(
-                    {
-                        "yes_platform": yes_pf,
-                        "yes_price": round(yes_price, 4),
-                        "no_platform": no_pf,
-                        "no_price": round(no_price, 4),
-                        "gross_edge_cents": round(gross * 100.0, 2),
-                        "fees_cents": round(fees * 100.0, 2),
-                        "net_edge_cents": round(net * 100.0, 2),
-                    }
-                )
-            best = max(directions, key=lambda d: d["net_edge_cents"])
+            for yes_pf, yes_pp in venues:
+                for no_pf, no_pp in venues:
+                    if yes_pf == no_pf:
+                        continue
+                    yes_price = float(yes_pp.yes_price)
+                    no_price = float(no_pp.no_price)
+                    gross = 1.0 - yes_price - no_price
+                    qty = 1
+                    fees = (
+                        compute_fee(yes_pf, yes_price, qty, getattr(yes_pp, "fee_rate", 0.0))
+                        + compute_fee(no_pf, no_price, qty, getattr(no_pp, "fee_rate", 0.0))
+                    )
+                    net = gross - fees
+                    directions.append(
+                        {
+                            "yes_platform": yes_pf,
+                            "yes_price": round(yes_price, 4),
+                            "no_platform": no_pf,
+                            "no_price": round(no_price, 4),
+                            "gross_edge_cents": round(gross * 100.0, 2),
+                            "fees_cents": round(fees * 100.0, 2),
+                            "net_edge_cents": round(net * 100.0, 2),
+                        }
+                    )
+            best = max(directions, key=lambda d: d["net_edge_cents"]) if directions else None
             edge_summary = {"directions": directions, "best": best}
 
         mapping_payload = None
@@ -2157,9 +2158,10 @@ class ArbiterAPI:
         amount = payload.get("amount")
         deposit_type = str(payload.get("type", "")).strip().lower()
 
-        if not platform or platform not in ("kalshi", "polymarket"):
+        if not platform or platform not in ("kalshi", "polymarket", "forecastex"):
             return web.json_response(
-                {"error": "platform must be 'kalshi' or 'polymarket'"}, status=400
+                {"error": "platform must be 'kalshi', 'polymarket', or 'forecastex'"},
+                status=400,
             )
         if amount is None:
             return web.json_response({"error": "amount is required"}, status=400)
@@ -3235,6 +3237,7 @@ class ArbiterAPI:
             "alerts": {
                 "kalshi_low": float(self.config.alerts.kalshi_low),
                 "polymarket_low": float(self.config.alerts.polymarket_low),
+                "forecastex_low": float(getattr(self.config.alerts, "forecastex_low", 50.0)),
                 "cooldown": float(self.config.alerts.cooldown),
             },
             "auto_executor": {
@@ -3349,6 +3352,8 @@ class ArbiterAPI:
                 alerts_patch["kalshi_low"] = self._coerce_float(alerts["kalshi_low"], label="kalshi_low", minimum=0.0, maximum=1000000.0)
             if "polymarket_low" in alerts:
                 alerts_patch["polymarket_low"] = self._coerce_float(alerts["polymarket_low"], label="polymarket_low", minimum=0.0, maximum=1000000.0)
+            if "forecastex_low" in alerts:
+                alerts_patch["forecastex_low"] = self._coerce_float(alerts["forecastex_low"], label="forecastex_low", minimum=0.0, maximum=1000000.0)
             if "cooldown" in alerts:
                 alerts_patch["cooldown"] = self._coerce_float(alerts["cooldown"], label="cooldown", minimum=0.0, maximum=86400.0)
             if alerts_patch:
@@ -3407,6 +3412,9 @@ class ArbiterAPI:
         if alerts_patch:
             self.monitor._thresholds["kalshi"] = float(self.config.alerts.kalshi_low)
             self.monitor._thresholds["polymarket"] = float(self.config.alerts.polymarket_low)
+            self.monitor._thresholds["forecastex"] = float(
+                getattr(self.config.alerts, "forecastex_low", 50.0)
+            )
 
         auto_patch = patch.get("auto_executor") or {}
         if auto_patch and getattr(self, "auto_executor", None) is not None:

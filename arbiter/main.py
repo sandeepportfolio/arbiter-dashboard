@@ -29,7 +29,7 @@ from .collectors.polymarket import PolymarketCollector
 from .scanner.arbitrage import ArbitrageScanner
 from .monitor.balance import BalanceMonitor, BalanceSnapshot
 from .execution.engine import ExecutionEngine, ExecutionIncident
-from .execution.adapters import KalshiAdapter, PolymarketAdapter
+from .execution.adapters import ForecastExAdapter, KalshiAdapter, PolymarketAdapter
 from .execution.failure_tracker import (
     FailureTracker,
     make_failure_tracker_from_env,
@@ -247,6 +247,42 @@ def build_polymarket_adapter(
         )
 
     return None
+
+
+def build_forecastex_collector(config: ArbiterConfig, price_store: PriceStore):
+    """Return the ForecastEx collector when the third platform is enabled.
+
+    FORECASTEX_ENABLED=false collapses the build to ``None`` so existing
+    two-platform deployments aren't forced to talk to an IBKR gateway that
+    isn't running.
+    """
+    cfg = getattr(config, "forecastex", None)
+    if cfg is None or not cfg.enabled:
+        return None
+    from .collectors.forecastex import ForecastExClient, ForecastExCollector
+
+    client = ForecastExClient(
+        gateway_url=cfg.gateway_url,
+        account_id=cfg.account_id,
+        verify_ssl=cfg.verify_ssl,
+        paper_trading=cfg.paper_trading,
+    )
+    return ForecastExCollector(config=cfg, store=price_store, client=client)
+
+
+def build_forecastex_adapter(config: ArbiterConfig, collector):
+    """Return the ForecastEx adapter, reusing the collector's HTTP client."""
+    cfg = getattr(config, "forecastex", None)
+    if cfg is None or not cfg.enabled or collector is None:
+        return None
+    client = getattr(collector, "client", None)
+    if client is None:
+        return None
+    return ForecastExAdapter(
+        client=client,
+        phase4_max_usd=_float_env("PHASE4_MAX_ORDER_USD"),
+        phase5_max_usd=_float_env("PHASE5_MAX_ORDER_USD"),
+    )
 
 
 def _init_sentry() -> None:
@@ -492,6 +528,7 @@ async def cleanup_runtime(
     shared_session: aiohttp.ClientSession,
     retry_scheduler=None,
     failure_tracker=None,
+    forecastex=None,
 ) -> None:
     """Best-effort teardown for shutdown and failed startup paths."""
 
@@ -510,6 +547,8 @@ async def cleanup_runtime(
     await _await_cleanup("kalshi.stop", kalshi.stop())
     if polymarket is not None:
         await _await_cleanup("polymarket.stop", polymarket.stop())
+    if forecastex is not None:
+        await _await_cleanup("forecastex.stop", forecastex.stop())
     await _await_cleanup("scanner.stop", scanner.stop())
     await _await_cleanup("monitor.stop", monitor.stop())
     await _await_cleanup("engine.stop", engine.stop())
@@ -653,6 +692,8 @@ async def run_market_discovery_loop(
                 kalshi.refresh_tracked_markets()
             if hasattr(polymarket, "refresh_tracked_markets"):
                 polymarket.refresh_tracked_markets()
+            if forecastex is not None and hasattr(forecastex, "refresh_tracked_markets"):
+                forecastex.refresh_tracked_markets()
             pending = await mapping_store.count_candidates()
             if metrics is not None:
                 metrics["auto_discovery_candidates_pending"] = pending
@@ -709,6 +750,7 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     # ── Collectors ─────────────────────────────────────────────
     kalshi = KalshiCollector(config.kalshi, price_store)
     polymarket = build_polymarket_collector(config, price_store)
+    forecastex = build_forecastex_collector(config, price_store)
 
     # ── Monitor ────────────────────────────────────────────────
     collectors_dict = {
@@ -716,6 +758,8 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     }
     if polymarket is not None:
         collectors_dict["polymarket"] = polymarket
+    if forecastex is not None:
+        collectors_dict["forecastex"] = forecastex
     monitor = BalanceMonitor(config.alerts, collectors_dict)
 
     # ── Scanner (with balance-proportioned sizing) ────────────
@@ -778,9 +822,12 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
         rate_limiter=poly_rate_limiter,
         circuit=poly_circuit,
     )
+    forecastex_adapter = build_forecastex_adapter(config, forecastex)
     adapters = {"kalshi": kalshi_adapter}
     if poly_adapter is not None:
         adapters["polymarket"] = poly_adapter
+    if forecastex_adapter is not None:
+        adapters["forecastex"] = forecastex_adapter
     engine.adapters = adapters  # late binding — engine constructed before adapters
 
     portfolio = PortfolioMonitor(
@@ -919,6 +966,13 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     else:
         poly_auth = "✓" if getattr(config.polymarket, "private_key", None) else "✗"
     logger.info(f"  Polymarket auth: {poly_auth}")
+    if config.forecastex is None:
+        forecastex_auth = "disabled"
+    elif config.forecastex.account_id:
+        forecastex_auth = f"✓ ({'paper' if config.forecastex.paper_trading else 'live'})"
+    else:
+        forecastex_auth = "✗ (missing IBKR_ACCOUNT_ID)"
+    logger.info(f"  ForecastEx auth: {forecastex_auth}")
     logger.info(f"  Telegram alerts: {'✓' if config.alerts.telegram_bot_token else '✗'}")
     logger.info("=" * 60)
 
@@ -1122,6 +1176,8 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
         tasks.append(asyncio.create_task(kalshi.run(), name="kalshi-collector"))
         if polymarket is not None:
             tasks.append(asyncio.create_task(polymarket.run(), name="poly-collector"))
+        if forecastex is not None:
+            tasks.append(asyncio.create_task(forecastex.run(), name="forecastex-collector"))
         if (
             mapping_store is not None
             and polymarket is not None
@@ -1288,6 +1344,7 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
             shared_session=shared_session,
             retry_scheduler=retry_scheduler,
             failure_tracker=failure_tracker,
+            forecastex=forecastex,
         )
         raise
 

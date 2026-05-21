@@ -70,6 +70,11 @@ POLYMARKET_DEFAULT_TAKER_FEE_RATE = 0.05
 POLYMAKET_DEFAULT_TAKER_FEE_RATE = POLYMARKET_DEFAULT_TAKER_FEE_RATE
 POLYMARKET_DEFAULT_MAKER_FEE_RATE = 0.0
 
+# ForecastEx (IBKR-routed prediction market) charges a flat half-cent per side.
+# Independent of price, fees are deterministic so the scanner can compute
+# net edge precisely without orderbook lookups.
+FORECASTEX_TAKER_FEE_PER_CONTRACT = 0.005
+
 
 def _clamp_probability(price: float) -> float:
     return max(0.0, min(1.0, float(price)))
@@ -140,6 +145,24 @@ def polymarket_fee(
     return polymarket_order_fee(price, quantity=quantity, fee_rate=fee_rate, category=category) / quantity
 
 
+def forecastex_order_fee(
+    price: float,
+    quantity: float = 1.0,
+    fee_per_contract: float = FORECASTEX_TAKER_FEE_PER_CONTRACT,
+) -> float:
+    """ForecastEx is flat $0.005 per side, per contract (no quadratic term)."""
+    quantity = max(float(quantity), 0.0)
+    price = _clamp_probability(price)
+    if quantity <= 0 or price <= 0:
+        return 0.0
+    return max(float(fee_per_contract), 0.0) * quantity
+
+
+def forecastex_fee(price: float, quantity: float = 1.0) -> float:
+    quantity = max(float(quantity), 1.0)
+    return forecastex_order_fee(price, quantity=quantity) / quantity
+
+
 _TEXT_NORMALIZER = re.compile(r"[^a-z0-9]+")
 
 
@@ -172,6 +195,10 @@ class MarketMappingRecord:
     kalshi: str = ""
     polymarket: str = ""
     polymarket_question: str = ""
+    # ForecastEx (IBKR) routes orders through Interactive Brokers' Client
+    # Portal Web API. The mapping key is the IBKR contract id (conid) of the
+    # event contract — empty when ForecastEx has no matching market.
+    forecastex: str = ""
     notes: str = ""
     # SAFE-06 (plan 03-06): Optional resolution-criteria payload. Structure:
     #   {
@@ -351,6 +378,7 @@ def _load_auto_seeds() -> Tuple[MarketMappingRecord, ...]:
                     kalshi=item.get("kalshi", ""),
                     polymarket=item.get("polymarket", ""),
                     polymarket_question=item.get("polymarket_question", ""),
+                    forecastex=item.get("forecastex", ""),
                     notes=item.get("notes", ""),
                     resolution_criteria=item.get("resolution_criteria"),
                     resolution_match_status=item.get("resolution_match_status", "pending_operator_review"),
@@ -550,6 +578,35 @@ class PolymarketConfig:
 
 
 @dataclass
+class ForecastExConfig:
+    """ForecastEx routed through the IBKR Client Portal Web API.
+
+    The gateway runs locally (default https://localhost:5000) and proxies
+    every authenticated request — the runtime never holds the IBKR password
+    or 2FA secret. ``IBKR_PAPER_TRADING=true`` selects the paper account.
+    """
+    gateway_url: str = field(
+        default_factory=lambda: os.getenv(
+            "IBKR_GATEWAY_URL", "https://localhost:5000/v1/api",
+        )
+    )
+    account_id: str = field(default_factory=lambda: os.getenv("IBKR_ACCOUNT_ID", ""))
+    paper_trading: bool = field(
+        default_factory=lambda: _env_bool("IBKR_PAPER_TRADING", True)
+    )
+    # Skip SSL verification by default because the local gateway uses a
+    # self-signed cert. Operators can flip via env var when running behind a
+    # proper TLS terminator.
+    verify_ssl: bool = field(
+        default_factory=lambda: _env_bool("IBKR_VERIFY_SSL", False)
+    )
+    poll_interval: float = 1.5
+    enabled: bool = field(
+        default_factory=lambda: _env_bool("FORECASTEX_ENABLED", False)
+    )
+
+
+@dataclass
 class PolymarketUSConfig:
     """Polymarket US (CFTC-regulated DCM) configuration. Uses Ed25519 key auth."""
     api_url: str = field(default_factory=lambda: os.getenv("POLYMARKET_US_API_URL", "https://api.polymarket.us/v1"))
@@ -584,6 +641,7 @@ class AlertConfig:
     telegram_alerts_chat_id: str = field(default_factory=_resolve_alerts_chat_id)
     kalshi_low: float = 50.0
     polymarket_low: float = 25.0
+    forecastex_low: float = 50.0
     cooldown: float = 300.0
 
 
@@ -704,6 +762,7 @@ class PostgresConfig:
 class ArbiterConfig:
     kalshi: KalshiConfig = field(default_factory=KalshiConfig)
     polymarket: Optional[Union[PolymarketConfig, PolymarketUSConfig]] = field(default_factory=PolymarketConfig)
+    forecastex: Optional[ForecastExConfig] = field(default_factory=ForecastExConfig)
     alerts: AlertConfig = field(default_factory=AlertConfig)
     scanner: ScannerConfig = field(default_factory=ScannerConfig)
     safety: SafetyConfig = field(default_factory=SafetyConfig)
@@ -765,6 +824,13 @@ def validate_live_config(cfg: ArbiterConfig) -> list[str]:
                 "POLY_SIGNATURE_TYPE=2 requires POLY_FUNDER (proxy wallet address)"
             )
 
+    # ForecastEx (IBKR Client Portal) requires an account id when enabled.
+    # Gateway URL has a safe localhost default, but the account id MUST be
+    # operator-supplied — there is no sensible fallback that won't aim
+    # orders at the wrong portfolio.
+    if cfg.forecastex is not None and cfg.forecastex.enabled and not cfg.forecastex.account_id:
+        errors.append("FORECASTEX_ENABLED=true but IBKR_ACCOUNT_ID is missing")
+
     # Telegram alerts gate live trading per readiness check; if either piece is
     # set the other should be too, otherwise alerts silently no-op.
     if cfg.alerts.telegram_bot_token and not cfg.alerts.telegram_chat_id:
@@ -803,6 +869,15 @@ def load_config() -> ArbiterConfig:
 
     cfg = ArbiterConfig()
     cfg.polymarket = polymarket_cfg
+
+    # ForecastEx (IBKR-routed) is OFF unless explicitly enabled. Setting
+    # FORECASTEX_ENABLED=false (the default) collapses the third platform to
+    # a no-op so existing two-platform deployments keep behaving identically.
+    forecastex_cfg = ForecastExConfig()
+    if not forecastex_cfg.enabled:
+        cfg.forecastex = None
+    else:
+        cfg.forecastex = forecastex_cfg
 
     if cfg.kalshi.private_key_path and not os.path.isabs(cfg.kalshi.private_key_path):
         config_root = _DOTENV_PATH.parent if _DOTENV_PATH else Path(__file__).resolve().parent.parent

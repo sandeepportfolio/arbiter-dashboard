@@ -53,6 +53,10 @@ class MarketMapping:
     kalshi_market_id: str = ""
     polymarket_slug: str = ""
     polymarket_question: str = ""
+    # ForecastEx contract id (IBKR ``conid``). Empty when the canonical
+    # event has no ForecastEx listing — the scanner just skips that platform
+    # leg for the mapping.
+    forecastex_contract_id: str = ""
     notes: str = ""
     review_note: str = ""
     mapping_score: float = 0.0
@@ -93,6 +97,7 @@ class MarketMapping:
             "kalshi": self.kalshi_market_id,
             "polymarket": self.polymarket_slug,
             "polymarket_question": self.polymarket_question,
+            "forecastex": self.forecastex_contract_id,
             "notes": self.notes,
             "review_note": self.review_note,
             "mapping_score": self.mapping_score,
@@ -128,6 +133,7 @@ class MarketMapping:
             kalshi_market_id=record.kalshi,
             polymarket_slug=record.polymarket,
             polymarket_question=record.polymarket_question,
+            forecastex_contract_id=getattr(record, "forecastex", "") or "",
             notes=record.notes,
             mapping_score=score,
             confidence=score,
@@ -149,6 +155,11 @@ class MarketMapping:
             kalshi_market_id=str(payload.get("kalshi", "") or payload.get("kalshi_market_id", "") or ""),
             polymarket_slug=str(payload.get("polymarket", "") or payload.get("polymarket_slug", "") or ""),
             polymarket_question=str(payload.get("polymarket_question", "") or ""),
+            forecastex_contract_id=str(
+                payload.get("forecastex", "")
+                or payload.get("forecastex_contract_id", "")
+                or ""
+            ),
             notes=str(payload.get("notes", "") or ""),
             review_note=str(payload.get("review_note", "") or ""),
             mapping_score=float(payload.get("mapping_score", payload.get("confidence", 0.0)) or 0.0),
@@ -231,6 +242,7 @@ CREATE TABLE IF NOT EXISTS market_mappings (
     kalshi_market_id     VARCHAR(100) DEFAULT '',
     polymarket_slug      VARCHAR(200) DEFAULT '',
     polymarket_question  TEXT DEFAULT '',
+    forecastex_contract_id VARCHAR(100) DEFAULT '',
     notes                TEXT DEFAULT '',
     review_note          TEXT DEFAULT '',
     mapping_score        DECIMAL(5,4) DEFAULT 0,
@@ -244,6 +256,7 @@ CREATE TABLE IF NOT EXISTS market_mappings (
 CREATE INDEX IF NOT EXISTS idx_mappings_status ON market_mappings(status);
 CREATE INDEX IF NOT EXISTS idx_mappings_kalshi ON market_mappings(kalshi_market_id) WHERE kalshi_market_id != '';
 CREATE INDEX IF NOT EXISTS idx_mappings_poly ON market_mappings(polymarket_slug) WHERE polymarket_slug != '';
+CREATE INDEX IF NOT EXISTS idx_mappings_forecastex ON market_mappings(forecastex_contract_id) WHERE forecastex_contract_id != '';
 CREATE INDEX IF NOT EXISTS idx_mappings_expires ON market_mappings(expires_at) WHERE expires_at IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS mapping_candidates (
@@ -270,6 +283,15 @@ ALTER TABLE market_mappings
     ADD COLUMN IF NOT EXISTS resolution_criteria JSONB,
     ADD COLUMN IF NOT EXISTS resolution_match_status VARCHAR(40)
         DEFAULT 'pending_operator_review';
+
+-- ForecastEx (IBKR-routed) third-platform support. Idempotent ALTER so older
+-- deployments pick up the column without a hand-written migration. Column is
+-- nullable / defaulted to '' so two-platform deployments keep working.
+ALTER TABLE market_mappings
+    ADD COLUMN IF NOT EXISTS forecastex_contract_id VARCHAR(100) DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_mappings_forecastex
+    ON market_mappings(forecastex_contract_id)
+    WHERE forecastex_contract_id != '';
 
 -- Widen canonical_id to VARCHAR(200) so long slugs don't truncate (idempotent).
 ALTER TABLE market_mappings    ALTER COLUMN canonical_id TYPE VARCHAR(200);
@@ -366,12 +388,12 @@ class MarketMappingStore:
                     INSERT INTO market_mappings (
                         canonical_id, description, status, allow_auto_trade,
                         aliases, tags, kalshi_market_id, polymarket_slug,
-                        polymarket_question,
+                        polymarket_question, forecastex_contract_id,
                         notes, mapping_score, confidence, updated_at,
                         resolution_criteria, resolution_match_status
                     ) VALUES (
-                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(),
-                        $13::jsonb, $14
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(),
+                        $14::jsonb, $15
                     ) ON CONFLICT (canonical_id) DO UPDATE SET
                         description = EXCLUDED.description,
                         status = EXCLUDED.status,
@@ -381,6 +403,7 @@ class MarketMappingStore:
                         kalshi_market_id = EXCLUDED.kalshi_market_id,
                         polymarket_slug = EXCLUDED.polymarket_slug,
                         polymarket_question = EXCLUDED.polymarket_question,
+                        forecastex_contract_id = EXCLUDED.forecastex_contract_id,
                         notes = EXCLUDED.notes,
                         mapping_score = EXCLUDED.mapping_score,
                         confidence = EXCLUDED.confidence,
@@ -397,6 +420,7 @@ class MarketMappingStore:
                     mapping.kalshi_market_id,
                     mapping.polymarket_slug,
                     mapping.polymarket_question,
+                    mapping.forecastex_contract_id,
                     mapping.notes,
                     mapping.mapping_score,
                     mapping.confidence,
@@ -475,12 +499,12 @@ class MarketMappingStore:
                 INSERT INTO market_mappings (
                     canonical_id, description, status, allow_auto_trade,
                     aliases, tags, kalshi_market_id, polymarket_slug,
-                    polymarket_question,
+                    polymarket_question, forecastex_contract_id,
                     notes, review_note, mapping_score, confidence,
                     expires_at, last_validated_at, created_at, updated_at,
                     resolution_criteria, resolution_match_status
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-                    $18::jsonb, $19
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18,
+                    $19::jsonb, $20
                 ) ON CONFLICT (canonical_id) DO UPDATE SET
                     description = EXCLUDED.description,
                     status = EXCLUDED.status,
@@ -490,6 +514,7 @@ class MarketMappingStore:
                     kalshi_market_id = EXCLUDED.kalshi_market_id,
                     polymarket_slug = EXCLUDED.polymarket_slug,
                     polymarket_question = EXCLUDED.polymarket_question,
+                    forecastex_contract_id = EXCLUDED.forecastex_contract_id,
                     notes = EXCLUDED.notes,
                     review_note = EXCLUDED.review_note,
                     mapping_score = EXCLUDED.mapping_score,
@@ -509,6 +534,7 @@ class MarketMappingStore:
                 mapping.kalshi_market_id,
                 mapping.polymarket_slug,
                 mapping.polymarket_question,
+                mapping.forecastex_contract_id,
                 mapping.notes,
                 mapping.review_note,
                 mapping.mapping_score,
@@ -602,6 +628,7 @@ class MarketMappingStore:
             col = {
                 "kalshi": "kalshi_market_id",
                 "polymarket": "polymarket_slug",
+                "forecastex": "forecastex_contract_id",
             }.get(platform.lower())
 
             if not col:
@@ -675,7 +702,11 @@ class MarketMappingStore:
         try:
             q = f"%{query_text.lower()}%"
             if platform:
-                col = {"kalshi": "kalshi_market_id", "polymarket": "polymarket_slug"}.get(platform.lower())
+                col = {
+                    "kalshi": "kalshi_market_id",
+                    "polymarket": "polymarket_slug",
+                    "forecastex": "forecastex_contract_id",
+                }.get(platform.lower())
                 col_filter = f" AND {col} != ''" if col else ""
             else:
                 col_filter = ""
@@ -1431,6 +1462,7 @@ class MarketMappingStore:
             kalshi_market_id=row["kalshi_market_id"] or "",
             polymarket_slug=row["polymarket_slug"] or "",
             polymarket_question=row["polymarket_question"] or "",
+            forecastex_contract_id=row_dict.get("forecastex_contract_id") or "",
             notes=row["notes"] or "",
             review_note=row["review_note"] or "",
             mapping_score=float(row["mapping_score"]) if row["mapping_score"] else 0.0,

@@ -105,11 +105,21 @@ class PriceStore:
         return None
 
     async def get_all_for_market(self, canonical_id: str) -> Dict[str, PricePoint]:
-        result = {}
-        for platform in ("kalshi", "polymarket"):
-            price = await self.get(platform, canonical_id)
-            if price:
-                result[platform] = price
+        # Iterate every in-memory price keyed off this canonical id so the
+        # scanner sees ALL configured venues, not just Kalshi+Polymarket. The
+        # previous hardcoded tuple silently dropped ForecastEx and any other
+        # third-platform feed even when the collector was writing to the
+        # store.
+        result: Dict[str, PricePoint] = {}
+        async with self._lock:
+            cached_items = list(self._mem.items())
+        suffix = f":{canonical_id}"
+        for key, price in cached_items:
+            if not key.endswith(suffix):
+                continue
+            if price.age_seconds >= self._ttl:
+                continue
+            result[price.platform] = price
         return result
 
     async def get_all_prices(self) -> Dict[str, PricePoint]:
