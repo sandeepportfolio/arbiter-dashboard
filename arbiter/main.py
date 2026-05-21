@@ -659,6 +659,7 @@ async def run_market_discovery_loop(
     polymarket,
     mapping_store: MarketMappingStore,
     *,
+    forecastex=None,
     metrics: Optional[dict] = None,
 ) -> None:
     """Continuously refresh candidate mappings through the canonical store."""
@@ -1190,6 +1191,7 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
                         kalshi,
                         polymarket,
                         mapping_store,
+                        forecastex=forecastex,
                         metrics=pm_us_metrics,
                     ),
                     name="market-discovery",
