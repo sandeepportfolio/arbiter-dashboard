@@ -51,6 +51,7 @@ from .safety.persistence import RedisStateShim, SafetyEventStore
 from .safety.supervisor import SafetySupervisor
 from .utils.retry import CircuitBreaker, RateLimiter
 from .mapping.auto_discovery import discover as discover_market_mappings
+from .mapping.forecastex_discovery import discover as discover_forecastex_mappings
 from .mapping.market_map import MarketMappingStore
 
 import sentry_sdk
@@ -688,6 +689,23 @@ async def run_market_discovery_loop(
                 max_candidates=int(runtime["auto_discovery_max_candidates"]),
                 promotion_settings=runtime,
             )
+            # ForecastEx-side discovery: walk confirmed K↔P mappings and
+            # attach IBKR conids for ones that have a matching FORECASTX
+            # event title. Runs after the K↔P pass so newly confirmed
+            # mappings get a shot in the same loop iteration.
+            forecastex_attached = 0
+            if forecastex is not None:
+                fx_client = getattr(forecastex, "client", None)
+                if fx_client is not None:
+                    try:
+                        forecastex_attached = await discover_forecastex_mappings(
+                            fx_client, mapping_store,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "ForecastEx discovery pass failed: %s", exc,
+                        )
+
             await mapping_store.refresh_runtime_cache()
             if hasattr(kalshi, "refresh_tracked_markets"):
                 kalshi.refresh_tracked_markets()
