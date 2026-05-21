@@ -276,11 +276,24 @@ async def discover(
     matched = 0
     for mapping in targets:
         best_score = 0.0
+        best_token_count = 10**9  # tiebreaker: prefer fewer tokens = more specific
         best_event: Optional[dict[str, Any]] = None
         for event in events:
             score = _score_event_against_mapping(event["title"], mapping)
-            if score > best_score:
+            if score <= 0:
+                continue
+            # Tiebreaker — when two FORECASTX events score the same against a
+            # mapping (both share only "house" with "US House Midterm Winner",
+            # say), prefer the event with fewer tokens overall. The shorter
+            # title is almost always the umbrella event ("US House Control")
+            # rather than a specific sub-race ("Kentucky 4th District...").
+            event_token_count = len(_tokenize(event["title"]))
+            if (
+                score > best_score
+                or (score == best_score and event_token_count < best_token_count)
+            ):
                 best_score = score
+                best_token_count = event_token_count
                 best_event = event
 
         if best_event is None:
