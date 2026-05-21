@@ -248,6 +248,133 @@ class ForecastExClient:
             return items
         return []
 
+    async def get_contract_info(self, conid: str) -> dict:
+        """Return /iserver/contract/{conid}/info — metadata, no prices."""
+        try:
+            return await self._request(
+                "GET", f"/iserver/contract/{conid}/info",
+            )
+        except Exception:
+            return {}
+
+    async def get_trsrv_secdef(self, conid: str) -> dict:
+        """Return /trsrv/secdef payload — includes hasOptions, assetClass, type."""
+        try:
+            payload = await self._request(
+                "GET", "/trsrv/secdef", params={"conids": str(conid)},
+            )
+            entries = payload.get("secdef") if isinstance(payload, dict) else None
+            if isinstance(entries, list) and entries:
+                return entries[0]
+        except Exception:
+            pass
+        return {}
+
+    async def resolve_event_children(
+        self, parent_conid: str, *, months: tuple[str, ...] = (),
+    ) -> list[dict]:
+        """Try every known IBKR endpoint to enumerate the YES/NO child
+        contracts under a FORECASTX event parent.
+
+        Returns a list of ``{"conid": ..., "right": "Y"|"N"|"C"|"P", ...}`` dicts.
+        Empty list if every strategy fails — callers must handle that
+        gracefully because IBKR's FORECASTX endpoints return 503 on weekends
+        and are inconsistently supported even on weekdays.
+
+        Strategies tried (in order):
+          1. POST /iserver/secdef/info with sectype=EC + each month
+          2. GET  /iserver/secdef/info  with sectype=EC + each month
+          3. POST /iserver/secdef/search with the parent's ticker + secType=EC
+          4. /trsrv/secdef hasOptions check + symbol-derived search
+        """
+        children: list[dict] = []
+        month_candidates = months or ("NOV26", "DEC26", "JAN27", "202611", "202612")
+
+        # Strategy 1+2 — secdef/info with sectype=EC
+        for method in ("POST", "GET"):
+            for month in month_candidates:
+                try:
+                    if method == "POST":
+                        payload = await self._request(
+                            "POST", "/iserver/secdef/info",
+                            json_body={
+                                "conid": str(parent_conid),
+                                "sectype": "EC",
+                                "month": month,
+                            },
+                        )
+                    else:
+                        payload = await self._request(
+                            "GET", "/iserver/secdef/info",
+                            params={
+                                "conid": str(parent_conid),
+                                "sectype": "EC",
+                                "month": month,
+                            },
+                        )
+                except Exception:
+                    continue
+                # Successful payloads carry a list of contracts under "items"
+                # or directly as a list.
+                items = payload.get("items") if isinstance(payload, dict) else payload
+                if isinstance(items, list) and items:
+                    for item in items:
+                        if isinstance(item, dict) and item.get("conid"):
+                            children.append({
+                                "conid": str(item["conid"]),
+                                "right": str(item.get("right") or item.get("putOrCall") or ""),
+                                "strike": item.get("strike"),
+                                "source": f"secdef/info:{method}:{month}",
+                            })
+                    if children:
+                        return children
+
+        # Strategy 3 — search by parent ticker
+        secdef = await self.get_trsrv_secdef(parent_conid)
+        ticker = str(secdef.get("ticker") or secdef.get("symbol") or "").strip()
+        if ticker:
+            try:
+                payload = await self._request(
+                    "POST", "/iserver/secdef/search",
+                    json_body={"symbol": ticker, "secType": "EC"},
+                )
+                items = payload.get("items") if isinstance(payload, dict) else payload
+                if isinstance(items, list):
+                    for item in items:
+                        if not isinstance(item, dict):
+                            continue
+                        conid = str(item.get("conid") or "").strip()
+                        if conid and conid != str(parent_conid):
+                            children.append({
+                                "conid": conid,
+                                "right": "",
+                                "strike": None,
+                                "source": f"secdef/search:{ticker}",
+                            })
+            except Exception:
+                pass
+
+        return children
+
+    @staticmethod
+    def is_tradeable_snapshot(snapshot: dict) -> bool:
+        """A FORECASTX snapshot is tradeable when IBKR returns at least one of
+        bid (field 84), ask (86), or last (31) with a positive value. Parent
+        IND/Event conids return only ``conid``+``conidEx``+symbol+empty fields.
+        """
+        if not isinstance(snapshot, dict):
+            return False
+        for field_code in ("31", "84", "86"):
+            value = snapshot.get(field_code)
+            if value in (None, "", "N/A"):
+                continue
+            try:
+                if float(str(value).lstrip("CHc h").strip()) > 0:
+                    return True
+            except (TypeError, ValueError):
+                continue
+        return False
+
     # ── Orders ─────────────────────────────────────────────────────
 
     async def place_order(
@@ -354,6 +481,9 @@ class ForecastExCollector:
         self.rate_limiter = self.client.live_rate_limiter
         self._conid_map: dict[str, str] = {}
         self._inactive_conids: set[str] = set()
+        # Track how many times each conid returned a non-tradeable snapshot
+        # so we can disable untradeable parent-event conids after a few probes.
+        self._parent_probe_counts: dict[str, int] = {}
         self.refresh_tracked_markets()
 
     def refresh_tracked_markets(self) -> None:
@@ -440,6 +570,26 @@ class ForecastExCollector:
             self.total_fetches += 1
             try:
                 snapshot = await self.client.market_snapshot(conid)
+                # FORECASTX event-parent (IND) conids return only conidEx +
+                # symbol + empty bid/ask. Polling them every cycle wastes
+                # rate-limit budget and pollutes "price_point is None" logs
+                # forever. Mark them inactive and let the operator (or the
+                # YES/NO resolver, when IBKR's FORECASTX endpoints are
+                # available) attach the child conid instead.
+                if snapshot and not ForecastExClient.is_tradeable_snapshot(snapshot):
+                    self._parent_probe_counts[conid] = (
+                        self._parent_probe_counts.get(conid, 0) + 1
+                    )
+                    if self._parent_probe_counts[conid] >= 3:
+                        self._inactive_conids.add(conid)
+                        logger.warning(
+                            "ForecastEx conid %s returns no bid/ask after %d "
+                            "probes — looks like an untradeable parent event "
+                            "conid. Disabling. Attach a child YES/NO conid via "
+                            "ops UI to enable.",
+                            conid, self._parent_probe_counts[conid],
+                        )
+                    continue
                 price = self._build_price_point(canonical_id, conid, snapshot or {})
                 if price is None:
                     continue

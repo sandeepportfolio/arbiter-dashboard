@@ -307,10 +307,41 @@ async def discover(
             )
             continue
 
+        # Resolve YES/NO child conids if the attached parent is an event.
+        # IBKR's FORECASTX EC endpoints are flaky (503 on weekends, often
+        # unsupported) so the resolver returns [] gracefully when it can't
+        # enumerate children — we then fall back to the parent conid and
+        # let the collector's parent-detection logic skip it gracefully.
+        resolved_conid = best_event["conid"]
+        try:
+            children = await forecastex_client.resolve_event_children(
+                best_event["conid"],
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "forecastex_discovery: resolve_event_children failed for %s: %s",
+                best_event["conid"], exc,
+            )
+            children = []
+        if children:
+            # Pick the YES side by convention (right in {"Y","C","1"}); if no
+            # right info is present, fall back to the first child.
+            yes_child = next(
+                (c for c in children
+                 if str(c.get("right", "")).upper() in ("Y", "C", "1", "YES")),
+                children[0],
+            )
+            resolved_conid = yes_child["conid"]
+            logger.info(
+                "forecastex_discovery: resolved %s parent %s -> child %s (right=%s, src=%s)",
+                mapping.canonical_id, best_event["conid"],
+                resolved_conid, yes_child.get("right"), yes_child.get("source"),
+            )
+
         logger.info(
             "forecastex_discovery: MATCH %s ↔ conid=%s '%s' (score=%.2f)%s",
             mapping.canonical_id,
-            best_event["conid"],
+            resolved_conid,
             best_event["title"],
             best_score,
             " [dry-run]" if dry_run else "",
@@ -320,7 +351,7 @@ async def discover(
             matched += 1
             continue
 
-        mapping.forecastex_contract_id = best_event["conid"]
+        mapping.forecastex_contract_id = resolved_conid
         try:
             await mapping_store.upsert(mapping)
             matched += 1
