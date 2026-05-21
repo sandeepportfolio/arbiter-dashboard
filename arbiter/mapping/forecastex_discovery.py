@@ -74,7 +74,31 @@ DEFAULT_SEED_KEYWORDS: tuple[str, ...] = (
 )
 
 # Conservative threshold. Below this, log the near-miss but do not write.
-DEFAULT_MIN_SCORE = 0.55
+# 0.30 picks up "U.S House Midterm Winner" ↔ "US House Control" (3-of-9
+# overlap) while the domain-routing guard below blocks the obvious false
+# positives (sports mappings ↔ FORECASTX geographic primaries that share
+# only city names).
+DEFAULT_MIN_SCORE = 0.30
+
+# Tokens that mark a mapping (or event) as a sports market. When the mapping
+# carries any of these and the FORECASTX event title does not, we refuse to
+# match — geographic overlap alone ("New York Yankees" vs "New York Governor")
+# is a false-positive trap.
+_SPORTS_HINT_TOKENS: frozenset[str] = frozenset({
+    "mlb", "nfl", "nba", "nhl", "mls", "epl", "uefa", "fifa", "wnba",
+    "game", "vs", "yankees", "mets", "dodgers", "celtics", "lakers",
+    "sox", "cubs", "padres", "rangers", "phillies", "athletic",
+    "fc", "soccer", "football", "basketball", "baseball", "hockey",
+    "tournament", "playoff", "championship", "match", "tie",
+})
+
+# Tokens that mark a mapping (or event) as political.
+_POLITICAL_HINT_TOKENS: frozenset[str] = frozenset({
+    "election", "senate", "house", "governor", "primary", "general",
+    "control", "majority", "midterm", "president", "presidential",
+    "republican", "democrat", "democratic", "congressional", "gop",
+    "dem", "party",
+})
 
 # Marker IBKR uses in companyHeader to identify ForecastEx event listings.
 FORECASTX_MARKER = "FORECASTX"
@@ -86,6 +110,38 @@ def _strip_marker(title: str) -> str:
     return cleaned.strip(" -")
 
 
+def _domain_compatible(event_title: str, mapping: MarketMapping) -> bool:
+    """Block cross-domain matches.
+
+    A FORECASTX event titled "New York Governor Republican Primary" should
+    never bind to a Kalshi MLB mapping ("New York Yankees vs Mets") even
+    though they share the "new york" tokens. The check fires only when the
+    mapping clearly belongs to one domain (sports) and the event clearly
+    belongs to another (political), so it stays conservative and won't
+    reject mappings whose domain we can't infer.
+    """
+    mapping_text = " ".join(
+        s for s in (
+            mapping.canonical_id,
+            mapping.description,
+            mapping.polymarket_question,
+        ) if s
+    )
+    mapping_tokens = _tokenize(mapping_text)
+    event_tokens = _tokenize(event_title)
+
+    mapping_is_sports = bool(mapping_tokens & _SPORTS_HINT_TOKENS)
+    event_is_political = bool(event_tokens & _POLITICAL_HINT_TOKENS)
+    event_is_sports = bool(event_tokens & _SPORTS_HINT_TOKENS)
+    mapping_is_political = bool(mapping_tokens & _POLITICAL_HINT_TOKENS)
+
+    if mapping_is_sports and event_is_political and not event_is_sports:
+        return False
+    if mapping_is_political and event_is_sports and not event_is_political:
+        return False
+    return True
+
+
 def _score_event_against_mapping(event_title: str, mapping: MarketMapping) -> float:
     """Best similarity between the FORECASTX event title and any descriptive
     field on the mapping (description, polymarket question, aliases).
@@ -94,8 +150,12 @@ def _score_event_against_mapping(event_title: str, mapping: MarketMapping) -> fl
       * overlap coefficient — robust when FORECASTX titles are wordier
       * Jaccard (similarity_score) — penalises spurious matches by union size
 
-    Both run with the same stopword-filtered token set.
+    Both run with the same stopword-filtered token set. Cross-domain
+    pairings (sports mapping ↔ political event, or vice versa) short-circuit
+    to 0 so geographic overlap can't carry a match.
     """
+    if not _domain_compatible(event_title, mapping):
+        return 0.0
     candidates = (
         mapping.description,
         mapping.polymarket_question,

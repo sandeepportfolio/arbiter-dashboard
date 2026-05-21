@@ -101,6 +101,35 @@ def test_score_event_against_mapping_zero_when_unrelated():
     assert score < 0.2
 
 
+def test_score_event_against_mapping_blocks_sports_vs_political_false_positive():
+    # The trap we found in prod: "New York Yankees" shares geography with
+    # "New York Governor". Without the domain guard, overlap coefficient
+    # rates this 0.5. With the guard it must return 0.
+    mapping = _make_mapping(
+        "GAME_MLB_20260517_NYY_fae1a2d9",
+        description="New York Yankees vs. New York Mets",
+        polymarket_question="New York Yankees vs. New York Mets",
+    )
+    score = _score_event_against_mapping(
+        "New York Governor Republican Primary", mapping,
+    )
+    assert score == 0.0
+
+
+def test_score_event_against_mapping_allows_political_to_political():
+    # Inverse — make sure the guard doesn't reject the legitimate match
+    # between a political control market and the FORECASTX political event.
+    mapping = _make_mapping(
+        "GOP_HOUSE_2026",
+        description="U.S House Midterm Winner",
+        polymarket_question="Which party wins the US House in 2026 midterms?",
+    )
+    score = _score_event_against_mapping(
+        "US House of Representatives Control", mapping,
+    )
+    assert score > 0.3
+
+
 # ── Async behaviour tests ─────────────────────────────────────────────────
 
 
