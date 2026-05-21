@@ -100,6 +100,11 @@ services:
       # Do NOT override it here — same env_file precedence issue as AUTO_EXECUTE.
     ports:
       - "${ARBITER_PORT:-8080}:8080"
+    extra_hosts:
+      # ForecastEx: IBKR Client Portal Gateway runs on the host, not in a container.
+      # Docker Desktop on macOS auto-resolves host.docker.internal, but declaring it
+      # explicitly makes the compose file portable to Linux hosts.
+      - "host.docker.internal:host-gateway"
     depends_on:
       arbiter-postgres-prod:
         condition: service_healthy
