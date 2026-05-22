@@ -401,3 +401,74 @@ async def test_rejected_response_sets_order_error():
     assert order.error is not None
     assert "polymarket_us" in order.error
     assert "REJECTED" in order.error.upper()
+
+
+# ─── Empty-error regression: every non-success terminal must surface a reason ──
+
+async def test_killed_response_sets_order_error():
+    """ORDER_STATE_KILLED maps to CANCELLED; before this fix the Order returned
+    with error=None and persisted as an empty string in execution_orders.error,
+    making post-hoc diagnosis impossible (49 prod failures, 60 prod cancels in
+    that exact state).  Now CANCELLED+terminal must always carry a reason.
+    """
+    client = MagicMock()
+    client.place_order = AsyncMock(
+        return_value={
+            "id": "ord-killed",
+            "state": "ORDER_STATE_KILLED",
+            "rejectionReason": "NO_FILL_AT_LIMIT",
+        }
+    )
+    adapter = _make_adapter(client=client)
+    order = await adapter.place_fok("ARB-K2", "slug-k", "CAN-K", "yes", 0.50, 10)
+    assert order.status == OrderStatus.CANCELLED
+    assert order.error, "KILLED must populate order.error (was empty in prod)"
+    assert "KILLED" in order.error.upper()
+
+
+async def test_expired_response_sets_order_error_without_reason():
+    """ORDER_STATE_EXPIRED with no rejectionReason field — error must still be
+    populated with at least the api_status so the operator can distinguish
+    'no liquidity' from 'venue rejected order shape'.
+    """
+    client = MagicMock()
+    client.place_order = AsyncMock(
+        return_value={"id": "ord-exp2", "state": "ORDER_STATE_EXPIRED"}
+    )
+    adapter = _make_adapter(client=client)
+    order = await adapter.place_ioc("ARB-E2", "slug-e", "CAN-E", "yes", 0.50, 10)
+    assert order.status == OrderStatus.CANCELLED
+    assert order.error, "EXPIRED must populate order.error even without reason"
+    assert "EXPIRED" in order.error.upper()
+
+
+async def test_unknown_state_sets_order_error():
+    """An unknown wire state defaults to FAILED — must carry the literal
+    api_status so the next diagnostic pass sees what new state Polymarket
+    started emitting.
+    """
+    client = MagicMock()
+    client.place_order = AsyncMock(
+        return_value={"id": "ord-unk2", "state": "WHATEVER_NEW_STATE"}
+    )
+    adapter = _make_adapter(client=client)
+    order = await adapter.place_fok("ARB-U2", "slug-u", "CAN-U", "yes", 0.50, 10)
+    assert order.status == OrderStatus.FAILED
+    assert order.error, "Unknown state must populate order.error"
+    assert "WHATEVER_NEW_STATE" in order.error
+
+
+async def test_time_in_force_killed_sets_order_error():
+    """TIME_IN_FORCE_KILLED is what Polymarket actually sends back for FOK
+    rejections that didn't match — must surface a reason instead of empty error.
+    """
+    client = MagicMock()
+    client.place_order = AsyncMock(
+        return_value={"id": "ord-tif", "state": "TIME_IN_FORCE_KILLED"}
+    )
+    adapter = _make_adapter(client=client)
+    order = await adapter.place_fok("ARB-TIF", "slug-t", "CAN-T", "yes", 0.50, 10)
+    # Unknown to _map_status -> FAILED
+    assert order.status == OrderStatus.FAILED
+    assert order.error, "TIME_IN_FORCE_KILLED must populate order.error"
+    assert "TIME_IN_FORCE_KILLED" in order.error
