@@ -47,6 +47,7 @@ from .execution.stuck_trade_recovery import (
 from .portfolio import PortfolioConfig, PortfolioMonitor
 from .profitability import ProfitabilityConfig, ProfitabilityValidator
 from .readiness import OperationalReadiness
+from .recovery import AutoResolver, AutoResolverConfig
 from .safety.persistence import RedisStateShim, SafetyEventStore
 from .safety.supervisor import SafetySupervisor
 from .utils.retry import CircuitBreaker, RateLimiter
@@ -513,6 +514,54 @@ async def run_incident_auto_resolve_loop(engine: ExecutionEngine, interval: floa
             await asyncio.sleep(30.0)
 
 
+async def run_auto_resolver_loop(
+    auto_resolver: AutoResolver,
+    *,
+    interval_s: float = 300.0,
+):
+    """Periodically run the AutoResolver's three runtime mechanisms.
+
+    Mechanisms invoked each pass (Components A, B, D from
+    ``arbiter.recovery.auto_resolver``):
+      - Reconcile half-recorded arbs whose unwind is already booked.
+      - Classify (not act on) the kill-switch arm reason.
+      - Expire stale incidents past their severity TTL.
+
+    Component C (warm-restart eligibility) is consumed at startup by the
+    readiness gate, not in this loop.
+
+    The loop never dies on per-iteration errors; AutoResolver.run_once
+    handles its own per-component error paths.
+    """
+    log = logging.getLogger("arbiter.main.auto_resolver")
+    while True:
+        try:
+            summary = await auto_resolver.run_once()
+            applied = [
+                r for r in summary.get("reconciled", [])
+                if r.get("outcome") == "applied"
+            ]
+            expired = [
+                e for e in summary.get("expired_incidents", [])
+                if e.get("outcome") == "expired"
+            ]
+            ks_verdict = summary.get("kill_switch", {}).get("verdict")
+            if applied or expired or ks_verdict not in (None, "not_armed"):
+                log.warning(
+                    "auto_resolver pass: reconciled=%d expired=%d "
+                    "kill_switch_verdict=%s",
+                    len(applied), len(expired), ks_verdict,
+                )
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:  # noqa: BLE001 — keep the loop alive
+            log.error("auto_resolver loop error: %s", exc)
+        try:
+            await asyncio.sleep(interval_s)
+        except asyncio.CancelledError:
+            return
+
+
 async def cleanup_runtime(
     *,
     logger: logging.Logger,
@@ -900,6 +949,21 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     engine._safety = safety  # late injection for plan 03-03 one-leg hook
     await safety.restore_from_redis()
 
+    # ── AutoResolver (verify-before-act recovery automation) ───────
+    # Build once here, run periodically below. Operates on the same
+    # store / safety_events / supervisor / notifier so a single test can
+    # stub them. See arbiter/recovery/auto_resolver.py for the four
+    # mechanisms (A reconcile, B classify, C warm-restart, D expire).
+    auto_resolver: Optional[AutoResolver] = None
+    if store is not None:
+        auto_resolver = AutoResolver(
+            store=store,
+            safety_store=safety_events_store,
+            supervisor=safety,
+            notifier=monitor.notifier,
+            config=AutoResolverConfig(),
+        )
+
     # Apply safety_events DDL when a Postgres pool is available. Additionally
     # re-run init.sql idempotently so schema migrations (SAFE-06 ALTER TABLE
     # market_mappings columns, etc.) land on restart. Every statement in
@@ -1258,6 +1322,17 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     tasks.append(asyncio.create_task(profitability.run(), name="profitability-validator"))
     tasks.append(asyncio.create_task(run_reconciliation_loop(reconciler, monitor, engine), name="pnl-reconciler"))
     tasks.append(asyncio.create_task(run_incident_auto_resolve_loop(engine, interval=120.0, max_age=120.0), name="incident-auto-resolve"))
+
+    # AutoResolver periodic loop (5-min default). Reconciles half-recorded
+    # arbs whose unwind is already booked, classifies the kill-switch arm
+    # reason, and expires stale incidents past their TTL. Construction was
+    # done above next to the safety supervisor.
+    if auto_resolver is not None:
+        ar_interval = float(os.getenv("AUTO_RESOLVER_INTERVAL_S", "300"))
+        tasks.append(asyncio.create_task(
+            run_auto_resolver_loop(auto_resolver, interval_s=ar_interval),
+            name="auto-resolver",
+        ))
 
     # Stuck-trade recovery loop (5-min default). Only runs when a Postgres
     # store and at least one platform adapter are configured — otherwise the
