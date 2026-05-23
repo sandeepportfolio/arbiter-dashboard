@@ -140,12 +140,28 @@ class SafetySupervisor:
 
     # ─── trip_kill / reset_kill ─────────────────────────────────────────
 
-    async def trip_kill(self, by: str, reason: str) -> SafetyState:
+    async def trip_kill(
+        self,
+        by: str,
+        reason: str,
+        *,
+        persist: bool = True,
+    ) -> SafetyState:
         """Arm the kill switch, cancel every open order, audit, publish.
 
         Idempotent: concurrent callers serialize on ``self._state_lock``; if
         the switch is already armed, this is a no-op (returns current state
         without re-cancelling or re-broadcasting).
+
+        ``persist`` controls whether the armed boolean is written to Redis.
+        Pass ``persist=False`` for transient arms that should NOT survive a
+        container restart — most notably the SIGTERM-induced
+        ``prepare_shutdown`` arm. Persisting that arm caused the 2026-05-21
+        audit bug where every deploy came back armed because the previous
+        container's graceful-shutdown drain left the Redis key set. Operator
+        and incident-driven arms keep the default ``persist=True`` so a real
+        kill-switch state survives across restarts as the original design
+        intended.
         """
         clear_contextvars()
         bind_contextvars(event="safety.trip_kill", actor=by)
@@ -184,7 +200,9 @@ class SafetySupervisor:
                     )
 
                 # Optional Redis live state (no-op when disabled).
-                if self.redis is not None:
+                # ``persist=False`` skips the write so a transient SIGTERM
+                # arm does not leave the next container instance armed.
+                if self.redis is not None and persist:
                     try:
                         await self.redis.set_armed(True)
                     except Exception as exc:
@@ -464,8 +482,15 @@ class SafetySupervisor:
             }
         )
         try:
+            # ``persist=False``: SIGTERM-induced arms are a transient drain
+            # mechanism, not a durable kill-switch state. Without this every
+            # ``docker restart`` / image redeploy left the next container
+            # armed because the previous instance's graceful shutdown wrote
+            # ``armed=true`` to Redis on its way out (see 2026-05-22 audit).
             await self.trip_kill(
-                by="system:shutdown", reason="Process shutdown signal",
+                by="system:shutdown",
+                reason="Process shutdown signal",
+                persist=False,
             )
         finally:
             await self._publish(

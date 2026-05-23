@@ -33,6 +33,15 @@ _TERMINAL_STATUSES = {
     OrderStatus.SIMULATED,
 }
 
+# Sentinel written into ``execution_arbs.recovery_notes`` by the naked-leg
+# reconciliation flow (see ``mark_naked_leg_reconciled`` below). The
+# ``list_half_recorded_arbs`` mode-2 query checks for this string to know
+# whether an asymmetric-fill arb has already been booked, distinguishing
+# real exposure from runtime ``recovery_check: ...`` polling noise. Stable
+# string — do not rename without updating both the query and any
+# operator-side runbooks that grep for it.
+NAKED_LEG_RECONCILED_SENTINEL = "[naked-leg-reconciled]"
+
 
 def _opp_to_jsonb(opportunity: Any) -> str:
     """Serialize ArbitrageOpportunity (or any dataclass) to JSON string for JSONB column."""
@@ -277,7 +286,21 @@ class ExecutionStore:
                             ('filled', 'failed', 'simulated', 'recovering', 'closed')
                     )
                     OR
-                    -- Mode 2: asymmetric fill, unwind not yet booked
+                    -- Mode 2: asymmetric fill, unwind not yet booked.
+                    -- "Not yet booked" = no unwind/realized PnL AND no
+                    -- reconciliation sentinel in recovery_notes. The sentinel
+                    -- ``NAKED_LEG_RECONCILED_SENTINEL`` is written by the
+                    -- backfill flow when an operator (or a future automated
+                    -- reconciler) confirms what the auto-unwind did. We use
+                    -- a sentinel rather than ``recovery_notes != ''`` because
+                    -- the engine's runtime recovery loop appends noisy
+                    -- ``recovery_check: ...`` lines on every poll, so a
+                    -- non-empty ``recovery_notes`` alone is not evidence of
+                    -- reconciliation. We use a sentinel rather than
+                    -- ``unwind_pnl != 0`` because a clean auto-unwind that
+                    -- closed at the buy price (e.g. NBA spread games where
+                    -- the second leg failed before any price drift) produces
+                    -- a *legitimate* unwind_pnl of 0.
                     (
                         SUM(
                             CASE WHEN o.status IN ('filled', 'simulated')
@@ -293,11 +316,11 @@ class ExecutionStore:
                                  THEN 1 ELSE 0
                             END
                         ) >= 1
-                        AND COALESCE(a.unwind_pnl, 0) = 0
-                        AND COALESCE(a.realized_pnl, 0) = 0
+                        AND POSITION($1 IN COALESCE(a.recovery_notes, '')) = 0
                     )
                 ORDER BY a.created_at ASC
-                """
+                """,
+                NAKED_LEG_RECONCILED_SENTINEL,
             )
         return [
             {
@@ -313,6 +336,47 @@ class ExecutionStore:
             }
             for r in rows
         ]
+
+    async def mark_naked_leg_reconciled(
+        self,
+        arb_id: str,
+        *,
+        unwind_pnl: float,
+        note: str,
+    ) -> None:
+        """Idempotently mark an asymmetric-fill arb as reconciled.
+
+        Writes the ``NAKED_LEG_RECONCILED_SENTINEL`` into ``recovery_notes``
+        (appending if existing notes are present), updates ``unwind_pnl``,
+        and bumps ``updated_at``. Future ``list_half_recorded_arbs`` calls
+        will skip this arb's mode-2 branch.
+
+        Called from the dashboard's manual reconciliation flow and from the
+        2026-05-22 audit backfill. Idempotent: re-applying with the same
+        values is a no-op-ish UPDATE that just touches ``updated_at``.
+        """
+        if self._pool is None:
+            await self.connect()
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE execution_arbs
+                   SET unwind_pnl = $2,
+                       updated_at = NOW(),
+                       recovery_notes = CASE
+                           WHEN COALESCE(recovery_notes, '') = ''
+                           THEN $3 || ' ' || $4
+                           WHEN POSITION($3 IN recovery_notes) > 0
+                           THEN recovery_notes
+                           ELSE recovery_notes || E'\n' || $3 || ' ' || $4
+                       END
+                 WHERE arb_id = $1
+                """,
+                arb_id,
+                Decimal(str(unwind_pnl)),
+                NAKED_LEG_RECONCILED_SENTINEL,
+                note,
+            )
 
     # ─── Fill persistence ────────────────────────────────────────────────────
 

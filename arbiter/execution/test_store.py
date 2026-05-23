@@ -555,6 +555,8 @@ async def test_resolve_stale_half_recorded_incidents_resolves_non_active_arbs(mo
 
 @pytest.mark.asyncio
 async def test_list_half_recorded_arbs_includes_fill_exposure_fields(mock_pool):
+    from arbiter.execution.store import NAKED_LEG_RECONCILED_SENTINEL
+
     store = ExecutionStore(database_url="postgres://mock/mock")
     await store.connect()
 
@@ -566,14 +568,16 @@ async def test_list_half_recorded_arbs_includes_fill_exposure_fields(mock_pool):
     assert "filled_leg_count" in sql
     assert "filled_notional" in sql
     assert "'closed'" in sql
-    assert args == ()
     # 2026-05-22 audit: query MUST surface asymmetric-fill arbs where one
     # leg filled but the counterpart did not and unwind PnL was never booked
     # (mode 2). Otherwise the ARB-000240..261 class of naked-leg orphans
     # silently bypasses the recovery endpoint.
-    assert "unwind_pnl" in sql
-    assert "realized_pnl" in sql
     assert "unfilled_leg_count" in sql
+    # Mode 2 keys off the sentinel string in recovery_notes, NOT off
+    # unwind_pnl/realized_pnl (which can be legitimately zero) and NOT off
+    # recovery_notes != '' (which is polluted by recovery_check polling).
+    assert "POSITION($1" in sql
+    assert args == (NAKED_LEG_RECONCILED_SENTINEL,)
 
 
 @pytest.mark.asyncio
@@ -604,6 +608,36 @@ async def test_list_half_recorded_arbs_surfaces_asymmetric_fill(mock_pool):
     assert result[0]["filled_leg_count"] == 1
     assert result[0]["unfilled_leg_count"] == 1
     assert result[0]["filled_notional"] == 7.40
+
+
+@pytest.mark.asyncio
+async def test_mark_naked_leg_reconciled_writes_sentinel(mock_pool):
+    """``mark_naked_leg_reconciled`` must (a) update unwind_pnl, (b) embed
+    the ``[naked-leg-reconciled]`` sentinel in recovery_notes, and (c) be
+    idempotent — re-applying does not duplicate the sentinel.
+    """
+    from arbiter.execution.store import NAKED_LEG_RECONCILED_SENTINEL
+
+    store = ExecutionStore(database_url="postgres://mock/mock")
+    await store.connect()
+
+    await store.mark_naked_leg_reconciled(
+        "ARB-000240",
+        unwind_pnl=-4.70,
+        note="Backfill (2026-05-22): naked kalshi yes leg auto-unwound",
+    )
+
+    method, sql, args = mock_pool.conn.calls[-1]
+    assert method == "execute"
+    assert "UPDATE execution_arbs" in sql
+    assert "unwind_pnl = $2" in sql
+    # Sentinel must be a query parameter, not interpolated, so we don't
+    # rot the string if the constant is renamed in the future.
+    assert NAKED_LEG_RECONCILED_SENTINEL in args
+    assert args[0] == "ARB-000240"
+    # POSITION-based idempotency: if sentinel already present, leave notes
+    # untouched (no double-write).
+    assert "POSITION($3 IN recovery_notes) > 0" in sql
 
 
 @pytest.mark.asyncio

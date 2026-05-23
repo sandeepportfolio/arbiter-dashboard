@@ -267,6 +267,86 @@ async def test_restore_from_redis_no_shim_is_safe(fake_notifier, fake_adapter_fa
     assert supervisor.is_armed is False
 
 
+async def test_trip_kill_persist_false_does_not_write_redis(
+    fake_notifier, fake_adapter_factory,
+):
+    """SIGTERM-induced arms must NOT persist to Redis. Otherwise every
+    docker restart leaves the next container armed (2026-05-22 audit)."""
+    from arbiter.safety.persistence import RedisStateShim
+
+    writes: list = []
+
+    class _StubRedis:
+        async def get(self, key):
+            return None
+
+        async def set(self, key, value):
+            writes.append(("set", key, value))
+
+        async def delete(self, key):
+            writes.append(("delete", key))
+
+    shim = RedisStateShim(redis_client=_StubRedis())
+    supervisor = SafetySupervisor(
+        config=SafetyConfig(),
+        engine=SimpleNamespace(),
+        adapters={"kalshi": fake_adapter_factory("kalshi", [])},
+        notifier=fake_notifier,
+        redis=shim,
+        store=None,
+        safety_store=None,
+    )
+
+    await supervisor.trip_kill(
+        by="system:shutdown",
+        reason="Process shutdown signal",
+        persist=False,
+    )
+
+    assert supervisor.is_armed is True
+    # In-memory state armed but Redis NOT written
+    assert writes == []
+
+
+async def test_trip_kill_default_persist_writes_redis(
+    fake_notifier, fake_adapter_factory,
+):
+    """Operator/incident arms (default persist=True) must write Redis so a
+    real kill-switch state survives a container restart."""
+    from arbiter.safety.persistence import RedisStateShim
+
+    writes: list = []
+
+    class _StubRedis:
+        async def get(self, key):
+            return None
+
+        async def set(self, key, value):
+            writes.append(("set", key, value))
+
+        async def delete(self, key):
+            writes.append(("delete", key))
+
+    shim = RedisStateShim(redis_client=_StubRedis())
+    supervisor = SafetySupervisor(
+        config=SafetyConfig(),
+        engine=SimpleNamespace(),
+        adapters={"kalshi": fake_adapter_factory("kalshi", [])},
+        notifier=fake_notifier,
+        redis=shim,
+        store=None,
+        safety_store=None,
+    )
+
+    await supervisor.trip_kill(
+        by="operator:test@example.com",
+        reason="manual incident response",
+    )
+
+    assert supervisor.is_armed is True
+    assert any(w[0] == "set" and w[2] == "armed" for w in writes), writes
+
+
 async def test_reset_kill_clears_engine_db_write_failed(
     fake_notifier, fake_adapter_factory, monkeypatch,
 ):
