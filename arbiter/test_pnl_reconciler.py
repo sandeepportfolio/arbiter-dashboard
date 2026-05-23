@@ -93,6 +93,85 @@ def test_record_deposit_dedup_tolerates_cent_level_noise():
     assert len(reconciler.deposit_history) == 1
 
 
+@pytest.mark.asyncio
+async def test_backfill_initial_deposits_records_event_without_shifting_starting():
+    """A platform with starting>0 and no deposit history gets its starting
+    balance recorded as an initial-capital deposit. starting balance must
+    NOT be shifted (record_deposit-style += amount would double-count)."""
+    reconciler = PnLReconciler(log_to_disk=False)
+    reconciler.set_starting_balance("forecastex", 298.95)
+
+    backfilled = await reconciler.backfill_initial_deposits_as_events()
+
+    assert backfilled == 1
+    assert reconciler.stats["starting_balances"]["forecastex"] == 298.95
+    assert reconciler.total_deposits_by_platform["forecastex"] == 298.95
+    assert len(reconciler.deposit_history) == 1
+    event = reconciler.deposit_history[0]
+    assert event["platform"] == "forecastex"
+    assert event["amount"] == 298.95
+    assert event["balance_before"] == 0.0
+    assert event["balance_after"] == 298.95
+
+
+@pytest.mark.asyncio
+async def test_backfill_is_idempotent():
+    """Running backfill twice should only insert one event per platform."""
+    reconciler = PnLReconciler(log_to_disk=False)
+    reconciler.set_starting_balance("forecastex", 100.0)
+
+    first = await reconciler.backfill_initial_deposits_as_events()
+    second = await reconciler.backfill_initial_deposits_as_events()
+
+    assert first == 1
+    assert second == 0
+    assert len(reconciler.deposit_history) == 1
+    assert reconciler.total_deposits_by_platform["forecastex"] == 100.0
+
+
+@pytest.mark.asyncio
+async def test_backfill_skips_platforms_with_existing_deposit_history():
+    """Kalshi/polymarket-style platforms already have deposit events — backfill
+    must leave them alone."""
+    reconciler = PnLReconciler(log_to_disk=False)
+    reconciler.set_starting_balance("kalshi", 100.0)
+    reconciler.record_deposit("kalshi", 50.0, balance_before=100.0, balance_after=150.0)
+    starting_before = reconciler.stats["starting_balances"]["kalshi"]
+    deposits_before = reconciler.total_deposits_by_platform["kalshi"]
+    events_before = len(reconciler.deposit_history)
+
+    backfilled = await reconciler.backfill_initial_deposits_as_events()
+
+    assert backfilled == 0
+    assert reconciler.stats["starting_balances"]["kalshi"] == starting_before
+    assert reconciler.total_deposits_by_platform["kalshi"] == deposits_before
+    assert len(reconciler.deposit_history) == events_before
+
+
+@pytest.mark.asyncio
+async def test_backfill_leaves_capital_math_invariant():
+    """capital_basis = original_start + total_deposits must not change."""
+    reconciler = PnLReconciler(log_to_disk=False)
+    reconciler.set_starting_balance("forecastex", 298.95)
+
+    starting_before = reconciler.stats["starting_balances"]["forecastex"]
+    deposits_before = reconciler.total_deposits_by_platform.get("forecastex", 0.0)
+    capital_basis_before = starting_before + deposits_before
+
+    await reconciler.backfill_initial_deposits_as_events()
+
+    starting_after = reconciler.stats["starting_balances"]["forecastex"]
+    deposits_after = reconciler.total_deposits_by_platform["forecastex"]
+    # capital_basis is (original_starting + total_deposits) where
+    # original_starting = adjusted_starting - total_deposits. So the visible
+    # capital_basis equals starting_balance always. Must not have moved.
+    assert starting_after == starting_before
+    # original_starting after backfill must be 0, total_deposits == starting.
+    original_starting_after = starting_after - deposits_after
+    assert original_starting_after == pytest.approx(0.0)
+    assert deposits_after == pytest.approx(capital_basis_before)
+
+
 def test_record_deposit_distinct_amounts_not_deduped():
     """A genuinely different deposit must NOT be dropped by the dedup check."""
     reconciler = PnLReconciler(log_to_disk=False)

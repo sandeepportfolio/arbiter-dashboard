@@ -194,10 +194,65 @@ class PnLReconciler:
                         "  %s: starting=$%.2f, deposits=$%.2f",
                         plat, bal, dep,
                     )
+                # Normalize: any platform whose starting balance was seeded
+                # before deposit tracking came online (starting > 0, deposits
+                # = 0, no deposit events) gets its starting balance recorded
+                # retroactively as an initial-capital deposit so the deposit
+                # ledger and the dashboard's "total deposits" reflect the
+                # actual capital flow. Idempotent — runs at most once per
+                # platform, ever.
+                await self.backfill_initial_deposits_as_events()
             return restored
         except Exception as exc:
             logger.warning("Failed to load persisted reconciler state: %s", exc)
             return False
+
+    async def backfill_initial_deposits_as_events(self) -> int:
+        """Retroactively record any unattributed starting balance as a deposit.
+
+        For each platform where:
+          - starting_balance > 0, AND
+          - total_deposits == 0 (no recorded capital flow), AND
+          - no existing deposit_events for that platform
+
+        insert a deposit event with amount = starting_balance and bump
+        total_deposits to match. The platform's effective starting balance
+        is NOT shifted (it's already set), so cash_trading_pnl and capital
+        math are unchanged — only the deposit ledger gains an explicit
+        "initial capital" entry.
+
+        Idempotent: the (total_deposits == 0 AND no events) guard means a
+        successful backfill won't fire again on the next startup.
+
+        Returns the number of platforms backfilled.
+        """
+        backfilled = 0
+        for platform, starting in list(self._starting_balances.items()):
+            if starting <= 0:
+                continue
+            if self._total_deposits.get(platform, 0.0) != 0.0:
+                continue
+            if any(e.platform == platform for e in self._deposit_events):
+                continue
+            event = DepositEvent(
+                platform=platform,
+                amount=starting,
+                balance_before=0.0,
+                balance_after=starting,
+                timestamp=time.time(),
+            )
+            self._deposit_events.append(event)
+            self._total_deposits[platform] = starting
+            logger.info(
+                "Backfilled initial-capital deposit for %s: $%.2f "
+                "(starting balance unchanged; deposit ledger now reflects it)",
+                platform, starting,
+            )
+            if self._pg_pool is not None:
+                await self._persist_deposit_event(event)
+                await self._persist_balance(platform)
+            backfilled += 1
+        return backfilled
 
     async def _persist_balance(self, platform: str) -> None:
         """Save starting balance and total deposits for a platform to PostgreSQL."""
