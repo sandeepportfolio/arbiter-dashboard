@@ -789,9 +789,21 @@ async def _apply_auto_promote(
     # Settings dict (operator-runtime) wins; falls back to env var
     # AUTO_PROMOTE_MIN_SCORE (containers using env_file but no settings
     # store), else 0.85.  Same fallback pattern for max_days and advisory.
+    # Per-category gate-2 floors (sports stays at 0.85, politics/crypto/
+    # economics/entertainment/finance relax to 0.65). See
+    # arbiter.mapping.auto_promote._category_min_score for the table.
+    from arbiter.mapping.auto_promote import _category_min_score
+
     min_score_default = _env_float("AUTO_PROMOTE_MIN_SCORE", 0.85)
     min_score_raw = promotion_settings.get("auto_promote_min_score", min_score_default)
-    min_score = float(min_score_default if min_score_raw is None else min_score_raw)
+    base_min_score = float(min_score_default if min_score_raw is None else min_score_raw)
+
+    def _candidate_min_score(candidate: dict[str, Any]) -> float:
+        return _category_min_score(promotion_settings, candidate, base_min_score)
+
+    # Retained for telemetry / progress messages — represents the global floor;
+    # the actual gate uses _candidate_min_score(candidate).
+    min_score = base_min_score
     max_days_default = int(_env_float("AUTO_PROMOTE_MAX_DAYS", 90.0))
     max_days_raw = promotion_settings.get("auto_promote_max_days", max_days_default)
     max_days = int(max_days_default if max_days_raw is None else max_days_raw)
@@ -805,7 +817,7 @@ async def _apply_auto_promote(
     preverify_candidates: list[dict[str, Any]] = []
     for candidate in candidates:
         score = float(candidate.get("score", 0.0) or 0.0)
-        if score < min_score:
+        if score < _candidate_min_score(candidate):
             continue
         resolution_date = _coerce_date(candidate.get("resolution_date"))
         if resolution_date is not None and (resolution_date - today).days > max_days:
@@ -875,7 +887,7 @@ async def _apply_auto_promote(
 
     async def _evaluate(candidate: dict[str, Any]) -> tuple[dict[str, Any], Any]:
         score = float(candidate.get("score", 0.0) or 0.0)
-        if score < min_score:
+        if score < _candidate_min_score(candidate):
             return candidate, type("PromotionResult", (), {"promoted": False, "reason": "score_low"})()
 
         resolution_date = _coerce_date(candidate.get("resolution_date"))

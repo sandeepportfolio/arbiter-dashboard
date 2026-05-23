@@ -68,23 +68,53 @@ DEFAULT_SEED_KEYWORDS: tuple[str, ...] = (
     "election", "senate", "house", "governor", "primary", "general",
     "control", "majority", "midterm", "race", "president",
     "republican", "democrat", "congressional",
+    # Elections 2026 specifics
+    "2026", "midterm 2026", "senate 2026", "house 2026",
+    "gubernatorial", "ballot", "referendum", "recall",
     # Sports — covered if/when IBKR adds the inventory
     "mlb", "nfl", "nba", "nhl", "soccer", "tournament", "championship",
     "world cup", "super bowl", "playoff", "world series",
     # Economics / macro
     "cpi", "gdp", "unemployment", "rate", "fed", "fomc", "inflation",
     "recession", "jobs", "payrolls",
+    "fed funds", "federal funds", "interest rate", "rate hike", "rate cut",
+    "core cpi", "core pce", "pce", "ppi", "retail sales",
+    "nonfarm", "jobless", "consumer", "housing starts",
     # Crypto / finance
     "bitcoin", "ethereum", "crypto", "spx", "sp500", "nasdaq",
+    # Crypto price levels (BTC/ETH/XRP targets)
+    "btc", "eth", "xrp", "solana", "sol", "dogecoin", "doge",
+    "bitcoin 100k", "bitcoin 150k", "bitcoin 200k",
+    "ethereum 5k", "ethereum 10k", "xrp 5", "xrp 10",
+    "btc target", "eth target", "ath", "all-time high",
+    # Company earnings
+    "earnings", "eps", "revenue", "guidance", "tesla earnings",
+    "apple earnings", "nvidia earnings", "microsoft earnings",
+    "google earnings", "amazon earnings", "meta earnings",
+    "q1 earnings", "q2 earnings", "q3 earnings", "q4 earnings",
+    # Tech milestones
+    "ai", "gpt", "agi", "openai", "anthropic", "claude", "gemini",
+    "tesla", "spacex", "starship", "nvidia", "chip", "semiconductor",
+    "iphone", "model release", "product launch",
     # Climate / weather
     "hurricane", "temperature", "climate", "drought", "snowfall",
     # Science / health
     "vaccine", "drug", "approval", "fda", "trial", "study",
-    "launch", "rocket", "mission", "spacex", "openai",
-    # Entertainment / culture
+    "launch", "rocket", "mission",
+    # Entertainment / culture / awards
     "oscar", "emmy", "grammy", "box", "movie", "award",
-    # Legal / policy
+    "oscars", "academy award", "best picture", "best actor",
+    "best actress", "best director", "grammys", "song of the year",
+    "album of the year", "emmys", "outstanding drama", "golden globe",
+    # Legal / policy / SCOTUS
     "scotus", "court", "ruling", "verdict", "indictment",
+    "supreme court", "scotus decision", "scotus ruling",
+    "scotus opinion", "appeal", "appellate", "doj", "justice department",
+    # Geopolitics
+    "russia", "ukraine", "china", "taiwan", "israel", "iran",
+    "north korea", "nato", "un", "united nations", "g7", "g20",
+    "summit", "ceasefire", "treaty", "sanction", "tariff", "trade war",
+    "peace deal", "border", "invasion",
 )
 
 # Conservative threshold. Below this, log the near-miss but do not write.

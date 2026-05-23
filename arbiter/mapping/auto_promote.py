@@ -52,6 +52,57 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+# Per-category gate-2 floor. Sports markets are tight (parsed structurally,
+# almost always score 0.85+); non-sports often score 0.55–0.75 because the
+# structured-metadata gate is inherently looser for political/economic/crypto
+# questions. We lower the score floor for those categories — the resolution
+# IDENTICAL gate (#4) and the LLM YES gate (#5) still have to pass, so we are
+# not relaxing safety, only allowing the better-judgment gates to do the work.
+DEFAULT_CATEGORY_MIN_SCORE: dict[str, float] = {
+    "sports": 0.85,
+    "politics": 0.65,
+    "crypto": 0.65,
+    "economics": 0.65,
+    "entertainment": 0.65,
+    "finance": 0.65,
+}
+
+
+def _category_min_score(
+    settings: dict,
+    candidate: dict,
+    base_default: float,
+) -> float:
+    """Return the score floor for this candidate's category.
+
+    Lookup order (first hit wins):
+      1. settings["AUTO_PROMOTE_MIN_SCORE_BY_CATEGORY"][category]
+      2. DEFAULT_CATEGORY_MIN_SCORE[category]
+      3. base_default  (the flat AUTO_PROMOTE_MIN_SCORE)
+    """
+    category = str(
+        candidate.get("category")
+        or candidate.get("kalshi_category")
+        or ""
+    ).strip().lower()
+    if not category:
+        return base_default
+    by_cat = _setting(
+        settings,
+        "AUTO_PROMOTE_MIN_SCORE_BY_CATEGORY",
+        "auto_promote_min_score_by_category",
+        default=None,
+    )
+    if isinstance(by_cat, dict) and category in by_cat:
+        try:
+            return float(by_cat[category])
+        except (TypeError, ValueError):
+            pass
+    if category in DEFAULT_CATEGORY_MIN_SCORE:
+        return DEFAULT_CATEGORY_MIN_SCORE[category]
+    return base_default
+
+
 # ─── Try to import Prometheus counter (optional — no-op if unavailable) ───────
 try:
     from prometheus_client import Counter as _Counter
@@ -167,13 +218,17 @@ async def maybe_promote(
     if not _setting(settings, "AUTO_PROMOTE_ENABLED", "auto_promote_enabled", default=False):
         return _reject("auto_promote_disabled")
 
-    # ── Gate 2: score >= configured threshold ──────────────────────────────────
+    # ── Gate 2: score >= configured threshold (per-category) ──────────────────
     # Settings dict (operator-runtime) wins; falls back to AUTO_PROMOTE_MIN_SCORE
     # env var (containers using env_file but no settings store), else 0.85.
-    min_score = float(_setting(
+    # Per-category floors (sports stays strict at 0.85, politics/crypto/economics
+    # /entertainment/finance relax to 0.65) live in DEFAULT_CATEGORY_MIN_SCORE
+    # and can be overridden via settings["AUTO_PROMOTE_MIN_SCORE_BY_CATEGORY"].
+    base_min_score = float(_setting(
         settings, "AUTO_PROMOTE_MIN_SCORE", "auto_promote_min_score",
         default=_env_float("AUTO_PROMOTE_MIN_SCORE", 0.85),
     ))
+    min_score = _category_min_score(settings, candidate, base_min_score)
     score = float(candidate.get("score", 0.0))
     if score < min_score:
         return _reject("score_low")

@@ -563,3 +563,76 @@ async def test_long_dated_markets_can_pass_with_configured_max_days():
 
     assert result.promoted
     assert result.reason == "promoted"
+
+
+@pytest.mark.asyncio
+async def test_per_category_min_score_relaxes_politics_floor():
+    """Per-category floor: politics candidate with score 0.70 passes when
+    the global floor is 0.85 because DEFAULT_CATEGORY_MIN_SCORE["politics"]=0.65."""
+    settings = _make_settings(min_score=0.85)
+    candidate = _make_candidate(score=0.70)
+    candidate["category"] = "politics"
+    orderbooks = _make_orderbooks(200.0, 200.0)
+    llm = _make_llm_verifier("YES")
+
+    result = await maybe_promote(
+        candidate,
+        settings=settings,
+        orderbooks=orderbooks,
+        llm_verifier=llm,
+        today_promoted_count=0,
+        cooling_state={},
+        resolution_checker=_resolution_check_identical,
+    )
+
+    assert result.promoted, f"Expected promoted=True, got reason={result.reason}"
+    assert result.reason == "promoted"
+
+
+@pytest.mark.asyncio
+async def test_per_category_min_score_keeps_sports_strict():
+    """Per-category floor: sports candidate with score 0.80 still fails the
+    0.85 sports floor, even though the global floor is 0.50."""
+    settings = _make_settings(min_score=0.50)
+    candidate = _make_candidate(score=0.80)
+    candidate["category"] = "sports"
+    candidate["polarity"] = "same"
+    orderbooks = _make_orderbooks(200.0, 200.0)
+    llm = _make_llm_verifier("YES")
+
+    result = await maybe_promote(
+        candidate,
+        settings=settings,
+        orderbooks=orderbooks,
+        llm_verifier=llm,
+        today_promoted_count=0,
+        cooling_state={},
+        resolution_checker=_resolution_check_identical,
+    )
+
+    assert not result.promoted
+    assert result.reason == "score_low"
+
+
+@pytest.mark.asyncio
+async def test_per_category_settings_override_default_table():
+    """Operator can override per-category floor via settings dict."""
+    settings = _make_settings(min_score=0.85)
+    settings["AUTO_PROMOTE_MIN_SCORE_BY_CATEGORY"] = {"crypto": 0.90}
+    candidate = _make_candidate(score=0.70)
+    candidate["category"] = "crypto"  # default would be 0.65; override is 0.90
+    orderbooks = _make_orderbooks(200.0, 200.0)
+    llm = _make_llm_verifier("YES")
+
+    result = await maybe_promote(
+        candidate,
+        settings=settings,
+        orderbooks=orderbooks,
+        llm_verifier=llm,
+        today_promoted_count=0,
+        cooling_state={},
+        resolution_checker=_resolution_check_identical,
+    )
+
+    assert not result.promoted
+    assert result.reason == "score_low"
