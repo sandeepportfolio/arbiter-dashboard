@@ -32,3 +32,9 @@ output/*.err
 # Portable secret bundle working files
 portable-secrets/backups/
 portable-secrets/*.tmp
+
+# Local scratch artifacts that occasionally land in the repo root
+01-overview.png
+arbiter-architecture.html
+network.log
+funds-*.png
