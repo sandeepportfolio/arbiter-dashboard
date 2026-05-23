@@ -409,6 +409,7 @@ class ArbiterAPI:
         app.router.add_get("/health", self.handle_liveness)
         app.router.add_get("/ready", self.handle_service_ready)
         app.router.add_get("/ops", self.handle_ops_dashboard)
+        app.router.add_get("/ops.html", self.handle_ops_dashboard)
         app.router.add_get("/ops-legacy", self.handle_dashboard)
         app.router.add_get("/favicon.ico", self.handle_favicon)
         if self._dashboard_dir.exists():

@@ -292,7 +292,7 @@ window.MOCK = (() => {
       audit: { audit_score: 0, audits_run: 0, total_flags: 0, critical_flags: 0, pass_rate: 0, recent_results: [] },
       profitability: { verdict: 'unknown', cumulative_pnl: 0, published_opportunities: 0, active_opportunities: 0, average_edge_cents: 0, best_edge_cents: 0 },
       reconciliation: { reconciliation_count: 0, flag_count: 0 },
-      readiness: { ready: false, gates: 0, passing: 0 },
+      readiness: { ready: false, gates: 0, passing: 0, checks: [], blocking_reasons: [], warnings: [] },
     },
 
     // Edge-bucket histogram. Computed at render time from current
@@ -578,9 +578,12 @@ window.MOCK = (() => {
       if (health.readiness.gates != null) M.health.readiness.gates = asNumber(health.readiness.gates, M.health.readiness.gates);
       if (health.readiness.passing != null) M.health.readiness.passing = asNumber(health.readiness.passing, M.health.readiness.passing);
       if (Array.isArray(health.readiness.checks)) {
+        M.health.readiness.checks = health.readiness.checks;
         M.health.readiness.gates = health.readiness.checks.length;
         M.health.readiness.passing = health.readiness.checks.filter(c => c && c.status === 'pass').length;
       }
+      if (Array.isArray(health.readiness.blocking_reasons)) M.health.readiness.blocking_reasons = health.readiness.blocking_reasons;
+      if (Array.isArray(health.readiness.warnings)) M.health.readiness.warnings = health.readiness.warnings;
       if (health.readiness.ready_for_live_trading != null) M.health.readiness.ready = !!health.readiness.ready_for_live_trading;
       else if (health.readiness.ready != null) M.health.readiness.ready = !!health.readiness.ready;
     }
@@ -621,9 +624,12 @@ window.MOCK = (() => {
     if (readiness.gates != null) M.health.readiness.gates = asNumber(readiness.gates, M.health.readiness.gates);
     if (readiness.passing != null) M.health.readiness.passing = asNumber(readiness.passing, M.health.readiness.passing);
     if (Array.isArray(readiness.checks)) {
+      M.health.readiness.checks = readiness.checks;
       M.health.readiness.gates = readiness.checks.length;
       M.health.readiness.passing = readiness.checks.filter(c => c && c.status === 'pass').length;
     }
+    if (Array.isArray(readiness.blocking_reasons)) M.health.readiness.blocking_reasons = readiness.blocking_reasons;
+    if (Array.isArray(readiness.warnings)) M.health.readiness.warnings = readiness.warnings;
     if (readiness.ready_for_live_trading != null) M.health.readiness.ready = !!readiness.ready_for_live_trading;
     else if (readiness.ready != null) M.health.readiness.ready = !!readiness.ready;
   }
@@ -1608,30 +1614,73 @@ const STATUS_INFO = {
 window.STATUS_INFO = STATUS_INFO;
 
 // ── Tooltip (hover on desktop, tap on mobile) ───────────────────────
+// Uses a portal + position:fixed so the popup escapes any overflow:hidden
+// ancestors (e.g. DataTable cells), which used to clip the tooltip when
+// hovering small status pills inside table rows.
 function Tooltip({ text, children, placement = 'top' }) {
   const { t } = window.useApp();
   const [show, setShow] = React.useState(false);
+  const [rect, setRect] = React.useState(null);
   const ref = React.useRef(null);
-  // Trust touch capability over viewport size — a wide tablet in landscape
-  // still has no hover, so it should still tap-to-reveal.
   const isMobile = typeof window !== 'undefined' && window.matchMedia
     ? window.matchMedia('(hover: none), (max-width: 1023px)').matches
     : false;
 
+  const updateRect = React.useCallback(() => {
+    if (ref.current) setRect(ref.current.getBoundingClientRect());
+  }, []);
+
   React.useEffect(() => {
     if (!show) return;
+    updateRect();
     const tapOut = (e) => { if (ref.current && !ref.current.contains(e.target)) setShow(false); };
     const onKey = (e) => { if (e.key === 'Escape') setShow(false); };
+    const onScroll = () => setShow(false);
     document.addEventListener('touchstart', tapOut, { passive: true });
     document.addEventListener('keydown', onKey);
+    window.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', onScroll);
     return () => {
       document.removeEventListener('touchstart', tapOut);
       document.removeEventListener('keydown', onKey);
+      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', onScroll);
     };
-  }, [show]);
+  }, [show, updateRect]);
 
   if (!text) return <>{children}</>;
   const above = placement !== 'bottom';
+
+  let popup = null;
+  if (show && rect) {
+    const centerX = rect.left + rect.width / 2;
+    const popupStyle = {
+      position: 'fixed',
+      [above ? 'bottom' : 'top']: above ? `calc(100vh - ${rect.top - 6}px)` : `${rect.bottom + 6}px`,
+      left: `${centerX}px`,
+      transform: 'translateX(-50%)',
+      background: t.bg2 || t.bgSubtle, color: t.text, border: `1px solid ${t.border}`,
+      padding: '7px 11px', borderRadius: 8, fontSize: 11.5, lineHeight: 1.45,
+      whiteSpace: 'normal', width: 'max-content', maxWidth: 260, zIndex: 9999,
+      boxShadow: '0 6px 24px rgba(0,0,0,0.45)', pointerEvents: 'none',
+      fontWeight: 400, letterSpacing: 0, textTransform: 'none', textAlign: 'left',
+    };
+    const arrowStyle = {
+      position: 'absolute',
+      [above ? 'top' : 'bottom']: '100%',
+      left: '50%', transform: 'translateX(-50%)',
+      width: 0, height: 0,
+      borderLeft: '5px solid transparent', borderRight: '5px solid transparent',
+      [above ? 'borderTop' : 'borderBottom']: `5px solid ${t.border}`,
+    };
+    popup = ReactDOM.createPortal(
+      <span role="tooltip" style={popupStyle}>
+        <span style={arrowStyle}/>
+        {text}
+      </span>,
+      document.body
+    );
+  }
 
   return (
     <span ref={ref} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}
@@ -1642,28 +1691,7 @@ function Tooltip({ text, children, placement = 'top' }) {
       onClick={isMobile ? (e) => { e.stopPropagation(); setShow(s => !s); } : undefined}
     >
       {children}
-      {show && (
-        <span role="tooltip" style={{
-          position: 'absolute',
-          [above ? 'bottom' : 'top']: 'calc(100% + 6px)',
-          left: '50%', transform: 'translateX(-50%)',
-          background: t.bg2 || t.bgSubtle, color: t.text, border: `1px solid ${t.border}`,
-          padding: '7px 11px', borderRadius: 8, fontSize: 11.5, lineHeight: 1.45,
-          whiteSpace: 'normal', width: 'max-content', maxWidth: 260, zIndex: 9999,
-          boxShadow: '0 6px 24px rgba(0,0,0,0.45)', pointerEvents: 'none',
-          fontWeight: 400, letterSpacing: 0, textTransform: 'none', textAlign: 'left',
-        }}>
-          <span style={{
-            position: 'absolute',
-            [above ? 'top' : 'bottom']: '100%',
-            left: '50%', transform: 'translateX(-50%)',
-            width: 0, height: 0,
-            borderLeft: '5px solid transparent', borderRight: '5px solid transparent',
-            [above ? 'borderTop' : 'borderBottom']: `5px solid ${t.border}`,
-          }}/>
-          {text}
-        </span>
-      )}
+      {popup}
     </span>
   );
 }
@@ -3606,8 +3634,17 @@ function PageScanner() {
 
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 14 }}>
         <window.Card title="Opportunity state" padding={20}>
-          <div style={{ height: 200 }}>
-            <window.BarChart data={opportunityState} color={t.bgHover} accent={t.accent} labelColor={t.textDim} emptyLabel="No scanner state reported yet."/>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 10 }}>
+            {opportunityState.map((row, i) => {
+              const isHero = row.range === 'Tradable' || row.range === 'Published';
+              const tone = row.count > 0 ? (isHero ? t.green : t.text) : t.textMuted;
+              return (
+                <div key={i} style={{ padding: '12px 14px', background: t.bgSubtle, borderRadius: 8, border: `1px solid ${t.border}`, display:'flex', flexDirection:'column', gap: 4, minWidth: 0 }}>
+                  <div style={{ fontSize: 10.5, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{row.range}</div>
+                  <div style={{ fontSize: 22, fontWeight: 600, color: tone, fontFamily: window.FONTS.mono, lineHeight: 1.1 }}>{Number(row.count || 0).toLocaleString()}</div>
+                </div>
+              );
+            })}
           </div>
         </window.Card>
         <window.Card title="Active scan engine" padding={20}>
@@ -3652,17 +3689,26 @@ function PageAudit() {
   const auditScore = Number(M.health.audit.audit_score || 0);
   const auditScorePct = (auditScore * 100).toFixed(2);
   const auditOk = auditScore >= AUDIT_THRESHOLD;
-  const gates = [
-    { name: 'Configuration valid', ok: true, detail: 'All required env vars set; API keys reachable.' },
-    { name: 'Authentication healthy', ok: true, detail: 'Kalshi token refreshed 8m ago · Polymarket signed via wallet.' },
+  // Prefer live readiness checks from /api/health.readiness.checks. Fall
+  // back to a synthesized list derived from other health fields only when
+  // the backend hasn't shipped the checks array yet — keeps the page
+  // useful during cold boot but never hardcodes "all green".
+  const liveChecks = Array.isArray(M.health.readiness.checks) ? M.health.readiness.checks : [];
+  const formatCheckName = (key) => String(key || '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, c => c.toUpperCase());
+  const gates = liveChecks.length ? liveChecks.map(c => ({
+    name: c.name || formatCheckName(c.key),
+    ok: String(c.status || '').toLowerCase() === 'pass',
+    detail: c.summary || c.detail || '',
+    blocking: c.blocking !== false,
+  })) : [
     { name: 'Profitability verdict', ok: profitabilityOk, detail: `Verdict: ${profitVerdict} · cumulative ${window.fmt$Sign(M.health.profitability.cumulative_pnl)}` },
     { name: 'Reconciliation flags', ok: reconFlags === 0, detail: `${reconFlags.toLocaleString()} outstanding discrepancies.` },
     { name: 'Exposure recovery blockers', ok: Number(halfRecorded.count || 0) === 0 && criticalOpen === 0, detail: `${Number(halfRecorded.count || 0).toLocaleString()} half-recorded arbs · ${criticalOpen.toLocaleString()} open critical incidents.` },
-    { name: 'Scanner heartbeat', ok: true, detail: `${M.health.scanner.scan_time_ms}ms p50 · last scan 1s ago.` },
     { name: 'Audit score', ok: auditOk, detail: auditOk
         ? `${auditScorePct}% · ≥ ${(AUDIT_THRESHOLD * 100).toFixed(0)}% threshold.`
         : `${auditScorePct}% · below ${(AUDIT_THRESHOLD * 100).toFixed(0)}% threshold.` },
-    { name: 'Kill switch armed', ok: true, detail: 'Manual override available · automatic halt on flag count > 5.' },
   ];
   const computedPassing = gates.filter(g => g.ok).length;
   const readinessGates = Number(M.health.readiness.gates) || gates.length;
