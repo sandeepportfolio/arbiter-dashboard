@@ -163,6 +163,27 @@ class MockConn:
                 MockRecord(m)
                 for m in sorted(self._mappings.values(), key=lambda item: item.get("description", ""))
             ][:limit]
+        # status-priority ordering (issue 5 fix): default ``store.all()``
+        # surfaces tradable rows before expired/rejected so a 36k expired
+        # tail doesn't push confirmed rows past the LIMIT.
+        if (
+            "FROM market_mappings" in query
+            and "CASE status" in query
+            and "WHEN 'confirmed' THEN 0" in query
+        ):
+            limit = args[0] if args else len(self._mappings)
+            status_rank = {
+                "confirmed": 0, "candidate": 1, "review": 2,
+                "rejected": 3, "expired": 4,
+            }
+            ranked = sorted(
+                self._mappings.values(),
+                key=lambda item: (
+                    status_rank.get(item.get("status"), 5),
+                    item.get("description", ""),
+                ),
+            )
+            return [MockRecord(m) for m in ranked][:limit]
         if "SELECT * FROM market_mappings WHERE status = 'confirmed'" in query:
             require_auto = "allow_auto_trade = TRUE" in query
             results = [
@@ -803,6 +824,46 @@ async def test_get_by_platform_forecastex(mock_pool):
 
     missing = await store.get_by_platform("forecastex", "ibkr-conid-MISSING")
     assert missing is None
+
+    await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_all_prioritizes_active_status_over_expired(mock_pool):
+    """``store.all()`` without a status filter must surface tradable rows
+    before expired/rejected, so the ops console doesn't show a misleading
+    "all rejected" picture when the DB carries a long expired tail
+    (audit 2026-05: 36,150 expired rows masked all 62 confirmed mappings
+    behind the default LIMIT 500).
+    """
+    store = MarketMappingStore("postgres://mock/mock")
+    await store.connect()
+
+    # Insert 5 expired (description that sorts BEFORE 'Z' confirmed entries)
+    for i in range(5):
+        await store.upsert(MarketMapping(
+            canonical_id=f"EXP-{i}", description=f"A expired {i}",
+            status=MappingStatus.EXPIRED,
+            kalshi_market_id=f"k-exp-{i}", polymarket_slug=f"p-exp-{i}",
+        ))
+    # Insert 2 confirmed
+    for i in range(2):
+        await store.upsert(MarketMapping(
+            canonical_id=f"CONF-{i}", description=f"Z confirmed {i}",
+            status=MappingStatus.CONFIRMED,
+            kalshi_market_id=f"k-conf-{i}", polymarket_slug=f"p-conf-{i}",
+            resolution_match_status="identical",
+        ))
+
+    # Default ordering with limit=3 must return ONLY the two confirmed
+    # rows plus one expired (or any single non-confirmed) — not three
+    # expired rows that would mask the confirmed entries.
+    rows = await store.all(limit=3)
+    statuses = [m.status.value for m in rows]
+    confirmed_count = statuses.count("confirmed")
+    assert confirmed_count == 2, (
+        f"expected both confirmed rows surfaced first; got statuses={statuses}"
+    )
 
     await store.disconnect()
 
