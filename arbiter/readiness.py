@@ -68,6 +68,7 @@ class OperationalReadiness:
         profitability=None,
         collectors: Optional[Dict[str, object]] = None,
         reconciler=None,
+        price_store=None,
     ):
         self.config = config
         self.engine = engine
@@ -75,6 +76,7 @@ class OperationalReadiness:
         self.profitability = profitability
         self.collectors = collectors or {}
         self.reconciler = reconciler
+        self.price_store = price_store
         self._last_snapshot: Optional[ReadinessSnapshot] = None
 
     def refresh(self) -> ReadinessSnapshot:
@@ -86,6 +88,7 @@ class OperationalReadiness:
             self._check_incidents(),
             self._check_balances(),
             self._check_collectors(),
+            self._check_quote_freshness(),
             self._check_reconciliation(),
         ]
         blocking_reasons = [check.summary for check in checks if check.blocking and check.status != "pass"]
@@ -466,6 +469,59 @@ class OperationalReadiness:
             summary="Collectors are publishing healthy live data",
             blocking=True,
             details=details,
+        )
+
+    def _check_quote_freshness(self) -> ReadinessCheck:
+        # A collector can pass _check_collectors (total_fetches > 0, circuit
+        # closed) while still publishing zero usable quotes — e.g. ForecastEx
+        # with no tracked markets, or an auth gap that returns empty pages.
+        # Surface that gap as a non-blocking warning so the dashboard makes
+        # the silent platform visible without halting trades on the other
+        # venues.
+        if self.price_store is None or not self.collectors:
+            return ReadinessCheck(
+                key="quote_freshness",
+                status="manual",
+                summary="Quote-freshness telemetry is unavailable",
+                blocking=False,
+            )
+
+        expected = sorted(self.collectors.keys())
+        counts: Dict[str, int] = {platform: 0 for platform in expected}
+        try:
+            mem = getattr(self.price_store, "_mem", {}) or {}
+            ttl = float(getattr(self.price_store, "_ttl", 30.0))
+            now = time.time()
+            for price in mem.values():
+                platform = getattr(price, "platform", None)
+                if platform not in counts:
+                    continue
+                timestamp = float(getattr(price, "timestamp", 0.0) or 0.0)
+                if now - timestamp < ttl:
+                    counts[platform] += 1
+        except Exception as exc:
+            return ReadinessCheck(
+                key="quote_freshness",
+                status="manual",
+                summary=f"Quote-freshness inspection failed: {exc}",
+                blocking=False,
+            )
+
+        silent = sorted([platform for platform, count in counts.items() if count == 0])
+        if silent:
+            return ReadinessCheck(
+                key="quote_freshness",
+                status="warning",
+                summary=f"Enabled platforms with no fresh quotes: {', '.join(silent)}",
+                blocking=False,
+                details={"fresh_quote_counts": counts, "silent_platforms": silent},
+            )
+        return ReadinessCheck(
+            key="quote_freshness",
+            status="pass",
+            summary="All enabled platforms are publishing fresh quotes",
+            blocking=False,
+            details={"fresh_quote_counts": counts},
         )
 
     def _check_reconciliation(self) -> ReadinessCheck:

@@ -877,6 +877,7 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
         profitability=profitability,
         collectors=collectors_dict,
         reconciler=reconciler,
+        price_store=price_store,
     )
 
     # ── Safety supervisor (SAFE-01, plan 03-01) ────────────────────
