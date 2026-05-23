@@ -530,6 +530,52 @@ class ExecutionStore:
                 opp_json,
             )
 
+    async def record_arb_stub_with_leg(
+        self,
+        arb_id: str,
+        canonical_id: str,
+        first_leg: Order,
+        opportunity: Any = None,
+        net_edge: Optional[float] = None,
+        client_order_id: Optional[str] = None,
+    ) -> None:
+        """Insert the arb stub + first leg's order row in a single transaction.
+
+        Replaces the legacy ``record_arb_stub`` → ``upsert_order`` two-write
+        sequence used by the primary-leg path.  Previously the arb row could
+        live in the DB for the duration of the secondary venue call while
+        only one leg was persisted; if the engine crashed in that window the
+        arb existed without legs (169 of 295 prod phantoms).  Now the arb
+        cannot appear in ``execution_arbs`` without its first leg in
+        ``execution_orders`` — either both rows commit or neither.
+
+        Idempotent: the arb INSERT uses ON CONFLICT DO NOTHING (matching the
+        legacy stub semantics so a re-call from recovery does not clobber
+        in-flight state); the order uses ON CONFLICT DO UPDATE via the
+        existing ``_upsert_order_on_conn`` helper.
+        """
+        if self._pool is None:
+            await self.connect()
+        opp_json = _opp_to_jsonb(opportunity)
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    """
+                    INSERT INTO execution_arbs (
+                        arb_id, canonical_id, status, net_edge, realized_pnl,
+                        opportunity_json, is_simulation
+                    ) VALUES ($1, $2, 'pending', $3, 0, $4::jsonb, FALSE)
+                    ON CONFLICT (arb_id) DO NOTHING
+                    """,
+                    arb_id,
+                    canonical_id,
+                    Decimal(str(net_edge)) if net_edge is not None else None,
+                    opp_json,
+                )
+                await self._upsert_order_on_conn(
+                    conn, first_leg, arb_id=arb_id, client_order_id=client_order_id,
+                )
+
     async def record_arb(self, arb_execution: ArbExecution) -> None:
         """Persist the arb row plus both leg upserts atomically (C4.1).
 

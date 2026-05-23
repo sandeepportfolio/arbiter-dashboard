@@ -1056,26 +1056,17 @@ class ExecutionEngine:
     async def _live_execution(self, arb_id: str, opp: ArbitrageOpportunity) -> ArbExecution:
         now = time.time()
 
-        # Insert a placeholder execution_arbs row so the FK from
-        # execution_orders.arb_id is satisfied while legs are still in flight.
-        # The later record_arb call will upsert the final status. Without
-        # this the per-leg upsert_order calls fired during execution fail
-        # with a FK violation and mid-flight order state is lost.
-        if self.store is not None:
-            try:
-                await self.store.record_arb_stub(
-                    arb_id,
-                    opp.canonical_id,
-                    opportunity=opp,
-                    net_edge=getattr(opp, "net_edge", None),
-                )
-            except Exception as exc:
-                await self._handle_db_failure(
-                    op="record_arb_stub",
-                    arb_id=arb_id,
-                    canonical_id=opp.canonical_id,
-                    exc=exc,
-                )
+        # C5.1 first-leg atomicity: the legacy ``record_arb_stub`` call used
+        # to live here, committing an ``execution_arbs`` row before any leg
+        # was placed.  Anything between that commit and the first
+        # ``_place_order_for_leg`` (book-walks, depth checks, profitability
+        # re-validation) could ``return None`` or raise, leaving an arb stub
+        # with zero legs — 169 of 295 prod phantoms followed this pattern.
+        # The stub is now written atomically with the first leg's
+        # ``execution_orders`` row (see ``atomic_arb_stub_opp`` in
+        # ``_place_order_for_leg``) so the parent cannot exist without at
+        # least one leg.  Early-return paths below place no orders and now
+        # leave no DB rows behind.
 
         # ── Sequential leg execution (naked-position prevention) ─────
         # Execute legs SEQUENTIALLY instead of concurrently to prevent
@@ -1285,9 +1276,15 @@ class ExecutionEngine:
                         )
 
             # Step 1: Execute the primary leg (Kalshi FOK)
+            # Pass the opp + net_edge so _place_order_for_leg writes the
+            # parent execution_arbs row in the SAME transaction as this
+            # leg's execution_orders row (C5.1).  Eliminates the historical
+            # zero-leg phantom window.
             primary_leg = await self._place_order_for_leg(
                 arb_id, primary_platform, primary_market,
                 opp.canonical_id, primary_side, primary_fok_price, effective_qty,
+                atomic_arb_stub_opp=opp,
+                atomic_arb_stub_net_edge=getattr(opp, "net_edge", None),
             )
 
             # Step 2: Only proceed if primary leg FILLED
@@ -1998,6 +1995,8 @@ class ExecutionEngine:
         qty: int,
         *,
         use_ioc: bool = False,
+        atomic_arb_stub_opp: Optional["ArbitrageOpportunity"] = None,
+        atomic_arb_stub_net_edge: Optional[float] = None,
     ) -> Order:
         """Dispatch a leg through self.adapters[platform], wrapped in asyncio.wait_for (EXEC-05).
 
@@ -2162,15 +2161,35 @@ class ExecutionEngine:
         # EXEC-02 / D-16: persist every state transition. Store is optional
         # (dev mode without Postgres) — failures escalate to _handle_db_failure
         # which arms the kill switch and blocks further placements (C4.2).
+        #
+        # First-leg atomicity (C5.1): when ``atomic_arb_stub_opp`` is provided,
+        # write the parent ``execution_arbs`` row in the SAME transaction as
+        # this leg's ``execution_orders`` row.  Previously the engine wrote
+        # ``record_arb_stub`` early in ``_live_execution`` and then did a lot
+        # of work (book-walks, depth checks, profitability re-validation)
+        # before the first leg call — any early return / crash in that window
+        # left an orphan arb stub with zero legs (169 of 295 prod phantoms).
+        # The atomic variant collapses that window to zero: the stub cannot
+        # exist without its first leg.
         if self.store is not None:
             try:
                 client_order_id = self._derive_client_order_id(order)
-                await self.store.upsert_order(
-                    order, arb_id=arb_id, client_order_id=client_order_id,
-                )
+                if atomic_arb_stub_opp is not None:
+                    await self.store.record_arb_stub_with_leg(
+                        arb_id=arb_id,
+                        canonical_id=canonical_id,
+                        first_leg=order,
+                        opportunity=atomic_arb_stub_opp,
+                        net_edge=atomic_arb_stub_net_edge,
+                        client_order_id=client_order_id,
+                    )
+                else:
+                    await self.store.upsert_order(
+                        order, arb_id=arb_id, client_order_id=client_order_id,
+                    )
             except Exception as exc:
                 await self._handle_db_failure(
-                    op="upsert_order",
+                    op="record_arb_stub_with_leg" if atomic_arb_stub_opp is not None else "upsert_order",
                     arb_id=arb_id,
                     canonical_id=canonical_id,
                     exc=exc,
