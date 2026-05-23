@@ -295,6 +295,10 @@ window.MOCK = (() => {
       readiness: { ready: false, gates: 0, passing: 0, checks: [], blocking_reasons: [], warnings: [] },
     },
 
+    // /api/system snapshot — includes auto_executor.stats so the operator
+    // desk can see exactly why opportunities are being skipped.
+    system: null,
+
     // Edge-bucket histogram. Computed at render time from current
     // opportunities; backend doesn't expose this directly.
     edgeBuckets: [],
@@ -889,7 +893,7 @@ window.MOCK = (() => {
            confirmedMappings, candidateMappings, reviewMappings, rejectedMappings, expiredMappings,
            mappingMetrics,
            settings, reconciliation, readiness, profitability,
-           failedTrades, errors, portfolio, halfRecordedRecovery, discovery] = await Promise.all([
+           failedTrades, errors, portfolio, halfRecordedRecovery, discovery, system] = await Promise.all([
       safeJson('/api/health'),
       safeJson('/api/balances'),
       safeJson('/api/opportunities'),
@@ -911,6 +915,7 @@ window.MOCK = (() => {
       safeJson('/api/portfolio'),
       safeJson('/api/recovery/half-recorded'),
       safeJson('/api/discovery/status'),
+      safeJson('/api/system'),
     ]);
     mergeHealth(M, health);
     mergeBalances(M, balances);
@@ -935,6 +940,9 @@ window.MOCK = (() => {
     mergePortfolio(M, portfolio);
     mergeHalfRecordedRecovery(M, halfRecordedRecovery);
     mergeDiscovery(M, discovery);
+    if (system && typeof system === 'object') {
+      M.system = system;
+    }
     // Keep live chart buffers moving between backend series snapshots.
     ensureEquityFallback(M);
     appendScannerHistory(M);
@@ -2500,6 +2508,9 @@ function PageOverview() {
         </window.Card>
       </div>
 
+      {/* Execution health — Arb vs Naked-leg P&L, ForecastEx circuit, auto-executor skip counters */}
+      <ExecutionHealthPanel/>
+
       {/* Recent activity */}
       <window.Card title="Recent activity" action={<a onClick={() => setPage('trades')} style={{ fontSize: 11, color: t.accent, cursor:'pointer' }}>All trades →</a>} padding={0}>
         <window.DataTable columns={[
@@ -2512,6 +2523,134 @@ function PageOverview() {
         ]} rows={execs.slice(0, 5)} onRowClick={(r) => { setPage('trades'); }} emptyTitle="No trades yet" emptyHint="Pending, recovering, closed, and failed arbitrage attempts will show up here from /api/executions." emptyIcon="↗"/>
       </window.Card>
     </div>
+  );
+}
+
+function ExecutionHealthPanel() {
+  const { t } = window.useApp();
+  const M = window.MOCK;
+  const execs = Array.isArray(M.executions) ? M.executions : [];
+  const arbPnl = execs.reduce((s, e) => s + Number(e.arb_pnl || 0), 0);
+  // "Naked-leg" P&L is the directional component of realized P&L that
+  // remained after a leg failed and the survivor was unwound. Mirrors the
+  // backend split (realized_pnl - arb_pnl) used by /api/portfolio.
+  const realizedPnl = execs.reduce((s, e) => s + Number(e.realized_pnl || 0), 0);
+  const explicitUnwind = execs.reduce((s, e) => s + Number(e.unwind_pnl || 0), 0);
+  const nakedPnl = explicitUnwind || (realizedPnl - arbPnl);
+
+  // ForecastEx circuit state from the readiness collector check (which
+  // already aggregates circuit/gamma_circuit/clob_circuit per platform).
+  const readinessChecks = (M.health && M.health.readiness && Array.isArray(M.health.readiness.checks))
+    ? M.health.readiness.checks
+    : [];
+  const collectorCheck = readinessChecks.find(c => c && c.key === 'collectors');
+  const fxDetails = (collectorCheck && collectorCheck.details && collectorCheck.details.forecastex) || null;
+  const fxCircuitState = (() => {
+    if (!fxDetails) return 'unknown';
+    const states = [
+      fxDetails.circuit && fxDetails.circuit.state,
+      fxDetails.gamma_circuit && fxDetails.gamma_circuit.state,
+      fxDetails.clob_circuit && fxDetails.clob_circuit.state,
+    ].filter(Boolean);
+    if (!states.length) return 'unknown';
+    if (states.includes('open')) return 'open';
+    if (states.includes('half_open')) return 'half_open';
+    return 'closed';
+  })();
+  const fxConsecutiveErrors = (fxDetails && fxDetails.consecutive_errors) || 0;
+  const fxStateColor = fxCircuitState === 'open'
+    ? t.red
+    : (fxCircuitState === 'half_open' ? t.amber : (fxCircuitState === 'closed' ? t.green : t.textMuted));
+
+  // Auto-executor skip counters from /api/system.
+  const ae = (M.system && M.system.auto_executor) || {};
+  const aeStats = (ae && ae.stats) || {};
+  const aeEnabled = !!ae.enabled;
+  const skipRows = [
+    ['mapping_unconfirmed', 'Mapping unconfirmed', aeStats.skipped_mapping_unconfirmed],
+    ['not_allowed',        'Not auto-allowed',   aeStats.skipped_not_allowed],
+    ['failed_cooldown',    'Failed cooldown',    aeStats.skipped_failed_cooldown],
+    ['failure_pattern',    'Failure pattern',    aeStats.skipped_failure_pattern],
+    ['edge_collapsed',     'Edge collapsed',     aeStats.skipped_edge_collapsed],
+    ['depth_low',          'Depth low',          aeStats.skipped_depth_low],
+    ['stale_quote',        'Stale quote',        aeStats.skipped_stale_quote],
+    ['over_cap',           'Over cap',           aeStats.skipped_over_cap],
+    ['duplicate',          'Duplicate',          aeStats.skipped_duplicate],
+    ['armed',              'Supervisor armed',   aeStats.skipped_armed],
+    ['requires_manual',    'Requires manual',    aeStats.skipped_requires_manual],
+    ['disabled',           'Auto-exec disabled', aeStats.skipped_disabled],
+    ['bootstrap_full',     'Bootstrap full',     aeStats.skipped_bootstrap_full],
+  ].filter(r => Number(r[2] || 0) > 0);
+
+  return (
+    <window.Card title="Execution health" padding={0} style={{ marginBottom: 18 }}>
+      <div style={{ display:'grid', gridTemplateColumns:'1.4fr 0.8fr 1.4fr', gap: 0 }}>
+        {/* P&L split */}
+        <div style={{ padding:'18px 22px', borderRight:`1px solid ${t.border}` }}>
+          <div style={{ fontSize:11, color:t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom:10 }}>P&L split</div>
+          <div title="Cross-platform spread captured when both legs filled — the pure arbitrage component of realized P&L." style={{ marginBottom:12 }}>
+            <div style={{ fontSize:10.5, color:t.textMuted, marginBottom:3 }}>Arb P&L</div>
+            <div style={{ fontSize:22, fontWeight:700, color:arbPnl >= 0 ? t.green : t.red, fontFamily:window.FONTS.mono }}>{window.fmt$Sign(arbPnl)}</div>
+            <div style={{ fontSize:10.5, color:t.textDim, marginTop:2 }}>both legs filled</div>
+          </div>
+          <div title="Directional residue from unwound naked legs — separate from arb edge to keep strategy P&L clean.">
+            <div style={{ fontSize:10.5, color:t.textMuted, marginBottom:3 }}>Naked-leg P&L</div>
+            <div style={{ fontSize:22, fontWeight:700, color:nakedPnl >= 0 ? t.green : t.red, fontFamily:window.FONTS.mono }}>{window.fmt$Sign(nakedPnl)}</div>
+            <div style={{ fontSize:10.5, color:t.textDim, marginTop:2 }}>realized − arb · {execs.length} executions</div>
+          </div>
+        </div>
+
+        {/* ForecastEx circuit */}
+        <div style={{ padding:'18px 22px', borderRight:`1px solid ${t.border}` }}>
+          <div style={{ fontSize:11, color:t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom:10 }}>ForecastEx circuit</div>
+          <div style={{ display:'inline-flex', alignItems:'center', gap:8, padding:'4px 10px', borderRadius:99, background:t.bgSubtle, border:`1px solid ${t.border}` }}>
+            <span style={{ width:8, height:8, borderRadius:'50%', background:fxStateColor }}/>
+            <span style={{ fontSize:12, fontWeight:700, color:fxStateColor, fontFamily:window.FONTS.mono, textTransform:'uppercase' }}>{fxCircuitState}</span>
+          </div>
+          <div style={{ fontSize:10.5, color:t.textDim, marginTop:10, lineHeight:1.45 }}>
+            {fxDetails
+              ? `${fxDetails.total_fetches || 0} fetches · ${fxDetails.total_errors || 0} errors · ${fxConsecutiveErrors} streak`
+              : 'No ForecastEx collector telemetry yet.'}
+          </div>
+        </div>
+
+        {/* Auto-executor skip counters */}
+        <div style={{ padding:'18px 22px' }}>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:8, marginBottom:10 }}>
+            <div style={{ fontSize:11, color:t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase' }}>Auto-executor</div>
+            <span style={{ fontSize:10, fontWeight:700, color: aeEnabled ? t.green : t.textMuted, fontFamily:window.FONTS.mono, padding:'2px 8px', borderRadius:99, background:t.bgSubtle, border:`1px solid ${t.border}` }}>
+              {aeEnabled ? 'ENABLED' : 'DISABLED'}
+            </span>
+          </div>
+          <div style={{ display:'flex', gap:18, marginBottom:10 }}>
+            <div>
+              <div style={{ fontSize:10.5, color:t.textMuted }}>Considered</div>
+              <div style={{ fontSize:18, fontWeight:700, color:t.text, fontFamily:window.FONTS.mono }}>{Number(aeStats.considered || 0).toLocaleString()}</div>
+            </div>
+            <div>
+              <div style={{ fontSize:10.5, color:t.textMuted }}>Executed</div>
+              <div style={{ fontSize:18, fontWeight:700, color: (aeStats.executed || 0) > 0 ? t.green : t.text, fontFamily:window.FONTS.mono }}>{Number(aeStats.executed || 0).toLocaleString()}</div>
+            </div>
+            <div>
+              <div style={{ fontSize:10.5, color:t.textMuted }}>Failures</div>
+              <div style={{ fontSize:18, fontWeight:700, color: (aeStats.failures || 0) > 0 ? t.red : t.text, fontFamily:window.FONTS.mono }}>{Number(aeStats.failures || 0).toLocaleString()}</div>
+            </div>
+          </div>
+          {skipRows.length === 0 ? (
+            <div style={{ fontSize:10.5, color:t.textMuted }}>No skips recorded.</div>
+          ) : (
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'4px 14px' }}>
+              {skipRows.slice(0, 8).map(([k, label, count]) => (
+                <div key={k} style={{ display:'flex', justifyContent:'space-between', fontSize:10.5, color:t.textDim }}>
+                  <span>{label}</span>
+                  <span style={{ fontFamily:window.FONTS.mono, color:t.text }}>{Number(count).toLocaleString()}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </window.Card>
   );
 }
 

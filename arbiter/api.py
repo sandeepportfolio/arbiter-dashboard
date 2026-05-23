@@ -3636,12 +3636,17 @@ class ArbiterAPI:
         for key, price in active_prices.items():
             tracked_markets.setdefault(price.canonical_id, []).append(price.to_dict())
 
+        ae = getattr(self, "auto_executor", None)
+        ae_stats = ae.stats.to_dict() if ae and getattr(ae, "stats", None) else {}
+        ae_enabled = bool(getattr(getattr(ae, "_config", None), "enabled", False))
+
         return {
             "timestamp": time.time(),
             "uptime_seconds": round(time.time() - self.started_at, 1),
             "mode": "dry-run" if self.config.scanner.dry_run else "live",
             "scanner": self.scanner.stats,
             "execution": self.engine.stats,
+            "auto_executor": {"enabled": ae_enabled, "stats": ae_stats},
             "audit": self.engine.stats.get("audit", {}),
             "profitability": self._profitability_snapshot(),
             "readiness": self._readiness_snapshot(),

@@ -228,7 +228,11 @@ class AutoExecutor:
             return
 
         if self._config.require_mapping_confirmed:
-            mapping_status = str(getattr(mapping, "status", "")).lower()
+            # MappingStatus is a (str, Enum); str(enum) returns "MappingStatus.CONFIRMED"
+            # in Python 3.11+, not the value. Unwrap via .value when present so the
+            # comparison below actually matches "confirmed".
+            raw_status = getattr(mapping, "status", "")
+            mapping_status = str(getattr(raw_status, "value", raw_status)).lower()
             if mapping_status != "confirmed":
                 self.stats.skipped_mapping_unconfirmed += 1
                 log.info(

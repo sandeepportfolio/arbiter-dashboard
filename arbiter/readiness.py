@@ -163,14 +163,35 @@ class OperationalReadiness:
             return True, "dry-run mode collecting evidence", self.refresh().to_dict()
 
         snapshot = self.refresh()
-        if not snapshot.ready_for_live_trading:
-            reason = snapshot.blocking_reasons[0] if snapshot.blocking_reasons else "Live readiness is not satisfied"
-            return False, reason, snapshot.to_dict()
+        # A collector being unhealthy on a venue the opportunity does NOT touch
+        # should not block the trade — e.g. ForecastEx OPEN should not stop a
+        # Kalshi↔Polymarket trade. Apply that narrowing only to the collector
+        # check; every other blocker (credentials, profitability, incidents,
+        # mappings, alerts, reconciliation, balances) keeps system-wide
+        # blocking semantics.
+        involved_platforms = {opportunity.yes_platform, opportunity.no_platform}
+        relevant_blocking: List[str] = []
+        for check in snapshot.checks:
+            if not check.blocking or check.status == "pass":
+                continue
+            if check.key == "collectors":
+                # _check_collectors lists the failed collector names after the
+                # last colon in its summary ("Collector health is degraded: X, Y").
+                summary_platforms = {
+                    name.strip() for name in check.summary.split(":")[-1].split(",")
+                    if name.strip()
+                }
+                if summary_platforms and not (summary_platforms & involved_platforms):
+                    continue
+            relevant_blocking.append(check.summary)
+
+        if relevant_blocking:
+            return False, relevant_blocking[0], snapshot.to_dict()
 
         balances = getattr(self.monitor, "current_balances", {}) or {}
         low_platforms = [
             platform
-            for platform in {opportunity.yes_platform, opportunity.no_platform}
+            for platform in involved_platforms
             if platform in balances and balances[platform].is_low
         ]
         if low_platforms:
