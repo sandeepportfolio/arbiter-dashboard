@@ -530,6 +530,52 @@ class ExecutionStore:
                 opp_json,
             )
 
+    async def record_arb_stub_with_leg(
+        self,
+        arb_id: str,
+        canonical_id: str,
+        first_leg: Order,
+        opportunity: Any = None,
+        net_edge: Optional[float] = None,
+        client_order_id: Optional[str] = None,
+    ) -> None:
+        """Insert the arb stub + first leg's order row in a single transaction.
+
+        Replaces the legacy ``record_arb_stub`` → ``upsert_order`` two-write
+        sequence used by the primary-leg path.  Previously the arb row could
+        live in the DB for the duration of the secondary venue call while
+        only one leg was persisted; if the engine crashed in that window the
+        arb existed without legs (169 of 295 prod phantoms).  Now the arb
+        cannot appear in ``execution_arbs`` without its first leg in
+        ``execution_orders`` — either both rows commit or neither.
+
+        Idempotent: the arb INSERT uses ON CONFLICT DO NOTHING (matching the
+        legacy stub semantics so a re-call from recovery does not clobber
+        in-flight state); the order uses ON CONFLICT DO UPDATE via the
+        existing ``_upsert_order_on_conn`` helper.
+        """
+        if self._pool is None:
+            await self.connect()
+        opp_json = _opp_to_jsonb(opportunity)
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    """
+                    INSERT INTO execution_arbs (
+                        arb_id, canonical_id, status, net_edge, realized_pnl,
+                        opportunity_json, is_simulation
+                    ) VALUES ($1, $2, 'pending', $3, 0, $4::jsonb, FALSE)
+                    ON CONFLICT (arb_id) DO NOTHING
+                    """,
+                    arb_id,
+                    canonical_id,
+                    Decimal(str(net_edge)) if net_edge is not None else None,
+                    opp_json,
+                )
+                await self._upsert_order_on_conn(
+                    conn, first_leg, arb_id=arb_id, client_order_id=client_order_id,
+                )
+
     async def record_arb(self, arb_execution: ArbExecution) -> None:
         """Persist the arb row plus both leg upserts atomically (C4.1).
 
@@ -550,11 +596,12 @@ class ExecutionStore:
                     """
                     INSERT INTO execution_arbs (
                         arb_id, canonical_id, status, net_edge, realized_pnl,
-                        opportunity_json, is_simulation
-                    ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
+                        unwind_pnl, opportunity_json, is_simulation
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
                     ON CONFLICT (arb_id) DO UPDATE SET
                         status         = EXCLUDED.status,
                         realized_pnl   = EXCLUDED.realized_pnl,
+                        unwind_pnl     = EXCLUDED.unwind_pnl,
                         updated_at     = NOW(),
                         closed_at      = CASE WHEN EXCLUDED.status IN ('filled','failed','simulated','recovering')
                                              THEN NOW() ELSE execution_arbs.closed_at END
@@ -564,6 +611,7 @@ class ExecutionStore:
                     arb_execution.status,
                     Decimal(str(net_edge)) if net_edge is not None else None,
                     Decimal(str(arb_execution.realized_pnl)),
+                    Decimal(str(getattr(arb_execution, "unwind_pnl", 0.0) or 0.0)),
                     opp_json,
                     is_sim,
                 )
@@ -626,6 +674,7 @@ class ExecutionStore:
 
         arb_sql = """
                 SELECT arb_id, canonical_id, status, net_edge, realized_pnl,
+                       COALESCE(unwind_pnl, 0) AS unwind_pnl,
                        opportunity_json, is_simulation, created_at
                 FROM execution_arbs
                 ORDER BY created_at DESC
@@ -743,6 +792,7 @@ class ExecutionStore:
                 leg_no=leg_no,
                 status=arb_row["status"] or "unknown",
                 realized_pnl=float(arb_row["realized_pnl"] or 0),
+                unwind_pnl=float(arb_row["unwind_pnl"] or 0),
                 timestamp=ts,
             )
             executions.append(execution)

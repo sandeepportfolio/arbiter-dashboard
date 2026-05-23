@@ -186,11 +186,18 @@ class ProfitabilityValidator:
         current_opportunities = list(self.scanner.current_opportunities)
 
         completed = self._completed_executions(executions)
-        profitable = [execution for execution in completed if execution.realized_pnl > 0]
-        losing = [execution for execution in completed if execution.realized_pnl < 0]
-        breakeven = [execution for execution in completed if execution.realized_pnl == 0]
+        # Audit 2026-05: use pure arb_pnl (excludes naked-leg unwind P&L) so
+        # the profitability gate is not fooled by directional luck on
+        # unhedged positions.  ``arb_pnl`` falls back to ``realized_pnl``
+        # for pre-migration rows that have unwind_pnl=0.
+        def _arb_pnl(execution):
+            return float(getattr(execution, "arb_pnl", execution.realized_pnl))
 
-        total_realized_pnl = sum(execution.realized_pnl for execution in completed)
+        profitable = [execution for execution in completed if _arb_pnl(execution) > 0]
+        losing = [execution for execution in completed if _arb_pnl(execution) < 0]
+        breakeven = [execution for execution in completed if _arb_pnl(execution) == 0]
+
+        total_realized_pnl = sum(_arb_pnl(execution) for execution in completed)
         average_realized_pnl = (
             total_realized_pnl / len(completed)
             if completed

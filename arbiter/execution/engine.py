@@ -245,11 +245,28 @@ class ArbExecution:
     leg_no: Order
     status: str = "pending"
     realized_pnl: float = 0.0
+    # Naked-leg unwind PnL, tracked separately from arb edge (audit 2026-05).
+    # ``realized_pnl`` = arb_pnl + unwind_pnl; consumers that need the pure
+    # arbitrage PnL (e.g. the profitability gate) compute ``arb_pnl``
+    # property below.  Pre-migration trades default to 0 and so report their
+    # full realized_pnl as arb_pnl, which is a known mis-attribution for
+    # historical rows only.
+    unwind_pnl: float = 0.0
     timestamp: float = 0.0
     notes: List[str] = field(default_factory=list)
     # Markdown post-mortem populated by ``_build_inline_analysis`` right before
     # the audit write. Empty until the trade reaches a recordable state.
     analysis_md: str = ""
+
+    @property
+    def arb_pnl(self) -> float:
+        """Pure arbitrage PnL: total realized minus naked-leg unwind PnL.
+
+        Both legs filled => arb_pnl > 0 reflects captured edge.
+        Naked-leg auto-unwind => unwind_pnl can be ±; arb_pnl is what would
+        have been realized if the secondary had filled paired.
+        """
+        return float(self.realized_pnl) - float(self.unwind_pnl)
 
     def to_dict(self) -> dict:
         return {
@@ -259,6 +276,8 @@ class ArbExecution:
             "leg_no": self.leg_no.to_dict(),
             "status": self.status,
             "realized_pnl": round(self.realized_pnl, 4),
+            "unwind_pnl": round(self.unwind_pnl, 4),
+            "arb_pnl": round(self.arb_pnl, 4),
             "timestamp": self.timestamp,
             "notes": self.notes,
             "analysis_md": self.analysis_md,
@@ -275,6 +294,8 @@ class ArbExecution:
             "leg_no": self.leg_no.to_audit_dict(),
             "status": self.status,
             "realized_pnl": self.realized_pnl,
+            "unwind_pnl": self.unwind_pnl,
+            "arb_pnl": self.arb_pnl,
             "timestamp": self.timestamp,
             "notes": list(self.notes),
         }
@@ -1056,26 +1077,17 @@ class ExecutionEngine:
     async def _live_execution(self, arb_id: str, opp: ArbitrageOpportunity) -> ArbExecution:
         now = time.time()
 
-        # Insert a placeholder execution_arbs row so the FK from
-        # execution_orders.arb_id is satisfied while legs are still in flight.
-        # The later record_arb call will upsert the final status. Without
-        # this the per-leg upsert_order calls fired during execution fail
-        # with a FK violation and mid-flight order state is lost.
-        if self.store is not None:
-            try:
-                await self.store.record_arb_stub(
-                    arb_id,
-                    opp.canonical_id,
-                    opportunity=opp,
-                    net_edge=getattr(opp, "net_edge", None),
-                )
-            except Exception as exc:
-                await self._handle_db_failure(
-                    op="record_arb_stub",
-                    arb_id=arb_id,
-                    canonical_id=opp.canonical_id,
-                    exc=exc,
-                )
+        # C5.1 first-leg atomicity: the legacy ``record_arb_stub`` call used
+        # to live here, committing an ``execution_arbs`` row before any leg
+        # was placed.  Anything between that commit and the first
+        # ``_place_order_for_leg`` (book-walks, depth checks, profitability
+        # re-validation) could ``return None`` or raise, leaving an arb stub
+        # with zero legs — 169 of 295 prod phantoms followed this pattern.
+        # The stub is now written atomically with the first leg's
+        # ``execution_orders`` row (see ``atomic_arb_stub_opp`` in
+        # ``_place_order_for_leg``) so the parent cannot exist without at
+        # least one leg.  Early-return paths below place no orders and now
+        # leave no DB rows behind.
 
         # ── Sequential leg execution (naked-position prevention) ─────
         # Execute legs SEQUENTIALLY instead of concurrently to prevent
@@ -1285,9 +1297,15 @@ class ExecutionEngine:
                         )
 
             # Step 1: Execute the primary leg (Kalshi FOK)
+            # Pass the opp + net_edge so _place_order_for_leg writes the
+            # parent execution_arbs row in the SAME transaction as this
+            # leg's execution_orders row (C5.1).  Eliminates the historical
+            # zero-leg phantom window.
             primary_leg = await self._place_order_for_leg(
                 arb_id, primary_platform, primary_market,
                 opp.canonical_id, primary_side, primary_fok_price, effective_qty,
+                atomic_arb_stub_opp=opp,
+                atomic_arb_stub_net_edge=getattr(opp, "net_edge", None),
             )
 
             # Step 2: Only proceed if primary leg FILLED
@@ -1835,14 +1853,18 @@ class ExecutionEngine:
             notes.extend(recovery_notes)
             # Book the realized loss from the unwind into the arb's P&L so
             # reconciliation drift no longer fires for the unrecorded
-            # auto-unwind cost. This is the only place ArbExecution.realized_pnl
-            # is mutated post-construction; do it BEFORE record_arb so the
-            # persisted row reflects the true realized P&L.
+            # auto-unwind cost. Track the unwind component SEPARATELY on
+            # ``execution.unwind_pnl`` so reporting can distinguish arb
+            # edge (both legs filled, paired) from directional naked-leg
+            # payouts (audit 2026-05).  ``realized_pnl`` continues to hold
+            # the TOTAL so existing reconciliation logic stays correct.
             if unwind_pnl != 0.0:
+                execution.unwind_pnl = float(execution.unwind_pnl) + unwind_pnl
                 execution.realized_pnl = float(execution.realized_pnl) + unwind_pnl
                 logger.info(
-                    "ARB %s realized_pnl updated by unwind: $%.4f (total now $%.4f)",
-                    arb_id, unwind_pnl, execution.realized_pnl,
+                    "ARB %s unwind_pnl=$%.4f; total realized_pnl now $%.4f "
+                    "(arb_pnl=$%.4f)",
+                    arb_id, unwind_pnl, execution.realized_pnl, execution.arb_pnl,
                 )
 
         # Daily-loss kill switch: roll the unwind loss into RiskManager's
@@ -1998,6 +2020,8 @@ class ExecutionEngine:
         qty: int,
         *,
         use_ioc: bool = False,
+        atomic_arb_stub_opp: Optional["ArbitrageOpportunity"] = None,
+        atomic_arb_stub_net_edge: Optional[float] = None,
     ) -> Order:
         """Dispatch a leg through self.adapters[platform], wrapped in asyncio.wait_for (EXEC-05).
 
@@ -2162,15 +2186,35 @@ class ExecutionEngine:
         # EXEC-02 / D-16: persist every state transition. Store is optional
         # (dev mode without Postgres) — failures escalate to _handle_db_failure
         # which arms the kill switch and blocks further placements (C4.2).
+        #
+        # First-leg atomicity (C5.1): when ``atomic_arb_stub_opp`` is provided,
+        # write the parent ``execution_arbs`` row in the SAME transaction as
+        # this leg's ``execution_orders`` row.  Previously the engine wrote
+        # ``record_arb_stub`` early in ``_live_execution`` and then did a lot
+        # of work (book-walks, depth checks, profitability re-validation)
+        # before the first leg call — any early return / crash in that window
+        # left an orphan arb stub with zero legs (169 of 295 prod phantoms).
+        # The atomic variant collapses that window to zero: the stub cannot
+        # exist without its first leg.
         if self.store is not None:
             try:
                 client_order_id = self._derive_client_order_id(order)
-                await self.store.upsert_order(
-                    order, arb_id=arb_id, client_order_id=client_order_id,
-                )
+                if atomic_arb_stub_opp is not None:
+                    await self.store.record_arb_stub_with_leg(
+                        arb_id=arb_id,
+                        canonical_id=canonical_id,
+                        first_leg=order,
+                        opportunity=atomic_arb_stub_opp,
+                        net_edge=atomic_arb_stub_net_edge,
+                        client_order_id=client_order_id,
+                    )
+                else:
+                    await self.store.upsert_order(
+                        order, arb_id=arb_id, client_order_id=client_order_id,
+                    )
             except Exception as exc:
                 await self._handle_db_failure(
-                    op="upsert_order",
+                    op="record_arb_stub_with_leg" if atomic_arb_stub_opp is not None else "upsert_order",
                     arb_id=arb_id,
                     canonical_id=canonical_id,
                     exc=exc,

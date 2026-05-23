@@ -1108,7 +1108,16 @@ class MarketMappingStore:
         status: Optional[str] = None,
         limit: int = 500,
     ) -> List[MarketMapping]:
-        """List all mappings, optionally filtered by status."""
+        """List all mappings, optionally filtered by status.
+
+        When ``status`` is None, rows are ordered by status priority so the
+        default ``LIMIT 500`` surfaces tradable mappings instead of the
+        36k+ expired tail. Audit 2026-05: the previous ``ORDER BY
+        description`` returned 498 expired + 2 rejected on the live DB
+        (36,150 expired rows masked 62 confirmed mappings entirely), so
+        the ops console showed an empty mapping list while the engine
+        was actually trading against confirmed pairs.
+        """
         conn = await self.acquire()
         try:
             if status:
@@ -1118,7 +1127,20 @@ class MarketMappingStore:
                 )
             else:
                 rows = await conn.fetch(
-                    "SELECT * FROM market_mappings ORDER BY description LIMIT $1",
+                    """
+                    SELECT * FROM market_mappings
+                    ORDER BY
+                        CASE status
+                            WHEN 'confirmed' THEN 0
+                            WHEN 'candidate' THEN 1
+                            WHEN 'review'    THEN 2
+                            WHEN 'rejected'  THEN 3
+                            WHEN 'expired'   THEN 4
+                            ELSE 5
+                        END,
+                        description
+                    LIMIT $1
+                    """,
                     limit,
                 )
             return [self._row_to_mapping(r) for r in rows]

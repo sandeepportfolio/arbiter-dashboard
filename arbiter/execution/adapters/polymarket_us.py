@@ -242,9 +242,21 @@ class PolymarketUSAdapter:
             )
             if rejection_reason:
                 log_payload["rejection_reason"] = str(rejection_reason)[:300]
-            if "REJECTED" in api_status.upper() or "KILLED" in api_status.upper():
-                # Echo the full response (capped) so we can mine it later for
-                # whatever field the API actually used.
+            # Surface the wire-level response on any non-success terminal
+            # state (FAILED, CANCELLED, ABORTED).  Previously only the literal
+            # "REJECTED" branch populated ``order.error`` — KILLED, EXPIRED,
+            # TIME_IN_FORCE_KILLED, and unknown states all fell through to
+            # ``order.error = None`` and persisted as empty strings in the DB,
+            # making post-hoc diagnosis impossible.  Now every non-fill
+            # terminal echoes api_status (and rejection_reason when present)
+            # so the operator can tell ``no liquidity`` apart from ``geo
+            # block`` apart from ``min-size violation``.
+            non_success_terminal = order.status in (
+                OrderStatus.FAILED,
+                OrderStatus.CANCELLED,
+                OrderStatus.ABORTED,
+            )
+            if non_success_terminal:
                 import json as _json
                 try:
                     raw = _json.dumps(response, default=str)[:5000]
@@ -252,13 +264,9 @@ class PolymarketUSAdapter:
                     raw = str(response)[:5000]
                 log_payload["raw_response"] = raw
                 logger.warning("polymarket_us.order.rejected", **log_payload)
-                # Surface the rejection on the Order so retry classification
-                # and the dashboard see a non-empty reason.  Previously the
-                # Order returned with ``error=None`` and downstream classifiers
-                # bucketed every rejection as "Platform error".
-                if "REJECTED" in api_status.upper() and not order.error:
+                if not order.error:
                     suffix = f": {str(rejection_reason)[:200]}" if rejection_reason else ""
-                    order.error = f"polymarket_us {api_status}{suffix}"
+                    order.error = f"polymarket_us {api_status or 'unknown'}{suffix}"
             else:
                 logger.info("polymarket_us.order.placed", **log_payload)
         return order

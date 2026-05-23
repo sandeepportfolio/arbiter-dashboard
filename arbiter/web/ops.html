@@ -2842,6 +2842,8 @@ function PageTrades() {
     return String(e.status || '').toLowerCase() === statusFilter;
   });
   const totalPnl = rows.reduce((s, e) => s + Number(e.realized_pnl || 0), 0);
+  const totalUnwindPnl = rows.reduce((s, e) => s + Number(e.unwind_pnl || 0), 0);
+  const totalArbPnl = totalPnl - totalUnwindPnl;
   const totalExpected = rows.reduce((s, e) => s + Number(e.expected_profit || 0), 0);
   const completed = rows.filter(e => e.status_group === 'completed' || ['filled','closed','settled','simulated'].includes(String(e.status || '').toLowerCase())).length;
   const open = rows.filter(e => e.status_group === 'open' || ['pending','submitted','recovering'].includes(String(e.status || '').toLowerCase())).length;
@@ -2855,8 +2857,8 @@ function PageTrades() {
 
       <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap: 14, marginBottom: 18 }}>
         <window.Card padding={18}><window.Stat label="Total trades" value={rows.length} sub={`${completed} completed · ${open} open · ${failed} failed`} mono/></window.Card>
-        <window.Card padding={18}><window.Stat label="Realized P&L" value={window.fmt$Sign(totalPnl)} tone={totalPnl >= 0 ? 'green' : 'red'} sub="Net of fees, all platforms" mono/></window.Card>
-        <window.Card padding={18}><window.Stat label="Expected profit" value={window.fmt$Sign(totalExpected)} sub={`${window.fmt$Sign(totalPnl - totalExpected)} vs expected`} tone={totalPnl - totalExpected >= 0 ? 'green' : 'red'} mono/></window.Card>
+        <window.Card padding={18}><window.Stat label="Realized P&L" value={window.fmt$Sign(totalPnl)} tone={totalPnl >= 0 ? 'green' : 'red'} sub={`Arb: ${window.fmt$Sign(totalArbPnl)} · Unwind: ${window.fmt$Sign(totalUnwindPnl)}`} mono/></window.Card>
+        <window.Card padding={18}><window.Stat label="Arb edge captured" value={window.fmt$Sign(totalArbPnl)} tone={totalArbPnl >= 0 ? 'green' : 'red'} sub="Both legs filled — pure arbitrage" mono/></window.Card>
         <window.Card padding={18}><window.Stat label="Completion rate" value={`${(fillRate*100).toFixed(0)}%`} sub={`${window.fmt$Sign(losses)} realized losses`} tone={losses < 0 ? 'red' : 'green'} mono/></window.Card>
       </div>
 

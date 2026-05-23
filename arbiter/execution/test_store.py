@@ -353,6 +353,100 @@ async def test_record_arb_rolls_back_when_arb_insert_fails(mock_pool):
     assert mock_pool.conn.executes_inside_txn == 1
 
 
+# ─── C5.1: record_arb_stub_with_leg atomicity ────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_record_arb_stub_with_leg_writes_both_in_single_transaction(mock_pool):
+    """C5.1: the arb stub INSERT and the first leg's order upsert must execute
+    inside a single ``conn.transaction()`` block.  Closes the historic phantom
+    window where ``record_arb_stub`` committed alone, then anything between
+    that commit and the first leg's ``upsert_order`` could leave an orphan
+    arb_row with zero legs (169 of 295 prod phantoms followed that path).
+    """
+    from arbiter.scanner.arbitrage import ArbitrageOpportunity
+
+    store = ExecutionStore(database_url="postgres://mock/mock")
+    await store.connect()
+    opp = ArbitrageOpportunity(
+        canonical_id="TEST_C5",
+        description="d",
+        yes_platform="kalshi", yes_price=0.50, yes_fee=0.0, yes_market_id="K-1",
+        no_platform="polymarket", no_price=0.50, no_fee=0.0, no_market_id="P-1",
+        gross_edge=0.0, total_fees=0.0,
+        net_edge=0.05, net_edge_cents=5.0,
+        suggested_qty=1, max_profit_usd=0.05,
+        timestamp=time.time(),
+    )
+    leg = Order(
+        order_id="ARB-C5-YES-aaaa",
+        platform="kalshi", market_id="K-1", canonical_id="TEST_C5",
+        side="yes", price=0.50, quantity=1,
+        status=OrderStatus.FILLED, fill_price=0.50, fill_qty=1,
+    )
+    await store.record_arb_stub_with_leg(
+        arb_id="ARB-C5",
+        canonical_id="TEST_C5",
+        first_leg=leg,
+        opportunity=opp,
+        net_edge=0.05,
+    )
+
+    assert mock_pool.conn.transactions_started == 1
+    assert mock_pool.conn.transactions_committed == 1
+    assert mock_pool.conn.transactions_rolled_back == 0
+    # Two writes inside the txn: arb INSERT + leg upsert.
+    assert mock_pool.conn.executes_inside_txn == 2, (
+        f"expected 2 executes inside the transaction; "
+        f"got {mock_pool.conn.executes_inside_txn}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_record_arb_stub_with_leg_rolls_back_when_leg_upsert_fails(mock_pool):
+    """C5.1: if the leg upsert raises after the arb INSERT, the transaction
+    must roll back so the arb stub is undone — no phantom parent row left."""
+    import asyncpg
+    from arbiter.scanner.arbitrage import ArbitrageOpportunity
+
+    # Fail on the SECOND execute (index 1) — arb INSERT succeeds at index 0,
+    # leg upsert fails at index 1, both must roll back.
+    mock_pool.conn._fail_on_execute_index = 1
+
+    store = ExecutionStore(database_url="postgres://mock/mock")
+    await store.connect()
+    opp = ArbitrageOpportunity(
+        canonical_id="TEST_RB",
+        description="d",
+        yes_platform="kalshi", yes_price=0.50, yes_fee=0.0, yes_market_id="K-1",
+        no_platform="polymarket", no_price=0.50, no_fee=0.0, no_market_id="P-1",
+        gross_edge=0.0, total_fees=0.0,
+        net_edge=0.05, net_edge_cents=5.0,
+        suggested_qty=1, max_profit_usd=0.05,
+        timestamp=time.time(),
+    )
+    leg = Order(
+        order_id="ARB-RB-YES-aaaa",
+        platform="kalshi", market_id="K-1", canonical_id="TEST_RB",
+        side="yes", price=0.50, quantity=1,
+        status=OrderStatus.FILLED, fill_price=0.50, fill_qty=1,
+    )
+
+    with pytest.raises(asyncpg.PostgresError):
+        await store.record_arb_stub_with_leg(
+            arb_id="ARB-RB",
+            canonical_id="TEST_RB",
+            first_leg=leg,
+            opportunity=opp,
+        )
+
+    assert mock_pool.conn.transactions_started == 1
+    assert mock_pool.conn.transactions_committed == 0
+    assert mock_pool.conn.transactions_rolled_back == 1, (
+        "leg upsert failure must roll back the arb INSERT too"
+    )
+
+
 # ─── Rehydration ──────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
