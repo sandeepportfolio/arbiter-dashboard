@@ -596,11 +596,12 @@ class ExecutionStore:
                     """
                     INSERT INTO execution_arbs (
                         arb_id, canonical_id, status, net_edge, realized_pnl,
-                        opportunity_json, is_simulation
-                    ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
+                        unwind_pnl, opportunity_json, is_simulation
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
                     ON CONFLICT (arb_id) DO UPDATE SET
                         status         = EXCLUDED.status,
                         realized_pnl   = EXCLUDED.realized_pnl,
+                        unwind_pnl     = EXCLUDED.unwind_pnl,
                         updated_at     = NOW(),
                         closed_at      = CASE WHEN EXCLUDED.status IN ('filled','failed','simulated','recovering')
                                              THEN NOW() ELSE execution_arbs.closed_at END
@@ -610,6 +611,7 @@ class ExecutionStore:
                     arb_execution.status,
                     Decimal(str(net_edge)) if net_edge is not None else None,
                     Decimal(str(arb_execution.realized_pnl)),
+                    Decimal(str(getattr(arb_execution, "unwind_pnl", 0.0) or 0.0)),
                     opp_json,
                     is_sim,
                 )
@@ -672,6 +674,7 @@ class ExecutionStore:
 
         arb_sql = """
                 SELECT arb_id, canonical_id, status, net_edge, realized_pnl,
+                       COALESCE(unwind_pnl, 0) AS unwind_pnl,
                        opportunity_json, is_simulation, created_at
                 FROM execution_arbs
                 ORDER BY created_at DESC
@@ -789,6 +792,7 @@ class ExecutionStore:
                 leg_no=leg_no,
                 status=arb_row["status"] or "unknown",
                 realized_pnl=float(arb_row["realized_pnl"] or 0),
+                unwind_pnl=float(arb_row["unwind_pnl"] or 0),
                 timestamp=ts,
             )
             executions.append(execution)

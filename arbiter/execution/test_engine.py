@@ -3068,3 +3068,66 @@ def test_secondary_exception_after_primary_fill_persists_naked_and_reraises():
                 _os_test.environ["EXECUTION_ORDER"] = _old_exec_order
 
     asyncio.run(runner())
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Audit 2026-05: arb_pnl must be tracked separately from naked-leg unwind
+# PnL so the profitability gate cannot be fooled by directional luck on
+# unhedged positions ($129.48 of $135.38 reported "profit" was naked-leg
+# payouts, not arbitrage edge).  Validate the ArbExecution dataclass split.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def test_arb_execution_separates_arb_pnl_from_unwind_pnl():
+    """``arb_pnl`` is the property that exposes pure arbitrage edge; it
+    equals ``realized_pnl - unwind_pnl``.  Pre-migration trades have
+    ``unwind_pnl=0`` so ``arb_pnl == realized_pnl`` for them.
+    """
+    from arbiter.execution.engine import ArbExecution, Order, OrderStatus
+
+    opp = ArbitrageOpportunity(
+        canonical_id="C", description="d",
+        yes_platform="kalshi", yes_price=0.50, yes_fee=0.0, yes_market_id="K",
+        no_platform="polymarket", no_price=0.45, no_fee=0.0, no_market_id="P",
+        gross_edge=0.05, total_fees=0.0, net_edge=0.05, net_edge_cents=5.0,
+        suggested_qty=10, max_profit_usd=0.50, timestamp=time.time(),
+    )
+    leg_yes = Order(order_id="A-Y", platform="kalshi", market_id="K", canonical_id="C",
+                    side="yes", price=0.50, quantity=10,
+                    status=OrderStatus.FILLED, fill_price=0.50, fill_qty=10)
+    leg_no = Order(order_id="A-N", platform="polymarket", market_id="P", canonical_id="C",
+                   side="no", price=0.45, quantity=10,
+                   status=OrderStatus.FILLED, fill_price=0.45, fill_qty=10)
+
+    # Case 1: both legs filled — realized_pnl IS arb_pnl, no unwind component.
+    arb = ArbExecution(
+        arb_id="ARB-PNL-1", opportunity=opp, leg_yes=leg_yes, leg_no=leg_no,
+        status="filled", realized_pnl=0.50, unwind_pnl=0.0,
+        timestamp=time.time(),
+    )
+    assert arb.arb_pnl == pytest.approx(0.50)
+    assert arb.to_dict()["arb_pnl"] == pytest.approx(0.50)
+    assert arb.to_dict()["unwind_pnl"] == pytest.approx(0.0)
+
+    # Case 2: naked leg recovered via unwind — most of "profit" came from
+    # the directional unwind, only a small slice is real arb edge.
+    arb_naked = ArbExecution(
+        arb_id="ARB-PNL-2", opportunity=opp, leg_yes=leg_yes, leg_no=leg_no,
+        status="recovering", realized_pnl=10.0, unwind_pnl=9.5,
+        timestamp=time.time(),
+    )
+    # arb_pnl carries only the small "real" arbitrage slice.
+    assert arb_naked.arb_pnl == pytest.approx(0.5)
+    assert arb_naked.to_dict()["realized_pnl"] == pytest.approx(10.0)
+    assert arb_naked.to_dict()["unwind_pnl"] == pytest.approx(9.5)
+    assert arb_naked.to_dict()["arb_pnl"] == pytest.approx(0.5)
+
+    # Case 3: pre-migration rehydrated row (default unwind_pnl=0) — arb_pnl
+    # falls back to full realized_pnl for backward-compat.
+    arb_legacy = ArbExecution(
+        arb_id="ARB-PNL-3", opportunity=opp, leg_yes=leg_yes, leg_no=leg_no,
+        status="filled", realized_pnl=2.75,
+        timestamp=time.time(),
+    )
+    assert arb_legacy.unwind_pnl == 0.0
+    assert arb_legacy.arb_pnl == pytest.approx(2.75)

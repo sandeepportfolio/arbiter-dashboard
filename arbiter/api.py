@@ -2484,19 +2484,33 @@ class ArbiterAPI:
                     "yes_fill_qty": e.leg_yes.fill_qty,
                     "no_fill_qty": e.leg_no.fill_qty,
                     "realized_pnl": e.realized_pnl,
+                    "unwind_pnl": float(getattr(e, "unwind_pnl", 0.0) or 0.0),
+                    "arb_pnl": float(getattr(e, "arb_pnl", e.realized_pnl)),
                     "created_at": e.timestamp,
                 })
         return web.json_response({"positions": positions})
 
     async def handle_portfolio_summary(self, request):
-        """Return aggregated portfolio performance summary."""
+        """Return aggregated portfolio performance summary.
+
+        ``realized_pnl`` is the total realized cash change (arb edge plus
+        any naked-leg unwind P&L).  ``arb_pnl`` is the pure arbitrage
+        component (both legs filled, paired).  ``unwind_pnl`` is the
+        directional component from naked-leg auto-unwinds.  Distinguishing
+        the two prevents the audit 2026-05 case where $129.48 of $135.38
+        "profit" was directional luck on unhedged Kalshi positions.
+        """
         executions = getattr(self.engine, "_executions", [])
         realized = sum(e.realized_pnl for e in executions)
+        unwind = sum(float(getattr(e, "unwind_pnl", 0.0) or 0.0) for e in executions)
+        arb = realized - unwind
         portfolio_snapshot = self._portfolio_monitor_snapshot()
         total_fees = sum(e.opportunity.total_fees * e.opportunity.suggested_qty for e in executions)
         return web.json_response({
             "total_executions": len(executions),
             "realized_pnl": round(realized, 4),
+            "arb_pnl": round(arb, 4),
+            "unwind_pnl": round(unwind, 4),
             "estimated_fees": round(total_fees, 4),
             "unrealized_pnl": round(portfolio_snapshot.unrealized_pnl, 4) if portfolio_snapshot else 0.0,
             "total_exposure": round(portfolio_snapshot.total_exposure, 4) if portfolio_snapshot else 0.0,

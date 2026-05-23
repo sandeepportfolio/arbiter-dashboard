@@ -245,11 +245,28 @@ class ArbExecution:
     leg_no: Order
     status: str = "pending"
     realized_pnl: float = 0.0
+    # Naked-leg unwind PnL, tracked separately from arb edge (audit 2026-05).
+    # ``realized_pnl`` = arb_pnl + unwind_pnl; consumers that need the pure
+    # arbitrage PnL (e.g. the profitability gate) compute ``arb_pnl``
+    # property below.  Pre-migration trades default to 0 and so report their
+    # full realized_pnl as arb_pnl, which is a known mis-attribution for
+    # historical rows only.
+    unwind_pnl: float = 0.0
     timestamp: float = 0.0
     notes: List[str] = field(default_factory=list)
     # Markdown post-mortem populated by ``_build_inline_analysis`` right before
     # the audit write. Empty until the trade reaches a recordable state.
     analysis_md: str = ""
+
+    @property
+    def arb_pnl(self) -> float:
+        """Pure arbitrage PnL: total realized minus naked-leg unwind PnL.
+
+        Both legs filled => arb_pnl > 0 reflects captured edge.
+        Naked-leg auto-unwind => unwind_pnl can be ±; arb_pnl is what would
+        have been realized if the secondary had filled paired.
+        """
+        return float(self.realized_pnl) - float(self.unwind_pnl)
 
     def to_dict(self) -> dict:
         return {
@@ -259,6 +276,8 @@ class ArbExecution:
             "leg_no": self.leg_no.to_dict(),
             "status": self.status,
             "realized_pnl": round(self.realized_pnl, 4),
+            "unwind_pnl": round(self.unwind_pnl, 4),
+            "arb_pnl": round(self.arb_pnl, 4),
             "timestamp": self.timestamp,
             "notes": self.notes,
             "analysis_md": self.analysis_md,
@@ -275,6 +294,8 @@ class ArbExecution:
             "leg_no": self.leg_no.to_audit_dict(),
             "status": self.status,
             "realized_pnl": self.realized_pnl,
+            "unwind_pnl": self.unwind_pnl,
+            "arb_pnl": self.arb_pnl,
             "timestamp": self.timestamp,
             "notes": list(self.notes),
         }
@@ -1832,14 +1853,18 @@ class ExecutionEngine:
             notes.extend(recovery_notes)
             # Book the realized loss from the unwind into the arb's P&L so
             # reconciliation drift no longer fires for the unrecorded
-            # auto-unwind cost. This is the only place ArbExecution.realized_pnl
-            # is mutated post-construction; do it BEFORE record_arb so the
-            # persisted row reflects the true realized P&L.
+            # auto-unwind cost. Track the unwind component SEPARATELY on
+            # ``execution.unwind_pnl`` so reporting can distinguish arb
+            # edge (both legs filled, paired) from directional naked-leg
+            # payouts (audit 2026-05).  ``realized_pnl`` continues to hold
+            # the TOTAL so existing reconciliation logic stays correct.
             if unwind_pnl != 0.0:
+                execution.unwind_pnl = float(execution.unwind_pnl) + unwind_pnl
                 execution.realized_pnl = float(execution.realized_pnl) + unwind_pnl
                 logger.info(
-                    "ARB %s realized_pnl updated by unwind: $%.4f (total now $%.4f)",
-                    arb_id, unwind_pnl, execution.realized_pnl,
+                    "ARB %s unwind_pnl=$%.4f; total realized_pnl now $%.4f "
+                    "(arb_pnl=$%.4f)",
+                    arb_id, unwind_pnl, execution.realized_pnl, execution.arb_pnl,
                 )
 
         # Daily-loss kill switch: roll the unwind loss into RiskManager's
