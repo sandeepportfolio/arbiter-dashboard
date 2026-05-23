@@ -76,6 +76,12 @@ class ForecastExClient:
 
     circuit: CircuitBreaker = field(init=False, repr=False)
     live_rate_limiter: RateLimiter = field(init=False, repr=False)
+    # IBKR brokerage-bridge state. ``/iserver/*`` endpoints reply
+    # ``400 "no bridge"`` until ``/iserver/auth/ssodh/init`` has been called
+    # for this gateway session.  We initialize lazily on the first iserver
+    # request and re-initialize if a subsequent call ever sees the same
+    # "no bridge" response (e.g. the IBKR session timed out and reconnected).
+    _bridge_ready: bool = field(default=False, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.circuit = CircuitBreaker(
@@ -101,6 +107,42 @@ class ForecastExClient:
         suffix = path if path.startswith("/") else f"/{path}"
         return f"{base}{suffix}"
 
+    async def _ensure_iserver_bridge(self) -> None:
+        """Initialize the IBKR brokerage bridge required by /iserver/* endpoints.
+
+        The Client Portal gateway maintains TWO sessions: an authenticated
+        SSO session (used for /portfolio/*) and a brokerage bridge
+        (required for /iserver/*).  The bridge must be explicitly
+        initialized via POST /iserver/auth/ssodh/init; otherwise every
+        iserver call returns 400 ``{"error":"Bad Request: no bridge"}``.
+
+        Audit 2026-05: forecastex_discovery returned 0 events on every run
+        because the bridge had never been initialized — all secdef/search
+        calls 400-failed silently in the per-keyword exception handler.
+        """
+        if self._bridge_ready:
+            return
+        session = await self._ensure_session()
+        # Best-effort — if init fails the next iserver call will surface
+        # the underlying error.  Don't block startup on bridge issues.
+        try:
+            async with session.post(
+                self._url("/iserver/auth/ssodh/init"),
+                json={"publish": True, "compete": True},
+                headers={"Accept": "application/json"},
+            ) as resp:
+                if resp.status == 200:
+                    self._bridge_ready = True
+                    logger.info("forecastex: iserver bridge initialized")
+                else:
+                    body = await resp.text()
+                    logger.warning(
+                        "forecastex: iserver bridge init returned %s: %s",
+                        resp.status, body[:200],
+                    )
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            logger.warning("forecastex: iserver bridge init raised: %s", exc)
+
     async def _request(
         self,
         method: str,
@@ -111,6 +153,13 @@ class ForecastExClient:
     ) -> dict:
         session = await self._ensure_session()
         url = self._url(path)
+
+        # /iserver/* paths need the brokerage bridge; ensure it up-front so
+        # the first FORECASTX discovery call after gateway restart doesn't
+        # silently 400.  /portfolio/* and a handful of read-only endpoints
+        # work without the bridge, so we don't gate them.
+        if path.startswith("/iserver/") and path != "/iserver/auth/ssodh/init":
+            await self._ensure_iserver_bridge()
 
         for attempt in range(3):
             if not self.circuit.can_execute():
@@ -147,6 +196,27 @@ class ForecastExClient:
                             f"gateway session expired — re-authenticate via /sso. "
                             f"Body: {text[:200]}"
                         )
+
+                    # ``400 {"error":"Bad Request: no bridge"}`` means the
+                    # brokerage bridge needs (re-)initialization.  Re-init
+                    # and retry once before surfacing the error so transient
+                    # session drops self-heal without operator action.
+                    if (
+                        resp.status == 400
+                        and path.startswith("/iserver/")
+                        and path != "/iserver/auth/ssodh/init"
+                        and attempt == 0
+                    ):
+                        body = await resp.text()
+                        if "no bridge" in body.lower():
+                            logger.warning(
+                                "forecastex: '/iserver' 400 'no bridge' on %s "
+                                "— re-initializing brokerage bridge",
+                                path,
+                            )
+                            self._bridge_ready = False
+                            await self._ensure_iserver_bridge()
+                            continue
 
                     resp.raise_for_status()
                     self.circuit.record_success()

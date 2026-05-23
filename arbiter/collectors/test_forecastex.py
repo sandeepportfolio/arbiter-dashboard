@@ -197,6 +197,68 @@ async def test_client_500_records_circuit_failure(client):
     await client.close()
 
 
+# ── IBKR brokerage-bridge initialization (audit 2026-05) ──────────────────
+
+
+async def test_client_iserver_call_initializes_brokerage_bridge(client):
+    """First /iserver/* call must POST to /iserver/auth/ssodh/init so the
+    brokerage bridge is established.  Audit 2026-05 found forecastex
+    discovery returning 0 events because no code path ever initialized
+    the bridge — every secdef/search came back as 400 ``no bridge``.
+    """
+    with aioresponses() as m:
+        m.post(
+            re.compile(r".*/iserver/auth/ssodh/init.*"),
+            payload={"authenticated": True, "established": True},
+        )
+        m.post(
+            re.compile(r".*/iserver/secdef/search.*"),
+            payload=[{"conid": "111", "companyHeader": "TEAM A WINS (FORECASTX)"}],
+        )
+        result = await client._request(
+            "POST", "/iserver/secdef/search",
+            json_body={"symbol": "nba", "name": True},
+        )
+    # Bridge flag flipped on successful init.
+    assert client._bridge_ready is True
+    # Result wrapped as expected.
+    assert result == {"items": [{"conid": "111", "companyHeader": "TEAM A WINS (FORECASTX)"}]}
+    await client.close()
+
+
+async def test_client_iserver_no_bridge_400_triggers_retry_with_init(client):
+    """If the gateway has been alive longer than the brokerage bridge
+    (e.g. the IBKR session timed out and reconnected), a /iserver/* call
+    can still receive ``400 no bridge``.  The client must re-initialize
+    the bridge and retry once before surfacing the error so transient
+    bridge drops don't propagate to discovery / market snapshots.
+    """
+    # Pretend the bridge was previously initialized so we exercise the
+    # retry path (not the upfront init path).
+    client._bridge_ready = True
+
+    with aioresponses() as m:
+        # First call returns 400 no bridge.
+        m.get(
+            re.compile(r".*/iserver/marketdata/snapshot.*"),
+            status=400,
+            payload={"error": "Bad Request: no bridge", "statusCode": 400},
+        )
+        # Bridge re-init succeeds.
+        m.post(
+            re.compile(r".*/iserver/auth/ssodh/init.*"),
+            payload={"authenticated": True, "established": True},
+        )
+        # Retry succeeds with real data.
+        m.get(
+            re.compile(r".*/iserver/marketdata/snapshot.*"),
+            payload=[{"31": "0.55", "84": "0.54", "86": "0.56"}],
+        )
+        snap = await client.market_snapshot("99999")
+    assert snap["86"] == "0.56"
+    await client.close()
+
+
 async def test_client_cancel_order_sends_delete(client):
     with aioresponses() as m:
         m.delete(
