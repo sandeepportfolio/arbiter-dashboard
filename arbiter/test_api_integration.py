@@ -138,6 +138,18 @@ def test_api_and_dashboard_contracts():
         assert isinstance(get_json("/api/trades"), list)
         assert isinstance(get_json("/api/errors"), list)
         assert isinstance(get_json("/api/manual-positions"), list)
+
+        # /api/alerts — aggregator feeding the ops console dropdown. Must
+        # return the documented envelope even when the engine has no
+        # incidents, trades, mappings, or safety events to draw from.
+        alerts_resp = get_json("/api/alerts")
+        assert isinstance(alerts_resp, dict)
+        assert isinstance(alerts_resp.get("alerts"), list)
+        assert "generated_at" in alerts_resp
+        for item in alerts_resp["alerts"]:
+            assert {"id", "sev", "kind", "title", "body", "ts"}.issubset(item.keys())
+            assert item["sev"] in {"info", "warn", "err", "ok"}
+            assert item["kind"] in {"incident", "trade", "mapping", "safety"}
         profitability = get_json("/api/profitability")
         assert "verdict" in profitability
         assert "progress" in profitability

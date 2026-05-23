@@ -441,6 +441,7 @@ class ArbiterAPI:
         app.router.add_get("/api/settings", self.handle_settings)
         app.router.add_post("/api/settings", self.handle_settings_update)
         app.router.add_get("/api/errors", self.handle_errors)
+        app.router.add_get("/api/alerts", self.handle_alerts)
         app.router.add_post("/api/errors/{incident_id}", self.handle_incident_action)
         app.router.add_get("/api/manual-positions", self.handle_manual_positions)
         app.router.add_post("/api/manual-positions/{position_id}", self.handle_manual_position_action)
@@ -1954,6 +1955,170 @@ class ArbiterAPI:
             except Exception as exc:
                 logger.warning("Failed to load persisted incidents for /api/errors: %s", exc)
         return web.json_response(list(incidents.values()))
+
+    async def handle_alerts(self, request):
+        """GET /api/alerts — aggregated feed of recent significant events.
+
+        Used by the ops console alerts dropdown. Aggregates open incidents,
+        recent execution outcomes, recently confirmed mappings, and safety
+        events. Telegram-sent alerts are NOT persisted today, so they cannot
+        be surfaced here — if alert history persistence is added later
+        (e.g. arbiter.notifiers.telegram writing to a sent_alerts table),
+        feed it in below.
+        """
+        try:
+            limit = min(max(int(request.query.get("limit", "50")), 1), 200)
+        except (TypeError, ValueError):
+            limit = 50
+        try:
+            hours = float(request.query.get("hours", "24"))
+        except (TypeError, ValueError):
+            hours = 24.0
+        cutoff = time.time() - hours * 3600.0
+
+        def _parse_iso(value: Any) -> float:
+            if value is None:
+                return 0.0
+            if isinstance(value, (int, float)):
+                return float(value)
+            if isinstance(value, datetime):
+                return value.timestamp()
+            try:
+                return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+            except (ValueError, TypeError):
+                return 0.0
+
+        alerts: list[dict] = []
+
+        incidents: Dict[str, dict] = {}
+        for incident in getattr(self.engine, "incidents", []) or []:
+            incidents[incident.incident_id] = incident.to_dict()
+        if self.execution_store is not None:
+            try:
+                persisted = await self.execution_store.list_incidents(
+                    status="open", limit=200,
+                )
+                for incident in persisted:
+                    incidents.setdefault(incident.incident_id, incident.to_dict())
+            except Exception as exc:
+                logger.warning("alerts: failed to load incidents: %s", exc)
+        for inc in incidents.values():
+            ts = float(inc.get("timestamp") or 0.0)
+            if ts < cutoff:
+                continue
+            sev_raw = str(inc.get("severity") or "info").lower()
+            sev = {"critical": "err", "error": "err", "warning": "warn"}.get(sev_raw, "info")
+            arb_id = str(inc.get("arb_id") or "")
+            title = f"Incident on {arb_id}" if arb_id and arb_id != "manual" else "Incident raised"
+            metadata = inc.get("metadata") or {}
+            try:
+                detail = json.dumps(metadata, indent=2, default=str) if metadata else ""
+            except Exception:
+                detail = ""
+            alerts.append({
+                "id": f"inc:{inc.get('incident_id')}",
+                "sev": sev,
+                "kind": "incident",
+                "title": title,
+                "body": str(inc.get("message") or ""),
+                "ts": ts,
+                "icon": "!" if sev == "err" else "⚠",
+                "go": "errors",
+                "detail": detail,
+            })
+
+        for execution in getattr(self.engine, "execution_history", []) or []:
+            try:
+                payload = self._execution_payload(execution)
+            except Exception:
+                continue
+            ts = float(payload.get("timestamp") or 0.0)
+            if ts < cutoff:
+                continue
+            arb_id = str(payload.get("arb_id") or "")
+            status = str(payload.get("status") or "").lower()
+            status_group = str(payload.get("status_group") or status)
+            canonical = str((payload.get("opportunity") or {}).get("canonical_id") or "")
+            realized = float(payload.get("realized_pnl") or 0.0)
+            if status_group == "completed":
+                sev = "ok" if realized >= 0 else "warn"
+                sign = "+" if realized >= 0 else ""
+                title = f"{arb_id} settled"
+                body = f"{canonical} · P&L {sign}${realized:.2f}"
+                icon = "✓"
+            elif status_group == "failed":
+                sev = "err"
+                title = f"{arb_id} failed"
+                body = f"{canonical} · status={status}"
+                icon = "✕"
+            elif status == "recovering":
+                sev = "warn"
+                title = f"{arb_id} recovering"
+                body = f"{canonical} · one-leg recovery in flight"
+                icon = "↗"
+            else:
+                continue
+            alerts.append({
+                "id": f"exec:{arb_id}:{status}",
+                "sev": sev,
+                "kind": "trade",
+                "title": title,
+                "body": body,
+                "ts": ts,
+                "icon": icon,
+                "go": "trades",
+            })
+
+        if self.mapping_store is not None:
+            try:
+                mappings = await self.mapping_store.all(status="confirmed", limit=100)
+                for mapping in mappings:
+                    row = mapping.to_dict() if hasattr(mapping, "to_dict") else mapping
+                    ts = _parse_iso(row.get("updated_at"))
+                    if ts < cutoff:
+                        continue
+                    canonical = str(row.get("canonical_id") or "")
+                    score = float(row.get("mapping_score") or row.get("confidence") or 0.0)
+                    alerts.append({
+                        "id": f"map:{canonical}:{int(ts)}",
+                        "sev": "info",
+                        "kind": "mapping",
+                        "title": "Mapping confirmed",
+                        "body": f"{canonical} · score {score:.2f}",
+                        "ts": ts,
+                        "icon": "⇄",
+                        "go": "mappings",
+                    })
+            except Exception as exc:
+                logger.warning("alerts: failed to load mappings: %s", exc)
+
+        if self.safety_store is not None:
+            try:
+                events = await self.safety_store.list_events(limit=50, offset=0)
+                for ev in events:
+                    ts = _parse_iso(ev.get("created_at"))
+                    if ts < cutoff:
+                        continue
+                    event_type = str(ev.get("event_type") or "safety event")
+                    alerts.append({
+                        "id": f"safe:{ev.get('event_id') or int(ts)}",
+                        "sev": "warn",
+                        "kind": "safety",
+                        "title": f"Safety: {event_type}",
+                        "body": str(ev.get("reason") or ev.get("actor") or ""),
+                        "ts": ts,
+                        "icon": "⛔",
+                        "go": "errors",
+                    })
+            except Exception as exc:
+                logger.warning("alerts: failed to load safety events: %s", exc)
+
+        alerts.sort(key=lambda a: a.get("ts") or 0.0, reverse=True)
+        return web.json_response({
+            "alerts": alerts[:limit],
+            "generated_at": time.time(),
+            "window_hours": hours,
+        })
 
     async def handle_manual_positions(self, request):
         return web.json_response([position.to_dict() for position in self.engine.manual_positions])
