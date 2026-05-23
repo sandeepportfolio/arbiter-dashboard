@@ -22,13 +22,26 @@ import os
 import re
 import shutil
 import subprocess
-from typing import Literal
+import time
+from typing import Literal, Optional
 
 logger = logging.getLogger("arbiter.mapping.llm_verifier")
 
 # ─── In-memory cache ──────────────────────────────────────────────────────────
-_cache: dict[frozenset, Literal["YES", "NO", "MAYBE"]] = {}
+# Value is (answer, expires_at_epoch). expires_at is None for YES/NO (definitive
+# verdicts that never change) and set for MAYBE so a sidecar outage that poisons
+# the cache with MAYBEs self-heals after the TTL window instead of requiring a
+# container restart. See memory/llm_verifier_sidecar.md for the original bug.
+_cache: dict[frozenset, tuple[Literal["YES", "NO", "MAYBE"], Optional[float]]] = {}
 _CACHE_MAX = 10_000
+
+
+def _maybe_ttl_seconds() -> float:
+    """TTL applied to MAYBE entries. Read on each write so tests can override."""
+    try:
+        return float(os.environ.get("LLM_VERIFIER_MAYBE_TTL_SECONDS", "3600"))
+    except ValueError:
+        return 3600.0
 
 # ─── Model ────────────────────────────────────────────────────────────────────
 _API_MODEL = "claude-sonnet-4-6"  # Fallback API model for better accuracy
@@ -136,7 +149,21 @@ def _remember(cache_key: frozenset, result: Literal["YES", "NO", "MAYBE"]) -> No
     if len(_cache) >= _CACHE_MAX:
         oldest_key = next(iter(_cache))
         del _cache[oldest_key]
-    _cache[cache_key] = result
+    expires_at = time.time() + _maybe_ttl_seconds() if result == "MAYBE" else None
+    _cache[cache_key] = (result, expires_at)
+
+
+def _recall(cache_key: frozenset) -> Optional[Literal["YES", "NO", "MAYBE"]]:
+    """Return a cached answer or None on miss / expired entry."""
+    entry = _cache.get(cache_key)
+    if entry is None:
+        return None
+    answer, expires_at = entry
+    if expires_at is not None and time.time() >= expires_at:
+        # Expired MAYBE — evict and force re-verify.
+        _cache.pop(cache_key, None)
+        return None
+    return answer
 
 
 # ─── CLI backend ─────────────────────────────────────────────────────────────
@@ -451,9 +478,10 @@ async def verify(
     cache_key = _cache_key(kalshi_question, poly_question)
 
     # Check in-memory cache first
-    if cache_key in _cache:
+    cached = _recall(cache_key)
+    if cached is not None:
         logger.debug("llm_verifier cache hit for pair")
-        return _cache[cache_key]
+        return cached
 
     if _BACKEND == "cli":
         result = await _verify_cli(kalshi_question, poly_question)
@@ -481,7 +509,7 @@ async def verify_batch(
 
     for idx, (kalshi_question, poly_question) in enumerate(pairs):
         key = _cache_key(kalshi_question, poly_question)
-        cached = _cache.get(key)
+        cached = _recall(key)
         if cached is not None:
             results[idx] = cached
         else:

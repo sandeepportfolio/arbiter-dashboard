@@ -68,9 +68,23 @@ DEFAULT_SEED_KEYWORDS: tuple[str, ...] = (
     "election", "senate", "house", "governor", "primary", "general",
     "control", "majority", "midterm", "race", "president",
     "republican", "democrat", "congressional",
-    # Future-proofing for sports / events when ForecastEx expands
+    # Sports — covered if/when IBKR adds the inventory
     "mlb", "nfl", "nba", "nhl", "soccer", "tournament", "championship",
     "world cup", "super bowl", "playoff", "world series",
+    # Economics / macro
+    "cpi", "gdp", "unemployment", "rate", "fed", "fomc", "inflation",
+    "recession", "jobs", "payrolls",
+    # Crypto / finance
+    "bitcoin", "ethereum", "crypto", "spx", "sp500", "nasdaq",
+    # Climate / weather
+    "hurricane", "temperature", "climate", "drought", "snowfall",
+    # Science / health
+    "vaccine", "drug", "approval", "fda", "trial", "study",
+    "launch", "rocket", "mission", "spacex", "openai",
+    # Entertainment / culture
+    "oscar", "emmy", "grammy", "box", "movie", "award",
+    # Legal / policy
+    "scotus", "court", "ruling", "verdict", "indictment",
 )
 
 # Conservative threshold. Below this, log the near-miss but do not write.
@@ -259,29 +273,42 @@ async def discover(
 
     # Gather confirmed mappings that haven't been bound to a ForecastEx
     # contract yet. iter_confirmed is an async generator returning
-    # (canonical_id, MarketMapping).
+    # (canonical_id, MarketMapping). Skip rows already negative-cached
+    # via `forecastex_not_available` — those have been searched in a prior
+    # pass and confirmed to have no FORECASTX equivalent, so re-querying
+    # IBKR every cycle is wasted rate budget on the long tail of
+    # localised sports/cultural markets.
     targets: list[MarketMapping] = []
+    skipped_negative_cache = 0
     async for _canonical_id, mapping in mapping_store.iter_confirmed():
         if (mapping.forecastex_contract_id or "").strip():
+            continue
+        if getattr(mapping, "forecastex_not_available", False):
+            skipped_negative_cache += 1
             continue
         targets.append(mapping)
 
     logger.info(
-        "forecastex_discovery: %d confirmed mapping(s) missing forecastex_contract_id",
+        "forecastex_discovery: %d confirmed mapping(s) missing forecastex_contract_id "
+        "(skipped %d previously-negative-cached)",
         len(targets),
+        skipped_negative_cache,
     )
     if not targets:
         return 0
 
     matched = 0
+    unavailable_marked = 0
     for mapping in targets:
         best_score = 0.0
         best_token_count = 10**9  # tiebreaker: prefer fewer tokens = more specific
         best_event: Optional[dict[str, Any]] = None
+        any_event_scored = False
         for event in events:
             score = _score_event_against_mapping(event["title"], mapping)
             if score <= 0:
                 continue
+            any_event_scored = True
             # Tiebreaker — when two FORECASTX events score the same against a
             # mapping (both share only "house" with "US House Midterm Winner",
             # say), prefer the event with fewer tokens overall. The shorter
@@ -297,6 +324,25 @@ async def discover(
                 best_event = event
 
         if best_event is None:
+            # No FORECASTX event scored above zero against this mapping
+            # (typically: localised MLS/NCAA games whose city names share
+            # tokens with no political event in the FORECASTX inventory).
+            # Negative-cache so we don't keep scanning every 5 min — the
+            # FORECASTX inventory is small and turns over slowly, so a
+            # missed match here is acceptable; the operator can re-trigger
+            # discovery if FORECASTX expands its catalog.
+            if not dry_run and not any_event_scored:
+                try:
+                    await mapping_store.mark_forecastex_unavailable(
+                        mapping.canonical_id
+                    )
+                    unavailable_marked += 1
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "forecastex_discovery: mark_forecastex_unavailable "
+                        "failed for %s: %s",
+                        mapping.canonical_id, exc,
+                    )
             continue
 
         if best_score < min_score:
@@ -362,7 +408,9 @@ async def discover(
             )
 
     logger.info(
-        "forecastex_discovery: attached %d/%d mappings", matched, len(targets),
+        "forecastex_discovery: attached %d/%d mappings "
+        "(negative-cached %d with no FORECASTX overlap)",
+        matched, len(targets), unavailable_marked,
     )
     return matched
 

@@ -25,19 +25,38 @@ from typing import Any, Callable, Optional
 
 logger = logging.getLogger("arbiter.mapping.pmxt_discovery")
 
-# Categories and queries to search across platforms
+# Categories and queries to search across platforms. Keep these grouped by
+# category so coverage gaps are easy to spot — discovery casts a wide net
+# and the structural matcher / LLM verifier prune false positives downstream.
 _DISCOVERY_QUERIES = [
-    # Economics
+    # Economics & finance
     "GDP", "federal funds rate", "unemployment rate", "CPI inflation",
-    "interest rate", "FOMC",
+    "interest rate", "FOMC", "recession", "jobs report", "retail sales",
+    "S&P 500", "Nasdaq", "Dow Jones",
     # Crypto
     "bitcoin price", "ethereum price", "XRP price", "solana price",
+    "dogecoin price", "cardano price", "crypto",
     # Politics
     "senate election", "house election", "president",
     "governor election", "democratic", "republican",
+    "midterm", "primary", "approval rating",
+    # Geopolitics
+    "russia ukraine", "israel", "china taiwan", "nato",
+    "ceasefire", "sanctions",
     # Sports
     "NBA", "NFL", "MLB", "NHL", "MLS", "soccer",
     "Premier League", "Champions League", "Serie A", "La Liga",
+    "World Cup", "Super Bowl", "World Series", "Stanley Cup",
+    "tennis", "golf", "boxing", "UFC",
+    # Weather / climate
+    "hurricane", "temperature record", "snowfall", "climate",
+    "wildfire", "earthquake",
+    # Entertainment / culture
+    "Oscars", "Grammys", "Emmys", "box office", "movie",
+    "album", "Spotify", "Netflix", "TIME person of the year",
+    # Science / tech
+    "SpaceX", "NASA", "rocket launch", "AI", "OpenAI",
+    "GPT", "self-driving", "Apple", "Tesla earnings",
 ]
 
 # Rate limiting

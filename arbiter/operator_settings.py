@@ -55,7 +55,10 @@ def default_market_discovery_settings() -> dict[str, Any]:
         "auto_discovery_interval_seconds": _coerce_float(os.getenv("AUTO_DISCOVERY_INTERVAL_S", "300"), 300.0, 15.0),
         "auto_discovery_budget_rps": _coerce_float(os.getenv("AUTO_DISCOVERY_BUDGET_RPS", "2.0"), 2.0, 0.1),
         "auto_discovery_min_score": _coerce_float(os.getenv("AUTO_DISCOVERY_MIN_SCORE", "0.25"), 0.25, 0.0),
-        "auto_discovery_max_candidates": _coerce_int(os.getenv("AUTO_DISCOVERY_MAX_CANDIDATES", "500"), 500, 1),
+        # Default raised from 500 -> 2000 to support the 1000+ mapping target.
+        # Prod env overrides to 5000; 2000 is a safe fresh-install baseline that
+        # won't immediately throttle once the system clears its initial backlog.
+        "auto_discovery_max_candidates": _coerce_int(os.getenv("AUTO_DISCOVERY_MAX_CANDIDATES", "2000"), 2000, 1),
         "auto_promote_enabled": _env_bool("AUTO_PROMOTE_ENABLED", False),
         "auto_promote_min_score": _coerce_float(os.getenv("AUTO_PROMOTE_MIN_SCORE", "0.78"), 0.78, 0.0),
         "auto_promote_daily_cap": _coerce_int(os.getenv("AUTO_PROMOTE_DAILY_CAP", "250"), 250, 1),

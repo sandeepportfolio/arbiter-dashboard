@@ -113,6 +113,8 @@ _AUTO_CATEGORY_LABELS = {
     "tech",
     "weather",
     "culture",
+    "entertainment",
+    "science",
 }
 _CATEGORY_ALIASES = {
     "elections": "politics",
@@ -120,6 +122,18 @@ _CATEGORY_ALIASES = {
     "world": "geopolitics",
     "international": "geopolitics",
     "sport": "sports",
+    "movies": "entertainment",
+    "film": "entertainment",
+    "tv": "entertainment",
+    "music": "entertainment",
+    "awards": "entertainment",
+    "celebrity": "entertainment",
+    "space": "science",
+    "ai": "tech",
+    "technology": "tech",
+    "climate": "weather",
+    "natural disaster": "weather",
+    "natural_disaster": "weather",
 }
 
 

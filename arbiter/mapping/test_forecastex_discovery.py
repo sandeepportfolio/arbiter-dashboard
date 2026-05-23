@@ -62,6 +62,7 @@ class _FakeStore:
     def __init__(self, mappings: list[MarketMapping]):
         self._mappings = {m.canonical_id: m for m in mappings}
         self.upserts: list[MarketMapping] = []
+        self.unavailable_marks: list[tuple[str, bool]] = []
 
     async def iter_confirmed(self, require_auto_trade: bool = False):
         for cid, m in self._mappings.items():
@@ -72,6 +73,15 @@ class _FakeStore:
         self.upserts.append(mapping)
         self._mappings[mapping.canonical_id] = mapping
         return mapping
+
+    async def mark_forecastex_unavailable(
+        self, canonical_id: str, *, unavailable: bool = True
+    ) -> bool:
+        self.unavailable_marks.append((canonical_id, bool(unavailable)))
+        if canonical_id in self._mappings:
+            self._mappings[canonical_id].forecastex_not_available = bool(unavailable)
+            return True
+        return False
 
 
 # ── Pure-function tests ───────────────────────────────────────────────────
@@ -240,6 +250,77 @@ async def test_discover_dry_run_does_not_write():
 async def test_discover_handles_no_client():
     matched = await discover(None, _FakeStore([]))
     assert matched == 0
+
+
+@pytest.mark.asyncio
+async def test_discover_negative_caches_unmatched_mappings():
+    """When no FORECASTX event scores against a mapping, mark it unavailable
+    so future discovery passes skip it instead of re-querying IBKR each cycle.
+    """
+    # Political events only — sports mapping will score 0 against all of them
+    # via the domain-compatibility guard.
+    client = _FakeClient(
+        {
+            "house": [
+                {"conid": "111", "companyHeader": "US House Control (FORECASTX)", "symbol": "HCTRL"},
+            ],
+        }
+    )
+    sports_mapping = _make_mapping(
+        "GAME_MLS_20260516", "Inter Miami vs Atlanta United MLS Game"
+    )
+    store = _FakeStore([sports_mapping])
+    matched = await discover(client, store, keywords=("house",), min_score=0.3)
+
+    assert matched == 0
+    assert store.upserts == []
+    # Mapping was searched, no event scored, negative-cache set.
+    assert store.unavailable_marks == [("GAME_MLS_20260516", True)]
+    assert sports_mapping.forecastex_not_available is True
+
+
+@pytest.mark.asyncio
+async def test_discover_skips_negative_cached_mappings():
+    """Mappings already flagged as forecastex_not_available must not be
+    re-queried — that's the whole point of the negative cache."""
+    client = _FakeClient(
+        {
+            "house": [
+                {"conid": "111", "companyHeader": "US House Control (FORECASTX)", "symbol": "HCTRL"},
+            ],
+        }
+    )
+    cached = _make_mapping(
+        "ALREADY_CACHED", "Senate Race Florida"
+    )
+    cached.forecastex_not_available = True
+    fresh = _make_mapping("FRESH_TARGET", "US House Midterm Winner")
+    store = _FakeStore([cached, fresh])
+
+    matched = await discover(client, store, keywords=("house",), min_score=0.3)
+
+    # Only the fresh mapping should be touched.
+    assert matched == 1
+    assert store.upserts[0].canonical_id == "FRESH_TARGET"
+    # The cached mapping must not have been re-marked.
+    assert all(cid != "ALREADY_CACHED" for cid, _ in store.unavailable_marks)
+
+
+@pytest.mark.asyncio
+async def test_discover_dry_run_does_not_set_negative_cache():
+    """Dry-run is a preview; no writes anywhere, including negative-cache marks."""
+    client = _FakeClient(
+        {
+            "house": [
+                {"conid": "111", "companyHeader": "US House Control (FORECASTX)", "symbol": "HCTRL"},
+            ],
+        }
+    )
+    sports_mapping = _make_mapping("MLB_GAME", "Yankees vs Red Sox")
+    store = _FakeStore([sports_mapping])
+    await discover(client, store, keywords=("house",), min_score=0.3, dry_run=True)
+    assert store.unavailable_marks == []
+    assert sports_mapping.forecastex_not_available is False
 
 
 def test_default_seed_keywords_are_lowercase_strings():

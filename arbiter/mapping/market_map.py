@@ -57,6 +57,12 @@ class MarketMapping:
     # event has no ForecastEx listing — the scanner just skips that platform
     # leg for the mapping.
     forecastex_contract_id: str = ""
+    # Negative-cache flag: ForecastEx attachment has been attempted and
+    # confirmed unavailable. Set by forecastex_discovery after multiple
+    # passes find no matching FORECASTX event; honored as a skip filter on
+    # subsequent discovery passes. Does NOT disable the platform — newly
+    # listed FORECASTX events for other mappings are still discovered.
+    forecastex_not_available: bool = False
     notes: str = ""
     review_note: str = ""
     mapping_score: float = 0.0
@@ -98,6 +104,7 @@ class MarketMapping:
             "polymarket": self.polymarket_slug,
             "polymarket_question": self.polymarket_question,
             "forecastex": self.forecastex_contract_id,
+            "forecastex_not_available": self.forecastex_not_available,
             "notes": self.notes,
             "review_note": self.review_note,
             "mapping_score": self.mapping_score,
@@ -134,6 +141,9 @@ class MarketMapping:
             polymarket_slug=record.polymarket,
             polymarket_question=record.polymarket_question,
             forecastex_contract_id=getattr(record, "forecastex", "") or "",
+            forecastex_not_available=bool(
+                getattr(record, "forecastex_not_available", False)
+            ),
             notes=record.notes,
             mapping_score=score,
             confidence=score,
@@ -159,6 +169,9 @@ class MarketMapping:
                 payload.get("forecastex", "")
                 or payload.get("forecastex_contract_id", "")
                 or ""
+            ),
+            forecastex_not_available=bool(
+                payload.get("forecastex_not_available", False)
             ),
             notes=str(payload.get("notes", "") or ""),
             review_note=str(payload.get("review_note", "") or ""),
@@ -263,6 +276,15 @@ CREATE INDEX IF NOT EXISTS idx_mappings_poly ON market_mappings(polymarket_slug)
 -- asyncpg runs the whole SQL_INIT block as one transaction — the failed index
 -- creation rolls back the later ADD COLUMN too.
 CREATE INDEX IF NOT EXISTS idx_mappings_expires ON market_mappings(expires_at) WHERE expires_at IS NOT NULL;
+-- Composite indexes for the hot discovery/scanner queries. At thousands of
+-- mappings, the scanner's "all confirmed allow_auto_trade" filter and the
+-- discovery loop's "candidates updated since X" scan would otherwise seq-scan
+-- a status-only index. Partial index on confirmed-rows-only keeps it small.
+CREATE INDEX IF NOT EXISTS idx_mappings_status_updated
+    ON market_mappings(status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_mappings_confirmed_autotrade
+    ON market_mappings(allow_auto_trade)
+    WHERE status = 'confirmed';
 
 CREATE TABLE IF NOT EXISTS mapping_candidates (
     id                  SERIAL PRIMARY KEY,
@@ -297,6 +319,13 @@ ALTER TABLE market_mappings
 CREATE INDEX IF NOT EXISTS idx_mappings_forecastex
     ON market_mappings(forecastex_contract_id)
     WHERE forecastex_contract_id != '';
+
+-- Negative-cache flag for confirmed mappings with no ForecastEx equivalent.
+-- forecastex_discovery sets this to TRUE after repeated passes find no
+-- FORECASTX event matching the mapping, so subsequent passes skip them and
+-- stop wasting IBKR rate-limit budget on the long tail of sports/local markets.
+ALTER TABLE market_mappings
+    ADD COLUMN IF NOT EXISTS forecastex_not_available BOOLEAN DEFAULT FALSE;
 
 -- Widen canonical_id to VARCHAR(200) so long slugs don't truncate (idempotent).
 ALTER TABLE market_mappings    ALTER COLUMN canonical_id TYPE VARCHAR(200);
@@ -480,6 +509,36 @@ class MarketMappingStore:
                 """,
                 canonical_id,
                 reason,
+            )
+            return row is not None
+        finally:
+            await self._pool.release(conn)
+
+    async def mark_forecastex_unavailable(
+        self, canonical_id: str, *, unavailable: bool = True
+    ) -> bool:
+        """Set/clear the ``forecastex_not_available`` negative-cache flag.
+
+        Single-column UPDATE so it doesn't race with `upsert()` writes from
+        other code paths. Used by ``forecastex_discovery`` to mark mappings
+        whose FORECASTX equivalent has been searched and confirmed absent,
+        so future discovery passes skip them and stop wasting IBKR rate
+        budget on the long tail of localised sports/cultural markets.
+
+        Returns True when a row was updated (i.e., the mapping exists).
+        """
+        conn = await self.acquire()
+        try:
+            row = await conn.fetchrow(
+                """
+                UPDATE market_mappings
+                   SET forecastex_not_available = $2,
+                       updated_at = NOW()
+                 WHERE canonical_id = $1
+              RETURNING canonical_id
+                """,
+                canonical_id,
+                bool(unavailable),
             )
             return row is not None
         finally:
@@ -1490,6 +1549,9 @@ class MarketMappingStore:
             polymarket_slug=row["polymarket_slug"] or "",
             polymarket_question=row["polymarket_question"] or "",
             forecastex_contract_id=row_dict.get("forecastex_contract_id") or "",
+            forecastex_not_available=bool(
+                row_dict.get("forecastex_not_available") or False
+            ),
             notes=row["notes"] or "",
             review_note=row["review_note"] or "",
             mapping_score=float(row["mapping_score"]) if row["mapping_score"] else 0.0,
