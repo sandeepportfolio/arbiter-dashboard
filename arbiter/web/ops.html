@@ -1523,7 +1523,7 @@ const fmt$Sign = (v, d = 2) => v == null ? '—' : (v >= 0 ? '+$' : '−$') + Ma
 const fmtC = v => v == null ? '—' : v.toFixed(1) + '¢';
 const fmtPct = (v, d = 2) => v == null ? '—' : (v >= 0 ? '+' : '') + (v * 100).toFixed(d) + '%';
 const ago = ts => {
-  const s = Math.floor(Date.now()/1000 - ts);
+  const s = Math.max(0, Math.floor(Date.now()/1000 - ts));
   if (s < 60) return s + 's ago';
   if (s < 3600) return Math.floor(s/60) + 'm ago';
   if (s < 86400) return Math.floor(s/3600) + 'h ago';
@@ -1886,7 +1886,7 @@ function AppProvider({ children, onSignOut }) {
   const [toasts, setToasts] = useS([]);
   const [confirm, setConfirm] = useS(null);
   const [userMenu, setUserMenu] = useS(false);
-  const [profile, setProfile] = useS({ name:'Sam Park', email:'sam@arbiter.app', initials:'SP' });
+  const [profile, setProfile] = useS({ name:'Operator', email:'', initials:'OP' });
   const [watchlist, setWatchlist] = useS(['BTC-150K-EOY-2026']);
   const [filters, setFilters] = useS({ trades: {}, markets: {}, audit: {} });
   const [settings, setSettings] = useS({
@@ -1919,6 +1919,30 @@ function AppProvider({ children, onSignOut }) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // Hydrate the operator profile from /api/auth/me so the account menu
+  // reflects the actual logged-in user (not a hardcoded placeholder).
+  useE(() => {
+    let cancelled = false;
+    const hydrate = async () => {
+      if (!window.__arbiterAuthMe) return;
+      const res = await window.__arbiterAuthMe();
+      if (cancelled || !res || !res.ok || !res.data) return;
+      const email = String(res.data.email || '').trim();
+      if (!email) return;
+      const local = (email.split('@')[0] || email);
+      const parts = local.split(/[._\-+]+/).filter(Boolean);
+      const name = parts.length
+        ? parts.map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(' ')
+        : email;
+      const initials = (parts.length >= 2
+        ? parts[0][0] + parts[1][0]
+        : (local[0] || '?') + (local[1] || '')).toUpperCase();
+      setProfile({ name, email, initials });
+    };
+    hydrate();
+    return () => { cancelled = true; };
   }, []);
 
   useE(() => {
@@ -2026,10 +2050,24 @@ function TopBar({ title, sub, actions }) {
   const { t, setPalette, setAlerts, toggle, name, scanner, setScanner, tradingMode, setTradingMode, setUserMenu, profile, toast } = window.useApp();
   const [narrow, setNarrow] = useS(() => typeof window !== 'undefined' && window.innerWidth < 1180);
   const [refreshing, setRefreshing] = useS(false);
+  const [alertCount, setAlertCount] = useS(0);
   useE(() => {
     const onR = () => setNarrow(window.innerWidth < 1180);
     window.addEventListener('resize', onR);
     return () => window.removeEventListener('resize', onR);
+  }, []);
+  useE(() => {
+    let cancelled = false;
+    const tick = () => fetch('/api/alerts?limit=50&hours=24')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (cancelled || !d) return;
+        setAlertCount(Array.isArray(d.alerts) ? d.alerts.length : 0);
+      })
+      .catch(() => {});
+    tick();
+    const id = setInterval(tick, 30000);
+    return () => { cancelled = true; clearInterval(id); };
   }, []);
   const onRefresh = async () => {
     if (refreshing) return;
@@ -2057,14 +2095,14 @@ function TopBar({ title, sub, actions }) {
           <IconBtn onClick={() => setPalette(true)} t={t}>⌕</IconBtn>
         ) : (
           <button onClick={() => setPalette(true)} style={{ display:'flex', alignItems:'center', gap: 8, padding: '7px 12px', background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 8, fontSize: 12, color: t.textDim, width: 240, flexShrink: 0, cursor: 'pointer' }}>
-            <span>⌕</span><span style={{ whiteSpace:'nowrap' }}>Search markets, trades…</span>
+            <span>⌕</span><span style={{ whiteSpace:'nowrap' }}>Navigate to…</span>
             <span style={{ marginLeft:'auto', fontSize: 10, color: t.textMuted, fontFamily: window.FONTS.mono, padding: '1px 5px', border:`1px solid ${t.border}`, borderRadius: 3 }}>⌘K</span>
           </button>
         )}
         <IconBtn onClick={onRefresh} t={t} aria-label="Refresh" title={refreshing ? 'Refreshing…' : 'Refresh live data'}>
           <span style={{ display:'inline-block', animation: refreshing ? 'spin 0.8s linear infinite' : 'none', fontSize: 14 }}>↻</span>
         </IconBtn>
-        <IconBtn onClick={() => setAlerts(true)} t={t} badge="3" aria-label="Alerts">
+        <IconBtn onClick={() => setAlerts(true)} t={t} badge={alertCount > 0 ? String(alertCount > 99 ? '99+' : alertCount) : null} aria-label="Alerts">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/>
             <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>
@@ -2144,7 +2182,7 @@ function CommandPalette() {
   return (
     <div onClick={() => setPalette(false)} style={{ position:'fixed', inset: 0, background: t.overlay, display:'flex', justifyContent:'center', alignItems:'flex-start', paddingTop: 100, zIndex: 100 }}>
       <div onClick={e => e.stopPropagation()} style={{ width: 560, background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, boxShadow: t.shadowLg, overflow:'hidden' }}>
-        <input autoFocus placeholder="Search pages, markets, trades…" value={q} onChange={e => setQ(e.target.value)} style={{ width: '100%', padding: '14px 18px', border:'none', background:'transparent', outline:'none', fontSize: 14, color: t.text, borderBottom: `1px solid ${t.border}` }}/>
+        <input autoFocus placeholder="Navigate to page or live opportunity…" value={q} onChange={e => setQ(e.target.value)} style={{ width: '100%', padding: '14px 18px', border:'none', background:'transparent', outline:'none', fontSize: 14, color: t.text, borderBottom: `1px solid ${t.border}` }}/>
         <div style={{ maxHeight: 360, overflow:'auto' }}>
           {filtered.slice(0, 12).map((i, idx) => (
             <div key={idx} onClick={() => { i.action(); setPalette(false); setQ(''); }} style={{ padding: '10px 18px', cursor:'pointer', display:'flex', alignItems:'center', gap: 10, fontSize: 13, color: t.text, borderBottom: idx < filtered.length - 1 ? `1px solid ${t.border}` : 'none' }} onMouseEnter={e => e.currentTarget.style.background = t.bgSubtle} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
@@ -2164,16 +2202,34 @@ function CommandPalette() {
 
 function AlertsInbox() {
   const { t, alerts, setAlerts, setModal, toast, setPage } = window.useApp();
+  const [items, setItems] = useS([]);
+  const [loading, setLoading] = useS(false);
+  const [error, setError] = useS('');
+  useE(() => {
+    if (!alerts) return;
+    let cancelled = false;
+    setLoading(true); setError('');
+    fetch('/api/alerts?limit=50&hours=24')
+      .then(r => r.json().then(d => ({ ok: r.ok, d })))
+      .then(({ ok, d }) => {
+        if (cancelled) return;
+        if (!ok) { setError((d && d.error) || 'failed to load alerts'); setItems([]); return; }
+        const raw = Array.isArray(d?.alerts) ? d.alerts : [];
+        setItems(raw.map(a => ({
+          sev: a.sev || 'info',
+          title: a.title || '',
+          body: a.body || '',
+          ts: a.ts ? window.ago(a.ts).replace(/ ago$/, '') : '',
+          icon: a.icon || '•',
+          go: a.go || null,
+          detail: a.detail || '',
+        })));
+      })
+      .catch(e => { if (!cancelled) { setError(String(e?.message || e)); setItems([]); } })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [alerts]);
   if (!alerts) return null;
-  const M = window.MOCK;
-  const items = [
-    { sev: 'info', title: 'Scanner heartbeat clean', body: `${(M.health.scanner.scan_count || 0).toLocaleString()} scans · ${M.health.scanner.scan_time_ms || 0}ms latency`, ts: 'now', icon: '⚡', go:'scanner', detail:`Live scanner heartbeat · ${(M.health.scanner.published || 0).toLocaleString()} published opportunities` },
-    { sev: 'warn', title: 'Polymarket fee rate updated', body: 'GPT-6 market — 2.0% → 2.4% on YES leg', ts: '14m', icon: '$', go:'markets', detail:'effective fee_rate_yes: 0.020 → 0.024\nimpact: net edge reduced by 0.4¢ on this market' },
-    { sev: 'info', title: 'New mapping confirmed', body: 'BTC-150K-EOY-2026 score 0.94 → confirmed', ts: '38m', icon: '⇄', go:'mappings', detail:'kalshi: BTC-150K-DEC2026\npoly: will-bitcoin-reach-150k-by-2026\nsimilarity: 0.94' },
-    { sev: 'ok',   title: 'Deposit settled', body: '+$100.00 to Polymarket · tx confirmed', ts: '2h', icon: '◐', go:'deposits', detail:'tx: 0x4a7…f2c9\nblock: 14,392,108\namount: $100.00 USDC' },
-    { sev: 'warn', title: 'Recovery on ARB-09412', body: 'YES leg filled, NO leg submitted — within tolerance', ts: '3h', icon: '↗', go:'trades', detail:'auto-recovery engaged · NO leg slippage budget within 0.5¢' },
-    { sev: 'err',  title: 'ARB-09405 failed', body: 'Polymarket NO leg rejected · refunded $32.40', ts: '6h', icon: '✕', go:'trades', detail:'reason: orderbook moved · refund_id: rf_4928f\namount: $32.40 returned to Polymarket balance' },
-  ];
   const colorFor = s => s === 'err' ? t.red : s === 'warn' ? t.amber : s === 'ok' ? t.green : t.accent;
   const bgFor = s => s === 'err' ? t.redSoft : s === 'warn' ? t.amberSoft : s === 'ok' ? t.greenSoft : t.accentSoft;
   return (
@@ -2191,13 +2247,25 @@ function AlertsInbox() {
           </div>
         </div>
         <div style={{ flex: 1, overflow:'auto', padding: 12 }}>
-          {items.map((it, i) => (
+          {loading && (
+            <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: t.textMuted }}>Loading alerts…</div>
+          )}
+          {!loading && error && (
+            <div style={{ padding: 14, borderRadius: 8, background: t.redSoft, color: t.red, fontSize: 12 }}>Failed to load alerts: {error}</div>
+          )}
+          {!loading && !error && items.length === 0 && (
+            <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: t.textMuted, lineHeight: 1.6 }}>
+              <div style={{ fontSize: 24, marginBottom: 8, opacity: 0.4 }}>○</div>
+              No recent alerts in the last 24 hours.
+            </div>
+          )}
+          {!loading && !error && items.map((it, i) => (
             <div key={i} onClick={() => { setAlerts(false); setModal({ kind:'notification', payload: it }); }} style={{ padding: 14, borderRadius: 8, marginBottom: 8, background: t.bgSubtle, display:'flex', gap: 12, cursor:'pointer' }} onMouseEnter={e => e.currentTarget.style.background = t.bgHover || t.bgSubtle} onMouseLeave={e => e.currentTarget.style.background = t.bgSubtle}>
               <div style={{ width: 30, height: 30, borderRadius: 8, background: bgFor(it.sev), color: colorFor(it.sev), display:'flex', alignItems:'center', justifyContent:'center', fontSize: 14, flexShrink: 0 }}>{it.icon}</div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap: 8 }}>
                   <div style={{ fontSize: 13, fontWeight: 500, color: t.text }}>{it.title}</div>
-                  <div style={{ fontSize: 10.5, color: t.textMuted, fontFamily: window.FONTS.mono, flexShrink: 0 }}>{it.ts} ago</div>
+                  <div style={{ fontSize: 10.5, color: t.textMuted, fontFamily: window.FONTS.mono, flexShrink: 0 }}>{it.ts ? `${it.ts} ago` : ''}</div>
                 </div>
                 <div style={{ fontSize: 11.5, color: t.textDim, marginTop: 2, lineHeight: 1.4 }}>{it.body}</div>
               </div>
@@ -2933,6 +3001,10 @@ function PagePnL() {
         + (M.pnl.starting_balances.forecastex || 0)
       ));
   const lifetimeReturn = tradingPnl / startingCapital;
+  const executions = Array.isArray(M.executions) ? M.executions : [];
+  const totalArbPnl = executions.reduce((s, e) => s + Number(e.arb_pnl || 0), 0);
+  const totalUnwindPnl = executions.reduce((s, e) => s + Number(e.unwind_pnl || 0), 0);
+  const hasPnlSplit = executions.some(e => e.arb_pnl != null || e.unwind_pnl != null);
 
   return (
     <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto' }}>
@@ -2941,7 +3013,7 @@ function PagePnL() {
       </window.PageHeader>
 
       <window.Card padding={0} style={{ marginBottom: 18 }}>
-        <div style={{ padding: '24px 28px', display:'flex', alignItems:'baseline', gap: 32, borderBottom: `1px solid ${t.border}` }}>
+        <div style={{ padding: '24px 28px', display:'flex', alignItems:'baseline', gap: 32, borderBottom: `1px solid ${t.border}`, flexWrap:'wrap', rowGap: 18 }}>
           <div>
             <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom: 6 }}>Total balance</div>
             <div style={{ fontSize: 36, fontWeight: 600, color: t.text, fontFamily: window.FONTS.mono, letterSpacing:'-0.02em' }}>{window.fmt$(M.pnl.total_balance)}</div>
@@ -2951,6 +3023,20 @@ function PagePnL() {
             <div style={{ fontSize: 24, fontWeight: 600, color: tradingPnl >= 0 ? t.green : t.red, fontFamily: window.FONTS.mono }}>{window.fmt$Sign(tradingPnl)}</div>
             <div style={{ fontSize: 11, color: t.textDim, marginTop: 2 }}>{window.fmtPct(lifetimeReturn)} since inception</div>
           </div>
+          {hasPnlSplit && (
+            <div title="Cross-platform spread captured when both legs filled — the pure arbitrage component of realized P&L.">
+              <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom: 6 }}>Arb P&L</div>
+              <div style={{ fontSize: 24, fontWeight: 600, color: totalArbPnl >= 0 ? t.green : t.red, fontFamily: window.FONTS.mono }}>{window.fmt$Sign(totalArbPnl)}</div>
+              <div style={{ fontSize: 11, color: t.textDim, marginTop: 2 }}>both legs filled</div>
+            </div>
+          )}
+          {hasPnlSplit && (
+            <div title="Directional exposure left over when one leg failed and the survivor was unwound — separated from arb edge to keep strategy P&L clean.">
+              <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom: 6 }}>Unwind P&L</div>
+              <div style={{ fontSize: 24, fontWeight: 600, color: totalUnwindPnl >= 0 ? t.green : t.red, fontFamily: window.FONTS.mono }}>{window.fmt$Sign(totalUnwindPnl)}</div>
+              <div style={{ fontSize: 11, color: t.textDim, marginTop: 2 }}>naked-leg cleanup</div>
+            </div>
+          )}
           <div>
             <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom: 6 }}>Total deposits</div>
             <div style={{ fontSize: 24, fontWeight: 600, color: t.text, fontFamily: window.FONTS.mono }}>{window.fmt$(totalDeposits)}</div>
@@ -2968,7 +3054,8 @@ function PagePnL() {
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 14 }}>
         <window.Card title="Per-platform P&L" padding={0}>
           <PlatformPnL platform="kalshi" color={t.green}/>
-          <PlatformPnL platform="polymarket" color={t.purple} last/>
+          <PlatformPnL platform="polymarket" color={t.purple}/>
+          <PlatformPnL platform="forecastex" color={t.amber} last/>
         </window.Card>
         <window.Card title="Reconciliation" padding={20}>
           <ReconRow label="Reconciliations run" value={M.health.reconciliation.reconciliation_count.toLocaleString()}/>
@@ -3000,9 +3087,9 @@ function PagePnL() {
 function PlatformPnL({ platform, color, last }) {
   const { t } = window.useApp();
   const M = window.MOCK;
-  const start = M.pnl.starting_balances[platform];
-  const cur = M.pnl.current_balances[platform];
-  const dep = M.pnl.total_deposits[platform];
+  const start = Number(M.pnl.starting_balances[platform] || 0);
+  const cur = Number(M.pnl.current_balances[platform] || 0);
+  const dep = Number(M.pnl.total_deposits[platform] || 0);
   const balancePnl = Number(M.pnl.balance_change_by_platform && M.pnl.balance_change_by_platform[platform]);
   const pnl = Number.isFinite(balancePnl) ? balancePnl : Number(M.pnl.recorded_trading_pnl[platform] || 0);
   return (
@@ -3085,6 +3172,7 @@ function marketRowsFromMappings(M, status) {
         description: r.description || r.polymarket_question || canonical,
         kalshi_market_id: mappingField(r, ['kalshi_market_id', 'kalshi_ticker', 'kalshi', 'ticker']),
         polymarket_slug: mappingField(r, ['polymarket_slug', 'poly_slug', 'polymarket']),
+        forecastex: mappingField(r, ['forecastex', 'forecastex_contract_id', 'forecastex_contract']),
         status: r.status || 'candidate',
         category: mappingCategory(r),
         tags: Array.isArray(r.tags) ? r.tags : [],
@@ -3141,8 +3229,9 @@ function PageMarkets() {
             </div>
           )},
           { label: 'Category', w: '110px', render: r => <span style={{ fontSize: 12, color: t.textDim }}>{r.category}</span> },
-          { label: 'Kalshi', w: '210px', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 11.5, color: t.text, overflowWrap:'anywhere' }}>{r.kalshi_market_id || '—'}</span> },
-          { label: 'Polymarket', w: '250px', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 11.5, color: t.textDim, overflowWrap:'anywhere' }}>{r.polymarket_slug || '—'}</span> },
+          { label: 'Kalshi', w: '180px', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 11.5, color: t.text, overflowWrap:'anywhere' }}>{r.kalshi_market_id || '—'}</span> },
+          { label: 'Polymarket', w: '210px', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 11.5, color: t.textDim, overflowWrap:'anywhere' }}>{r.polymarket_slug || '—'}</span> },
+          { label: 'ForecastEx', w: '140px', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 11.5, color: r.forecastex ? t.text : t.textMuted, overflowWrap:'anywhere' }}>{r.forecastex || '—'}</span> },
           { label: 'Criteria', w: '135px', render: r => <window.Pill tone={r.resolution_match_status === 'identical' ? 'green' : r.resolution_match_status === 'divergent' ? 'red' : 'amber'}>{String(r.resolution_match_status || '').replace(/_/g, ' ')}</window.Pill> },
           { label: 'Confidence', w: '105px', align:'right', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12.5, color: r.confidence >= 0.9 ? t.green : t.textDim, fontWeight: 600 }}>{r.confidence ? r.confidence.toFixed(2) : '—'}</span> },
           { label: 'Live edge', w: '105px', align:'right', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12.5, color: r.live ? (r.net_edge_cents >= 1 ? t.green : t.textDim) : t.textMuted, fontWeight: r.live ? 600 : 400 }}>{r.live ? window.fmtC(r.net_edge_cents) : 'No quote'}</span> },
@@ -3185,6 +3274,7 @@ function PageMappings() {
     score: Number(r.mapping_score ?? r.score ?? r.confidence ?? 0),
     k: r.kalshi_market_id || r.kalshi_ticker || r.kalshi || '',
     p: r.polymarket_slug || r.poly_slug || r.polymarket || '',
+    f: r.forecastex || r.forecastex_contract_id || r.forecastex_contract || '',
     s: r.status || 'candidate',
     auto: !!r.allow_auto_trade,
     match: r.resolution_match_status || 'pending_operator_review',
@@ -3410,8 +3500,9 @@ function PageMappings() {
               <div style={{ width: 32, height: 32, borderRadius:'50%', background: r.score >= 0.9 ? t.greenSoft : r.score >= 0.7 ? t.amberSoft : t.redSoft, display:'flex', alignItems:'center', justifyContent:'center', fontSize: 11, fontWeight: 700, color: r.score >= 0.9 ? t.green : r.score >= 0.7 ? t.amber : t.red, fontFamily: window.FONTS.mono }}>{r.score.toFixed(2)}</div>
             </div>
           )},
-          { label: 'Kalshi ticker', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12, color: t.text }}>{r.k}</span> },
-          { label: 'Polymarket slug', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 11.5, color: t.textDim }}>{r.p}</span> },
+          { label: 'Kalshi ticker', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12, color: t.text }}>{r.k || '—'}</span> },
+          { label: 'Polymarket slug', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 11.5, color: t.textDim }}>{r.p || '—'}</span> },
+          { label: 'ForecastEx', w: '140px', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 11.5, color: r.f ? t.text : t.textMuted }}>{r.f || '—'}</span> },
           { label: 'Status', w: '110px', render: r => <window.StatusBadge status={r.s}/> },
           { label: 'Criteria', w: '150px', render: r => <span style={{ fontSize: 11, color: r.match === 'identical' ? t.green : r.match === 'divergent' ? t.red : t.textDim }}>{r.match}</span> },
           { label: '', w: '230px', align:'right', render: r => {
@@ -3557,6 +3648,10 @@ function PageAudit() {
   const profitabilityOk = profitVerdict === 'validated_profitable' || profitVerdict === 'profitable';
   const reconFlags = Number(M.health.reconciliation.flag_count || 0);
   const readinessReady = !!M.health.readiness.ready;
+  const AUDIT_THRESHOLD = 0.99;
+  const auditScore = Number(M.health.audit.audit_score || 0);
+  const auditScorePct = (auditScore * 100).toFixed(2);
+  const auditOk = auditScore >= AUDIT_THRESHOLD;
   const gates = [
     { name: 'Configuration valid', ok: true, detail: 'All required env vars set; API keys reachable.' },
     { name: 'Authentication healthy', ok: true, detail: 'Kalshi token refreshed 8m ago · Polymarket signed via wallet.' },
@@ -3564,11 +3659,16 @@ function PageAudit() {
     { name: 'Reconciliation flags', ok: reconFlags === 0, detail: `${reconFlags.toLocaleString()} outstanding discrepancies.` },
     { name: 'Exposure recovery blockers', ok: Number(halfRecorded.count || 0) === 0 && criticalOpen === 0, detail: `${Number(halfRecorded.count || 0).toLocaleString()} half-recorded arbs · ${criticalOpen.toLocaleString()} open critical incidents.` },
     { name: 'Scanner heartbeat', ok: true, detail: `${M.health.scanner.scan_time_ms}ms p50 · last scan 1s ago.` },
-    { name: 'Audit score', ok: true, detail: `${(M.health.audit.audit_score * 100).toFixed(2)}% above 99% threshold.` },
+    { name: 'Audit score', ok: auditOk, detail: auditOk
+        ? `${auditScorePct}% · ≥ ${(AUDIT_THRESHOLD * 100).toFixed(0)}% threshold.`
+        : `${auditScorePct}% · below ${(AUDIT_THRESHOLD * 100).toFixed(0)}% threshold.` },
     { name: 'Kill switch armed', ok: true, detail: 'Manual override available · automatic halt on flag count > 5.' },
   ];
-  const readinessGates = M.health.readiness.gates || gates.length;
-  const readinessPassing = M.health.readiness.passing || (M.health.readiness.ready ? readinessGates : gates.filter(g => g.ok).length);
+  const computedPassing = gates.filter(g => g.ok).length;
+  const readinessGates = Number(M.health.readiness.gates) || gates.length;
+  const readinessPassing = Number(M.health.readiness.passing != null
+    ? M.health.readiness.passing
+    : computedPassing);
   const readinessTone = readinessReady ? t.green : t.red;
   const readinessToneSoft = readinessReady ? t.greenSoft : t.redSoft;
 
@@ -3583,7 +3683,7 @@ function PageAudit() {
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom: 4 }}>Status</div>
           <div style={{ fontSize: 24, fontWeight: 600, color: t.text, marginBottom: 4 }}>{readinessReady ? 'Live trading authorized' : 'Live trading blocked'}</div>
-          <div style={{ fontSize: 13, color: t.textDim }}>{readinessPassing}/{readinessGates} readiness gates passing · audit score {(M.health.audit.audit_score * 100).toFixed(2)}% · uptime {(M.health.uptime_seconds/3600).toFixed(1)}h</div>
+          <div style={{ fontSize: 13, color: t.textDim }}>{readinessPassing}/{readinessGates} readiness gates passing · audit score {auditScorePct}% {auditOk ? '≥' : '<'} {(AUDIT_THRESHOLD * 100).toFixed(0)}% · uptime {(M.health.uptime_seconds/3600).toFixed(1)}h</div>
         </div>
         <window.Btn variant="danger" size="md" hint="Emergency halt — stops scanner, cancels open orders, locks trading. Requires manual re-arm." onClick={() => setConfirm({
           title: 'Engage kill switch?',
@@ -3700,21 +3800,35 @@ function PlatformBalCard({ platform, color }) {
 function PageSettings() {
   const { t, settings, setModal, toast } = window.useApp();
   const fmt$ = window.fmt$;
+  // Read live strategy values from the same /api/settings snapshot the
+  // Scanner page consumes so both screens always agree. Local AppCtx state
+  // is only a fallback while the API snapshot is still loading.
+  const M = window.MOCK;
+  const apiScanner = (M && M.settings && M.settings.scanner) || {};
+  const apiAuto = (M && M.settings && M.settings.auto_executor) || {};
+  const minEdge = Number(apiScanner.min_edge_cents != null ? apiScanner.min_edge_cents : settings.minEdge);
+  const minVolume = Number(apiScanner.min_liquidity != null ? apiScanner.min_liquidity : settings.minVolume);
+  const persistence = Number(apiScanner.persistence_scans != null ? apiScanner.persistence_scans : settings.persistence);
+  const maxPos = Number(apiScanner.max_position_usd != null ? apiScanner.max_position_usd : settings.maxPos);
+  const autoExecOn = (apiAuto && typeof apiAuto.enabled === 'boolean')
+    ? apiAuto.enabled
+    : settings.autoExec === 'on';
   return (
     <div style={{ padding: '28px 32px', maxWidth: 900, margin: '0 auto' }}>
       <window.PageHeader kicker="Configuration" title="Settings" sub="Strategy parameters, API connections, and operator preferences."/>
 
       <window.Card title="Strategy" padding={20} style={{ marginBottom: 14 }}>
-        <SettingRow label="Min net edge" value={`${settings.minEdge.toFixed(1)}¢`} desc="Opportunities below this threshold are not published." onEdit={() => setModal({ kind:'editSetting', payload: { key:'minEdge', label:'Min net edge', kind:'slider', min:0.5, max:5, step:0.1, unit:'¢', desc:'Net edge required after fees, slippage, and gas. Lower = more opportunities but thinner margins.' } })}/>
-        <SettingRow label="Min volume" value={`${settings.minVolume} shares`} desc="Required liquidity on both legs combined." onEdit={() => setModal({ kind:'editSetting', payload: { key:'minVolume', label:'Min volume', kind:'slider', min:100, max:5000, step:100, unit:' shares', desc:'Minimum combined orderbook depth across both legs. Protects against thin markets.' } })}/>
-        <SettingRow label="Persistence" value={`${settings.persistence} scans`} desc="Edge must hold for this many consecutive 5s scans." onEdit={() => setModal({ kind:'editSetting', payload: { key:'persistence', label:'Persistence', kind:'slider', min:1, max:10, step:1, unit:' scans', desc:'How many consecutive scans the edge must persist before publishing. Higher = fewer false positives.' } })}/>
-        <SettingRow label="Max position size" value={fmt$(settings.maxPos)} desc="Per arbitrage pair. Hard cap regardless of edge." onEdit={() => setModal({ kind:'editSetting', payload: { key:'maxPos', label:'Max position size', kind:'slider', min:50, max:1000, step:25, unit:'', desc:'Hard cap per arbitrage pair. Applied even if edge is large.' } })}/>
-        <SettingRow label="Auto-execute" value={settings.autoExec === 'on' ? 'Enabled' : 'Disabled'} pill={settings.autoExec === 'on' ? 'green' : 'gray'} desc="Automatically place trades when all gates pass." onEdit={() => setModal({ kind:'editSetting', payload: { key:'autoExec', label:'Auto-execute', kind:'toggle', desc:'Off = opportunities show in queue but require manual approve. On = trades fire when all gates pass.' } })} last/>
+        <SettingRow label="Min net edge" value={`${minEdge.toFixed(2)}¢`} desc="Opportunities below this threshold are not published." onEdit={() => setModal({ kind:'editSetting', payload: { key:'minEdge', label:'Min net edge', kind:'slider', min:0.5, max:10, step:0.1, unit:'¢', desc:'Net edge required after fees, slippage, and gas. Lower = more opportunities but thinner margins.' } })}/>
+        <SettingRow label="Min volume" value={`${minVolume.toLocaleString()} shares`} desc="Required liquidity on both legs combined." onEdit={() => setModal({ kind:'editSetting', payload: { key:'minVolume', label:'Min volume', kind:'slider', min:25, max:5000, step:25, unit:' shares', desc:'Minimum combined orderbook depth across both legs. Protects against thin markets.' } })}/>
+        <SettingRow label="Persistence" value={`${persistence} scans`} desc="Edge must hold for this many consecutive 5s scans." onEdit={() => setModal({ kind:'editSetting', payload: { key:'persistence', label:'Persistence', kind:'slider', min:1, max:10, step:1, unit:' scans', desc:'How many consecutive scans the edge must persist before publishing. Higher = fewer false positives.' } })}/>
+        <SettingRow label="Max position size" value={fmt$(maxPos)} desc="Per arbitrage pair. Hard cap regardless of edge." onEdit={() => setModal({ kind:'editSetting', payload: { key:'maxPos', label:'Max position size', kind:'slider', min:50, max:1000, step:25, unit:'', desc:'Hard cap per arbitrage pair. Applied even if edge is large.' } })}/>
+        <SettingRow label="Auto-execute" value={autoExecOn ? 'Enabled' : 'Disabled'} pill={autoExecOn ? 'green' : 'gray'} desc="Automatically place trades when all gates pass." onEdit={() => setModal({ kind:'editSetting', payload: { key:'autoExec', label:'Auto-execute', kind:'toggle', desc:'Off = opportunities show in queue but require manual approve. On = trades fire when all gates pass.' } })} last/>
       </window.Card>
 
       <window.Card title="API connections" padding={20} style={{ marginBottom: 14 }}>
         <SettingRow label="Kalshi" value="Connected" pill="green" desc="Token expires in 4h 12m · auto-refresh enabled." editLabel="Manage" onEdit={() => toast('Reauthenticating Kalshi…', { sub:'token will refresh in ~3s' })}/>
         <SettingRow label="Polymarket" value="Connected" pill="green" desc="Wallet 0x4a7…f2c9 · CLOB API authorized." editLabel="Manage" onEdit={() => toast('Polymarket connection healthy', { sub:'CLOB authorization valid' })}/>
+        <SettingRow label="ForecastEx" value="Connected" pill="green" desc="IBKR Client Portal bridge active · event-contract orders authorized." editLabel="Manage" onEdit={() => toast('ForecastEx connection healthy', { sub:'IBKR brokerage bridge initialized' })}/>
         <SettingRow label="LLM provider" value="Anthropic" desc="Used for mapping similarity scoring." onEdit={() => setModal({ kind:'editSetting', payload: { key:'llm', label:'LLM provider', kind:'options', options:['Anthropic','OpenAI','Local'], desc:'Provider used for canonical-id matching across platforms.' } })} last/>
       </window.Card>
 
@@ -4105,6 +4219,9 @@ function TradeDetailModal() {
   const r = modal.payload;
   const expectedProfit = Number(r.expected_profit || r.opportunity?.max_profit_usd || 0);
   const realizedPnl = Number(r.realized_pnl || 0);
+  const arbPnl = Number(r.arb_pnl || 0);
+  const unwindPnl = Number(r.unwind_pnl || 0);
+  const hasSplit = r.arb_pnl != null || r.unwind_pnl != null;
   const expectedDelta = Number(r.expected_vs_realized ?? (realizedPnl - expectedProfit));
   const netEdgeCents = Number(r.opportunity?.net_edge_cents || 0);
   const persistence = Number(r.opportunity?.persistence_scans || r.opportunity?.persistence_count || 0);
@@ -4155,11 +4272,18 @@ function TradeDetailModal() {
       </div>
 
       <div style={{ padding: 24, overflow:'auto' }}>
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap: 12, marginBottom: 24 }}>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap: 12, marginBottom: 12 }}>
           <Tile label="Expected profit" value={window.fmt$Sign(expectedProfit)} tone={expectedProfit >= 0 ? 'green' : 'red'}/>
-          <Tile label="Actual P&L" value={window.fmt$Sign(realizedPnl)} tone={realizedPnl >= 0 ? 'green' : 'red'}/>
+          <Tile label="Actual P&L" value={window.fmt$Sign(realizedPnl)} tone={realizedPnl >= 0 ? 'green' : 'red'} sub={hasSplit ? 'arb + unwind' : null}/>
           <Tile label="Delta vs expected" value={window.fmt$Sign(expectedDelta)} tone={expectedDelta >= 0 ? 'green' : 'red'}/>
         </div>
+
+        {hasSplit && (
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(2, 1fr)', gap: 12, marginBottom: 24 }}>
+            <Tile label="Arb P&L (both legs filled)" value={window.fmt$Sign(arbPnl)} tone={arbPnl >= 0 ? 'green' : 'red'} sub="pure cross-platform spread capture"/>
+            <Tile label="Unwind P&L (naked-leg)" value={window.fmt$Sign(unwindPnl)} tone={unwindPnl >= 0 ? 'green' : 'red'} sub="directional exposure from incomplete legs"/>
+          </div>
+        )}
 
         <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap: 12, marginBottom: 24 }}>
           <Tile label="Submitted" value={window.tsTime(r.timestamp)} sub={window.tsDate(r.timestamp)}/>
@@ -7435,6 +7559,9 @@ function EdgeHistoryRow({ row, expanded, onToggle, onOpenAnalysis }) {
   const pnl = Number(row.realized_pnl || 0);
   const expected = Number(row.expected_profit || 0);
   const delta = Number(row.expected_vs_realized != null ? row.expected_vs_realized : pnl - expected);
+  const arbPnl = Number(row.arb_pnl || 0);
+  const unwindPnl = Number(row.unwind_pnl || 0);
+  const hasPnlSplit = row.arb_pnl != null || row.unwind_pnl != null;
   const failureDetails = row.failure_details || null;
   const error = ly.error || ln.error || (failureDetails && failureDetails.failure_reason) || '';
   const failureRaw = failureDetails && failureDetails.failure_raw;
@@ -7464,10 +7591,24 @@ function EdgeHistoryRow({ row, expanded, onToggle, onOpenAnalysis }) {
       {expanded && (
         <tr style={{ background: t.bgSubtle, borderBottom: `1px solid ${t.border}` }}>
           <td colSpan={8} style={{ padding: '14px 22px 18px' }}>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 14, marginBottom: error ? 14 : 4 }}>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 14, marginBottom: hasPnlSplit ? 12 : (error ? 14 : 4) }}>
               <EhLeg side="YES" leg={ly} platform={o.yes_platform}/>
               <EhLeg side="NO" leg={ln} platform={o.no_platform}/>
             </div>
+            {hasPnlSplit && (
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 14, marginBottom: error ? 14 : 4 }}>
+                <div style={{ border:`1px solid ${t.border}`, borderRadius: 8, padding:'10px 12px', background: t.bgCard }}>
+                  <div style={{ fontSize: 10, color: t.textMuted, letterSpacing:'0.08em', fontWeight: 700, marginBottom: 4 }}>ARB P&L</div>
+                  <div style={{ fontSize: 13, fontFamily: window.FONTS.mono, fontWeight: 600, color: arbPnl >= 0 ? t.green : t.red }}>{window.fmt$Sign(arbPnl)}</div>
+                  <div style={{ fontSize: 10.5, color: t.textMuted, marginTop: 2 }}>both-leg cross-platform spread capture</div>
+                </div>
+                <div style={{ border:`1px solid ${t.border}`, borderRadius: 8, padding:'10px 12px', background: t.bgCard }}>
+                  <div style={{ fontSize: 10, color: t.textMuted, letterSpacing:'0.08em', fontWeight: 700, marginBottom: 4 }}>UNWIND P&L</div>
+                  <div style={{ fontSize: 13, fontFamily: window.FONTS.mono, fontWeight: 600, color: unwindPnl >= 0 ? t.green : t.red }}>{window.fmt$Sign(unwindPnl)}</div>
+                  <div style={{ fontSize: 10.5, color: t.textMuted, marginTop: 2 }}>directional exposure from naked-leg unwind</div>
+                </div>
+              </div>
+            )}
             {(error || failureRaw) && (
               <div style={{ background: t.redSoft, border:`1px solid ${t.red}40`, borderRadius: 8, padding: '10px 14px', marginBottom: 10 }}>
                 <div style={{ display:'flex', alignItems:'center', gap: 8, marginBottom: 4 }}>
