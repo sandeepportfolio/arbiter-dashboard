@@ -99,7 +99,17 @@ def _level_qty(levels: list[dict], limit: int = 5) -> float:
 
 
 def extract_current_balance(payload: dict) -> float:
-    """Return the USD currentBalance from a Polymarket US balances payload."""
+    """Return the placeable USD balance from a Polymarket US balances payload.
+
+    Polymarket US splits cash into ``currentBalance`` (total, includes margin
+    locked against open positions) and ``buyingPower`` (what the venue will
+    actually accept on a new order). Sizing trades against ``currentBalance``
+    causes the venue to reject every order with
+    ``EXCHANGE_OPTION: "<bp> USD available, requested <X>"`` whenever a
+    position is held, so we treat ``buyingPower`` as the live trading
+    balance and fall back to ``currentBalance`` only when the field is
+    missing (older payload shape).
+    """
     if not isinstance(payload, dict):
         raise ValueError("balance payload must be an object")
 
@@ -115,9 +125,13 @@ def extract_current_balance(payload: dict) -> float:
                 preferred = entry
                 break
         if preferred is not None:
+            if "buyingPower" in preferred and preferred.get("buyingPower") is not None:
+                return float(preferred.get("buyingPower", 0.0))
             return float(preferred.get("currentBalance", 0.0))
 
     # Backwards-compat fallback for any older flat payload shape.
+    if "buyingPower" in payload and payload.get("buyingPower") is not None:
+        return float(payload.get("buyingPower", 0.0))
     return float(payload.get("currentBalance", 0.0))
 
 
