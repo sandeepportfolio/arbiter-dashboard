@@ -41,6 +41,21 @@ class SafetyAlertTemplates:
         )
 
     @staticmethod
+    def kill_restored_from_redis(prior_reason: str) -> str:
+        """Sent on startup when ``restore_from_redis`` finds the switch armed.
+
+        The previous arm's Telegram alert is days/weeks in the past — without
+        this restart-time ping a SIGTERM-induced auto-arm silently keeps the
+        engine muted until an operator notices. See 2026-05-22 audit notes.
+        """
+        return (
+            "🛑 <b>KILL SWITCH RESTORED ON STARTUP</b>\n"
+            "Previous instance left the switch armed in Redis.\n"
+            f"Prior reason (best-effort): {prior_reason or 'unknown'}\n"
+            "Engine refuses trades until an operator resets via the dashboard."
+        )
+
+    @staticmethod
     def one_leg_exposure(
         canonical_id: str,
         filled_platform: str,

@@ -1191,6 +1191,7 @@ class ArbiterAPI:
                 "created_at": self._json_timestamp(row.get("created_at")),
                 "leg_count": int(row.get("leg_count") or 0),
                 "filled_leg_count": filled_leg_count,
+                "unfilled_leg_count": int(row.get("unfilled_leg_count") or 0),
                 "filled_notional": round(filled_notional, 4),
                 "leg_order_ids": list(row.get("leg_order_ids") or []),
                 "allow_auto_trade": False,

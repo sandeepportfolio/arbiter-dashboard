@@ -208,7 +208,10 @@ class SafetySupervisor:
                             exc,
                         )
 
-                logger.info(
+                # CRITICAL so the arm event is never buried in INFO noise
+                # — operators must be able to find this in container logs
+                # without grepping (2026-05-22 audit follow-up).
+                logger.critical(
                     "safety.supervisor: KILL SWITCH ARMED by=%s reason=%s cancelled=%s",
                     by, reason, cancelled_counts,
                 )
@@ -296,8 +299,9 @@ class SafetySupervisor:
                             exc,
                         )
 
-                logger.info(
-                    "safety.supervisor: kill switch RESET by=%s note=%s", by, note,
+                logger.warning(
+                    "safety.supervisor: KILL SWITCH RESET by=%s note=%s",
+                    by, note,
                 )
                 await self._publish(
                     {"type": "kill_switch", "payload": self._state.to_dict()}
@@ -320,8 +324,19 @@ class SafetySupervisor:
         Cancels are intentionally skipped (the orders that triggered the
         trip have long since been cancelled or settled); we only need
         ``allow_execution`` to keep refusing trades until an operator
-        resets via the dashboard. No Telegram alert either — the alert
-        already fired when the supervisor first armed.
+        resets via the dashboard.
+
+        2026-05-22 audit: the previous behavior emitted only a
+        ``logger.warning`` and no Telegram alert ("the original arm alert
+        already fired" — but that ping is days old by the time anyone reads
+        it). When the kill switch was armed by ``system:shutdown`` (every
+        SIGTERM does so) the engine silently came back muted on every
+        deploy. We now (a) escalate the log to CRITICAL, (b) read the prior
+        arm reason from ``safety_events`` so the operator knows whether the
+        restore is from a real incident or a stale SIGTERM, (c) send a
+        Telegram restart-time alert, and (d) append a ``restore`` row to
+        ``safety_events`` so the audit trail does not silently skip the
+        restart-time re-arming.
         """
         if self.redis is None:
             return
@@ -335,6 +350,9 @@ class SafetySupervisor:
             return
         if not armed:
             return
+
+        prior_reason = await self._lookup_last_arm_reason()
+
         async with self._state_lock:
             if self._state.armed:
                 return
@@ -343,16 +361,80 @@ class SafetySupervisor:
                 armed=True,
                 armed_by="system:redis_restore",
                 armed_at=now,
-                armed_reason="kill switch restored from persisted state",
+                armed_reason=(
+                    f"kill switch restored from persisted state "
+                    f"(prior: {prior_reason or 'unknown'})"
+                ),
                 cooldown_until=now + float(self.config.min_cooldown_seconds),
             )
-            logger.warning(
-                "safety.supervisor: KILL SWITCH RESTORED from Redis "
-                "(previous instance left it armed)",
+            # CRITICAL because a silently-restored kill switch will keep
+            # the engine muted across a deploy until an operator notices.
+            logger.critical(
+                "safety.supervisor: KILL SWITCH RESTORED from Redis on startup "
+                "(prior arm reason: %s) — engine refuses trades until reset.",
+                prior_reason or "unknown",
             )
+
+            from .alerts import SafetyAlertTemplates  # local import: avoid cycle
+            try:
+                await self.notifier.send(
+                    SafetyAlertTemplates.kill_restored_from_redis(
+                        prior_reason or "unknown",
+                    ),
+                    dedup_key="kill_restored_from_redis",
+                )
+            except Exception as exc:
+                logger.warning(
+                    "safety.supervisor: telegram kill_restored send failed: %s",
+                    exc,
+                )
+
+            if self._safety_store is not None:
+                try:
+                    await self._safety_store.insert_safety_event(
+                        event_type="restore",
+                        actor="system:redis_restore",
+                        reason=(
+                            f"Restored armed state on startup; prior arm: "
+                            f"{prior_reason or 'unknown'}"
+                        ),
+                        state=self._state.to_dict(),
+                        cancelled_counts=None,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "safety.supervisor: safety_events insert_restore failed: %s",
+                        exc,
+                    )
+
             await self._publish(
                 {"type": "kill_switch", "payload": self._state.to_dict()}
             )
+
+    async def _lookup_last_arm_reason(self) -> Optional[str]:
+        """Best-effort lookup of the most recent ``arm`` event reason.
+
+        Used by ``restore_from_redis`` to tell the operator *why* the prior
+        instance left the switch armed. Returns ``None`` when the safety
+        event store is unavailable or the lookup fails — never raises so
+        startup recovery cannot be aborted by a Postgres hiccup.
+        """
+        if self._safety_store is None:
+            return None
+        try:
+            events = await self._safety_store.list_events(limit=10, offset=0)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(
+                "safety.supervisor: lookup_last_arm_reason failed: %s", exc,
+            )
+            return None
+        for event in events or []:
+            if event.get("event_type") == "arm":
+                return (
+                    f"{event.get('reason', '') or 'unknown'} "
+                    f"(armed_by={event.get('actor', '') or 'unknown'})"
+                ).strip()
+        return None
 
     # ─── prepare_shutdown (SAFE-05, plan 03-05) ─────────────────────────
 

@@ -193,18 +193,35 @@ class ExecutionStore:
         return [self._row_to_order(r) for r in rows if r is not None]
 
     async def list_half_recorded_arbs(self) -> List[Dict[str, Any]]:
-        """Find arbs whose ``execution_arbs`` row exists in a non-terminal
-        status but whose ``execution_orders`` count is less than 2.
+        """Surface arbs that still represent (or recently represented) naked
+        single-leg venue exposure that the system has not yet booked.
 
-        These are crash / exception-escape orphans: ``record_arb_stub`` ran
-        and the primary leg's ``upsert_order`` persisted, but ``record_arb``
-        (the atomic both-legs upsert) never completed. The exception-escape
-        fix in ``_live_execution`` closes the synchronous source of these
-        orphans; this query catches legacy rows and genuine process crashes
-        on startup so a venue-side fill never sits silent in DB.
+        Two failure modes are detected:
+
+        1. **Stub orphan** — ``record_arb_stub`` ran and the primary leg's
+           ``upsert_order`` persisted, but ``record_arb`` (the atomic both-legs
+           upsert) never completed. The arb row sits in a non-terminal status
+           with fewer than two leg rows.
+
+        2. **Asymmetric-fill orphan** — both leg rows persisted but only one
+           filled (e.g. Kalshi YES filled, Polymarket NO returned ``failed``
+           or ``cancelled``). The arb was marked ``failed``/``closed`` but
+           ``unwind_pnl``/``realized_pnl`` were never recorded, so the books
+           do not reflect what the auto-unwind paid (or, worse, the unwind
+           never ran and venue exposure is still live). Original detection
+           missed this class entirely because it required
+           ``status NOT IN ('failed','closed',...)`` AND ``COUNT(orders) < 2``.
+
+        The 2026-05-22 audit found 21 such arbs (ARB-000240..261 on
+        DEM_HOUSE_2026) that the old query silently passed over. We surface
+        every asymmetric-fill arb whose unwind has not been booked
+        (``COALESCE(unwind_pnl, 0) = 0 AND COALESCE(realized_pnl, 0) = 0``)
+        so an operator can verify venue state and either book the unwind PnL
+        or close the residual position.
 
         Returned dicts: ``arb_id``, ``canonical_id``, ``status``,
-        ``created_at``, ``leg_count``, ``leg_order_ids``.
+        ``created_at``, ``leg_count``, ``filled_leg_count``,
+        ``filled_notional``, ``leg_order_ids``.
         """
         if self._pool is None:
             await self.connect()
@@ -227,6 +244,16 @@ class ExecutionStore:
                     ), 0) AS filled_leg_count,
                     COALESCE(SUM(
                         CASE
+                            WHEN NOT (
+                                o.status IN ('filled', 'simulated')
+                                AND COALESCE(o.fill_qty, 0) > 0
+                            )
+                            THEN 1
+                            ELSE 0
+                        END
+                    ), 0) AS unfilled_leg_count,
+                    COALESCE(SUM(
+                        CASE
                             WHEN o.status IN ('filled', 'simulated')
                              AND COALESCE(o.fill_qty, 0) > 0
                             THEN COALESCE(o.fill_qty, 0) * COALESCE(o.fill_price, o.price, 0)
@@ -240,10 +267,35 @@ class ExecutionStore:
                     ) AS leg_order_ids
                 FROM execution_arbs a
                 LEFT JOIN execution_orders o ON o.arb_id = a.arb_id
-                WHERE a.status NOT IN
-                    ('filled', 'failed', 'simulated', 'recovering', 'closed')
-                GROUP BY a.arb_id, a.canonical_id, a.status, a.created_at
-                HAVING COUNT(o.order_id) < 2
+                GROUP BY a.arb_id, a.canonical_id, a.status,
+                         a.created_at, a.realized_pnl, a.unwind_pnl
+                HAVING
+                    -- Mode 1: stub orphan (active status, <2 leg rows)
+                    (
+                        COUNT(o.order_id) < 2
+                        AND a.status NOT IN
+                            ('filled', 'failed', 'simulated', 'recovering', 'closed')
+                    )
+                    OR
+                    -- Mode 2: asymmetric fill, unwind not yet booked
+                    (
+                        SUM(
+                            CASE WHEN o.status IN ('filled', 'simulated')
+                                  AND COALESCE(o.fill_qty, 0) > 0
+                                 THEN 1 ELSE 0
+                            END
+                        ) >= 1
+                        AND SUM(
+                            CASE WHEN NOT (
+                                    o.status IN ('filled', 'simulated')
+                                    AND COALESCE(o.fill_qty, 0) > 0
+                                 )
+                                 THEN 1 ELSE 0
+                            END
+                        ) >= 1
+                        AND COALESCE(a.unwind_pnl, 0) = 0
+                        AND COALESCE(a.realized_pnl, 0) = 0
+                    )
                 ORDER BY a.created_at ASC
                 """
             )
@@ -255,6 +307,7 @@ class ExecutionStore:
                 "created_at": r["created_at"],
                 "leg_count": int(r["leg_count"] or 0),
                 "filled_leg_count": int(r["filled_leg_count"] or 0),
+                "unfilled_leg_count": int(r["unfilled_leg_count"] or 0),
                 "filled_notional": float(r["filled_notional"] or 0.0),
                 "leg_order_ids": list(r["leg_order_ids"] or []),
             }

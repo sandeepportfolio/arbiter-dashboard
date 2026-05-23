@@ -567,6 +567,43 @@ async def test_list_half_recorded_arbs_includes_fill_exposure_fields(mock_pool):
     assert "filled_notional" in sql
     assert "'closed'" in sql
     assert args == ()
+    # 2026-05-22 audit: query MUST surface asymmetric-fill arbs where one
+    # leg filled but the counterpart did not and unwind PnL was never booked
+    # (mode 2). Otherwise the ARB-000240..261 class of naked-leg orphans
+    # silently bypasses the recovery endpoint.
+    assert "unwind_pnl" in sql
+    assert "realized_pnl" in sql
+    assert "unfilled_leg_count" in sql
+
+
+@pytest.mark.asyncio
+async def test_list_half_recorded_arbs_surfaces_asymmetric_fill(mock_pool):
+    """Mode 2: arb status='failed' with one filled + one unfilled leg and
+    no booked unwind must still be returned so the operator can reconcile."""
+    mock_pool.conn = MockConn(fetch_response=[
+        {
+            "arb_id": "ARB-000240",
+            "canonical_id": "DEM_HOUSE_2026",
+            "status": "failed",
+            "created_at": None,
+            "leg_count": 2,
+            "filled_leg_count": 1,
+            "unfilled_leg_count": 1,
+            "filled_notional": 7.40,
+            "leg_order_ids": ["k-1", "p-1"],
+        }
+    ])
+    store = ExecutionStore(database_url="postgres://mock/mock")
+    await store.connect()
+
+    result = await store.list_half_recorded_arbs()
+
+    assert len(result) == 1
+    assert result[0]["arb_id"] == "ARB-000240"
+    assert result[0]["status"] == "failed"
+    assert result[0]["filled_leg_count"] == 1
+    assert result[0]["unfilled_leg_count"] == 1
+    assert result[0]["filled_notional"] == 7.40
 
 
 @pytest.mark.asyncio
