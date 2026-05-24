@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any, Iterable, Optional
 
 from ..config.settings import normalize_market_text, similarity_score
@@ -124,6 +125,27 @@ DEFAULT_SEED_KEYWORDS: tuple[str, ...] = (
 # only city names).
 DEFAULT_MIN_SCORE = 0.30
 
+# Categories that could plausibly exist on ForecastEx (IBKR). Sports
+# markets are not listed on ForecastEx — skip them entirely so we don't
+# waste IBKR rate budget scoring 200+ sports mappings that will never
+# match, and don't poison the negative cache with false negatives.
+_FORECASTEX_ELIGIBLE_CATEGORIES: frozenset[str] = frozenset({
+    "politics", "economics", "finance", "crypto", "weather", "climate",
+    "geopolitics", "tech", "science", "entertainment",
+})
+
+# Negative cache TTL in seconds. Mappings marked forecastex_not_available
+# are re-scanned after this period in case ForecastEx expanded its catalog
+# or the previous scan failed due to a transient IBKR outage.
+_NEGATIVE_CACHE_TTL_SECONDS = 7 * 24 * 3600  # 7 days
+
+# Minimum number of FORECASTX events that must be enumerated before we
+# allow negative-caching of unmatched mappings. If IBKR returned fewer
+# than this, it likely means the gateway was down or the bridge wasn't
+# initialized — we shouldn't permanently blacklist mappings based on an
+# incomplete inventory scan.
+_MIN_EVENTS_FOR_NEGATIVE_CACHE = 5
+
 # Tokens that mark a mapping (or event) as a sports market. When the mapping
 # carries any of these and the FORECASTX event title does not, we refuse to
 # match — geographic overlap alone ("New York Yankees" vs "New York Governor")
@@ -219,8 +241,13 @@ def _score_event_against_mapping(event_title: str, mapping: MarketMapping) -> fl
 
 async def _search_forecastx_events(
     client, keyword: str,
-) -> list[dict[str, Any]]:
-    """Issue a single secdef/search call and return only FORECASTX hits."""
+) -> Optional[list[dict[str, Any]]]:
+    """Issue a single secdef/search call and return only FORECASTX hits.
+
+    Returns ``None`` on network/auth failure (vs ``[]`` for success with no
+    hits) so callers can distinguish "IBKR unreachable" from "no events
+    match this keyword".
+    """
     try:
         payload = await client._request(
             "POST",
@@ -231,7 +258,7 @@ async def _search_forecastx_events(
         logger.warning(
             "forecastex_discovery: search '%s' failed: %s", keyword, exc,
         )
-        return []
+        return None
 
     # _request normalises bare lists to ``{"items": [...]}`` so callers can
     # always treat the response as a dict.
@@ -270,9 +297,26 @@ async def enumerate_forecastex_events(
     """Walk a seed keyword list and return deduped FORECASTX events."""
     kws = tuple(keywords) if keywords is not None else DEFAULT_SEED_KEYWORDS
     seen: dict[str, dict[str, Any]] = {}
+    failed_keywords = 0
     for kw in kws:
-        for hit in await _search_forecastx_events(client, kw):
+        hits = await _search_forecastx_events(client, kw)
+        if hits is None:
+            failed_keywords += 1
+            continue
+        for hit in hits:
             seen.setdefault(hit["conid"], hit)
+    if failed_keywords > 0:
+        logger.warning(
+            "forecastex_discovery: %d/%d keyword searches failed "
+            "(IBKR gateway may be down or bridge not initialized)",
+            failed_keywords, len(kws),
+        )
+    if failed_keywords == len(kws) and len(kws) > 0:
+        logger.error(
+            "forecastex_discovery: ALL %d keyword searches failed — "
+            "IBKR gateway is unreachable. No events enumerated.",
+            len(kws),
+        )
     return list(seen.values())
 
 
@@ -303,26 +347,56 @@ async def discover(
 
     # Gather confirmed mappings that haven't been bound to a ForecastEx
     # contract yet. iter_confirmed is an async generator returning
-    # (canonical_id, MarketMapping). Skip rows already negative-cached
-    # via `forecastex_not_available` — those have been searched in a prior
-    # pass and confirmed to have no FORECASTX equivalent, so re-querying
-    # IBKR every cycle is wasted rate budget on the long tail of
-    # localised sports/cultural markets.
+    # (canonical_id, MarketMapping).
+    #
+    # Three filters applied:
+    # 1. Skip mappings that already have a forecastex_contract_id
+    # 2. Skip categories that ForecastEx doesn't list (sports, etc.)
+    # 3. Skip negative-cached mappings (with TTL — stale entries re-scan)
     targets: list[MarketMapping] = []
     skipped_negative_cache = 0
+    skipped_ineligible_category = 0
+    negative_cache_expired = 0
+    now = time.time()
     async for _canonical_id, mapping in mapping_store.iter_confirmed():
         if (mapping.forecastex_contract_id or "").strip():
             continue
+
+        mapping_category = ""
+        for tag in (mapping.tags or ()):
+            if tag in _FORECASTEX_ELIGIBLE_CATEGORIES:
+                mapping_category = tag
+                break
+        if not mapping_category:
+            raw_cat = (
+                getattr(mapping, "category", "")
+                or next(iter(mapping.tags or ()), "")
+            ).lower().strip()
+            if raw_cat and raw_cat not in _FORECASTEX_ELIGIBLE_CATEGORIES:
+                skipped_ineligible_category += 1
+                continue
+
         if getattr(mapping, "forecastex_not_available", False):
-            skipped_negative_cache += 1
-            continue
+            updated_at = getattr(mapping, "updated_at", None)
+            if updated_at is not None:
+                updated_ts = updated_at.timestamp() if hasattr(updated_at, "timestamp") else 0
+                if (now - updated_ts) < _NEGATIVE_CACHE_TTL_SECONDS:
+                    skipped_negative_cache += 1
+                    continue
+                negative_cache_expired += 1
+            else:
+                skipped_negative_cache += 1
+                continue
         targets.append(mapping)
 
     logger.info(
-        "forecastex_discovery: %d confirmed mapping(s) missing forecastex_contract_id "
-        "(skipped %d previously-negative-cached)",
+        "forecastex_discovery: %d confirmed mapping(s) eligible "
+        "(skipped %d negative-cached, %d ineligible category, "
+        "%d negative-cache expired and re-scanning)",
         len(targets),
         skipped_negative_cache,
+        skipped_ineligible_category,
+        negative_cache_expired,
     )
     if not targets:
         return 0
@@ -354,14 +428,17 @@ async def discover(
                 best_event = event
 
         if best_event is None:
-            # No FORECASTX event scored above zero against this mapping
-            # (typically: localised MLS/NCAA games whose city names share
-            # tokens with no political event in the FORECASTX inventory).
-            # Negative-cache so we don't keep scanning every 5 min — the
-            # FORECASTX inventory is small and turns over slowly, so a
-            # missed match here is acceptable; the operator can re-trigger
-            # discovery if FORECASTX expands its catalog.
-            if not dry_run and not any_event_scored:
+            # No FORECASTX event scored above zero against this mapping.
+            # Only negative-cache if we had a substantial inventory scan
+            # (>= _MIN_EVENTS_FOR_NEGATIVE_CACHE events). If IBKR returned
+            # very few events, the gateway may have been partially down and
+            # we shouldn't permanently blacklist mappings based on an
+            # incomplete scan.
+            if (
+                not dry_run
+                and not any_event_scored
+                and len(events) >= _MIN_EVENTS_FOR_NEGATIVE_CACHE
+            ):
                 try:
                     await mapping_store.mark_forecastex_unavailable(
                         mapping.canonical_id

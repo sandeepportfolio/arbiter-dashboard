@@ -875,6 +875,15 @@ def load_config() -> ArbiterConfig:
     # a no-op so existing two-platform deployments keep behaving identically.
     forecastex_cfg = ForecastExConfig()
     if not forecastex_cfg.enabled:
+        if forecastex_cfg.account_id:
+            import logging as _fx_log
+            _fx_log.getLogger("arbiter.config").warning(
+                "IBKR_ACCOUNT_ID is set (%s) but FORECASTEX_ENABLED=false — "
+                "ForecastEx integration is completely disabled. Set "
+                "FORECASTEX_ENABLED=true to activate third-platform discovery "
+                "and 3-way arbitrage scanning.",
+                forecastex_cfg.account_id,
+            )
         cfg.forecastex = None
     else:
         cfg.forecastex = forecastex_cfg

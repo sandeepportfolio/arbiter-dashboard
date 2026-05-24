@@ -304,15 +304,44 @@ class ForecastExAdapter:
     async def list_open_orders_by_client_id(
         self, client_order_id_prefix: str,
     ) -> list[Order]:
-        # IBKR has a ``cOID`` field for client-side IDs but the gateway does
-        # not expose a query-by-prefix endpoint. Return an empty list to
-        # match the Polymarket US adapter behaviour; the engine's startup
-        # reconciliation will resync on next status poll.
-        logger.warning(
-            "forecastex.list_open_orders_by_client_id.unsupported",
-            prefix=client_order_id_prefix,
-        )
-        return []
+        # IBKR's gateway has no query-by-cOID-prefix endpoint, but we can
+        # fetch all live orders and filter client-side. This is essential
+        # for startup reconciliation — without it, orphaned orders from a
+        # prior crash are invisible.
+        try:
+            live = await self.client.list_live_orders()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "forecastex.list_open_orders: fetch failed: %s", exc,
+            )
+            return []
+        results: list[Order] = []
+        for raw in live:
+            coid = str(raw.get("cOID") or raw.get("client_order_id") or "")
+            if not coid.startswith(client_order_id_prefix):
+                continue
+            order_id = str(raw.get("orderId") or raw.get("order_id") or "")
+            status_raw = str(raw.get("status") or "").lower()
+            if status_raw in ("cancelled", "canceled", "inactive"):
+                continue
+            results.append(Order(
+                order_id=order_id,
+                platform="forecastex",
+                market_id=str(raw.get("conid") or raw.get("conidex") or ""),
+                canonical_id="",
+                side=str(raw.get("side") or "BUY").upper(),
+                price=float(raw.get("price") or 0),
+                quantity=int(float(raw.get("totalSize") or raw.get("remainingQuantity") or 0)),
+                status=OrderStatus.SUBMITTED,
+                external_client_order_id=coid,
+            ))
+        if results:
+            logger.info(
+                "forecastex.list_open_orders: found %d open order(s) "
+                "matching prefix '%s'",
+                len(results), client_order_id_prefix,
+            )
+        return results
 
     # ─── Depth / executable-price helpers ─────────────────────────────────
 

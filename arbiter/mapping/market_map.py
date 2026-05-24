@@ -1229,7 +1229,7 @@ class MarketMappingStore:
                         ELSE 2
                     END,
                     updated_at DESC NULLS LAST
-                LIMIT 5000
+                LIMIT 50000
                 """
             )
         finally:

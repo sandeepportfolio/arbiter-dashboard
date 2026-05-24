@@ -846,6 +846,12 @@ async def run_market_discovery_loop(
                         logger.warning(
                             "ForecastEx discovery pass failed: %s", exc,
                         )
+                    if forecastex_attached > 0:
+                        logger.info(
+                            "ForecastEx discovery attached %d contract(s) — "
+                            "refreshing runtime cache for 3-way scanning",
+                            forecastex_attached,
+                        )
 
             await mapping_store.refresh_runtime_cache()
             if hasattr(kalshi, "refresh_tracked_markets"):
