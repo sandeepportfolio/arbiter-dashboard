@@ -365,6 +365,17 @@ class BalanceMonitor:
         # Serialize check_balances() calls so concurrent /api/balances requests
         # with force_refresh=1 don't hammer the platform APIs.
         self._refresh_lock = asyncio.Lock()
+        # 2026-05-23 audit finding #5: global burst guard on execution-result
+        # alerts. A cascade (e.g. the DEM_HOUSE_2026 incident: 22 trades in
+        # 15 minutes) would otherwise spam Telegram with one alert per leg,
+        # making the real signal unreadable. Keep the rolling window of recent
+        # send timestamps; reject when the count in the last EXEC_ALERT_WINDOW_S
+        # exceeds EXEC_ALERT_MAX_BURST.
+        self._exec_alert_window_s: float = 10.0
+        self._exec_alert_max_burst: int = 5
+        self._exec_alert_history: "list[float]" = []
+        self._exec_alert_lock = asyncio.Lock()
+        self._exec_alert_dropped: int = 0
 
     def set_manual_balance(self, platform: str, balance: float):
         """Set balance manually for platforms without API."""
@@ -523,6 +534,31 @@ class BalanceMonitor:
             msg += f"\n⚠️ YES error: {leg_yes.error[:100]}"
         if leg_no.error:
             msg += f"\n⚠️ NO error: {leg_no.error[:100]}"
+
+        # Burst guard: drop alerts when more than _exec_alert_max_burst
+        # fired in the last _exec_alert_window_s seconds. Critical alerts
+        # (failed / unwound) still pass through so an operator never misses
+        # the bad path even during a cascade.
+        critical_statuses = {"failed", "aborted", "unwound", "recovering"}
+        is_critical = status in critical_statuses or realized_pnl < 0
+        async with self._exec_alert_lock:
+            now_ts = time.time()
+            cutoff = now_ts - self._exec_alert_window_s
+            self._exec_alert_history = [
+                t for t in self._exec_alert_history if t >= cutoff
+            ]
+            if (
+                not is_critical
+                and len(self._exec_alert_history) >= self._exec_alert_max_burst
+            ):
+                self._exec_alert_dropped += 1
+                logger.info(
+                    "Execution alert burst-dropped for %s (%d in window, total dropped=%d)",
+                    arb_id, len(self._exec_alert_history),
+                    self._exec_alert_dropped,
+                )
+                return
+            self._exec_alert_history.append(now_ts)
 
         await self.notifier.send(msg, dedup_key=f"exec_{arb_id}")
         logger.info("Execution alert sent for %s: %s pnl=$%.2f", arb_id, status, realized_pnl)

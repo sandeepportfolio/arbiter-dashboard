@@ -324,9 +324,25 @@ class RiskManager:
         self._platform_exposures: Dict[str, float] = {}
         self._daily_pnl: float = 0.0
         self._daily_trades: int = 0
-        self._max_daily_trades: int = 100
-        self._max_daily_loss: float = -50.0
-        self._max_total_exposure: float = 500.0
+        # Env-driven risk limits (2026-05-23 audit). Defaults preserve the
+        # historical hard-coded values so existing deployments behave
+        # identically without env changes.
+        import os as _os_risk
+        def _risk_int(name: str, default: int) -> int:
+            try:
+                return int(_os_risk.getenv(name, "") or default)
+            except (TypeError, ValueError):
+                return default
+        def _risk_float(name: str, default: float) -> float:
+            try:
+                return float(_os_risk.getenv(name, "") or default)
+            except (TypeError, ValueError):
+                return default
+        self._max_daily_trades: int = _risk_int("MAX_DAILY_TRADES", 100)
+        self._max_daily_loss: float = _risk_float("MAX_DAILY_LOSS_USD", -50.0)
+        self._max_total_exposure: float = _risk_float(
+            "MAX_TOTAL_EXPOSURE_USD", 500.0,
+        )
 
     def check_trade(self, opp: ArbitrageOpportunity) -> Tuple[bool, str]:
         if opp.status not in {"tradable", "manual"}:
@@ -480,6 +496,15 @@ class ExecutionEngine:
         self._manual_positions: Deque[ManualPosition] = deque(maxlen=200)
         self._recent_signatures: Dict[str, float] = {}
         self._signatures_last_pruned: float = time.time()
+        # Per-canonical lock map: prevents two opportunities for the same
+        # canonical_id from racing through execute_opportunity concurrently.
+        # The 5-second signature dedup window catches re-emits of the same
+        # opp, but two *different* opps for the same market arriving > 5s
+        # apart could still both pass the per-market exposure check
+        # because _open_positions is mutated only after the trade records.
+        # (2026-05-23 audit finding #10.)
+        self._canonical_locks: Dict[str, asyncio.Lock] = {}
+        self._canonical_locks_guard: asyncio.Lock = asyncio.Lock()
         self._aborted_count = 0
         self._manual_count = 0
         self._recovery_count = 0
@@ -563,7 +588,25 @@ class ExecutionEngine:
         self._incident_subscribers.append(queue)
         return queue
 
+    async def _get_canonical_lock(self, canonical_id: str) -> asyncio.Lock:
+        """Return (creating on demand) the per-canonical execution lock."""
+        async with self._canonical_locks_guard:
+            lock = self._canonical_locks.get(canonical_id)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._canonical_locks[canonical_id] = lock
+            return lock
+
     async def execute_opportunity(self, opp: ArbitrageOpportunity) -> Optional[ArbExecution]:
+        # Per-canonical serialization: two opportunities for the same market
+        # cannot be executed concurrently. Prevents the race where the
+        # per-market exposure check passes for both because _open_positions
+        # is mutated only after each trade completes.
+        canonical_lock = await self._get_canonical_lock(opp.canonical_id)
+        async with canonical_lock:
+            return await self._execute_opportunity_locked(opp)
+
+    async def _execute_opportunity_locked(self, opp: ArbitrageOpportunity) -> Optional[ArbExecution]:
         approved, reason = self.risk.check_trade(opp)
         if not approved:
             # Plan 03-02 (SAFE-02): surface every risk-rejection as a
@@ -1104,6 +1147,58 @@ class ExecutionEngine:
         # so the engine, scanner, and AutoExecutor preflight all share the
         # MIN_EDGE_CENTS env var (default 7.0 per 2026-05 forensic audit:
         # median Poly adverse move 3.66¢).
+        # ── Pre-trade live-balance gate (2026-05-23 audit finding #3) ─
+        # Verify each platform still has enough balance to cover the leg
+        # notional PLUS the configured reserve floor. The scanner sizes
+        # against a cached BalanceMonitor snapshot which can be up to 30s
+        # stale; this re-checks against the most recent snapshot before we
+        # commit any capital. Skips silently when the snapshot is missing
+        # (no balance feed configured) so dev/test paths stay unblocked.
+        import os as _os_bal_gate
+        try:
+            _min_reserve_usd = float(
+                _os_bal_gate.getenv("MIN_PLATFORM_RESERVE_USD", "20") or "20"
+            )
+        except (TypeError, ValueError):
+            _min_reserve_usd = 20.0
+        _bal_qty = max(1, int(opp.suggested_qty or 1))
+        _leg_notionals = {
+            opp.yes_platform: opp.yes_price * _bal_qty,
+            opp.no_platform: opp.no_price * _bal_qty,
+        }
+        _balances_snap = getattr(self.balance_monitor, "_balances", {}) or {}
+        for _bp_platform, _bp_notional in _leg_notionals.items():
+            _snap = _balances_snap.get(_bp_platform)
+            if _snap is None:
+                continue
+            _avail = float(getattr(_snap, "balance", 0.0) or 0.0)
+            _required = float(_bp_notional) + _min_reserve_usd
+            if _avail < _required:
+                logger.warning(
+                    "REJECTED %s: insufficient balance on %s "
+                    "(available=$%.2f, required=$%.2f notional + $%.2f reserve). "
+                    "canonical=%s",
+                    arb_id, _bp_platform, _avail, _bp_notional,
+                    _min_reserve_usd, opp.canonical_id,
+                )
+                try:
+                    await self._record_incident(
+                        arb_id, opp, "warning",
+                        f"Pre-trade balance gate: {_bp_platform} short",
+                        metadata={
+                            "event_type": "balance_gate_reject",
+                            "platform": _bp_platform,
+                            "available_usd": _avail,
+                            "leg_notional_usd": _bp_notional,
+                            "reserve_floor_usd": _min_reserve_usd,
+                            "qty": _bal_qty,
+                        },
+                    )
+                except Exception as _exc:  # noqa: BLE001
+                    logger.warning("balance_gate_reject incident emit failed: %s", _exc)
+                self._aborted_count += 1
+                return None
+
         MIN_NET_EDGE_CENTS = float(self.scanner_config.min_edge_cents)
         total_cost = opp.yes_price + opp.no_price
         gross_edge = 1.0 - total_cost
@@ -1640,8 +1735,9 @@ class ExecutionEngine:
                         secondary_leg.fill_qty, secondary_leg.quantity,
                         self._naked_leg_count, self._naked_leg_exposure_usd,
                     )
+                    soft_incident = None
                     try:
-                        await self._record_incident(
+                        soft_incident = await self._record_incident(
                             arb_id,
                             opp,
                             "critical",
@@ -1653,11 +1749,17 @@ class ExecutionEngine:
                                 "primary_filled_qty": primary_leg.fill_qty,
                                 "primary_filled_price": primary_leg.fill_price,
                                 "primary_exposure_usd": primary_filled_usd,
+                                "exposure_usd": primary_filled_usd,
                                 "secondary_platform": secondary_platform,
                                 "secondary_side": secondary_side,
                                 "secondary_status": secondary_leg.status.value,
                                 "secondary_filled_qty": secondary_leg.fill_qty,
                                 "secondary_unfilled_qty": secondary_unfilled_qty,
+                                "recommended_unwind": (
+                                    f"Wait for resting {secondary_side.upper()} on "
+                                    f"{secondary_platform.upper()} to fill, or cancel and "
+                                    f"hedge {primary_side.upper()} exposure on {primary_platform.upper()}"
+                                ),
                                 "cumulative_naked_count": self._naked_leg_count,
                                 "cumulative_naked_exposure_usd": round(
                                     self._naked_leg_exposure_usd, 2,
@@ -1668,6 +1770,22 @@ class ExecutionEngine:
                         logger.warning(
                             "soft_naked_leg incident emit failed: %s", exc,
                         )
+                    # 2026-05-23 audit finding #4 (CRITICAL): soft-naked must
+                    # fan out to Telegram via SafetySupervisor, identical to
+                    # the hard-naked case. Without this, the operator hears
+                    # nothing until the resting secondary either fills or is
+                    # manually cleared — exposure can sit on the books
+                    # indefinitely with only an incident-WS event.
+                    if self._safety is not None and soft_incident is not None:
+                        try:
+                            await self._safety.handle_one_leg_exposure(
+                                soft_incident, primary_leg, secondary_leg, opp,
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            logger.error(
+                                "safety.handle_one_leg_exposure (soft naked) raised: %s",
+                                exc,
+                            )
 
             # Assign to leg_yes / leg_no based on which side was primary
             if primary_side == "yes":
