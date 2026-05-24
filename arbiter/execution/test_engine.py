@@ -3131,3 +3131,160 @@ def test_arb_execution_separates_arb_pnl_from_unwind_pnl():
     )
     assert arb_legacy.unwind_pnl == 0.0
     assert arb_legacy.arb_pnl == pytest.approx(2.75)
+
+
+def test_fok_slippage_buffer_lifts_primary_price_by_one_tick():
+    """FILL-01: the engine lifts the FOK primary limit by FOK_SLIPPAGE_TICKS
+    ticks above ``best_executable_price`` so the order can absorb a
+    one-level adverse book move in the wire-latency window. Default
+    buffer is 1 tick = 0.01.
+
+    Wires both legs to FILLED so the test focuses on what limit the
+    primary FOK was placed at, not on naked-leg recovery paths.
+    """
+    from arbiter.execution.engine import Order, OrderStatus
+
+    async def runner():
+        import os as _os_test
+        _old_exec = _os_test.environ.get("EXECUTION_ORDER")
+        _os_test.environ["EXECUTION_ORDER"] = "poly_first"  # match prod
+        _old_buf = _os_test.environ.get("FOK_SLIPPAGE_TICKS")
+        _os_test.environ.pop("FOK_SLIPPAGE_TICKS", None)  # use default (1)
+        try:
+            engine = _build_live_engine_for_safe02_gap()
+
+            def _mk_filled_adapter(platform: str, side: str, walked_price: float, qty: int):
+                adapter = MagicMock()
+                adapter.platform = platform
+                _wire_live_depth(adapter, walked_price)
+                # Echo back the price we were ASKED to send so the test
+                # can verify the buffer math without coupling to engine
+                # internals.
+                async def _place(arb_id, market_id, canonical_id, side_, price, qty_, max_affordable=None):
+                    return Order(
+                        order_id=f"ARB-FOK-BUF-{platform.upper()}",
+                        platform=platform, market_id=market_id,
+                        canonical_id=canonical_id, side=side_,
+                        price=price, quantity=qty_,
+                        status=OrderStatus.FILLED,
+                        fill_qty=qty_, fill_price=price,
+                        timestamp=time.time(),
+                    )
+                adapter.place_fok = AsyncMock(side_effect=_place)
+                adapter.place_ioc = AsyncMock(side_effect=_place)
+                adapter.get_order = AsyncMock()
+                adapter.cancel_order = AsyncMock(return_value=True)
+                return adapter
+
+            poly = _mk_filled_adapter("polymarket", "yes", 0.40, 100)
+            kalshi = _mk_filled_adapter("kalshi", "no", 0.30, 100)
+            engine.adapters = {"polymarket": poly, "kalshi": kalshi}
+
+            opp = _make_safety_opp(
+                canonical_id="MKT1",
+                yes_platform="polymarket",
+                no_platform="kalshi",
+                yes_price=0.40,
+                no_price=0.30,
+                suggested_qty=100,
+            )
+
+            result = await engine.execute_opportunity(opp)
+            assert result is not None
+            assert result.status in {"filled", "recovering"}
+
+            # Primary (polymarket YES) was walked at 0.40; with FOK_SLIPPAGE_TICKS=1
+            # the FOK must be placed at 0.41 (0.40 + 0.01) so the venue can
+            # absorb a one-tick adverse move and still fill.
+            poly.place_fok.assert_awaited()
+            sent_price = float(poly.place_fok.await_args.kwargs.get(
+                "price",
+                poly.place_fok.await_args.args[4] if len(poly.place_fok.await_args.args) > 4 else 0.0,
+            ))
+            assert abs(sent_price - 0.41) < 1e-9, (
+                f"FOK_SLIPPAGE_TICKS=1 must lift 0.40 → 0.41; got {sent_price}"
+            )
+        finally:
+            if _old_exec is None:
+                _os_test.environ.pop("EXECUTION_ORDER", None)
+            else:
+                _os_test.environ["EXECUTION_ORDER"] = _old_exec
+            if _old_buf is None:
+                _os_test.environ.pop("FOK_SLIPPAGE_TICKS", None)
+            else:
+                _os_test.environ["FOK_SLIPPAGE_TICKS"] = _old_buf
+
+    asyncio.run(runner())
+
+
+def test_fok_slippage_buffer_can_be_disabled_via_env():
+    """FILL-01 kill-switch: setting FOK_SLIPPAGE_TICKS=0 restores the
+    legacy no-buffer behavior. The buffer is the fix for the 2026-05-14
+    zero-fill streak but must be controllable in case a future
+    regression makes the unbuffered path the safer one.
+    """
+    from arbiter.execution.engine import Order, OrderStatus
+
+    async def runner():
+        import os as _os_test
+        _old_exec = _os_test.environ.get("EXECUTION_ORDER")
+        _os_test.environ["EXECUTION_ORDER"] = "poly_first"
+        _old_buf = _os_test.environ.get("FOK_SLIPPAGE_TICKS")
+        _os_test.environ["FOK_SLIPPAGE_TICKS"] = "0"
+        try:
+            engine = _build_live_engine_for_safe02_gap()
+
+            def _mk_filled_adapter(platform: str, walked_price: float):
+                adapter = MagicMock()
+                adapter.platform = platform
+                _wire_live_depth(adapter, walked_price)
+                async def _place(arb_id, market_id, canonical_id, side_, price, qty_, max_affordable=None):
+                    return Order(
+                        order_id=f"ARB-NOBUF-{platform.upper()}",
+                        platform=platform, market_id=market_id,
+                        canonical_id=canonical_id, side=side_,
+                        price=price, quantity=qty_,
+                        status=OrderStatus.FILLED,
+                        fill_qty=qty_, fill_price=price,
+                        timestamp=time.time(),
+                    )
+                adapter.place_fok = AsyncMock(side_effect=_place)
+                adapter.place_ioc = AsyncMock(side_effect=_place)
+                adapter.get_order = AsyncMock()
+                adapter.cancel_order = AsyncMock(return_value=True)
+                return adapter
+
+            poly = _mk_filled_adapter("polymarket", 0.40)
+            kalshi = _mk_filled_adapter("kalshi", 0.30)
+            engine.adapters = {"polymarket": poly, "kalshi": kalshi}
+
+            opp = _make_safety_opp(
+                canonical_id="MKT1",
+                yes_platform="polymarket",
+                no_platform="kalshi",
+                yes_price=0.40,
+                no_price=0.30,
+                suggested_qty=100,
+            )
+
+            result = await engine.execute_opportunity(opp)
+            assert result is not None
+
+            sent_price = float(poly.place_fok.await_args.kwargs.get(
+                "price",
+                poly.place_fok.await_args.args[4] if len(poly.place_fok.await_args.args) > 4 else 0.0,
+            ))
+            assert abs(sent_price - 0.40) < 1e-9, (
+                f"FOK_SLIPPAGE_TICKS=0 must send at walked price 0.40; got {sent_price}"
+            )
+        finally:
+            if _old_exec is None:
+                _os_test.environ.pop("EXECUTION_ORDER", None)
+            else:
+                _os_test.environ["EXECUTION_ORDER"] = _old_exec
+            if _old_buf is None:
+                _os_test.environ.pop("FOK_SLIPPAGE_TICKS", None)
+            else:
+                _os_test.environ["FOK_SLIPPAGE_TICKS"] = _old_buf
+
+    asyncio.run(runner())

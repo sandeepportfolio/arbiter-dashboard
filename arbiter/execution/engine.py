@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 import uuid
 from collections import deque
@@ -1390,6 +1391,69 @@ class ExecutionEngine:
                             "revised net edge %.2f¢",
                             primary_price, exec_price, revised_net * 100,
                         )
+
+            # Step 0c: FOK slippage buffer (FILL-01).
+            # Post-2026-05-14 zero-fill streak: 214 consecutive FOK orders
+            # came back ORDER_STATE_NEW and were KILLED by the venue within
+            # ~750ms. Engine's best_executable_price() walks the book to
+            # find a sufficient-depth limit, but ~500-900ms of HTTP
+            # latency from walk-to-venue lets the touch move up by one
+            # tick before our order arrives — at which point the FOK
+            # cannot fill at the stale limit and the venue kills it.
+            #
+            # Fix: lift the FOK limit by FOK_SLIPPAGE_TICKS ticks (default
+            # 1, configurable via env) so the order can absorb a one-
+            # level adverse move. Re-validate net edge against
+            # MIN_NET_EDGE_CENTS using the buffered price; if the buffer
+            # would cross our minimum-edge floor we abort the buffer
+            # (send at the walked price; still better than skipping).
+            #
+            # The slippage budget is bounded: max wire-price change is
+            # FOK_SLIPPAGE_TICKS * 0.01 = $0.01 per contract by default.
+            # On effective_qty=11 that's $0.11 of additional cost, a tiny
+            # fraction of the 7¢+ min net edge requirement.
+            try:
+                fok_slippage_ticks = int(
+                    os.getenv("FOK_SLIPPAGE_TICKS", "1") or "1"
+                )
+            except (TypeError, ValueError):
+                fok_slippage_ticks = 1
+            fok_slippage_ticks = max(0, fok_slippage_ticks)
+            if fok_slippage_ticks > 0:
+                tick = 0.01  # Both Kalshi and Polymarket use 1¢ ticks.
+                slippage = tick * fok_slippage_ticks
+                buffered_price = min(primary_fok_price + slippage, 0.99)
+                buffered_yes = (
+                    buffered_price if primary_side == "yes" else opp.yes_price
+                )
+                buffered_no = (
+                    buffered_price if primary_side == "no" else opp.no_price
+                )
+                buffered_total = buffered_yes + buffered_no
+                buffered_gross = 1.0 - buffered_total
+                buffered_yes_fee = compute_fee(
+                    opp.yes_platform, buffered_yes,
+                    effective_qty, opp.yes_fee_rate,
+                ) / max(effective_qty, 1)
+                buffered_no_fee = compute_fee(
+                    opp.no_platform, buffered_no,
+                    effective_qty, opp.no_fee_rate,
+                ) / max(effective_qty, 1)
+                buffered_net = buffered_gross - buffered_yes_fee - buffered_no_fee
+                if buffered_net * 100 >= MIN_NET_EDGE_CENTS:
+                    logger.info(
+                        "  ↑ FOK slippage buffer applied: walked=%.4f + %d tick(s) "
+                        "= %.4f; revised net edge %.2f¢ ≥ %.1f¢ minimum",
+                        primary_fok_price, fok_slippage_ticks, buffered_price,
+                        buffered_net * 100, MIN_NET_EDGE_CENTS,
+                    )
+                    primary_fok_price = buffered_price
+                else:
+                    logger.info(
+                        "  · FOK slippage buffer skipped: buffered net %.2f¢ < "
+                        "%.1f¢ minimum; sending at walked price %.4f without buffer",
+                        buffered_net * 100, MIN_NET_EDGE_CENTS, primary_fok_price,
+                    )
 
             # Step 1: Execute the primary leg (Kalshi FOK)
             # Pass the opp + net_edge so _place_order_for_leg writes the

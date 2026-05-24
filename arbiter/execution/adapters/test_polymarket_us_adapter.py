@@ -291,34 +291,53 @@ def _make_client_with_bbo(
     return client
 
 
-async def test_marketability_clamp_raises_buy_long_to_ask():
-    """BUY_LONG (buy YES) below best_ask gets lifted to best_ask before submit."""
+async def test_clamp_sends_engine_price_as_is_for_buy_long():
+    """FILL-01: the adapter no longer rewrites the BUY_LONG limit based on
+    live BBO. The engine's book_walk + slippage buffer already covers
+    adverse movement, and a redundant BBO clamp here was adding 200-600ms
+    of wire latency that caused the post-2026-05-14 FOK-kill cascade. We
+    must send the engine's price unchanged (subject only to tick-snap).
+    """
     client = _make_client_with_bbo(best_bid=0.40, best_ask=0.45, tick=0.01)
     adapter = _make_adapter(client=client)
 
-    await adapter.place_ioc("ARB-CLAMP", "slug-1", "CAN-1", "yes", 0.30, 10)
+    await adapter.place_ioc("ARB-NOCLAMP", "slug-1", "CAN-1", "yes", 0.30, 10)
 
     assert client.place_order.await_count == 1
     sent_price = float(client.place_order.await_args.kwargs["price"])
-    assert sent_price == 0.45, f"expected 0.45, got {sent_price}"
+    assert sent_price == 0.30, f"engine price must be passed through, got {sent_price}"
 
 
-async def test_marketability_clamp_lowers_buy_short_to_bid():
-    """BUY_SHORT (buy NO) maps to selling YES; wire price must be <= best_bid.
-
-    Engine passes ``no_price``; adapter flips to ``1 - no_price`` for the
-    YES-axis wire field, then clamps that DOWN to ``best_bid`` if it sits
-    above the bid.
+async def test_clamp_does_not_call_get_orderbook():
+    """FILL-01: get_orderbook is the latency bandit and must NOT be hit
+    on the order path. Engine handles book-walk upstream; the adapter
+    only tick-snaps. A regression that reintroduces the BBO HTTP call
+    will silently bring back the 750ms FOK-kill window.
     """
-    # no_price=0.30  → wire request_price = 1 - 0.30 = 0.70.  best_bid=0.55 so
-    # the clamp pushes the wire price DOWN to 0.55.
+    client = _make_client_with_bbo(best_bid=0.40, best_ask=0.45, tick=0.01)
+    adapter = _make_adapter(client=client)
+
+    await adapter.place_ioc("ARB-NOBBO-HTTP", "slug-1", "CAN-1", "yes", 0.50, 10)
+
+    assert client.get_orderbook.await_count == 0, (
+        f"adapter must not fetch the book on the order path; "
+        f"got {client.get_orderbook.await_count} call(s)"
+    )
+
+
+async def test_clamp_for_buy_short_sends_engine_price_as_is():
+    """BUY_SHORT (buy NO) wire flip: no_price=0.30 → wire = 1 - 0.30 = 0.70.
+    With BBO clamp removed, the wire price stays at 0.70 even if best_bid
+    is below it; the engine is responsible for not sending a non-marketable
+    limit.
+    """
     client = _make_client_with_bbo(best_bid=0.55, best_ask=0.60, tick=0.01)
     adapter = _make_adapter(client=client)
 
-    await adapter.place_ioc("ARB-CLAMP-NO", "slug-2", "CAN-2", "no", 0.30, 10)
+    await adapter.place_ioc("ARB-NOCLAMP-NO", "slug-2", "CAN-2", "no", 0.30, 10)
 
     sent_price = float(client.place_order.await_args.kwargs["price"])
-    assert sent_price == 0.55, f"expected 0.55, got {sent_price}"
+    assert sent_price == 0.70, f"wire price = 1 - no_price = 0.70, got {sent_price}"
 
 
 async def test_tick_snap_rounds_to_market_tick():
@@ -326,8 +345,6 @@ async def test_tick_snap_rounds_to_market_tick():
     client = _make_client_with_bbo(best_bid=0.40, best_ask=0.40, tick=0.005)
     adapter = _make_adapter(client=client)
 
-    # best_ask=0.40 caps the BUY_LONG clamp; nothing to lift.  Pass an above-ask
-    # limit so the clamp does NOT activate and we observe pure tick-snap.
     # 0.4533 snapped to 0.005 grid -> 0.455.
     await adapter.place_ioc("ARB-SNAP", "slug-3", "CAN-3", "yes", 0.4533, 10)
 
@@ -335,25 +352,25 @@ async def test_tick_snap_rounds_to_market_tick():
     assert sent_price == 0.455, f"expected 0.455, got {sent_price}"
 
 
-async def test_marketability_clamp_aborts_when_above_max_affordable():
-    """Clamp lifting BUY_LONG above ``max_affordable`` must raise OrderRejected.
-
-    Best ask is 0.60 but the engine can only afford 0.50; placing at 0.60
-    guarantees a loss, so the adapter aborts before signing.
+async def test_max_affordable_aborts_when_snapped_price_too_high():
+    """max_affordable must still abort the signing path when tick-snap
+    rounds the engine's price above the slippage budget. Engine passes a
+    deliberately-strict cap so the adapter is a last-line safety check.
     """
-    client = _make_client_with_bbo(best_bid=0.55, best_ask=0.60, tick=0.01)
+    client = _make_client_with_bbo(best_bid=0.55, best_ask=0.60, tick=0.05)
     adapter = _make_adapter(client=client)
 
-    with pytest.raises(OrderRejected, match="marketability"):
+    # 0.48 snapped to 0.05 grid → 0.50. max_affordable=0.49 ⇒ abort.
+    with pytest.raises(OrderRejected, match="max_affordable"):
         await adapter.place_ioc(
-            "ARB-CLAMP-ABORT", "slug-4", "CAN-4", "yes", 0.40, 10,
-            max_affordable=0.50,
+            "ARB-AFFORD-ABORT", "slug-4", "CAN-4", "yes", 0.48, 10,
+            max_affordable=0.49,
         )
     assert client.place_order.await_count == 0, "must not sign after abort"
 
 
-async def test_marketability_clamp_no_bbo_falls_through():
-    """Missing BBO (empty book) is not a reason to abort — submit as-is."""
+async def test_clamp_no_bbo_passes_through():
+    """Empty book is no longer even queried; engine price must pass through."""
     client = _make_client_with_bbo(best_bid=0.0, best_ask=0.0, tick=0.01)
     adapter = _make_adapter(client=client)
 
@@ -361,6 +378,24 @@ async def test_marketability_clamp_no_bbo_falls_through():
 
     sent_price = float(client.place_order.await_args.kwargs["price"])
     assert sent_price == 0.50
+
+
+async def test_market_meta_is_cached_across_orders():
+    """FILL-01: tick info is per-market immutable, so cache it across
+    orders. A regression that re-fetches meta on every order would
+    re-add ~200ms of wire latency per leg.
+    """
+    client = _make_client_with_bbo(best_bid=0.40, best_ask=0.40, tick=0.01)
+    adapter = _make_adapter(client=client)
+
+    await adapter.place_ioc("ARB-META-1", "slug-cache", "CAN-1", "yes", 0.50, 10)
+    await adapter.place_ioc("ARB-META-2", "slug-cache", "CAN-1", "yes", 0.51, 10)
+    await adapter.place_ioc("ARB-META-3", "slug-cache", "CAN-1", "yes", 0.52, 10)
+
+    assert client.get_market_by_slug.await_count == 1, (
+        f"market meta must be fetched once and cached; "
+        f"got {client.get_market_by_slug.await_count} call(s)"
+    )
 
 
 async def test_tick_snap_defaults_to_one_cent_when_meta_missing():

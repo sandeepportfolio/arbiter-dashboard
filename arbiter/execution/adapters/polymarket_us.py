@@ -84,6 +84,19 @@ class PolymarketUSAdapter:
         # change. maxlen=50 caps memory; the dashboard only renders the
         # last 10.
         self._terminal_diagnostics: Deque[Dict[str, Any]] = deque(maxlen=50)
+        # Tick metadata cache (FILL-01): per-slug (tick, expiry_ts). The
+        # previous _marketability_clamp_and_snap path fetched market_meta
+        # AND BBO on EVERY order, adding two HTTP round-trips (~200-600ms)
+        # of latency between the engine's book_walk and the venue arrival.
+        # That latency was the primary cause of the 2026-05-14+ FOK-kill
+        # streak: by the time our order arrived the touch had moved up
+        # one tick and the FOK could not fill at the stale limit. We now
+        # cache tick info for 5 minutes (it never changes for a market)
+        # and skip the BBO fetch entirely; the engine's best_executable
+        # _price already walked the book so a redundant BBO read adds
+        # latency without adding safety.
+        self._market_meta_cache: Dict[str, tuple[float, float]] = {}
+        self._market_meta_ttl_s: float = 300.0
 
     # ─── place_fok ────────────────────────────────────────────────────────
 
@@ -176,11 +189,11 @@ class PolymarketUSAdapter:
         """
         intent, request_price = self._us_order_params(side, price)
 
-        # Marketability + tick-size guard (P0).  Polymarket US instantly
-        # rejects IOC/FOK orders whose limit is non-marketable on receipt
-        # (e.g. selling YES above the best bid, buying YES below the best
-        # ask).  We fetch live BBO + tick metadata, clamp to the touch,
-        # and snap to the market's tick before signing.
+        # FILL-01 (2026-05-24): the clamp no longer hits the wire — it
+        # tick-snaps against a cached meta lookup, so the only HTTP
+        # round-trip between the engine's book_walk and the venue is the
+        # /orders POST below. Engine adds the slippage buffer up-front.
+        t_enter_ns = time.monotonic_ns()
         request_price = await self._marketability_clamp_and_snap(
             arb_id=arb_id,
             slug=market_id,
@@ -190,6 +203,7 @@ class PolymarketUSAdapter:
             request_price=request_price,
             max_affordable=max_affordable,
         )
+        t_after_clamp_ns = time.monotonic_ns()
 
         response = await self._client.place_order(
             slug=market_id,
@@ -198,6 +212,7 @@ class PolymarketUSAdapter:
             qty=qty,
             tif=tif,
         )
+        t_after_place_ns = time.monotonic_ns()
         order = self._order_from_response(
             response, arb_id, market_id, canonical_id, side, price, qty
         )
@@ -245,6 +260,15 @@ class PolymarketUSAdapter:
                 tif=tif,
                 qty=qty,
                 limit_price=price,
+                # FILL-01: surface the actual wire price (post-tick-snap)
+                # alongside the original user-side limit_price. Was a
+                # diagnostic blind spot — when the clamp moved the price
+                # the log only showed the original, hiding what we
+                # actually sent. Also surface per-segment timing so we
+                # can verify the latency budget post-cache.
+                wire_price=request_price,
+                clamp_ms=round((t_after_clamp_ns - t_enter_ns) / 1e6, 1),
+                place_ms=round((t_after_place_ns - t_after_clamp_ns) / 1e6, 1),
                 api_status=api_status,
                 order_status=order.status.value,
                 fill_qty=order.fill_qty,
@@ -670,6 +694,24 @@ class PolymarketUSAdapter:
         best_ask = _amount_value((offers[0] or {}).get("px")) if offers else 0.0
         return (best_bid, best_ask)
 
+    async def _cached_tick(self, slug: str) -> float:
+        """Return the per-slug tick size, using a 5-minute in-memory cache.
+
+        Polymarket US never changes a market's tick after listing, so the
+        meta payload is functionally immutable. The previous code fetched
+        it on every order; that HTTP call (plus the BBO fetch in the
+        clamp path) added 200-600ms of wire latency that caused the FOK
+        kill cascade described in ``__init__``.
+        """
+        now = time.time()
+        cached = self._market_meta_cache.get(slug)
+        if cached is not None and cached[1] > now:
+            return cached[0]
+        meta = await self._fetch_market_meta(slug)
+        tick = self._tick_from_meta(meta)
+        self._market_meta_cache[slug] = (tick, now + self._market_meta_ttl_s)
+        return tick
+
     async def _marketability_clamp_and_snap(
         self,
         *,
@@ -681,43 +723,32 @@ class PolymarketUSAdapter:
         request_price: float,
         max_affordable: Optional[float],
     ) -> float:
-        """Clamp ``request_price`` to the live BBO and snap it to the tick grid.
+        """Snap ``request_price`` to the tick grid and apply ``max_affordable``.
+
+        FILL-01 (2026-05-24): the previous implementation fetched live BBO
+        and ALSO market metadata on every order — two extra HTTP round-
+        trips that added ~200-600ms of latency between the engine's
+        ``best_executable_price`` book walk and the venue arrival. That
+        latency window let the touch move up by one tick on
+        fast-settling sports markets, after which the FOK limit was no
+        longer marketable and the venue killed the order. Result: 214
+        consecutive zero-fill trades since 2026-05-14.
+
+        The engine now adds a ``FOK_SLIPPAGE_TICKS`` price buffer (with
+        net-edge re-validation) BEFORE calling place_fok, which absorbs
+        the same adverse book movement the BBO clamp was trying to
+        defend against — but does so on cached/in-process data with
+        zero added wire latency. The adapter therefore drops the BBO
+        fetch entirely and only does tick-snapping + max_affordable
+        enforcement.
 
         ``request_price`` is already on the YES-scale (``_us_order_params``
-        flipped NO-leg prices via ``1 - p``).  ``intent`` tells us which
-        side of the book we'll cross:
-
-          - BUY_LONG / BUY_SHORT  → we are TAKING liquidity (buying YES
-            with BUY_LONG, buying NO via BUY_SHORT which sells YES short).
-            For BUY_LONG we need ``price >= best_ask`` to be marketable;
-            we therefore lift the wire price up to ``best_ask`` if it is
-            below.  For BUY_SHORT we need ``(1 - no_price) <= best_bid``
-            which means ``request_price <= best_bid``; clamp DOWN.
-
-        Aborts with ``OrderRejected`` when the clamp would cross
-        ``max_affordable`` (a guaranteed-loss trade).
+        flipped NO-leg prices via ``1 - p``). ``max_affordable`` is
+        evaluated on the original user-side axis so the engine's
+        slippage budget is honored regardless of intent flip.
         """
-        meta = await self._fetch_market_meta(slug)
-        tick = self._tick_from_meta(meta)
-        best_bid, best_ask = await self._get_bbo(slug)
-
-        clamped = request_price
-        clamp_direction = "none"
-
-        # BUY_LONG: limit must be >= best_ask to cross the book.
-        if intent in ("BUY_LONG", "ORDER_INTENT_BUY_LONG"):
-            if best_ask > 0.0 and clamped < best_ask:
-                clamped = best_ask
-                clamp_direction = "raised_to_ask"
-        # BUY_SHORT: we're selling YES; limit must be <= best_bid.
-        elif intent in ("BUY_SHORT", "ORDER_INTENT_BUY_SHORT"):
-            if best_bid > 0.0 and clamped > best_bid:
-                clamped = best_bid
-                clamp_direction = "lowered_to_bid"
-        # SELL_LONG / SELL_SHORT — keep the limit as-is; we're not currently
-        # using those paths from the engine but the tick-snap still applies.
-
-        snapped = self._snap_to_tick(clamped, tick)
+        tick = await self._cached_tick(slug)
+        snapped = self._snap_to_tick(request_price, tick)
 
         # Convert wire-side ``snapped`` back to the original side's view
         # (NO-leg = 1 - yes_price) so the max_affordable check is on the
@@ -740,28 +771,23 @@ class PolymarketUSAdapter:
                 original_price=original_price,
                 clamped_user_price=user_side_price,
                 max_affordable=max_affordable,
-                best_bid=best_bid,
-                best_ask=best_ask,
                 tick=tick,
             )
             raise OrderRejected(
-                f"polymarket_us marketability clamp pushed price to "
+                f"polymarket_us tick-snap pushed price to "
                 f"{user_side_price:.4f} > max_affordable {max_affordable:.4f}"
             )
 
-        if clamp_direction != "none" or abs(snapped - request_price) > 1e-9:
+        if abs(snapped - request_price) > 1e-9:
             logger.info(
-                "polymarket_us.price_clamped",
+                "polymarket_us.price_snapped",
                 arb_id=arb_id,
                 slug=slug,
                 intent=intent,
                 side=side,
                 old=request_price,
                 new=snapped,
-                bbo_bid=best_bid,
-                bbo_ask=best_ask,
                 tick=tick,
-                clamp=clamp_direction,
             )
         return snapped
 
