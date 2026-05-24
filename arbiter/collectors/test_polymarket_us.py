@@ -9,7 +9,11 @@ import pytest
 from aioresponses import aioresponses
 
 from arbiter.auth.ed25519_signer import Ed25519Signer
-from arbiter.collectors.polymarket_us import PolymarketUSClient, PolymarketUSCollector
+from arbiter.collectors.polymarket_us import (
+    PolymarketUSClient,
+    PolymarketUSCollector,
+    extract_current_balance,
+)
 from arbiter.config.settings import PolymarketUSConfig
 from arbiter.utils.price_store import PriceStore
 
@@ -320,3 +324,66 @@ async def test_collector_fetch_balance_propagates_errors(client):
         with pytest.raises(Exception):
             await collector.fetch_balance()
     await client.close()
+
+
+# ---------------------------------------------------------------------------
+# extract_current_balance — buyingPower preference
+# ---------------------------------------------------------------------------
+# Polymarket US splits cash into currentBalance (total — includes margin
+# locked against open positions) and buyingPower (what the venue will
+# actually accept on a new order). Sizing trades against currentBalance
+# triggers EXCHANGE_OPTION "<bp> USD available, requested <X>" rejections
+# whenever a position is held. The function must prefer buyingPower and
+# only fall back to currentBalance when buyingPower is missing.
+
+def test_extract_current_balance_prefers_buying_power_in_usd_entry():
+    payload = {
+        "balances": [
+            {"currency": "USD", "currentBalance": "742.18", "buyingPower": "318.55"},
+            {"currency": "USDC", "currentBalance": "0", "buyingPower": "0"},
+        ]
+    }
+    assert extract_current_balance(payload) == pytest.approx(318.55)
+
+
+def test_extract_current_balance_falls_back_to_current_balance_when_buying_power_missing():
+    payload = {
+        "balances": [
+            {"currency": "USD", "currentBalance": "742.18"},
+        ]
+    }
+    assert extract_current_balance(payload) == pytest.approx(742.18)
+
+
+def test_extract_current_balance_treats_null_buying_power_as_missing():
+    payload = {
+        "balances": [
+            {"currency": "USD", "currentBalance": "742.18", "buyingPower": None},
+        ]
+    }
+    assert extract_current_balance(payload) == pytest.approx(742.18)
+
+
+def test_extract_current_balance_selects_usd_entry_over_first_entry():
+    payload = {
+        "balances": [
+            {"currency": "USDC", "currentBalance": "0", "buyingPower": "0"},
+            {"currency": "USD", "currentBalance": "500", "buyingPower": "200"},
+        ]
+    }
+    assert extract_current_balance(payload) == pytest.approx(200.0)
+
+
+def test_extract_current_balance_supports_flat_legacy_payload_with_buying_power():
+    payload = {"currentBalance": "1000", "buyingPower": "400"}
+    assert extract_current_balance(payload) == pytest.approx(400.0)
+
+
+def test_extract_current_balance_supports_flat_legacy_payload_without_buying_power():
+    payload = {"currentBalance": "1000"}
+    assert extract_current_balance(payload) == pytest.approx(1000.0)
+
+
+def test_extract_current_balance_rejects_non_dict_payload():
+    with pytest.raises(ValueError):
+        extract_current_balance([])  # type: ignore[arg-type]

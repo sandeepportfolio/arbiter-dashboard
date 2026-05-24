@@ -21,6 +21,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from arbiter.execution.auto_executor import AutoExecutor, AutoExecutorConfig
+from arbiter.mapping.market_map import MappingStatus
 from arbiter.scanner.arbitrage import ArbitrageOpportunity
 
 
@@ -432,7 +433,7 @@ async def test_require_mapping_confirmed_skips_unconfirmed():
 @pytest.mark.asyncio
 async def test_require_mapping_confirmed_passes_confirmed():
     confirmed_mapping = _FakeMapping(allow_auto_trade=True)
-    confirmed_mapping.status = "confirmed"  # type: ignore[attr-defined]
+    confirmed_mapping.status = MappingStatus.CONFIRMED  # type: ignore[attr-defined]
     ae, engine = _make_components_with_preflight(
         require_mapping_confirmed=True,
         mapping=confirmed_mapping,

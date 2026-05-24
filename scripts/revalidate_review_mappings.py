@@ -197,20 +197,42 @@ async def revalidate(
     dry_run: bool,
     filter_prefix: Optional[str],
     limit: Optional[int],
+    kalshi: Optional[KalshiCollector] = None,
+    poly_client: Optional[Any] = None,
+    store: Optional[MarketMappingStore] = None,
 ) -> int:
-    config = load_config()
-    price_store = PriceStore()
-    kalshi = KalshiCollector(config.kalshi, price_store)
-    poly_client = _build_polymarket_client(config)
-    if poly_client is None:
-        raise RuntimeError("polymarket client not configured")
+    """Re-evaluate review-status mappings through the auto-promote gate.
 
-    database_url = os.environ.get("DATABASE_URL") or getattr(config, "database_url", None)
-    if not database_url:
-        raise RuntimeError("DATABASE_URL not set")
+    When ``kalshi`` / ``poly_client`` / ``store`` are ``None`` (the script
+    entrypoint), build them from environment config and tear them down at
+    the end. When provided (the main.py periodic-loop entrypoint), use the
+    caller-managed instances in-place and leave their lifecycles alone —
+    that keeps the live runtime sharing one Kalshi auth context, one HTTP
+    session, and the same MARKET_MAP cache that the scanner reads from.
+    """
+    owned_kalshi = kalshi is None
+    owned_poly = poly_client is None
+    owned_store = store is None
 
-    store = MarketMappingStore(database_url)
-    await store.connect()
+    config = None
+    if owned_kalshi or owned_poly or owned_store:
+        config = load_config()
+
+    if owned_kalshi:
+        price_store = PriceStore()
+        kalshi = KalshiCollector(config.kalshi, price_store)
+
+    if owned_poly:
+        poly_client = _build_polymarket_client(config)
+        if poly_client is None:
+            raise RuntimeError("polymarket client not configured")
+
+    if owned_store:
+        database_url = os.environ.get("DATABASE_URL") or getattr(config, "database_url", None)
+        if not database_url:
+            raise RuntimeError("DATABASE_URL not set")
+        store = MarketMappingStore(database_url)
+        await store.connect()
     try:
         # Pull review-status records.
         conn = await store.acquire()
@@ -298,13 +320,15 @@ async def revalidate(
             logger.info("  %s: %d", reason, count)
         return len(promoted)
     finally:
-        await store.disconnect()
-        close = getattr(kalshi, "close", None)
-        if callable(close):
-            try:
-                await close()
-            except Exception:  # pragma: no cover
-                pass
+        if owned_store:
+            await store.disconnect()
+        if owned_kalshi:
+            close = getattr(kalshi, "close", None)
+            if callable(close):
+                try:
+                    await close()
+                except Exception:  # pragma: no cover
+                    pass
 
 
 def _main() -> int:

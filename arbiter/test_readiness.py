@@ -155,6 +155,57 @@ def test_allow_execution_stays_closed_until_profitability_validates():
             MARKET_MAP["TEST_READY"] = original
 
 
+def test_collectors_check_identifies_only_the_failing_platform():
+    """A degraded kalshi collector must not drag polymarket into the failure
+    list. The dashboard surfaces each failing collector by name; lumping them
+    together hides which venue actually needs operator attention."""
+    collectors = {
+        "kalshi": StubCollector(circuit_state="open"),
+        "polymarket": StubCollector(),
+    }
+    readiness = OperationalReadiness(ArbiterConfig(), collectors=collectors)
+    check = readiness._check_collectors()
+
+    assert check.status == "fail"
+    assert "kalshi" in check.summary
+    assert "polymarket" not in check.summary
+
+
+def test_collectors_check_distinguishes_warming_from_failing_per_platform():
+    """Mixed states: one warming-up, one failing. Warming-up shouldn't mask
+    the failure, and the failure shouldn't mis-label the warming-up venue."""
+    collectors = {
+        "kalshi": StubCollector(circuit_state="open"),
+        "polymarket": StubCollector(total_fetches=0),
+        "forecastex": StubCollector(),
+    }
+    readiness = OperationalReadiness(ArbiterConfig(), collectors=collectors)
+    check = readiness._check_collectors()
+
+    # A hard failure takes precedence over warming-up.
+    assert check.status == "fail"
+    assert "kalshi" in check.summary
+    # Per-platform telemetry is still recorded for both other platforms.
+    assert set(check.details.keys()) == {"kalshi", "polymarket", "forecastex"}
+    assert check.details["polymarket"]["total_fetches"] == 0
+    assert check.details["forecastex"]["total_fetches"] == 1
+
+
+def test_collectors_check_reports_per_platform_warming_only_for_warming_platforms():
+    """When no collector has failed but one is warming up, the warning must
+    name just that platform — not every collector in the dict."""
+    collectors = {
+        "kalshi": StubCollector(),
+        "polymarket": StubCollector(total_fetches=0),
+    }
+    readiness = OperationalReadiness(ArbiterConfig(), collectors=collectors)
+    check = readiness._check_collectors()
+
+    assert check.status == "warning"
+    assert "polymarket" in check.summary
+    assert "kalshi" not in check.summary
+
+
 def test_incident_check_counts_half_recorded_summary_arb_count():
     incident = ExecutionIncident(
         incident_id="INC-HALF-RECORDED-SUMMARY",

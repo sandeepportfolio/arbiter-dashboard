@@ -704,6 +704,98 @@ def arm_critical_task_watch(
     task.add_done_callback(_on_done)
 
 
+async def run_expire_settled_mappings_loop(
+    mapping_store: MarketMappingStore,
+    *,
+    interval_s: float = 3600.0,
+) -> None:
+    """Hourly sweep that demotes confirmed sports mappings whose embedded
+    event date has already passed.
+
+    The discovery pipeline only walks ``status='candidate'``, so without
+    this sweep the sports-game tail accumulates indefinitely with
+    ``allow_auto_trade=True`` pointing at long-settled markets. See
+    ``arbiter.mapping.expire_settled`` for the date-parsing rules — only
+    canonical_ids matching ``PREFIX_LEAGUE_YYYYMMDD_TEAM_…`` are eligible.
+    """
+    from .mapping.expire_settled import expire_settled_confirmed_mappings
+
+    log = logging.getLogger("arbiter.main.expire_settled")
+    while True:
+        try:
+            expired = await expire_settled_confirmed_mappings(mapping_store)
+            if expired:
+                log.info(
+                    "expire_settled pass: demoted %d settled-date mapping(s) to EXPIRED",
+                    len(expired),
+                )
+                # Push the status change into the in-memory MARKET_MAP that
+                # the scanner and auto-executor read from; otherwise the
+                # next pass would re-demote rows already flagged in DB.
+                await mapping_store.refresh_runtime_cache()
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:  # noqa: BLE001 — keep the loop alive
+            log.error("expire_settled loop error: %s", exc)
+        try:
+            await asyncio.sleep(interval_s)
+        except asyncio.CancelledError:
+            return
+
+
+async def run_revalidate_review_mappings_loop(
+    kalshi: KalshiCollector,
+    polymarket,
+    mapping_store: MarketMappingStore,
+    *,
+    interval_s: float = 3600.0,
+) -> None:
+    """Hourly sweep that re-runs the auto-promote 9-gate stack against
+    ``status='review'`` mappings.
+
+    Counterpart to the candidate→confirmed path inside
+    ``run_market_discovery_loop``. Without this loop the records demoted
+    by past live audits stay frozen at status='review' until an operator
+    runs ``scripts/revalidate_review_mappings.py`` manually — see the
+    script's docstring for the original demotion context.
+    """
+    from scripts.revalidate_review_mappings import revalidate
+
+    log = logging.getLogger("arbiter.main.revalidate_review")
+    poly_client = getattr(polymarket, "client", polymarket)
+
+    # Stagger first run so we don't pile on the venues during restart-storm.
+    try:
+        await asyncio.sleep(min(interval_s, 60.0))
+    except asyncio.CancelledError:
+        return
+
+    while True:
+        try:
+            promoted = await revalidate(
+                dry_run=False,
+                filter_prefix=None,
+                limit=None,
+                kalshi=kalshi,
+                poly_client=poly_client,
+                store=mapping_store,
+            )
+            if promoted:
+                log.info(
+                    "revalidate_review pass: promoted %d review mapping(s) to confirmed",
+                    promoted,
+                )
+                await mapping_store.refresh_runtime_cache()
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:  # noqa: BLE001 — keep the loop alive
+            log.error("revalidate_review loop error: %s", exc)
+        try:
+            await asyncio.sleep(interval_s)
+        except asyncio.CancelledError:
+            return
+
+
 async def run_market_discovery_loop(
     kalshi: KalshiCollector,
     polymarket,
@@ -1333,6 +1425,31 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
             run_auto_resolver_loop(auto_resolver, interval_s=ar_interval),
             name="auto-resolver",
         ))
+
+    # Mapping-lifecycle loops (hourly default each). Both only run when a
+    # MarketMappingStore exists — DATABASE_URL must be set. The expire pass
+    # demotes confirmed sports mappings whose event date has passed; the
+    # revalidate pass walks status='review' rows and promotes any that now
+    # clear the 9-gate auto-promote stack.
+    if mapping_store is not None:
+        expire_interval_s = float(os.getenv("EXPIRE_SETTLED_INTERVAL_S", "3600"))
+        tasks.append(asyncio.create_task(
+            run_expire_settled_mappings_loop(mapping_store, interval_s=expire_interval_s),
+            name="expire-settled-mappings",
+        ))
+        if (
+            polymarket is not None
+            and hasattr(kalshi, "list_all_markets")
+            and hasattr(getattr(polymarket, "client", polymarket), "list_markets")
+        ):
+            revalidate_interval_s = float(os.getenv("REVALIDATE_REVIEW_INTERVAL_S", "3600"))
+            tasks.append(asyncio.create_task(
+                run_revalidate_review_mappings_loop(
+                    kalshi, polymarket, mapping_store,
+                    interval_s=revalidate_interval_s,
+                ),
+                name="revalidate-review-mappings",
+            ))
 
     # Stuck-trade recovery loop (5-min default). Only runs when a Postgres
     # store and at least one platform adapter are configured — otherwise the

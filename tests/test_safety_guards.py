@@ -326,6 +326,12 @@ class TestAutoPromoteGate4:
                 _make_candidate(score=0.20),
                 settings=_make_settings(
                     AUTO_PROMOTE_MIN_SCORE=0.18,
+                    # _make_candidate defaults to category="politics", whose
+                    # per-category floor (0.65) would otherwise short-circuit
+                    # with score_low before the LLM gate fires. Override it
+                    # to the test's chosen base floor so we actually reach
+                    # the gate under test.
+                    AUTO_PROMOTE_MIN_SCORE_BY_CATEGORY={"politics": 0.18},
                     AUTO_PROMOTE_MAYBE_MIN_SCORE=0.30,
                 ),
                 orderbooks=_make_orderbooks(),
