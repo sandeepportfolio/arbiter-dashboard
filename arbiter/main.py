@@ -1526,6 +1526,19 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
                 _run_reconciler_lifecycle(fx_resolver, shutdown_event),
                 name="forecastex-child-resolver",
             ))
+            logger.info(
+                "forecastex-child-resolver task scheduled (interval=%ss, dry_run=%s)",
+                fx_resolver._interval_s, fx_resolver._dry_run,
+            )
+        else:
+            logger.warning(
+                "forecastex-child-resolver NOT scheduled: resolver_from_env returned None"
+            )
+    else:
+        logger.warning(
+            "forecastex-child-resolver NOT scheduled: forecastex=%s mapping_store=%s",
+            forecastex is not None, mapping_store is not None,
+        )
 
     # API server always runs
     tasks.append(asyncio.create_task(api.serve(), name="api-server"))

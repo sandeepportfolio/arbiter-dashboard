@@ -149,7 +149,12 @@ class ForecastExChildResolver:
     async def _run_loop(self) -> None:
         # Initial sleep so the resolver doesn't compete with collector
         # cold-start for the IBKR rate-limit budget.
+        logger.info(
+            "forecastex_resolver.loop_started",
+            interval_s=self._interval_s, dry_run=self._dry_run,
+        )
         await asyncio.sleep(60.0)
+        logger.info("forecastex_resolver.startup_sleep_complete")
         while not self._stopped:
             try:
                 await self.run_once()
@@ -185,15 +190,46 @@ class ForecastExChildResolver:
         t0 = time.monotonic()
         self._cycle_count += 1
         candidates = self._candidate_canonical_ids()
+        logger.info(
+            "forecastex_resolver.cycle_start",
+            cycle=self._cycle_count, candidates=len(candidates),
+        )
         attempts: List[ResolveAttempt] = []
         resolved = failed = 0
+        consecutive_failures = 0
         for canonical_id, parent_conid in candidates:
+            # Short-circuit: if we've hit 3 consecutive IBKR failures
+            # (503s, exceptions, no_children — anything non-resolved),
+            # the /iserver/secdef/* endpoint is effectively down right
+            # now. resolve_event_children probes ~10 endpoints per
+            # conid; with the FX circuit breaker tripping after 5
+            # consecutive failures, ALL subsequent calls in the same
+            # cycle raise RuntimeError("circuit OPEN") which classifies
+            # as "exception". 24 conids × 30s circuit-recovery wait =
+            # 12 minutes blocked on a futile cycle. Once we know the
+            # endpoint isn't responding, mark the rest as ibkr_503 and
+            # pick up next interval (when the circuit will be closed
+            # again).
+            if consecutive_failures >= 3:
+                attempts.append(ResolveAttempt(
+                    canonical_id=canonical_id, parent_conid=parent_conid,
+                    ts=time.time(), outcome="ibkr_503",
+                    detail="short-circuited after 3 consecutive IBKR failures — endpoint down or circuit open",
+                ))
+                self._last_attempts[canonical_id] = attempts[-1]
+                failed += 1
+                continue
             attempt = await self._resolve_one(canonical_id, parent_conid)
             attempts.append(attempt)
             self._last_attempts[canonical_id] = attempt
             if attempt.outcome == "resolved":
                 resolved += 1
-            elif attempt.outcome != "dry_run":
+                consecutive_failures = 0
+            elif attempt.outcome == "dry_run":
+                # Dry-run reached the child, IBKR was healthy — reset.
+                consecutive_failures = 0
+            else:
+                consecutive_failures += 1
                 failed += 1
 
         duration_ms = (time.monotonic() - t0) * 1000.0

@@ -251,3 +251,44 @@ def test_resolver_from_env_honors_dry_run(monkeypatch):
     )
     assert res is not None
     assert res._dry_run is True
+
+
+async def test_run_once_short_circuits_after_three_consecutive_503s():
+    """When IBKR's /iserver/secdef/* endpoint is down (weekend), the
+    resolver must not block the asyncio loop for 2+ hours probing 24
+    conids × 10 endpoints × 30s timeout. After 3 consecutive 503s we
+    short-circuit the remaining candidates and pick up next cycle.
+    """
+    import aiohttp
+    from aiohttp import ClientResponseError, RequestInfo
+    from yarl import URL
+
+    for i in range(10):
+        settings_module.MARKET_MAP[f"C{i}"] = _confirmed(f"C{i}", f"P{i}")
+    collector = MagicMock()
+    collector._inactive_conids = {f"P{i}" for i in range(10)}
+
+    req_info = RequestInfo(
+        url=URL("https://ibkr/info"), method="GET", headers={}, real_url=URL("https://ibkr/info"),
+    )
+    exc = ClientResponseError(req_info, (), status=503, message="SU")
+    client = MagicMock()
+    client.resolve_event_children = AsyncMock(side_effect=exc)
+    store = MagicMock()
+
+    res = ForecastExChildResolver(
+        forecastex_client=client, forecastex_collector=collector, mapping_store=store,
+    )
+    snap = await res.run_once()
+    # All 10 candidates failed, but resolve_event_children was only
+    # called 3 times (after that the short-circuit fires).
+    assert snap.candidates_count == 10
+    assert snap.failed_count == 10
+    assert client.resolve_event_children.await_count == 3, (
+        f"expected short-circuit after 3 IBKR 503s, "
+        f"got {client.resolve_event_children.await_count} calls"
+    )
+    # All attempts surface as ibkr_503 (the 3 real ones AND the 7
+    # short-circuited ones) so the ops UI still shows the right outcome.
+    outcomes = {a["outcome"] for a in snap.attempts}
+    assert outcomes == {"ibkr_503"}
