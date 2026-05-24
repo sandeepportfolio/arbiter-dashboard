@@ -204,51 +204,80 @@ class ForecastExAdapter:
     # ─── Status queries ───────────────────────────────────────────────────
 
     async def get_order(self, order: Order) -> Order:
+        """Query IBKR for the current order state.
+
+        Only definitive venue responses mutate ``order.status``. Transient
+        errors (network blip, empty payload, malformed shape) leave the
+        order unchanged and set ``idempotency_ambiguous=True`` so callers
+        can distinguish "no fresh signal" from "venue confirmed FAILED".
+
+        Previously every exception terminally marked the order FAILED,
+        which let a single network blip during ``_poll_submitted_to_terminal``
+        flip a resting Forecastex order to FAILED and trigger an
+        unwarranted naked-leg unwind on the paired leg.
+        """
         try:
             payload = await self._client.get_order(order.order_id)
-            # IBKR returns either a single dict or a list of status dicts;
-            # take the most recent entry.
-            if isinstance(payload, list) and payload:
-                payload = payload[-1]
-            if not isinstance(payload, dict) or not payload:
-                return order
-            api_status = str(
-                payload.get("status")
-                or payload.get("order_status")
-                or payload.get("orderStatus")
-                or ""
-            ).upper()
-            order.status = self._map_status(api_status, order.status)
-            try:
-                fill_qty = float(
-                    payload.get("filled_quantity")
-                    or payload.get("filledQuantity")
-                    or payload.get("cumQty")
-                    or 0.0
-                )
-                if fill_qty:
-                    order.fill_qty = int(fill_qty)
-            except (TypeError, ValueError):
-                pass
-            try:
-                avg_px = float(
-                    payload.get("avg_price")
-                    or payload.get("avgPrice")
-                    or payload.get("avgFillPrice")
-                    or 0.0
-                )
-                if avg_px:
-                    order.fill_price = (
-                        avg_px if avg_px <= 1.0 else avg_px / 100.0
-                    )
-            except (TypeError, ValueError):
-                pass
         except Exception as exc:
             logger.warning(
-                "forecastex.get_order.failed", order_id=order.order_id, err=str(exc),
+                "forecastex.get_order.failed",
+                order_id=order.order_id, err=str(exc),
             )
-            order.status = OrderStatus.FAILED
+            order.idempotency_ambiguous = True
             order.error = f"get_order failed: {exc}"
+            return order
+
+        # IBKR returns either a single dict or a list of status dicts;
+        # take the most recent entry.
+        if isinstance(payload, list) and payload:
+            payload = payload[-1]
+        if not isinstance(payload, dict) or not payload:
+            logger.warning(
+                "forecastex.get_order.empty_payload",
+                order_id=order.order_id,
+            )
+            order.idempotency_ambiguous = True
+            return order
+
+        api_status = str(
+            payload.get("status")
+            or payload.get("order_status")
+            or payload.get("orderStatus")
+            or ""
+        ).upper()
+        if not api_status:
+            logger.warning(
+                "forecastex.get_order.empty_status",
+                order_id=order.order_id,
+            )
+            order.idempotency_ambiguous = True
+            return order
+
+        order.status = self._map_status(api_status, order.status)
+        try:
+            fill_qty = float(
+                payload.get("filled_quantity")
+                or payload.get("filledQuantity")
+                or payload.get("cumQty")
+                or 0.0
+            )
+            if fill_qty:
+                order.fill_qty = int(fill_qty)
+        except (TypeError, ValueError):
+            pass
+        try:
+            avg_px = float(
+                payload.get("avg_price")
+                or payload.get("avgPrice")
+                or payload.get("avgFillPrice")
+                or 0.0
+            )
+            if avg_px:
+                order.fill_price = (
+                    avg_px if avg_px <= 1.0 else avg_px / 100.0
+                )
+        except (TypeError, ValueError):
+            pass
         return order
 
     async def get_order_status(self, order: Order) -> Order:

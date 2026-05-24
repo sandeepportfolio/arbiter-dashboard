@@ -332,26 +332,58 @@ class PolymarketUSAdapter:
     async def get_order(self, order: Order) -> Order:
         """Query the platform for current order state.
 
-        Maps the response's ``status`` field to ``OrderStatus``.  If the
-        response cannot be retrieved, returns the order with status=FAILED.
+        Maps the response's ``status`` field to ``OrderStatus``. Transient
+        failures (no client method, non-dict response, network exception)
+        leave the order unchanged and flag ``idempotency_ambiguous=True`` so
+        downstream callers can distinguish "we have no fresh signal" from
+        "we confirmed terminal state". Only a definitive venue response
+        mutates ``order.status``.
+
+        Previously a missing ``client.get_order`` silently returned the
+        order unchanged with no signal, and ``_poll_submitted_to_terminal``
+        would loop until timeout before deciding to cancel — even if the
+        order had already filled. Now the ambiguity is explicit.
         """
         try:
-            # Polymarket US: GET /order/{order_id} — use client extension if
-            # available, otherwise fall through to SUBMITTED (not critical for FOK).
-            if hasattr(self._client, "get_order"):
-                resp = await self._client.get_order(order.order_id)
-                payload = resp.get("order", resp) if isinstance(resp, dict) else {}
-                api_status = str(
-                    payload.get("state", payload.get("status", ""))
-                ).upper()
-                order.status = self._map_status(api_status, order.status)
+            if not hasattr(self._client, "get_order"):
+                logger.warning(
+                    "polymarket_us.get_order.unsupported",
+                    order_id=order.order_id,
+                    note="client lacks get_order — cannot verify terminal state",
+                )
+                order.idempotency_ambiguous = True
+                return order
+            resp = await self._client.get_order(order.order_id)
+            if not isinstance(resp, dict):
+                logger.warning(
+                    "polymarket_us.get_order.non_dict_response",
+                    order_id=order.order_id,
+                    resp_type=type(resp).__name__,
+                )
+                order.idempotency_ambiguous = True
+                return order
+            payload = resp.get("order", resp)
+            api_status = str(
+                payload.get("state", payload.get("status", ""))
+            ).upper()
+            if not api_status:
+                logger.warning(
+                    "polymarket_us.get_order.empty_status",
+                    order_id=order.order_id,
+                )
+                order.idempotency_ambiguous = True
+                return order
+            order.status = self._map_status(api_status, order.status)
         except Exception as exc:
             logger.warning(
                 "polymarket_us.get_order.failed",
                 order_id=order.order_id,
                 err=str(exc),
             )
-            order.status = OrderStatus.FAILED
+            # Transient venue/network error — leave order.status unchanged
+            # so the caller does not collapse a possibly-still-live order
+            # to FAILED on a single network blip. Flag ambiguity instead.
+            order.idempotency_ambiguous = True
             order.error = f"get_order failed: {exc}"
         return order
 
@@ -718,22 +750,22 @@ class PolymarketUSAdapter:
             "KILLED", "ORDER_STATE_KILLED",
             "EXPIRED", "ORDER_STATE_EXPIRED",
             "ORDER_STATE_UNFILLED",  # FOK/IOC reply when nothing matched
-            # ORDER_STATE_NEW arrives synchronously when Polymarket's matching
-            # engine has accepted the IOC but not yet completed processing
-            # within ``maxBlockTime``.  Verified empirically (order
-            # 9RPY2RKG00YX, 2026-05-02): a synchronous NEW reply with
-            # fill_qty=0 transitions to ORDER_STATE_EXPIRED moments later
-            # because the IOC didn't match the live book.  Treating it as
-            # CANCELLED here matches the eventual terminal state and routes
-            # the trade through soft-naked recovery so the primary leg gets
-            # unwound promptly instead of sitting exposed waiting for a
-            # delayed terminal callback that may never fire.
-            "NEW", "ORDER_STATE_NEW",
         }:
             return OrderStatus.CANCELLED
         if normalized in {"REJECTED", "ORDER_STATE_REJECTED"}:
             return OrderStatus.FAILED
-        if normalized in {"LIVE", "OPEN", "ORDER_STATE_OPEN", "ORDER_STATE_LIVE"}:
+        if normalized in {
+            "LIVE", "OPEN", "ORDER_STATE_OPEN", "ORDER_STATE_LIVE",
+            # NEW / ORDER_STATE_NEW: Polymarket's matching engine has accepted
+            # the order but not yet returned a terminal verdict. Map to
+            # SUBMITTED so the engine's post-submit poll
+            # (_poll_submitted_to_terminal) drives it to a real terminal state
+            # via get_order. Previously this mapped to CANCELLED based on a
+            # single empirical observation; that race-condition shortcut could
+            # trigger smart-unwind on the primary while the venue still
+            # filled the secondary, producing double-direction exposure.
+            "NEW", "ORDER_STATE_NEW",
+        }:
             return OrderStatus.SUBMITTED
         # Unknown status from a wire format we have not seen before.  Fail
         # loud rather than fall through to ``default`` (which used to be

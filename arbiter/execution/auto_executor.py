@@ -300,7 +300,21 @@ class AutoExecutor:
             # Scale qty down to fit within the per-trade cap instead of skipping
             # Use pair cost (yes + no) to match auditor's _compute_position_size
             price = float(opp.yes_price or 0.01) + float(opp.no_price or 0.01)
-            clamped_qty = max(1, int(self._config.max_position_usd / price))
+            # If even a single contract exceeds max_position_usd, skip rather
+            # than force-place 1 contract and breach the cap. Previously
+            # ``max(1, int(...))`` would floor to 1 when pair cost > cap and
+            # silently violate the per-trade USD ceiling.
+            raw_qty = int(self._config.max_position_usd / price)
+            if raw_qty < 1:
+                self.stats.skipped_over_cap += 1
+                log.info(
+                    "auto_executor.skip.pair_cost_exceeds_cap",
+                    canonical_id=opp.canonical_id,
+                    pair_cost=round(price, 4),
+                    cap=self._config.max_position_usd,
+                )
+                return
+            clamped_qty = raw_qty
             # ── Recompute per-unit fees for the clamped quantity ───────
             # Fee functions have order-level ceil rounding, so per-unit
             # cost changes with quantity.  We must recompute net_edge
