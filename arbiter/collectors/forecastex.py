@@ -640,6 +640,13 @@ class ForecastExCollector:
             self.total_fetches += 1
             try:
                 snapshot = await self.client.market_snapshot(conid)
+                # A successful HTTP response means the IBKR bridge is healthy
+                # — reset the consecutive_errors counter now, BEFORE the
+                # tradeable check. An empty bid/ask snapshot is a market-data
+                # issue (parent-event conid, illiquid contract), not a
+                # connectivity issue, and shouldn't keep the readiness gate
+                # tripped after the auth outage clears.
+                self.consecutive_errors = 0
                 # FORECASTX event-parent (IND) conids return only conidEx +
                 # symbol + empty bid/ask. Polling them every cycle wastes
                 # rate-limit budget and pollutes "price_point is None" logs
@@ -665,7 +672,6 @@ class ForecastExCollector:
                     continue
                 results.append(price)
                 await self.store.put(price)
-                self.consecutive_errors = 0
             except aiohttp.ClientResponseError as exc:
                 if exc.status in (404, 410):
                     self._inactive_conids.add(conid)
