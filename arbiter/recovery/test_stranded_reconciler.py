@@ -1,0 +1,318 @@
+"""Tests for StrandedPositionReconciler.
+
+These tests mock out the venue fetchers and exercise:
+  - tracking semantics (first_seen / last_seen / dedup)
+  - new-position incident emission
+  - prune-on-disappear
+  - auto-close gate: notional cap, spread cap, illiquid skip, no-adapter
+  - reconciler_from_env defaults
+"""
+from __future__ import annotations
+
+import asyncio
+import os
+import time
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from arbiter.recovery.stranded_reconciler import (
+    ReconcilerSnapshot,
+    StrandedPosition,
+    StrandedPositionReconciler,
+    reconciler_from_env,
+)
+
+
+def _stub_pos(**overrides) -> StrandedPosition:
+    defaults = dict(
+        platform="kalshi",
+        market_id="K-X",
+        side="YES",
+        qty=10.0,
+        cost_basis_usd=5.0,
+        mtm_usd=5.5,
+        unrealized_usd=0.5,
+        best_bid=0.55,
+        best_ask=0.56,
+        title="Stub market",
+        first_seen_ts=time.time(),
+        last_seen_ts=time.time(),
+    )
+    defaults.update(overrides)
+    return StrandedPosition(**defaults)
+
+
+
+async def test_first_cycle_records_all_observed_as_new():
+    engine = MagicMock()
+    engine._record_incident = AsyncMock()
+    rec = StrandedPositionReconciler(config=SimpleNamespace(), engine=engine)
+    rec._fetch_kalshi_positions = AsyncMock(return_value=[
+        _stub_pos(market_id="K-A", qty=5),
+        _stub_pos(market_id="K-B", qty=10),
+    ])
+    rec._fetch_polymarket_us_positions = AsyncMock(return_value=[])
+
+    snapshot = await rec.run_once()
+    assert snapshot.stranded_count == 2
+    # An incident must fire ONCE for each newly-observed lot.
+    assert engine._record_incident.await_count == 2
+
+
+
+async def test_subsequent_cycle_does_not_re_emit_for_same_lot():
+    engine = MagicMock()
+    engine._record_incident = AsyncMock()
+    rec = StrandedPositionReconciler(config=SimpleNamespace(), engine=engine)
+    rec._fetch_kalshi_positions = AsyncMock(return_value=[
+        _stub_pos(market_id="K-A", qty=5),
+    ])
+    rec._fetch_polymarket_us_positions = AsyncMock(return_value=[])
+
+    await rec.run_once()
+    await rec.run_once()
+    # First cycle: 1 incident. Second cycle: same lot still there, no
+    # new incident. Total: 1.
+    assert engine._record_incident.await_count == 1
+
+
+
+async def test_position_pruned_when_it_disappears_from_venue():
+    engine = MagicMock()
+    engine._record_incident = AsyncMock()
+    rec = StrandedPositionReconciler(config=SimpleNamespace(), engine=engine)
+    rec._fetch_polymarket_us_positions = AsyncMock(return_value=[])
+    # Cycle 1: position present.
+    rec._fetch_kalshi_positions = AsyncMock(return_value=[
+        _stub_pos(market_id="K-PRUNE", qty=3),
+    ])
+    await rec.run_once()
+    assert ("kalshi", "K-PRUNE") in rec.tracked
+    # Cycle 2: venue no longer reports it (closed / settled).
+    rec._fetch_kalshi_positions = AsyncMock(return_value=[])
+    snap = await rec.run_once()
+    assert ("kalshi", "K-PRUNE") not in rec.tracked
+    assert snap.stranded_count == 0
+
+
+
+async def test_auto_close_disabled_by_default_does_not_call_adapter():
+    """The safety default: ``auto_close=False`` means the reconciler
+    only OBSERVES and EMITS incidents — never silently closes. The
+    operator stays in the loop unless they explicitly opt in.
+    """
+    engine = MagicMock()
+    engine._record_incident = AsyncMock()
+    adapter = MagicMock()
+    adapter.place_unwind_sell = AsyncMock()
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(),
+        engine=engine,
+        adapters={"kalshi": adapter},
+        auto_close=False,
+    )
+    rec._fetch_kalshi_positions = AsyncMock(return_value=[
+        _stub_pos(market_id="K-A", qty=3),
+    ])
+    rec._fetch_polymarket_us_positions = AsyncMock(return_value=[])
+
+    await rec.run_once()
+    assert adapter.place_unwind_sell.await_count == 0
+
+
+
+async def test_auto_close_skips_when_no_bbo():
+    engine = MagicMock()
+    engine._record_incident = AsyncMock()
+    adapter = MagicMock()
+    adapter.place_unwind_sell = AsyncMock()
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), engine=engine,
+        adapters={"kalshi": adapter}, auto_close=True,
+    )
+    # Empty book → illiquid skip.
+    rec._fetch_kalshi_positions = AsyncMock(return_value=[
+        _stub_pos(market_id="K-NOBBO", best_bid=0.0, best_ask=0.0),
+    ])
+    rec._fetch_polymarket_us_positions = AsyncMock(return_value=[])
+
+    await rec.run_once()
+    assert adapter.place_unwind_sell.await_count == 0
+    pos = rec.tracked[("kalshi", "K-NOBBO")]
+    assert pos.auto_close_attempted
+    assert "illiquid" in (pos.auto_close_result or "").lower()
+
+
+
+async def test_auto_close_skips_when_notional_exceeds_cap():
+    """Large positions stay for manual review. The default cap is $10,
+    matching the live-trading position-USD ceiling — anything larger
+    needs operator eyes before we touch it.
+    """
+    engine = MagicMock()
+    engine._record_incident = AsyncMock()
+    adapter = MagicMock()
+    adapter.place_unwind_sell = AsyncMock()
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), engine=engine,
+        adapters={"kalshi": adapter},
+        auto_close=True, max_auto_close_notional_usd=10.0,
+    )
+    rec._fetch_kalshi_positions = AsyncMock(return_value=[
+        _stub_pos(market_id="K-BIG", qty=100, cost_basis_usd=50.0,
+                  best_bid=0.45, best_ask=0.46),
+    ])
+    rec._fetch_polymarket_us_positions = AsyncMock(return_value=[])
+
+    await rec.run_once()
+    assert adapter.place_unwind_sell.await_count == 0
+    pos = rec.tracked[("kalshi", "K-BIG")]
+    assert "notional" in (pos.auto_close_result or "").lower()
+
+
+
+async def test_auto_close_skips_when_spread_too_wide():
+    """Wide spreads mean the market is illiquid / unfairly priced; we
+    refuse to dump position at a panic level when there's no real
+    bid-side liquidity to absorb us.
+    """
+    engine = MagicMock()
+    engine._record_incident = AsyncMock()
+    adapter = MagicMock()
+    adapter.place_unwind_sell = AsyncMock()
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), engine=engine,
+        adapters={"kalshi": adapter},
+        auto_close=True,
+        max_auto_close_spread_bps=200.0,  # 2c max
+    )
+    rec._fetch_kalshi_positions = AsyncMock(return_value=[
+        _stub_pos(market_id="K-WIDE", qty=5, cost_basis_usd=2.5,
+                  best_bid=0.30, best_ask=0.60),  # 30c spread
+    ])
+    rec._fetch_polymarket_us_positions = AsyncMock(return_value=[])
+
+    await rec.run_once()
+    assert adapter.place_unwind_sell.await_count == 0
+    pos = rec.tracked[("kalshi", "K-WIDE")]
+    assert "spread" in (pos.auto_close_result or "").lower()
+
+
+
+async def test_auto_close_fires_when_gates_pass():
+    """When notional is small, spread is tight, BBO exists, and the
+    adapter supports place_unwind_sell — the reconciler executes the
+    close.
+    """
+    from arbiter.execution.engine import Order, OrderStatus
+
+    engine = MagicMock()
+    engine._record_incident = AsyncMock()
+    adapter = MagicMock()
+    adapter.place_unwind_sell = AsyncMock(
+        return_value=Order(
+            order_id="UNWIND-OK", platform="kalshi",
+            market_id="K-OK", canonical_id="K-OK", side="yes",
+            price=0.01, quantity=3,
+            status=OrderStatus.FILLED, fill_qty=3, fill_price=0.55,
+            timestamp=time.time(),
+        )
+    )
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), engine=engine,
+        adapters={"kalshi": adapter},
+        auto_close=True,
+        max_auto_close_notional_usd=10.0,
+        max_auto_close_spread_bps=200.0,
+    )
+    rec._fetch_kalshi_positions = AsyncMock(return_value=[
+        _stub_pos(market_id="K-OK", qty=3, cost_basis_usd=1.5,
+                  best_bid=0.55, best_ask=0.56),
+    ])
+    rec._fetch_polymarket_us_positions = AsyncMock(return_value=[])
+
+    await rec.run_once()
+    assert adapter.place_unwind_sell.await_count == 1
+    pos = rec.tracked[("kalshi", "K-OK")]
+    assert pos.auto_close_attempted
+    assert "filled" in (pos.auto_close_result or "").lower()
+
+
+
+async def test_auto_close_not_retried_in_following_cycle():
+    """Once attempted (success OR failure), the position is marked so
+    the next cycle doesn't loop on the same close.
+    """
+    from arbiter.execution.engine import Order, OrderStatus
+
+    engine = MagicMock()
+    engine._record_incident = AsyncMock()
+    adapter = MagicMock()
+    adapter.place_unwind_sell = AsyncMock(
+        return_value=Order(
+            order_id="UNWIND-2", platform="kalshi", market_id="K-R",
+            canonical_id="K-R", side="yes",
+            price=0.01, quantity=2,
+            status=OrderStatus.CANCELLED, fill_qty=0, fill_price=0.0,
+            timestamp=time.time(),
+        )
+    )
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), engine=engine,
+        adapters={"kalshi": adapter}, auto_close=True,
+        max_auto_close_notional_usd=10.0,
+        max_auto_close_spread_bps=200.0,
+    )
+    rec._fetch_kalshi_positions = AsyncMock(return_value=[
+        _stub_pos(market_id="K-R", qty=2, cost_basis_usd=1.0,
+                  best_bid=0.55, best_ask=0.56),
+    ])
+    rec._fetch_polymarket_us_positions = AsyncMock(return_value=[])
+
+    await rec.run_once()
+    await rec.run_once()
+    # Only ONE close attempt total despite two cycles.
+    assert adapter.place_unwind_sell.await_count == 1
+
+
+
+async def test_fetch_failure_on_one_venue_does_not_kill_cycle():
+    """If Polymarket is down, Kalshi positions must still surface and
+    the error must appear in the snapshot's ``errors`` list.
+    """
+    engine = MagicMock()
+    engine._record_incident = AsyncMock()
+    rec = StrandedPositionReconciler(config=SimpleNamespace(), engine=engine)
+    rec._fetch_kalshi_positions = AsyncMock(return_value=[
+        _stub_pos(market_id="K-OK", qty=4),
+    ])
+    rec._fetch_polymarket_us_positions = AsyncMock(
+        side_effect=RuntimeError("polymarket gateway 503"),
+    )
+
+    snap = await rec.run_once()
+    assert snap.stranded_count == 1
+    assert any("polymarket" in e or "503" in e for e in snap.errors)
+
+
+def test_reconciler_from_env_reads_interval_and_caps(monkeypatch):
+    monkeypatch.setenv("STRANDED_RECONCILE_INTERVAL_S", "120")
+    monkeypatch.setenv("STRANDED_AUTO_CLOSE", "true")
+    monkeypatch.setenv("STRANDED_AUTO_CLOSE_MAX_USD", "5")
+    monkeypatch.setenv("STRANDED_AUTO_CLOSE_MAX_SPREAD_BPS", "300")
+    rec = reconciler_from_env(config=SimpleNamespace(), adapters={}, engine=None)
+    assert rec._interval_s == 120.0
+    assert rec._auto_close is True
+    assert rec._max_auto_close_notional_usd == 5.0
+    assert rec._max_auto_close_spread_bps == 300.0
+
+
+def test_reconciler_from_env_clamps_interval_minimum(monkeypatch):
+    """An overly short interval would hammer the venues' rate limits;
+    the reconciler clamps to a 30s floor regardless of env.
+    """
+    monkeypatch.setenv("STRANDED_RECONCILE_INTERVAL_S", "5")
+    rec = reconciler_from_env(config=SimpleNamespace(), adapters={}, engine=None)
+    assert rec._interval_s == 30.0

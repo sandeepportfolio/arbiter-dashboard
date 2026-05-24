@@ -3288,3 +3288,54 @@ def test_fok_slippage_buffer_can_be_disabled_via_env():
                 _os_test.environ["FOK_SLIPPAGE_TICKS"] = _old_buf
 
     asyncio.run(runner())
+
+
+def test_unprofitable_path_does_not_raise_unbound_local():
+    """Regression: the unprofitability early-return at engine.py:1213 used
+    to fall through to the post-record_arb re-raise tail and hit
+    UnboundLocalError on ``_secondary_exception`` (engine.py:2084). The
+    variable is now hoisted above the IF/ELSE so every path has a
+    definition.
+
+    Triggering the IF branch requires the pre-trade RiskManager.check_
+    trade to pass (so we don't get filtered out earlier) and THEN the
+    engine's recomputation from prices+fees to come in BELOW min. We
+    engineer that by setting yes_price + no_price ≈ 1.0 so gross_edge
+    ≈ 0 and net_edge_after_fees ≈ -fees, while leaving the opp's
+    reported net_edge_cents at 7 (passes check_trade with min=1).
+    """
+    from arbiter.execution.engine import OrderStatus
+
+    async def runner():
+        engine = _build_live_engine_for_safe02_gap()
+        # check_trade min low enough to pass on the opp's reported 7c;
+        # recompute floor at 1c so a near-zero recompute trips the IF.
+        engine.scanner_config.min_edge_cents = 1.0
+
+        kalshi = MagicMock()
+        kalshi.platform = "kalshi"
+        _wire_live_depth(kalshi, 0.50)
+        poly = MagicMock()
+        poly.platform = "polymarket"
+        _wire_live_depth(poly, 0.50)
+        engine.adapters = {"kalshi": kalshi, "polymarket": poly}
+
+        opp = _make_safety_opp(
+            canonical_id="MKT1",
+            yes_platform="polymarket",
+            no_platform="kalshi",
+            yes_price=0.50,
+            no_price=0.50,  # gross=0, recompute net < 1c → IF branch
+            suggested_qty=10,
+        )
+
+        # Must NOT raise UnboundLocalError; must finish with aborted legs.
+        result = await engine.execute_opportunity(opp)
+        assert result is not None, (
+            "execute_opportunity returned None — pre-trade check may "
+            "now block the path; broaden the test if so."
+        )
+        assert result.leg_yes.status == OrderStatus.ABORTED
+        assert result.leg_no.status == OrderStatus.ABORTED
+
+    asyncio.run(runner())

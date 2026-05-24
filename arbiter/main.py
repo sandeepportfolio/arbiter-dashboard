@@ -437,6 +437,22 @@ async def run_reconciliation_loop(
             await asyncio.sleep(min(reconciler.check_interval, 10.0))
 
 
+async def _run_reconciler_lifecycle(reconciler, shutdown_event):
+    """Drive the StrandedPositionReconciler periodic loop until shutdown.
+
+    Lives in main.py rather than the reconciler module so the shutdown
+    handshake matches the other long-running tasks here. The
+    reconciler's own ``start()`` schedules an inner task; we keep
+    that alive until the global ``shutdown_event`` fires and then
+    request a clean ``stop()``.
+    """
+    await reconciler.start()
+    try:
+        await shutdown_event.wait()
+    finally:
+        await reconciler.stop()
+
+
 async def run_stuck_trade_recovery_loop(
     store: ExecutionStore,
     adapters: dict,
@@ -1467,6 +1483,26 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
                 stats=stuck_recovery_stats,
             ),
             name="stuck-trade-recovery",
+        ))
+
+    # ── Stranded-position reconciler ──────────────────────────────
+    # Periodic venue-truth audit that closes the gap between what the
+    # engine THINKS exists and what venues actually hold. Surfaces the
+    # 25-lot stranded inventory exposed by the FILL-01 audit and
+    # protects against future drift from crashed sessions or adapter
+    # exceptions during unwind. Conservative default (auto_close=False
+    # so operator sees every incident before any close happens).
+    if adapters:
+        from .recovery.stranded_reconciler import reconciler_from_env
+        stranded_reconciler = reconciler_from_env(
+            config=config, adapters=adapters, engine=engine,
+        )
+        # Stash on the API so /api/system can render the latest
+        # snapshot without re-querying the venues.
+        api.stranded_reconciler = stranded_reconciler
+        tasks.append(asyncio.create_task(
+            _run_reconciler_lifecycle(stranded_reconciler, shutdown_event),
+            name="stranded-position-reconciler",
         ))
 
     # API server always runs

@@ -2615,6 +2615,21 @@ function ExecutionHealthPanel() {
   // Count by api_status so the operator sees the failure shape, not just
   // a list of one-offs. KILLED:8 / UNFILLED:1 tells a different story
   // than REJECTED:9.
+  // Stranded-position reconciler snapshot from /api/system.
+  // Periodic venue-truth audit surfaces lots the engine doesn't know
+  // about (legacy naked legs, recovery drift, etc). Each entry:
+  // {platform, market_id, side, qty, cost_basis_usd, mtm_usd,
+  // unrealized_usd, best_bid, best_ask, title, first_seen_ts,
+  // last_seen_ts, age_seconds, auto_close_attempted, auto_close_result}.
+  const strandedSnap = (M.system && M.system.stranded_positions) || {};
+  const strandedList = Array.isArray(strandedSnap.stranded) ? strandedSnap.stranded : [];
+  const strandedCount = Number(strandedSnap.stranded_count || strandedList.length || 0);
+  const strandedAutoClose = !!strandedSnap.auto_close_enabled;
+  const strandedCycle = Number(strandedSnap.cycle_count || 0);
+  const strandedLastRun = Number(strandedSnap.timestamp || 0);
+  const strandedTotalCost = strandedList.reduce((s, p) => s + Math.abs(Number(p.cost_basis_usd || 0)), 0);
+  const strandedTotalUnrealized = strandedList.reduce((s, p) => s + Number(p.unrealized_usd || 0), 0);
+
   const diagStatusCounts = flatDiagnostics.reduce((acc, e) => {
     const key = String(e.api_status || 'UNKNOWN');
     acc[key] = (acc[key] || 0) + 1;
@@ -2755,6 +2770,75 @@ function ExecutionHealthPanel() {
                   );
                 })}
               </div>
+            </div>
+          </div>
+        )}
+      </div>
+      {/* Stranded positions — populated by the periodic
+          StrandedPositionReconciler. Lots that the engine doesn't
+          know about (legacy naked legs, recovery drift). Shows count,
+          total cost basis, total unrealized, and the lot table. */}
+      <div style={{ borderTop:`1px solid ${t.border}`, padding:'14px 22px' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8, gap:12, flexWrap:'wrap' }}>
+          <div style={{ fontSize:11, color:t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase' }}>Stranded positions</div>
+          <div style={{ display:'flex', alignItems:'center', gap:14 }}>
+            <span style={{ fontSize:10.5, color:t.textDim }} title="Reconciler cycle counter — increments each time the periodic loop fires.">
+              {strandedCycle === 0 ? 'awaiting first cycle' : `cycle #${strandedCycle.toLocaleString()}`}
+              {strandedLastRun > 0 && ` · last ${new Date(strandedLastRun * 1000).toISOString().slice(11, 19)} UTC`}
+            </span>
+            <span title="auto-close gate: when enabled, the reconciler will attempt to close small, liquid stranded positions automatically. Set STRANDED_AUTO_CLOSE=true to enable." style={{ fontSize:10, fontWeight:700, color: strandedAutoClose ? t.amber : t.textMuted, fontFamily:window.FONTS.mono, padding:'2px 8px', borderRadius:99, background:t.bgSubtle, border:`1px solid ${t.border}` }}>
+              auto-close {strandedAutoClose ? 'ON' : 'OFF'}
+            </span>
+          </div>
+        </div>
+        {strandedCount === 0 && strandedCycle === 0 ? (
+          <div style={{ fontSize:10.5, color:t.textMuted, lineHeight:1.45 }}>
+            Reconciler not yet running or no snapshot published. Fires on a 5-minute interval after startup.
+          </div>
+        ) : strandedCount === 0 ? (
+          <div style={{ fontSize:10.5, color:t.green, lineHeight:1.45 }}>
+            ✓ No stranded positions detected across enabled venues.
+          </div>
+        ) : (
+          <div>
+            <div style={{ display:'flex', gap:18, marginBottom:10, flexWrap:'wrap' }}>
+              <div>
+                <div style={{ fontSize:10.5, color:t.textMuted }}>Stranded lots</div>
+                <div style={{ fontSize:18, fontWeight:700, color:t.red, fontFamily:window.FONTS.mono }}>{strandedCount.toLocaleString()}</div>
+              </div>
+              <div>
+                <div style={{ fontSize:10.5, color:t.textMuted }}>Total cost basis</div>
+                <div style={{ fontSize:18, fontWeight:700, color:t.text, fontFamily:window.FONTS.mono }}>{window.fmt$Sign(-strandedTotalCost)}</div>
+              </div>
+              <div>
+                <div style={{ fontSize:10.5, color:t.textMuted }}>Net unrealized</div>
+                <div style={{ fontSize:18, fontWeight:700, color: strandedTotalUnrealized >= 0 ? t.green : t.red, fontFamily:window.FONTS.mono }}>{window.fmt$Sign(strandedTotalUnrealized)}</div>
+              </div>
+            </div>
+            <div style={{ display:'grid', gap:4 }}>
+              {strandedList.slice(0, 20).map((p, i) => {
+                const acStatus = p.auto_close_attempted
+                  ? (p.auto_close_result || 'attempted')
+                  : (strandedAutoClose ? 'pending close' : 'observe-only');
+                const acColor = p.auto_close_attempted
+                  ? (String(p.auto_close_result || '').toLowerCase().includes('filled') ? t.green : t.amber)
+                  : t.textMuted;
+                return (
+                  <div key={(p.platform || '') + '-' + (p.market_id || '') + '-' + i} title={`${p.platform} · ${p.market_id} · ${p.title || ''} · cost $${Number(p.cost_basis_usd).toFixed(2)} · mtm $${Number(p.mtm_usd).toFixed(2)} · bbo ${Number(p.best_bid).toFixed(3)}/${Number(p.best_ask).toFixed(3)} · age ${Math.round(Number(p.age_seconds || 0))}s · ${acStatus}`} style={{ fontSize:10.5, color:t.textDim, fontFamily:window.FONTS.mono, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', display:'flex', gap:10 }}>
+                    <span style={{ color:t.text, minWidth:80 }}>{p.platform}</span>
+                    <span style={{ color:t.text, flex:'1 1 auto', overflow:'hidden', textOverflow:'ellipsis' }}>{p.market_id}</span>
+                    <span style={{ color: Number(p.qty) >= 0 ? t.green : t.red }}>{Number(p.qty) >= 0 ? '+' : ''}{Number(p.qty).toFixed(0)} {p.side}</span>
+                    <span style={{ color:t.textMuted }}>cost {window.fmt$Sign(-Math.abs(Number(p.cost_basis_usd)))}</span>
+                    <span style={{ color: Number(p.unrealized_usd) >= 0 ? t.green : t.red }}>{window.fmt$Sign(Number(p.unrealized_usd))}</span>
+                    <span style={{ color: acColor, minWidth:140, overflow:'hidden', textOverflow:'ellipsis' }}>{acStatus}</span>
+                  </div>
+                );
+              })}
+              {strandedList.length > 20 && (
+                <div style={{ fontSize:10.5, color:t.textMuted, marginTop:4 }}>
+                  … and {(strandedList.length - 20).toLocaleString()} more (showing top 20)
+                </div>
+              )}
             </div>
           </div>
         )}

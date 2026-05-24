@@ -507,3 +507,99 @@ async def test_time_in_force_killed_sets_order_error():
     assert order.status == OrderStatus.FAILED
     assert order.error, "TIME_IN_FORCE_KILLED must populate order.error"
     assert "TIME_IN_FORCE_KILLED" in order.error
+
+
+async def test_place_unwind_sell_yes_uses_sell_long_intent():
+    """When recovering a naked YES position, the adapter must translate
+    side='yes' into the SELL_LONG intent and use IOC TIF. The wire
+    payload's intent + tif fields are how the venue distinguishes a
+    'sell what I own' from 'short-sell new exposure'."""
+    client = MagicMock()
+    client.get_market_by_slug = AsyncMock(return_value={"orderPriceMinTickSize": "0.01"})
+    client.place_order = AsyncMock(
+        return_value={"id": "ord-uw-y", "state": "ORDER_STATE_FILLED"}
+    )
+    adapter = _make_adapter(client=client)
+
+    await adapter.place_unwind_sell(
+        "ARB-UW-Y", "slug-uw", "CAN-UW", "yes", 5, panic_price=0.01,
+    )
+    assert client.place_order.await_count == 1
+    sent = client.place_order.await_args.kwargs
+    assert sent["intent"] == "SELL_LONG", f"expected SELL_LONG, got {sent['intent']}"
+    assert sent["tif"] == "IMMEDIATE_OR_CANCEL", f"expected IOC, got {sent['tif']}"
+    assert float(sent["price"]) == 0.01
+
+
+async def test_place_unwind_sell_no_uses_sell_short_intent():
+    """side='no' → SELL_SHORT with wire price = 1 - panic_price (because
+    Polymarket's order book is YES-axis; selling NO = covering a YES
+    short, so the wire field flips)."""
+    client = MagicMock()
+    client.get_market_by_slug = AsyncMock(return_value={"orderPriceMinTickSize": "0.01"})
+    client.place_order = AsyncMock(
+        return_value={"id": "ord-uw-n", "state": "ORDER_STATE_FILLED"}
+    )
+    adapter = _make_adapter(client=client)
+
+    await adapter.place_unwind_sell(
+        "ARB-UW-N", "slug-uw", "CAN-UW", "no", 5, panic_price=0.01,
+    )
+    sent = client.place_order.await_args.kwargs
+    assert sent["intent"] == "SELL_SHORT"
+    assert sent["tif"] == "IMMEDIATE_OR_CANCEL"
+    # NO panic 0.01 → wire = 1 - 0.01 = 0.99 (sell our NO at 1c means
+    # the YES-axis ask we're posting is 99c).
+    assert abs(float(sent["price"]) - 0.99) < 1e-6, (
+        f"expected wire 0.99 for SELL_SHORT panic=0.01, got {sent['price']}"
+    )
+
+
+async def test_place_resting_sell_uses_gtc_tif():
+    """Resting break-even sell must use GOOD_TILL_CANCEL TIF so the order
+    actually rests on the book (IOC would self-cancel immediately).
+    Verified against docs.polymarket.us OpenAPI enum 2026-05-24:
+    valid GTC value is TIME_IN_FORCE_GOOD_TILL_CANCEL (no "ED").
+    """
+    client = MagicMock()
+    client.get_market_by_slug = AsyncMock(return_value={"orderPriceMinTickSize": "0.01"})
+    client.place_order = AsyncMock(
+        return_value={"id": "ord-rest", "state": "ORDER_STATE_OPEN"}
+    )
+    adapter = _make_adapter(client=client)
+
+    await adapter.place_resting_sell(
+        "ARB-REST", "slug-r", "CAN-R", "yes", 0.40, 5,
+    )
+    sent = client.place_order.await_args.kwargs
+    assert sent["intent"] == "SELL_LONG"
+    assert sent["tif"] == "GOOD_TILL_CANCEL", (
+        f"expected GOOD_TILL_CANCEL per the OpenAPI enum, got {sent['tif']}"
+    )
+    assert float(sent["price"]) == 0.40
+
+
+async def test_unwind_sell_skips_phase_hardlocks():
+    """Naked-leg recovery must NOT be blocked by PHASE4/PHASE5 size caps
+    or the supervisor armed gate: those gates exist to stop NEW exposure,
+    while unwind closes EXISTING exposure that the supervisor itself
+    flagged. Blocking it would lock us into a permanent naked state.
+    """
+    client = MagicMock()
+    client.get_market_by_slug = AsyncMock(return_value={"orderPriceMinTickSize": "0.01"})
+    client.place_order = AsyncMock(
+        return_value={"id": "ord-no-gate", "state": "ORDER_STATE_FILLED"}
+    )
+    supervisor = MagicMock()
+    supervisor.is_armed = True
+    adapter = _make_adapter(
+        client=client,
+        phase4_max_usd=0.01,   # would block any new order
+        phase5_max_usd=0.01,
+        supervisor=supervisor,
+    )
+
+    # Must NOT raise OrderRejected — recovery path bypasses these gates.
+    await adapter.place_unwind_sell("ARB-RECOV", "slug-r", "CAN-R", "yes", 5)
+    await adapter.place_resting_sell("ARB-REST", "slug-r", "CAN-R", "yes", 0.40, 5)
+    assert client.place_order.await_count == 2

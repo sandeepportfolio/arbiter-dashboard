@@ -1210,6 +1210,14 @@ class ExecutionEngine:
         yes_fee_per = yes_fee / qty if qty > 0 else 0.0
         no_fee_per = no_fee / qty if qty > 0 else 0.0
         net_edge_after_fees = gross_edge - yes_fee_per - no_fee_per
+        # Hoisted out of the else-branch below so the re-raise at the
+        # bottom of execute_opportunity always has a definition. Without
+        # this, the unprofitability early-return path falls through to
+        # the record_arb / re-raise tail and hits an UnboundLocalError
+        # on _secondary_exception (engine.py:2084). The variable is set
+        # only by the secondary-leg try/except block; for IF-branch
+        # ABORTED-legs and for paths that finish cleanly, it stays None.
+        _secondary_exception: Optional[BaseException] = None
         if net_edge_after_fees * 100 < MIN_NET_EDGE_CENTS:
             logger.info(
                 "Profitability gate: net_edge=%.4f (%.2f¢) below minimum %.1f¢, aborting",
@@ -1238,10 +1246,11 @@ class ExecutionEngine:
             # adapter call) used to escape _live_execution entirely, leaving
             # primary FILLED in DB with no secondary row and no naked incident.
             # The try/except around the secondary block below captures the
-            # exception into this local, builds an ABORTED ``-EXCEPTION``
-            # placeholder so the downstream naked detection / supervisor
-            # fanout still fire, and we re-raise after record_arb completes.
-            _secondary_exception: Optional[BaseException] = None
+            # exception into _secondary_exception (hoisted above the IF/ELSE
+            # so the re-raise tail always has a definition), builds an
+            # ABORTED ``-EXCEPTION`` placeholder so the downstream naked
+            # detection / supervisor fanout still fire, and we re-raise
+            # after record_arb completes.
             # POLY-FIRST STRATEGY: Execute Polymarket first because it
             # reprices faster than Kalshi. Historical data shows 0/118
             # trades completed both legs with Kalshi-first — the Polymarket

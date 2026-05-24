@@ -217,6 +217,10 @@ class ArbiterAPI:
         self.profitability = profitability
         self.readiness = readiness
         self.reconciler = reconciler
+        # StrandedPositionReconciler — assigned by main.py after construction
+        # so the existing __init__ signature stays backward-compatible. None
+        # in dev/test contexts that don't wire the reconciler.
+        self.stranded_reconciler = None
         self.host = host
         self.port = port
         self.safety = safety
@@ -3683,6 +3687,24 @@ class ArbiterAPI:
                 ).items()
                 if getattr(adapter, "_terminal_diagnostics", None) is not None
             },
+            # Stranded-position reconciler snapshot — periodic venue-truth
+            # audit. Surfaces lots that the engine doesn't know about
+            # (legacy naked legs, recovery-loop drift, etc). Auto-close
+            # is conservative: disabled by default, env-gated.
+            "stranded_positions": (
+                self.stranded_reconciler.last_snapshot.to_dict()
+                if self.stranded_reconciler is not None
+                and self.stranded_reconciler.last_snapshot is not None
+                else {
+                    "timestamp": 0,
+                    "cycle_count": 0,
+                    "stranded_count": 0,
+                    "stranded": [],
+                    "duration_ms": 0.0,
+                    "errors": [],
+                    "auto_close_enabled": False,
+                }
+            ),
             "series": {
                 "scanner": self.scanner.history,
                 "equity": self.engine.equity_curve,

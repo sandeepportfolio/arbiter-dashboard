@@ -355,6 +355,111 @@ class PolymarketUSAdapter:
             max_affordable=max_affordable,
         )
 
+    # ─── place_unwind_sell ────────────────────────────────────────────────
+
+    async def place_unwind_sell(
+        self,
+        arb_id: str,
+        market_id: str,
+        canonical_id: str,
+        side: str,
+        qty: int,
+        panic_price: float = 0.01,
+    ) -> Order:
+        """SELL IOC at a panic price to close a naked Polymarket US position.
+
+        Mirrors ``KalshiAdapter.place_unwind_sell``: used by
+        ``ExecutionEngine._smart_unwind`` Phase 2 (and the fallback
+        path when no resting sell is supported) when one leg of an arb
+        is confirmed FILLED but the hedge leg never filled. We sell
+        whatever the book absorbs at >= ``panic_price`` (default 1¢)
+        and the IOC TIF cancels the rest, leaving any residual as a
+        manual-review incident upstream.
+
+        Before this method existed PolymarketUSAdapter had no SELL
+        surface at all, so the engine's ``hasattr(adapter,
+        "place_unwind_sell")`` guard in _recover_one_leg_risk skipped
+        the unwind branch and the naked PU position became permanently
+        stranded — observable in the two legacy 2026-11-03 midterm NO
+        lots currently parked in venue inventory (cost basis ~$26.83,
+        $70 of buying-power margin locked).
+
+        ``side`` is the side originally bought:
+          - "yes" → we hold YES long, SELL_LONG closes
+          - "no"  → we hold NO long, SELL_SHORT closes
+        ``panic_price`` is in user-side units (the price WE would
+        receive per contract); _us_order_params handles the wire
+        flip for SELL_SHORT.
+
+        Skips PHASE4/PHASE5 hard-locks and the supervisor armed gate
+        deliberately: those gates exist to STOP new exposure; this
+        path is CLOSING existing exposure that the supervisor itself
+        flagged. Blocking it would lock the venue into a permanent
+        naked state.
+
+        Always returns an Order in a terminal state; never raises
+        across this boundary.
+        """
+        # Translate engine's bought-side semantics into the adapter's
+        # SELL_LONG / SELL_SHORT intent slugs that _us_order_params
+        # understands.
+        s = str(side).strip().lower()
+        if s == "yes":
+            sell_side = "SELL_YES"
+        elif s == "no":
+            sell_side = "SELL_NO"
+        else:
+            sell_side = side  # already in SELL_* form; pass through
+        return await self._sign_and_send(
+            arb_id, market_id, canonical_id, sell_side, panic_price, qty,
+            tif="IMMEDIATE_OR_CANCEL",
+            max_affordable=None,
+        )
+
+    # ─── place_resting_sell ───────────────────────────────────────────────
+
+    async def place_resting_sell(
+        self,
+        arb_id: str,
+        market_id: str,
+        canonical_id: str,
+        side: str,
+        price: float,
+        qty: int,
+    ) -> Order:
+        """GTC SELL limit at ``price`` (break-even by convention).
+
+        Phase 1 of ``ExecutionEngine._smart_unwind``: rest at break-even
+        for ~30s so passive buyers can hit our cost basis and close the
+        naked leg flat, before the panic-IOC fallback chews through the
+        spread. If a buyer doesn't materialise within the timeout, the
+        engine cancels and falls back to place_unwind_sell.
+
+        Mirrors ``KalshiAdapter.place_resting_sell``. Same SELL_LONG /
+        SELL_SHORT side translation as place_unwind_sell.
+
+        Same gate-skip rationale as place_unwind_sell — closing exposure
+        must not be blocked by the gates that stop OPENING exposure.
+
+        Returns the Order with status SUBMITTED on success; caller must
+        poll get_order or cancel_order to drive the lifecycle.
+        """
+        s = str(side).strip().lower()
+        if s == "yes":
+            sell_side = "SELL_YES"
+        elif s == "no":
+            sell_side = "SELL_NO"
+        else:
+            sell_side = side
+        return await self._sign_and_send(
+            arb_id, market_id, canonical_id, sell_side, price, qty,
+            # Polymarket US OpenAPI enum: TIME_IN_FORCE_GOOD_TILL_CANCEL
+            # (no "ED" suffix). Verified against the create-order schema
+            # at docs.polymarket.us 2026-05-24.
+            tif="GOOD_TILL_CANCEL",
+            max_affordable=None,
+        )
+
     # ─── get_order_status ─────────────────────────────────────────────────
 
     async def get_order_status(self, order: Order) -> Order:
