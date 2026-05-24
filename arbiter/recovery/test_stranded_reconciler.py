@@ -316,3 +316,27 @@ def test_reconciler_from_env_clamps_interval_minimum(monkeypatch):
     monkeypatch.setenv("STRANDED_RECONCILE_INTERVAL_S", "5")
     rec = reconciler_from_env(config=SimpleNamespace(), adapters={}, engine=None)
     assert rec._interval_s == 30.0
+
+
+def test_strand_arb_id_fits_db_varchar_40():
+    """Regression: live deploy on 2026-05-24 tripped the kill switch
+    because the original arb_id format
+    ``STRAND-POLYMARKET-paccc-usho-midterms-2026-11-03-dem`` (52 chars)
+    overflowed the execution_incidents.arb_id varchar(40) column.
+    ExecutionStore.insert_incident raised, _handle_db_failure armed
+    SafetySupervisor, live trading went read-only.
+
+    The hash-based replacement MUST stay ≤ 40 chars for the longest
+    realistic platform name + any slug content.
+    """
+    rec = StrandedPositionReconciler(config=SimpleNamespace())
+    # Long slug — the actual production case that broke things.
+    long = rec._strand_arb_id("polymarket", "paccc-usho-midterms-2026-11-03-dem")
+    assert len(long) <= 40, f"arb_id too long: {long!r} ({len(long)} chars)"
+    # Two different slugs that share the same prefix must NOT collide
+    # (truncation-style ids would; hash-based ids won't).
+    a = rec._strand_arb_id("polymarket", "aec-mlb-pit-tor-2026-05-24")
+    b = rec._strand_arb_id("polymarket", "aec-mlb-pit-tor-2026-05-25")
+    assert a != b, "same-prefix slugs collided — must use a hash, not a prefix"
+    # Deterministic across calls (so dedup works).
+    assert rec._strand_arb_id("polymarket", "paccc-usho-midterms-2026-11-03-dem") == long

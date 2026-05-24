@@ -401,6 +401,25 @@ class StrandedPositionReconciler:
 
     # ─── incident + auto-close ────────────────────────────────────────────
 
+    @staticmethod
+    def _strand_arb_id(platform: str, market_id: str) -> str:
+        """Build a synthetic arb_id for the stranded-position incident that
+        fits the ExecutionStore.execution_incidents.arb_id ``varchar(40)``
+        column. ``STRAND-{venue}-{12-hex-of-market-id}`` is unique,
+        deterministic across cycles (so dedup keeps working), and ≤ 32
+        characters even on the longest venue prefix.
+
+        The market_id is hashed (truncated SHA-1) instead of truncated
+        verbatim because two slugs sharing the first 20 chars (common for
+        sport-of-the-day markets like aec-mlb-PIT-TOR-2026-05-24 vs
+        aec-mlb-PIT-TOR-2026-05-25) would otherwise collide on dedup.
+        SHA-1 is fine here — we're not signing anything, just bucketing.
+        """
+        import hashlib
+        venue = (platform or "UNK").upper()[:8]
+        digest = hashlib.sha1(market_id.encode("utf-8")).hexdigest()[:12]
+        return f"STRAND-{venue}-{digest}"
+
     async def _emit_stranded_incident(self, pos: StrandedPosition) -> None:
         """Surface a new stranded lot as a warning incident the engine
         already knows how to route to Telegram + the ops UI."""
@@ -422,7 +441,7 @@ class StrandedPositionReconciler:
                     }
 
             await engine._record_incident(
-                f"STRAND-{pos.platform.upper()}-{pos.market_id}",
+                self._strand_arb_id(pos.platform, pos.market_id),
                 _StubOpp(),
                 "warning",
                 f"Stranded position detected on {pos.platform}: "
@@ -492,10 +511,11 @@ class StrandedPositionReconciler:
             )
             return
 
-        # Execute the unwind.
+        # Execute the unwind. arb_id reuses the same hash-based id as the
+        # incident so DB joins (and operator-side dedup) line up.
         try:
             order = await adapter.place_unwind_sell(
-                arb_id=f"STRAND-{pos.platform.upper()}-{pos.market_id}",
+                arb_id=self._strand_arb_id(pos.platform, pos.market_id),
                 market_id=pos.market_id,
                 canonical_id=pos.market_id,
                 side=pos.side.lower(),
