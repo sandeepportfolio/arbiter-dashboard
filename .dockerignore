@@ -26,6 +26,8 @@ output/
 src/
 docs/
 tests/
-scripts/
+# scripts/ is shipped into the image: arbiter.main imports from
+# scripts.revalidate_review_mappings (see commit cb3fede). Keep it in the
+# image so the review-revalidator loop resolves at startup.
 *.log
 *.tgz
