@@ -221,6 +221,8 @@ class ArbiterAPI:
         # so the existing __init__ signature stays backward-compatible. None
         # in dev/test contexts that don't wire the reconciler.
         self.stranded_reconciler = None
+        # ForecastExChildResolver — same wiring pattern.
+        self.forecastex_resolver = None
         self.host = host
         self.port = port
         self.safety = safety
@@ -443,6 +445,11 @@ class ArbiterAPI:
         app.router.add_get("/api/market-mappings/{canonical_id}/audit", self.handle_market_mapping_audit)
         app.router.add_get("/api/market-mappings/{canonical_id}/validation", self.handle_market_mapping_validation)
         app.router.add_post("/api/market-mappings/{canonical_id}/validate", self.handle_market_mapping_validate)
+        # Manual override for the FX child-conid resolver. Lets the
+        # operator paste a known-good tradeable conid when IBKR's
+        # /iserver/secdef/* endpoints aren't returning children (e.g.
+        # weekend 503s). Trips the FX collector to re-probe immediately.
+        app.router.add_post("/api/market-mappings/{canonical_id}/forecastex_conid", self.handle_set_forecastex_conid)
         app.router.add_get("/api/settings", self.handle_settings)
         app.router.add_post("/api/settings", self.handle_settings_update)
         app.router.add_get("/api/errors", self.handle_errors)
@@ -1944,6 +1951,71 @@ class ArbiterAPI:
         )
         await self._broadcast_json({"type": "mapping_validation", "payload": session})
         return web.json_response(session)
+
+    async def handle_set_forecastex_conid(self, request):
+        """POST a manual ForecastEx child conid for a canonical mapping.
+
+        Body: {"conid": "<numeric_string>"}
+        Empty string clears the conid (back to auto-discovery candidate).
+
+        Use case: IBKR's auto-resolver (forecastex_resolver) is the
+        primary path. When IBKR's /iserver/secdef/* endpoints are 503
+        (weekends) or the contract chain is unexposed, the operator
+        can paste the child conid (e.g. from the IBKR Portal) and the
+        FX collector picks it up on the next poll cycle.
+        """
+        actor = await require_auth(request)
+        canonical_id = request.match_info["canonical_id"]
+        payload = await self._read_json_body(request)
+        new_conid = str(payload.get("conid", "")).strip()
+
+        if self.mapping_store is None:
+            return web.json_response(
+                {"error": "mapping store unavailable"}, status=503,
+            )
+        try:
+            getter = getattr(self.mapping_store, "get", None)
+            mapping = await getter(canonical_id) if callable(getter) else None
+        except Exception as exc:
+            return web.json_response(
+                {"error": f"mapping_store.get failed: {exc}"}, status=500,
+            )
+        if mapping is None:
+            return web.json_response(
+                {"error": f"Unknown mapping: {canonical_id}"}, status=404,
+            )
+
+        prior_conid = str(getattr(mapping, "forecastex_contract_id", "") or "")
+        mapping.forecastex_contract_id = new_conid
+        try:
+            await self.mapping_store.upsert(mapping)
+        except Exception as exc:
+            return web.json_response(
+                {"error": f"mapping_store.upsert failed: {exc}"}, status=500,
+            )
+
+        # Tell the FX collector to drop any in-memory inactive flag on
+        # both the old and new conids so the next poll re-probes them
+        # cleanly. Best-effort — collector may not be present in dev.
+        for adapter_attr in ("forecastex_collector", "collectors"):
+            collectors = getattr(self, adapter_attr, None) or {}
+            fx = collectors.get("forecastex") if isinstance(collectors, dict) else None
+            if fx and hasattr(fx, "reactivate_conid"):
+                if prior_conid:
+                    fx.reactivate_conid(prior_conid)
+                if new_conid:
+                    fx.reactivate_conid(new_conid)
+
+        logger.info(
+            "operator_attach_forecastex_conid actor=%s canonical_id=%s prior=%r new=%r",
+            actor, canonical_id, prior_conid, new_conid,
+        )
+        return web.json_response({
+            "canonical_id": canonical_id,
+            "prior_conid": prior_conid,
+            "new_conid": new_conid,
+            "actor": actor,
+        })
 
     async def handle_errors(self, request):
         incidents = {
@@ -3703,6 +3775,29 @@ class ArbiterAPI:
                     "duration_ms": 0.0,
                     "errors": [],
                     "auto_close_enabled": False,
+                }
+            ),
+            # ForecastEx child-conid resolver snapshot — periodic retry
+            # of IBKR's /iserver/secdef/* endpoints for parent conids
+            # the collector has disabled. The 24 confirmed FX mappings
+            # currently hold parent EVENT conids that don't trade; once
+            # IBKR's endpoints return children (weekday business hours)
+            # the resolver attaches them and the FX collector starts
+            # publishing quotes. Status visible here regardless of
+            # whether IBKR responded yet.
+            "forecastex_resolver": (
+                self.forecastex_resolver.last_snapshot.to_dict()
+                if self.forecastex_resolver is not None
+                and self.forecastex_resolver.last_snapshot is not None
+                else {
+                    "timestamp": 0,
+                    "cycle_count": 0,
+                    "candidates_count": 0,
+                    "resolved_count": 0,
+                    "failed_count": 0,
+                    "duration_ms": 0.0,
+                    "attempts": [],
+                    "dry_run": False,
                 }
             ),
             "series": {

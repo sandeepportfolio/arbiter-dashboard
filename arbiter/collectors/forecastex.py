@@ -557,7 +557,16 @@ class ForecastExCollector:
         self.refresh_tracked_markets()
 
     def refresh_tracked_markets(self) -> None:
-        """Reload tracked ForecastEx contract ids from MARKET_MAP."""
+        """Reload tracked ForecastEx contract ids from MARKET_MAP.
+
+        Also clears the inactive-conid set of any conid that is NO LONGER
+        referenced by any mapping — when the auto-resolver (or operator
+        manual override) attaches a child conid in place of an inactive
+        parent, the old parent disappears from MARKET_MAP and the new
+        child must get a clean probe budget. Without this, the collector
+        carries the inactive flag forever across restarts of the source
+        mapping.
+        """
         new_map: dict[str, str] = {}
         for canonical_id, mapping in MARKET_MAP.items():
             conid = str(mapping.get("forecastex", "") or "").strip()
@@ -569,7 +578,25 @@ class ForecastExCollector:
                 "ForecastEx: tracking %d markets (was %d)",
                 len(new_map), len(self._conid_map),
             )
+        # Drop inactivity / probe-count state for conids that have been
+        # replaced or removed by upstream. Conids that are still tracked
+        # keep their state (so re-promoted parents don't get re-probed).
+        referenced = set(new_map.values())
+        stale_inactive = self._inactive_conids - referenced
+        for stale in stale_inactive:
+            self._inactive_conids.discard(stale)
+            self._parent_probe_counts.pop(stale, None)
         self._conid_map = new_map
+
+    def reactivate_conid(self, conid: str) -> None:
+        """Remove a specific conid from the inactive set so the next
+        fetch cycle re-probes it. Called by the auto-resolver after a
+        child-conid attach succeeds, AND by the manual-override API
+        endpoint. Idempotent.
+        """
+        conid_str = str(conid)
+        self._inactive_conids.discard(conid_str)
+        self._parent_probe_counts.pop(conid_str, None)
 
     def _build_price_point(
         self, canonical_id: str, conid: str, snapshot: dict,

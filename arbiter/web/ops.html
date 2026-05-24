@@ -2630,6 +2630,26 @@ function ExecutionHealthPanel() {
   const strandedTotalCost = strandedList.reduce((s, p) => s + Math.abs(Number(p.cost_basis_usd || 0)), 0);
   const strandedTotalUnrealized = strandedList.reduce((s, p) => s + Number(p.unrealized_usd || 0), 0);
 
+  // ForecastEx child-conid resolver snapshot from /api/system. Surfaces
+  // resolver-cycle state so the operator can see whether IBKR's
+  // /iserver/secdef/* endpoints are returning child contracts. The 24
+  // confirmed FX mappings currently hold parent EVENT conids that don't
+  // trade; the resolver retries periodically and attaches YES children
+  // when IBKR responds.
+  const fxResolver = (M.system && M.system.forecastex_resolver) || {};
+  const fxResolverCycle = Number(fxResolver.cycle_count || 0);
+  const fxResolverLastRun = Number(fxResolver.timestamp || 0);
+  const fxResolverCandidates = Number(fxResolver.candidates_count || 0);
+  const fxResolverResolved = Number(fxResolver.resolved_count || 0);
+  const fxResolverFailed = Number(fxResolver.failed_count || 0);
+  const fxResolverDryRun = !!fxResolver.dry_run;
+  const fxResolverAttempts = Array.isArray(fxResolver.attempts) ? fxResolver.attempts : [];
+  const fxOutcomeCounts = fxResolverAttempts.reduce((acc, a) => {
+    const k = String(a.outcome || 'unknown');
+    acc[k] = (acc[k] || 0) + 1;
+    return acc;
+  }, {});
+
   const diagStatusCounts = flatDiagnostics.reduce((acc, e) => {
     const key = String(e.api_status || 'UNKNOWN');
     acc[key] = (acc[key] || 0) + 1;
@@ -2839,6 +2859,76 @@ function ExecutionHealthPanel() {
                   … and {(strandedList.length - 20).toLocaleString()} more (showing top 20)
                 </div>
               )}
+            </div>
+          </div>
+        )}
+      </div>
+      {/* ForecastEx child-conid resolver — periodic IBKR retry that
+          replaces parent EVENT conids with their YES child contracts.
+          Until this completes, the FX collector publishes 0 fresh
+          quotes (parents have no bid/ask). */}
+      <div style={{ borderTop:`1px solid ${t.border}`, padding:'14px 22px' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8, gap:12, flexWrap:'wrap' }}>
+          <div style={{ fontSize:11, color:t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase' }}>ForecastEx child-conid resolver</div>
+          <div style={{ display:'flex', alignItems:'center', gap:14 }}>
+            <span style={{ fontSize:10.5, color:t.textDim }} title="Resolver cycle counter — increments each time the periodic loop fires (default 30min).">
+              {fxResolverCycle === 0 ? 'awaiting first cycle' : `cycle #${fxResolverCycle.toLocaleString()}`}
+              {fxResolverLastRun > 0 && ` · last ${new Date(fxResolverLastRun * 1000).toISOString().slice(11, 19)} UTC`}
+            </span>
+            <span title="dry-run mode skips the DB upsert. Set FX_RESOLVER_DRY_RUN=true to observe without mutating." style={{ fontSize:10, fontWeight:700, color: fxResolverDryRun ? t.amber : t.textMuted, fontFamily:window.FONTS.mono, padding:'2px 8px', borderRadius:99, background:t.bgSubtle, border:`1px solid ${t.border}` }}>
+              {fxResolverDryRun ? 'dry-run' : 'live'}
+            </span>
+          </div>
+        </div>
+        {fxResolverCycle === 0 ? (
+          <div style={{ fontSize:10.5, color:t.textMuted, lineHeight:1.45 }}>
+            Resolver not yet running or no snapshot published. Default cadence is 30 minutes after a 60-second startup delay.
+          </div>
+        ) : fxResolverCandidates === 0 ? (
+          <div style={{ fontSize:10.5, color:t.green, lineHeight:1.45 }}>
+            ✓ No inactive ForecastEx parent conids to resolve.
+          </div>
+        ) : (
+          <div>
+            <div style={{ display:'flex', gap:18, marginBottom:10, flexWrap:'wrap' }}>
+              <div>
+                <div style={{ fontSize:10.5, color:t.textMuted }}>Candidates</div>
+                <div style={{ fontSize:18, fontWeight:700, color:t.text, fontFamily:window.FONTS.mono }}>{fxResolverCandidates.toLocaleString()}</div>
+              </div>
+              <div>
+                <div style={{ fontSize:10.5, color:t.textMuted }}>Resolved</div>
+                <div style={{ fontSize:18, fontWeight:700, color: fxResolverResolved > 0 ? t.green : t.text, fontFamily:window.FONTS.mono }}>{fxResolverResolved.toLocaleString()}</div>
+              </div>
+              <div>
+                <div style={{ fontSize:10.5, color:t.textMuted }}>Failed</div>
+                <div style={{ fontSize:18, fontWeight:700, color: fxResolverFailed > 0 ? t.amber : t.text, fontFamily:window.FONTS.mono }}>{fxResolverFailed.toLocaleString()}</div>
+              </div>
+            </div>
+            <div style={{ display:'grid', gridTemplateColumns:'minmax(0,0.6fr) minmax(0,1.4fr)', gap:24 }}>
+              <div>
+                <div style={{ fontSize:10.5, color:t.textMuted, marginBottom:6 }}>By outcome</div>
+                <div style={{ display:'grid', gridTemplateColumns:'1fr auto', gap:'4px 12px' }}>
+                  {Object.entries(fxOutcomeCounts).sort((a,b)=>b[1]-a[1]).map(([k,v]) => (
+                    <React.Fragment key={k}>
+                      <span style={{ fontSize:11, color: k==='resolved'?t.green:(k.startsWith('ibkr_')?t.amber:t.textDim), fontFamily:window.FONTS.mono }}>{k}</span>
+                      <span style={{ fontSize:11, color:t.text, fontFamily:window.FONTS.mono, textAlign:'right' }}>{v}</span>
+                    </React.Fragment>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize:10.5, color:t.textMuted, marginBottom:6 }}>Latest attempts</div>
+                <div style={{ display:'grid', gap:4 }}>
+                  {fxResolverAttempts.slice(0, 10).map((a, i) => (
+                    <div key={(a.canonical_id || '') + '-' + i} title={a.detail || ''} style={{ fontSize:10.5, color:t.textDim, fontFamily:window.FONTS.mono, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', display:'flex', gap:10 }}>
+                      <span style={{ color:t.text, flex:'0 1 240px', overflow:'hidden', textOverflow:'ellipsis' }}>{a.canonical_id}</span>
+                      <span style={{ color:t.textMuted }}>parent={a.parent_conid}</span>
+                      <span style={{ color: a.outcome === 'resolved' ? t.green : (String(a.outcome).startsWith('ibkr_') ? t.amber : t.red) }}>{a.outcome}</span>
+                      {a.child_conid && <span style={{ color:t.green }}>child={a.child_conid}</span>}
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
         )}

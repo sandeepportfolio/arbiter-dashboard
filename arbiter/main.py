@@ -1505,6 +1505,28 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
             name="stranded-position-reconciler",
         ))
 
+    # ── ForecastEx child-conid auto-resolver ──────────────────────
+    # The 24 confirmed FX mappings have parent EVENT conids that don't
+    # trade — they need YES child conids. Resolver retries IBKR's
+    # /iserver/secdef/* endpoints periodically (they're 503 on weekends)
+    # and persists the child conid back to the DB so the collector
+    # picks it up on the next poll cycle. Without this loop the system
+    # is permanently stuck on parent-only conids until an operator
+    # manually fixes each mapping.
+    if forecastex is not None and mapping_store is not None:
+        from .recovery.forecastex_resolver import resolver_from_env as fx_resolver_from_env
+        fx_resolver = fx_resolver_from_env(
+            forecastex_client=forecastex.client,
+            forecastex_collector=forecastex,
+            mapping_store=mapping_store,
+        )
+        if fx_resolver is not None:
+            api.forecastex_resolver = fx_resolver
+            tasks.append(asyncio.create_task(
+                _run_reconciler_lifecycle(fx_resolver, shutdown_event),
+                name="forecastex-child-resolver",
+            ))
+
     # API server always runs
     tasks.append(asyncio.create_task(api.serve(), name="api-server"))
 

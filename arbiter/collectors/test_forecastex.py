@@ -558,3 +558,69 @@ def test_collector_balance_source_set():
         config=ForecastExConfig(), store=store, client=client,
     )
     assert collector.balance_source == "forecastex:ibkr-gateway"
+
+
+async def test_reactivate_conid_clears_inactive_state(patched_market_map):
+    """FILL-FX01: when the resolver replaces a parent conid with its
+    YES child, the collector must drop any in-memory inactive flag on
+    BOTH conids so the next poll re-probes without stale state.
+    """
+    store = PriceStore()
+    client = ForecastExClient(gateway_url=GATEWAY, account_id=ACCOUNT)
+    collector = ForecastExCollector(
+        config=ForecastExConfig(), store=store, client=client,
+    )
+    collector._inactive_conids = {"111222", "999999"}
+    collector._parent_probe_counts = {"111222": 5, "999999": 3}
+
+    collector.reactivate_conid("111222")
+    assert "111222" not in collector._inactive_conids
+    assert "111222" not in collector._parent_probe_counts
+    # Other conid untouched
+    assert "999999" in collector._inactive_conids
+    assert collector._parent_probe_counts.get("999999") == 3
+
+    # Idempotent — re-call against a not-tracked conid is harmless
+    collector.reactivate_conid("777777")
+    collector.reactivate_conid("111222")  # already cleared
+    await client.close()
+
+
+async def test_refresh_drops_inactive_for_conids_no_longer_referenced(
+    patched_market_map, monkeypatch,
+):
+    """If a mapping's forecastex conid changes (resolver attached a child,
+    or operator did a manual override), the OLD conid disappears from
+    MARKET_MAP. The collector's inactive set must be pruned for any
+    conid that's no longer referenced — otherwise restored conids stay
+    flagged forever.
+    """
+    store = PriceStore()
+    client = ForecastExClient(gateway_url=GATEWAY, account_id=ACCOUNT)
+    collector = ForecastExCollector(
+        config=ForecastExConfig(), store=store, client=client,
+    )
+    # Pre-condition: parent 111222 is the current conid AND it's inactive.
+    collector._inactive_conids = {"111222", "stale-old"}
+    collector._parent_probe_counts = {"111222": 3, "stale-old": 9}
+
+    # Operator (or resolver) attaches a different child conid. MARKET_MAP
+    # no longer references "stale-old" anywhere.
+    new_map = dict(patched_market_map)
+    new_map["EXAMPLE_2026_OUTCOME"] = {
+        **new_map["EXAMPLE_2026_OUTCOME"], "forecastex": "child-222"
+    }
+    monkeypatch.setattr(settings_mod, "MARKET_MAP", new_map)
+    import arbiter.collectors.forecastex as fcst_mod
+    monkeypatch.setattr(fcst_mod, "MARKET_MAP", new_map)
+
+    collector.refresh_tracked_markets()
+
+    # stale-old wasn't referenced → dropped from inactive.
+    assert "stale-old" not in collector._inactive_conids
+    assert "stale-old" not in collector._parent_probe_counts
+    # 111222 also wasn't referenced after the swap → dropped too.
+    assert "111222" not in collector._inactive_conids
+    # The new conid is tracked.
+    assert collector._conid_map.get("EXAMPLE_2026_OUTCOME") == "child-222"
+    await client.close()

@@ -1718,3 +1718,97 @@ def test_mapping_state_ws_event_fires_on_update(monkeypatch):
                 assert payload["resolution_match_status"] == "divergent"
 
     asyncio.run(_run())
+
+
+def _mint_session_token():
+    """Mint a fresh operator-session token for require_auth-protected tests."""
+    import arbiter.api as api_mod
+
+    token = api_mod._generate_token("sparx.sandeep@gmail.com")
+    api_mod._ACTIVE_SESSIONS[token] = "sparx.sandeep@gmail.com"
+    return token
+
+
+def test_set_forecastex_conid_writes_through_to_mapping_store_and_reactivates_collector():
+    """POST /api/market-mappings/{cid}/forecastex_conid attaches the
+    operator-supplied tradeable conid, calls mapping_store.upsert, and
+    pokes the FX collector to drop any in-memory inactive state on the
+    old AND new conids so the next poll cycle re-probes cleanly.
+    """
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+
+    free_port()
+
+    async def _run():
+        api = await _make_mapping_api()
+
+        stored = SimpleNamespace(
+            canonical_id="DEM_HOUSE_2026",
+            forecastex_contract_id="733131966",  # parent
+        )
+        store = MagicMock()
+        store.get = AsyncMock(return_value=stored)
+        store.upsert = AsyncMock()
+        api.mapping_store = store
+
+        fx = MagicMock()
+        fx.reactivate_conid = MagicMock()
+        api.collectors = {"forecastex": fx}
+
+        app = web.Application()
+        app.router.add_post(
+            "/api/market-mappings/{canonical_id}/forecastex_conid",
+            api.handle_set_forecastex_conid,
+        )
+        async with TestClient(TestServer(app)) as client:
+            token = _mint_session_token()
+            response = await client.post(
+                "/api/market-mappings/DEM_HOUSE_2026/forecastex_conid",
+                json={"conid": "888888"},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert response.status == 200, await response.text()
+            payload = await response.json()
+            assert payload["prior_conid"] == "733131966"
+            assert payload["new_conid"] == "888888"
+            assert store.upsert.await_count == 1
+            assert stored.forecastex_contract_id == "888888"
+            args = {c.args[0] for c in fx.reactivate_conid.call_args_list}
+            assert "733131966" in args
+            assert "888888" in args
+
+    asyncio.run(_run())
+
+
+def test_set_forecastex_conid_returns_404_for_unknown_mapping():
+    from unittest.mock import AsyncMock, MagicMock
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+
+    free_port()
+
+    async def _run():
+        api = await _make_mapping_api()
+        store = MagicMock()
+        store.get = AsyncMock(return_value=None)
+        store.upsert = AsyncMock()
+        api.mapping_store = store
+        app = web.Application()
+        app.router.add_post(
+            "/api/market-mappings/{canonical_id}/forecastex_conid",
+            api.handle_set_forecastex_conid,
+        )
+        async with TestClient(TestServer(app)) as client:
+            token = _mint_session_token()
+            response = await client.post(
+                "/api/market-mappings/NONEXISTENT/forecastex_conid",
+                json={"conid": "888"},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert response.status == 404
+            assert store.upsert.await_count == 0
+
+    asyncio.run(_run())
