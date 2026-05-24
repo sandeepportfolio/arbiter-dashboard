@@ -2530,13 +2530,42 @@ function ExecutionHealthPanel() {
   const { t } = window.useApp();
   const M = window.MOCK;
   const execs = Array.isArray(M.executions) ? M.executions : [];
-  const arbPnl = execs.reduce((s, e) => s + Number(e.arb_pnl || 0), 0);
-  // "Naked-leg" P&L is the directional component of realized P&L that
-  // remained after a leg failed and the survivor was unwound. Mirrors the
-  // backend split (realized_pnl - arb_pnl) used by /api/portfolio.
-  const realizedPnl = execs.reduce((s, e) => s + Number(e.realized_pnl || 0), 0);
-  const explicitUnwind = execs.reduce((s, e) => s + Number(e.unwind_pnl || 0), 0);
-  const nakedPnl = explicitUnwind || (realizedPnl - arbPnl);
+
+  // P&L TRUTH (FILL-01 audit 2026-05-24): classify every trade by what
+  // ACTUALLY filled on the venues, not by the engine's theoretical
+  // ``arb_pnl`` field. The historical ``arb_pnl = realized_pnl -
+  // unwind_pnl`` property reports "what the spread WOULD have made if
+  // the unwind hadn't happened" — useful for strategy attribution but
+  // misleading when summed across a corpus dominated by naked-leg
+  // outcomes. We re-bucket from leg.fill_qty so the dashboard reflects
+  // what the venues actually returned:
+  //   capturedArb  — BOTH legs filled (real cross-platform arbitrage)
+  //   nakedLeg     — exactly ONE leg filled (single-sided settlement)
+  //   failedCount  — ZERO fills (FOK kill / pre-2026-05-24 cascade)
+  let capturedArb = 0;
+  let nakedLeg = 0;
+  let failedCount = 0;
+  let capturedArbCount = 0;
+  let nakedLegCount = 0;
+  for (const e of execs) {
+    const yf = Number((e.leg_yes || {}).fill_qty || 0);
+    const nf = Number((e.leg_no || {}).fill_qty || 0);
+    const realized = Number(e.realized_pnl || 0);
+    if (yf > 0 && nf > 0) {
+      capturedArb += realized;
+      capturedArbCount += 1;
+    } else if (yf > 0 || nf > 0) {
+      nakedLeg += realized;
+      nakedLegCount += 1;
+    } else {
+      failedCount += 1;
+    }
+  }
+  // Keep arbPnl/nakedPnl variable names so existing layout below
+  // works unchanged; the numbers are now truthful.
+  const arbPnl = capturedArb;
+  const nakedPnl = nakedLeg;
+  const realizedPnl = capturedArb + nakedLeg;
 
   // ForecastEx circuit state from the readiness collector check (which
   // already aggregates circuit/gamma_circuit/clob_circuit per platform).
@@ -2616,15 +2645,15 @@ function ExecutionHealthPanel() {
         {/* P&L split */}
         <div style={{ padding:'18px 22px', borderRight:`1px solid ${t.border}` }}>
           <div style={{ fontSize:11, color:t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom:10 }}>P&L split</div>
-          <div title="Cross-platform spread captured when both legs filled — the pure arbitrage component of realized P&L." style={{ marginBottom:12 }}>
-            <div style={{ fontSize:10.5, color:t.textMuted, marginBottom:3 }}>Arb P&L</div>
+          <div title="P&L from trades where BOTH legs actually filled on the venues. This is the only bucket that represents real cross-platform arbitrage capture." style={{ marginBottom:12 }}>
+            <div style={{ fontSize:10.5, color:t.textMuted, marginBottom:3 }}>Captured arb P&L</div>
             <div style={{ fontSize:22, fontWeight:700, color:arbPnl >= 0 ? t.green : t.red, fontFamily:window.FONTS.mono }}>{window.fmt$Sign(arbPnl)}</div>
-            <div style={{ fontSize:10.5, color:t.textDim, marginTop:2 }}>both legs filled</div>
+            <div style={{ fontSize:10.5, color:t.textDim, marginTop:2 }}>{capturedArbCount.toLocaleString()} both-leg fills</div>
           </div>
-          <div title="Directional residue from unwound naked legs — separate from arb edge to keep strategy P&L clean.">
+          <div title="P&L from trades where exactly ONE leg filled and the other never did. Settlement luck, not arbitrage — happens to net positive or negative depending on which way the unsettled outcome went.">
             <div style={{ fontSize:10.5, color:t.textMuted, marginBottom:3 }}>Naked-leg P&L</div>
             <div style={{ fontSize:22, fontWeight:700, color:nakedPnl >= 0 ? t.green : t.red, fontFamily:window.FONTS.mono }}>{window.fmt$Sign(nakedPnl)}</div>
-            <div style={{ fontSize:10.5, color:t.textDim, marginTop:2 }}>realized − arb · {execs.length} executions</div>
+            <div style={{ fontSize:10.5, color:t.textDim, marginTop:2 }}>{nakedLegCount.toLocaleString()} single-leg fills · {failedCount.toLocaleString()} zero-fill</div>
           </div>
         </div>
 
