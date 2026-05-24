@@ -21,7 +21,8 @@ from __future__ import annotations
 import logging
 import math
 import time
-from typing import Any, Optional
+from collections import deque
+from typing import Any, Deque, Dict, Optional
 
 import structlog
 
@@ -74,6 +75,15 @@ class PolymarketUSAdapter:
         self._supervisor = supervisor
         self.rate_limiter = getattr(client, "live_rate_limiter", None)
         self.circuit = getattr(client, "circuit", None)
+        # Diagnostic ring buffer: every time get_order observes a SUBMITTED
+        # order flip to a non-FILL terminal state we append the raw venue
+        # api_status + a BBO snapshot here. Exposed via the engine's
+        # ``terminal_diagnostics`` property and surfaced in /api/system so
+        # the ops console can show WHY each FOK kill happened (KILLED vs
+        # UNFILLED vs REJECTED vs …). Pure observability — no behavior
+        # change. maxlen=50 caps memory; the dashboard only renders the
+        # last 10.
+        self._terminal_diagnostics: Deque[Dict[str, Any]] = deque(maxlen=50)
 
     # ─── place_fok ────────────────────────────────────────────────────────
 
@@ -373,7 +383,53 @@ class PolymarketUSAdapter:
                 )
                 order.idempotency_ambiguous = True
                 return order
+            prev_status = order.status
             order.status = self._map_status(api_status, order.status)
+            # Diagnostic ring-buffer capture for the SUBMITTED → terminal-
+            # non-fill transition. This is the exact event the dashboard
+            # currently has zero visibility into: post-submit poll flips
+            # a NEW order to CANCELLED but no log captures the raw venue
+            # string or the BBO at that moment. We need it to tell apart
+            # KILLED (no liquidity at our limit), ORDER_STATE_UNFILLED
+            # (FOK swept nothing), REJECTED (post-accept validation), etc.
+            terminal_non_fill = {OrderStatus.CANCELLED, OrderStatus.FAILED}
+            if (
+                prev_status == OrderStatus.SUBMITTED
+                and order.status in terminal_non_fill
+            ):
+                # BBO snapshot is best-effort — never block the poll path
+                # on a flaky book fetch.
+                try:
+                    best_bid, best_ask = await self._get_bbo(order.market_id)
+                except Exception:
+                    best_bid, best_ask = 0.0, 0.0
+                # Pull any rejection-reason fields the venue surfaces.
+                rejection_reason = (
+                    payload.get("rejectionReason")
+                    or payload.get("statusReason")
+                    or payload.get("errorMessage")
+                    or payload.get("message")
+                    or ""
+                )
+                diag = {
+                    "ts": time.time(),
+                    "order_id": order.order_id,
+                    "market_id": order.market_id,
+                    "side": order.side,
+                    "limit_price": float(order.price),
+                    "qty": int(order.quantity),
+                    "api_status": api_status,
+                    "mapped_status": order.status.value,
+                    "fill_qty": float(order.fill_qty or 0.0),
+                    "best_bid_yes": float(best_bid),
+                    "best_ask_yes": float(best_ask),
+                    "rejection_reason": str(rejection_reason)[:200],
+                }
+                self._terminal_diagnostics.append(diag)
+                logger.warning(
+                    "polymarket_us.terminal_via_poll",
+                    **diag,
+                )
         except Exception as exc:
             logger.warning(
                 "polymarket_us.get_order.failed",

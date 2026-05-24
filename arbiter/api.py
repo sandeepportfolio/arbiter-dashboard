@@ -3669,6 +3669,20 @@ class ArbiterAPI:
                 ).items()
                 if getattr(adapter, "rate_limiter", None) is not None
             },
+            # Execution diagnostics: per-adapter ring buffers capturing the
+            # raw venue api_status when a SUBMITTED order flips to a
+            # non-FILL terminal state. Surfaced in ops.html so the operator
+            # can see WHY each FOK kill happened (KILLED vs UNFILLED vs
+            # REJECTED vs …) — that signal is currently absent everywhere
+            # else and was blocking root-cause analysis of the
+            # post-2026-05-14 zero-fill streak.
+            "execution_diagnostics": {
+                platform: list(getattr(adapter, "_terminal_diagnostics", []) or [])
+                for platform, adapter in (
+                    getattr(self.engine, "adapters", {}) or {}
+                ).items()
+                if getattr(adapter, "_terminal_diagnostics", None) is not None
+            },
             "series": {
                 "scanner": self.scanner.history,
                 "equity": self.engine.equity_curve,

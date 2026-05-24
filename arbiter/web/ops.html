@@ -2566,6 +2566,34 @@ function ExecutionHealthPanel() {
   const ae = (M.system && M.system.auto_executor) || {};
   const aeStats = (ae && ae.stats) || {};
   const aeEnabled = !!ae.enabled;
+
+  // Per-venue terminal-non-fill diagnostics from /api/system.
+  // Each entry: {ts, order_id, market_id, side, limit_price, qty,
+  // api_status, mapped_status, fill_qty, best_bid_yes, best_ask_yes,
+  // rejection_reason}. Surfaced here so the operator can see WHY each
+  // FOK kill happened (KILLED / UNFILLED / REJECTED / …) — a signal that
+  // was previously absent everywhere in the system.
+  const diagByVenue = (M.system && M.system.execution_diagnostics) || {};
+  const flatDiagnostics = [];
+  for (const [venue, entries] of Object.entries(diagByVenue)) {
+    if (!Array.isArray(entries)) continue;
+    for (const e of entries) {
+      flatDiagnostics.push({ ...e, venue });
+    }
+  }
+  flatDiagnostics.sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0));
+  const recentDiagnostics = flatDiagnostics.slice(0, 10);
+  // Count by api_status so the operator sees the failure shape, not just
+  // a list of one-offs. KILLED:8 / UNFILLED:1 tells a different story
+  // than REJECTED:9.
+  const diagStatusCounts = flatDiagnostics.reduce((acc, e) => {
+    const key = String(e.api_status || 'UNKNOWN');
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  const diagStatusRows = Object.entries(diagStatusCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6);
   const skipRows = [
     ['mapping_unconfirmed', 'Mapping unconfirmed', aeStats.skipped_mapping_unconfirmed],
     ['not_allowed',        'Not auto-allowed',   aeStats.skipped_not_allowed],
@@ -2649,6 +2677,58 @@ function ExecutionHealthPanel() {
             </div>
           )}
         </div>
+      </div>
+      {/* Venue terminal-rejection diagnostics — visible signal of WHY
+          each FOK kill happened. Empty until the next get_order poll
+          flips a SUBMITTED order to a non-FILL terminal state. */}
+      <div style={{ borderTop:`1px solid ${t.border}`, padding:'14px 22px' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8 }}>
+          <div style={{ fontSize:11, color:t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase' }}>Venue terminal rejections</div>
+          <div style={{ fontSize:10.5, color:t.textDim }} title="Captured by the adapter when get_order polls find a SUBMITTED order has flipped to CANCELLED/FAILED. Total count over the in-memory ring buffer (last 50 per venue).">
+            {flatDiagnostics.length === 0 ? 'none captured yet' : `${flatDiagnostics.length} captured · showing latest ${recentDiagnostics.length}`}
+          </div>
+        </div>
+        {flatDiagnostics.length === 0 ? (
+          <div style={{ fontSize:10.5, color:t.textMuted, lineHeight:1.45 }}>
+            No SUBMITTED→terminal transitions observed yet. Populated by ``polymarket_us.terminal_via_poll`` events; will fill in as the next FOK orders resolve.
+          </div>
+        ) : (
+          <div style={{ display:'grid', gridTemplateColumns:'minmax(0,1fr) minmax(0,1.2fr)', gap:24 }}>
+            <div>
+              <div style={{ fontSize:10.5, color:t.textMuted, marginBottom:6 }}>By api_status</div>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr auto', gap:'4px 12px' }}>
+                {diagStatusRows.map(([status, count]) => (
+                  <React.Fragment key={status}>
+                    <span style={{ fontSize:11, color:t.text, fontFamily:window.FONTS.mono, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{status}</span>
+                    <span style={{ fontSize:11, color:t.text, fontFamily:window.FONTS.mono, textAlign:'right' }}>{count}</span>
+                  </React.Fragment>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize:10.5, color:t.textMuted, marginBottom:6 }}>Last {recentDiagnostics.length} events</div>
+              <div style={{ display:'grid', gap:4 }}>
+                {recentDiagnostics.map((e, i) => {
+                  const dt = e.ts ? new Date(Number(e.ts) * 1000) : null;
+                  const tstr = dt ? dt.toISOString().slice(11, 19) : '—';
+                  const bbo = (Number(e.best_bid_yes || 0) > 0 || Number(e.best_ask_yes || 0) > 0)
+                    ? `bbo=${Number(e.best_bid_yes).toFixed(3)}/${Number(e.best_ask_yes).toFixed(3)}`
+                    : 'bbo=—';
+                  const reason = e.rejection_reason ? ` · ${e.rejection_reason}` : '';
+                  return (
+                    <div key={e.order_id + '-' + i} style={{ fontSize:10.5, color:t.textDim, fontFamily:window.FONTS.mono, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }} title={`${e.venue} · ${e.market_id} · ${e.side} ${e.qty}@${e.limit_price} · ${e.api_status}${reason}`}>
+                      <span style={{ color:t.textMuted }}>{tstr}</span>
+                      {' '}<span style={{ color:t.text }}>{e.venue}</span>
+                      {' '}<span style={{ color:t.red }}>{e.api_status}</span>
+                      {' '}<span>{e.side} {e.qty}@{Number(e.limit_price).toFixed(3)}</span>
+                      {' '}<span style={{ color:t.textMuted }}>{bbo}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </window.Card>
   );
