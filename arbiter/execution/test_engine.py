@@ -446,6 +446,115 @@ def test_incident_resolution_marks_status():
     asyncio.run(runner())
 
 
+def test_record_incident_sends_telegram_for_critical():
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        sent: list[tuple[str, str]] = []
+
+        async def fake_send(msg, parse_mode="HTML", *, dedup_key=None):
+            sent.append((msg, dedup_key or ""))
+            return True
+
+        engine.balance_monitor.notifier.send = fake_send  # type: ignore[assignment]
+        await engine.record_incident(
+            arb_id="ARB-X",
+            canonical_id="MKT_X",
+            severity="critical",
+            message="something exploded",
+            metadata={"event_type": "db_write_failure", "op": "insert_execution"},
+        )
+        assert sent, "Critical incident must trigger Telegram"
+        body, dedup = sent[0]
+        assert "CRITICAL INCIDENT" in body
+        assert "something exploded" in body
+        assert dedup.startswith("incident:")
+
+    asyncio.run(runner())
+
+
+def test_record_incident_sends_telegram_for_stranded_position():
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        sent: list[tuple[str, str]] = []
+
+        async def fake_send(msg, parse_mode="HTML", *, dedup_key=None):
+            sent.append((msg, dedup_key or ""))
+            return True
+
+        engine.balance_monitor.notifier.send = fake_send  # type: ignore[assignment]
+        await engine.record_incident(
+            arb_id="STRAND-kalshi-deadbeef",
+            canonical_id="KX-TEST-MKT",
+            severity="warning",
+            message="Stranded position detected on kalshi: 7 YES @ avg $0.4200 per contract",
+            metadata={
+                "event_type": "stranded_position",
+                "platform": "kalshi",
+                "side": "yes",
+                "qty": 7,
+                "cost_basis_usd": 2.94,
+                "mtm_usd": 3.50,
+                "unrealized_usd": 0.56,
+                "title": "Test stranded market",
+            },
+        )
+        assert sent, "Stranded position must trigger Telegram even at warning severity"
+        body, _ = sent[0]
+        assert "STRANDED POSITION" in body
+        assert "7 YES on KALSHI" in body
+        assert "MTM: $+3.50" in body
+
+    asyncio.run(runner())
+
+
+def test_record_incident_skips_telegram_for_one_leg_exposure():
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        sent: list[str] = []
+
+        async def fake_send(msg, parse_mode="HTML", *, dedup_key=None):
+            sent.append(msg)
+            return True
+
+        engine.balance_monitor.notifier.send = fake_send  # type: ignore[assignment]
+        await engine.record_incident(
+            arb_id="ARB-OLE",
+            canonical_id="MKT_OLE",
+            severity="critical",
+            message="One leg exposed",
+            metadata={"event_type": "one_leg_exposure"},
+        )
+        assert sent == [], "one_leg_exposure must be handled by supervisor only"
+
+    asyncio.run(runner())
+
+
+def test_record_incident_no_telegram_for_routine_warning():
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        sent: list[str] = []
+
+        async def fake_send(msg, parse_mode="HTML", *, dedup_key=None):
+            sent.append(msg)
+            return True
+
+        engine.balance_monitor.notifier.send = fake_send  # type: ignore[assignment]
+        await engine.record_incident(
+            arb_id="ARB-W",
+            canonical_id="MKT_W",
+            severity="warning",
+            message="Missing fresh quote",
+            metadata={"source": "scanner"},
+        )
+        assert sent == []
+
+    asyncio.run(runner())
+
+
 def test_shadow_audit_blocks_unprofitable_manual_math():
     async def runner():
         store = PriceStore(ttl=60)
@@ -3337,5 +3446,148 @@ def test_unprofitable_path_does_not_raise_unbound_local():
         )
         assert result.leg_yes.status == OrderStatus.ABORTED
         assert result.leg_no.status == OrderStatus.ABORTED
+
+    asyncio.run(runner())
+
+
+def _build_concurrency_adapter(platform: str, price: float, in_flight: dict, hold_s: float):
+    """Build a FILLED-returning adapter whose primary FOK takes ``hold_s``
+    seconds to complete, while tracking observed concurrency in ``in_flight``.
+
+    in_flight = {"current": 0, "max": 0} — incremented on entry, decremented
+    on exit. The MAX value observed is what the per-canonical-lock test
+    asserts against.
+    """
+    from arbiter.execution.engine import Order, OrderStatus
+
+    adapter = MagicMock()
+    adapter.platform = platform
+    _wire_live_depth(adapter, price)
+
+    async def _slow_place(arb_id, market_id, canonical_id, side, price_, qty, max_affordable=None):
+        in_flight["current"] += 1
+        in_flight["max"] = max(in_flight["max"], in_flight["current"])
+        try:
+            await asyncio.sleep(hold_s)
+            return Order(
+                order_id=f"ARB-CONC-{platform.upper()}-{canonical_id}",
+                platform=platform, market_id=market_id,
+                canonical_id=canonical_id, side=side,
+                price=price_, quantity=qty,
+                status=OrderStatus.FILLED,
+                fill_qty=qty, fill_price=price_,
+                timestamp=time.time(),
+            )
+        finally:
+            in_flight["current"] -= 1
+
+    adapter.place_fok = AsyncMock(side_effect=_slow_place)
+    adapter.place_ioc = AsyncMock(side_effect=_slow_place)
+    adapter.get_order = AsyncMock()
+    adapter.cancel_order = AsyncMock(return_value=True)
+    return adapter
+
+
+def test_canonical_lock_serializes_concurrent_same_canonical():
+    """Two execute_opportunity calls for the SAME canonical_id must run
+    sequentially — the per-canonical asyncio.Lock acquired in
+    execute_opportunity (engine.py:606) is what prevents the per-market
+    exposure check from passing for both racers at once because
+    _open_positions is mutated only after each trade completes.
+
+    Asserts that observed in-flight primary FOK count never exceeds 1.
+    """
+    async def runner():
+        import os as _os_test
+        _old_exec = _os_test.environ.get("EXECUTION_ORDER")
+        _os_test.environ["EXECUTION_ORDER"] = "poly_first"
+        try:
+            engine = _build_live_engine_for_safe02_gap()
+
+            in_flight = {"current": 0, "max": 0}
+            poly = _build_concurrency_adapter("polymarket", 0.40, in_flight, hold_s=0.05)
+            kalshi = _build_concurrency_adapter("kalshi", 0.30, in_flight, hold_s=0.001)
+            engine.adapters = {"polymarket": poly, "kalshi": kalshi}
+
+            opp_a = _make_safety_opp(
+                canonical_id="MKT_CNC",
+                yes_platform="polymarket", no_platform="kalshi",
+                yes_price=0.40, no_price=0.30, suggested_qty=10,
+            )
+            opp_b = _make_safety_opp(
+                canonical_id="MKT_CNC",  # SAME canonical — must serialize
+                yes_platform="polymarket", no_platform="kalshi",
+                yes_price=0.40, no_price=0.30, suggested_qty=10,
+            )
+
+            results = await asyncio.gather(
+                engine.execute_opportunity(opp_a),
+                engine.execute_opportunity(opp_b),
+                return_exceptions=True,
+            )
+            # Both calls completed (no swallowed exception that would skew
+            # the concurrency measurement).
+            for r in results:
+                assert not isinstance(r, BaseException), f"unexpected error: {r!r}"
+
+            assert in_flight["max"] == 1, (
+                f"per-canonical lock did not serialize: max in-flight primary "
+                f"FOK count = {in_flight['max']} (expected 1)"
+            )
+        finally:
+            if _old_exec is None:
+                _os_test.environ.pop("EXECUTION_ORDER", None)
+            else:
+                _os_test.environ["EXECUTION_ORDER"] = _old_exec
+
+    asyncio.run(runner())
+
+
+def test_canonical_lock_allows_parallel_distinct_canonicals():
+    """The per-canonical lock keys on canonical_id, so two opportunities on
+    DIFFERENT canonicals must be allowed to execute concurrently — otherwise
+    the engine becomes a global single-threaded bottleneck and throughput
+    collapses on multi-market opportunity bursts.
+    """
+    async def runner():
+        import os as _os_test
+        _old_exec = _os_test.environ.get("EXECUTION_ORDER")
+        _os_test.environ["EXECUTION_ORDER"] = "poly_first"
+        try:
+            engine = _build_live_engine_for_safe02_gap()
+
+            in_flight = {"current": 0, "max": 0}
+            poly = _build_concurrency_adapter("polymarket", 0.40, in_flight, hold_s=0.05)
+            kalshi = _build_concurrency_adapter("kalshi", 0.30, in_flight, hold_s=0.001)
+            engine.adapters = {"polymarket": poly, "kalshi": kalshi}
+
+            opp_a = _make_safety_opp(
+                canonical_id="MKT_CNC",
+                yes_platform="polymarket", no_platform="kalshi",
+                yes_price=0.40, no_price=0.30, suggested_qty=10,
+            )
+            opp_b = _make_safety_opp(
+                canonical_id="MKT_BURST",  # DIFFERENT canonical — must overlap
+                yes_platform="polymarket", no_platform="kalshi",
+                yes_price=0.40, no_price=0.30, suggested_qty=10,
+            )
+
+            results = await asyncio.gather(
+                engine.execute_opportunity(opp_a),
+                engine.execute_opportunity(opp_b),
+                return_exceptions=True,
+            )
+            for r in results:
+                assert not isinstance(r, BaseException), f"unexpected error: {r!r}"
+
+            assert in_flight["max"] == 2, (
+                f"per-canonical lock OVER-serialized distinct canonicals: "
+                f"max in-flight = {in_flight['max']} (expected 2)"
+            )
+        finally:
+            if _old_exec is None:
+                _os_test.environ.pop("EXECUTION_ORDER", None)
+            else:
+                _os_test.environ["EXECUTION_ORDER"] = _old_exec
 
     asyncio.run(runner())

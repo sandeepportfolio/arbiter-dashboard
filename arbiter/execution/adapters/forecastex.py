@@ -14,11 +14,17 @@ Hard-lock enforcement order (matches ``polymarket_us.py`` spec §5.2):
     ─────── Only NOW send the order ───────────────────────────────
 
 ForecastEx-specific:
-  - BUY-only: SELL legs raise ``OrderRejected`` immediately.
+  - BUY and SELL are both supported (SELL closes a position held long against
+    the same conid, mirroring Kalshi's place_unwind_sell semantics).
   - Prices are clamped to [0.01, 0.99] dollars and snapped to the cent tick.
   - IOC + LMT for the secondary leg; FOK is emulated as IOC where IBKR doesn't
     expose a native FOK (the engine treats partial fill on IOC as the same
     soft-naked recovery path as a FOK kill).
+  - ``place_resting_sell`` (GTC) and ``place_unwind_sell`` (IOC) deliberately
+    skip PHASE4/5/supervisor gates — those gates exist to STOP new exposure;
+    these paths CLOSE existing exposure that the gates themselves may have
+    flagged. Blocking the unwind would lock the venue into a permanent
+    naked state.
 """
 from __future__ import annotations
 
@@ -124,6 +130,121 @@ class ForecastExAdapter:
             tif="IOC", op="place_ioc", max_affordable=max_affordable,
         )
 
+    # ─── Sell-side (smart-unwind helpers) ─────────────────────────────────
+
+    async def place_resting_sell(
+        self,
+        arb_id: str,
+        market_id: str,
+        canonical_id: str,
+        side: str,
+        price: float,
+        qty: int,
+    ) -> Order:
+        """GTC LMT SELL at ``price`` (typically break-even per smart-unwind).
+
+        Phase 1 of ``ExecutionEngine._smart_unwind``: rest at break-even for
+        ~30s so passive buyers can hit our cost basis. If nothing matches,
+        the engine cancels and falls back to ``place_unwind_sell``.
+
+        ``side`` is the side originally bought ("yes" → we hold YES long,
+        "no" → we hold NO long). We sell the SAME conid that was bought
+        — IBKR position accounting handles the offset directly, no opposite-
+        leg routing required.
+
+        Deliberately skips PHASE4/5/supervisor gates (closing exposure must
+        not be blocked by gates that exist to stop opening it). Always
+        returns an Order; never raises across this boundary.
+        """
+        return await self._submit_sell(
+            arb_id, market_id, canonical_id, side, price, qty,
+            tif="GTC", op="place_resting_sell",
+        )
+
+    async def place_unwind_sell(
+        self,
+        arb_id: str,
+        market_id: str,
+        canonical_id: str,
+        side: str,
+        qty: int,
+        panic_price: float = 0.01,
+    ) -> Order:
+        """IOC LMT SELL at ``panic_price`` to close a naked leg immediately.
+
+        Phase 2 of ``ExecutionEngine._smart_unwind`` (also the no-resting-
+        support fallback): sell whatever the book absorbs at >= ``panic_price``
+        and the IOC TIF cancels the rest. Residual unfilled qty becomes a
+        manual-review incident upstream.
+
+        ``side`` is the side originally bought. We sell the SAME conid.
+        Skips PHASE4/5/supervisor gates by design (see class docstring).
+        Always returns an Order in a terminal state; never raises.
+        """
+        return await self._submit_sell(
+            arb_id, market_id, canonical_id, side, panic_price, qty,
+            tif="IOC", op="place_unwind_sell",
+        )
+
+    async def _submit_sell(
+        self,
+        arb_id: str,
+        market_id: str,
+        canonical_id: str,
+        side: str,
+        price: float,
+        qty: int,
+        *,
+        tif: str,
+        op: str,
+    ) -> Order:
+        """Common path for resting + unwind sells.
+
+        Deliberately omits ``_check_gates`` — see class-level docstring for
+        why the close-exposure path bypasses PHASE4/5/supervisor.
+        """
+        normalized_side = str(side).strip().lower()
+        snapped = self._snap_to_tick(price)
+
+        t_before_place_ns = time.monotonic_ns()
+        try:
+            response = await self._client.place_order(
+                conid=market_id, side="SELL",
+                price=snapped, quantity=int(qty), tif=tif,
+            )
+        except Exception as exc:
+            place_ms_failed = round((time.monotonic_ns() - t_before_place_ns) / 1e6, 1)
+            logger.warning(
+                "forecastex.sell.place_order.failed",
+                arb_id=arb_id, market_id=market_id, side=side, op=op,
+                place_ms=place_ms_failed, err=str(exc),
+            )
+            return Order(
+                order_id=f"{arb_id}-{normalized_side.upper() or 'SELL'}-FCST",
+                platform="forecastex",
+                market_id=market_id,
+                canonical_id=canonical_id,
+                side=side,
+                price=snapped,
+                quantity=int(qty),
+                status=OrderStatus.FAILED,
+                timestamp=time.time(),
+                error=f"forecastex {op} failed: {exc}",
+                external_client_order_id=None,
+            )
+        place_ms = round((time.monotonic_ns() - t_before_place_ns) / 1e6, 1)
+
+        order = self._order_from_response(
+            response, arb_id, market_id, canonical_id, side, snapped, int(qty),
+        )
+        logger.info(
+            "forecastex.sell.placed",
+            arb_id=arb_id, market_id=market_id, side=side, op=op, tif=tif,
+            price=snapped, qty=qty, place_ms=place_ms,
+            order_status=order.status.value, fill_qty=order.fill_qty,
+        )
+        return order
+
     async def _submit(
         self,
         arb_id: str,
@@ -164,6 +285,7 @@ class ForecastExAdapter:
                 f"forecastex price {snapped:.4f} > max_affordable {max_affordable:.4f}"
             )
 
+        t_before_place_ns = time.monotonic_ns()
         try:
             response = await self._client.place_order(
                 conid=market_id, side="BUY",
@@ -172,9 +294,11 @@ class ForecastExAdapter:
         except OrderRejected:
             raise
         except Exception as exc:
+            place_ms_failed = round((time.monotonic_ns() - t_before_place_ns) / 1e6, 1)
             logger.warning(
                 "forecastex.place_order.failed",
-                arb_id=arb_id, market_id=market_id, side=side, err=str(exc),
+                arb_id=arb_id, market_id=market_id, side=side,
+                place_ms=place_ms_failed, err=str(exc),
             )
             return Order(
                 order_id=f"{arb_id}-{normalized_side or 'BUY'}-FCST",
@@ -189,14 +313,17 @@ class ForecastExAdapter:
                 error=f"forecastex place_order failed: {exc}",
                 external_client_order_id=None,
             )
+        place_ms = round((time.monotonic_ns() - t_before_place_ns) / 1e6, 1)
 
         order = self._order_from_response(
             response, arb_id, market_id, canonical_id, side, snapped, int(qty),
         )
+        # V19 wire-path telemetry — per-leg place latency so operators can
+        # tell venue slowness apart from network slowness in live-fire.
         logger.info(
             "forecastex.order.placed",
             arb_id=arb_id, market_id=market_id, side=side, tif=tif,
-            price=snapped, qty=qty,
+            price=snapped, qty=qty, place_ms=place_ms,
             order_status=order.status.value, fill_qty=order.fill_qty,
         )
         return order

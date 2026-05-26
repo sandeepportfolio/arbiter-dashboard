@@ -303,11 +303,25 @@ class KalshiAdapter:
         path = "/trade-api/v2/portfolio/orders"
         url = f"{self.config.kalshi.base_url}/portfolio/orders"
         headers = self.auth.get_headers("POST", path)
+        t_before_ns = time.monotonic_ns()
         async with self.session.post(url, json=body, headers=headers) as response:
             payload = await response.text()
             # Copy headers into a plain dict so the caller doesn't hold a
             # reference to the aiohttp response after context exit.
             resp_headers = dict(response.headers) if response.headers else {}
+            # V19 wire-path telemetry — surface per-leg place latency so
+            # operators can spot venue slowness vs network slowness in
+            # the live-fire trace.  ``place_ms`` is the wire round-trip
+            # only (rate-limiter wait already happened above).
+            place_ms = round((time.monotonic_ns() - t_before_ns) / 1e6, 1)
+            log.info(
+                "kalshi.order.placed",
+                client_order_id=body.get("client_order_id"),
+                ticker=body.get("ticker"),
+                side=body.get("side"),
+                place_ms=place_ms,
+                api_status=response.status,
+            )
             return response.status, payload, resp_headers
 
     # ─── place_unwind_sell ────────────────────────────────────────────────

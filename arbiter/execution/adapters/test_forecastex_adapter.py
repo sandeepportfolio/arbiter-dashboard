@@ -243,6 +243,31 @@ async def test_place_order_exception_returns_failed_order():
     assert "gateway down" in order.error
 
 
+async def test_place_order_emits_place_ms_telemetry(capsys):
+    """V19: ForecastEx BUY path must emit a ``forecastex.order.placed`` log
+    line carrying ``place_ms`` (per-leg wire latency) so operators can
+    diagnose venue vs network slowness from the live-fire trace.
+    """
+    client = _mock_client(place_response={
+        "order_id": "id-1",
+        "order_status": "Filled",
+        "filled_quantity": 1,
+        "avg_price": 0.55,
+    })
+    adapter = ForecastExAdapter(client=client)
+    await adapter.place_fok(
+        arb_id="arb-LAT", market_id="111", canonical_id="X",
+        side="BUY", price=0.55, qty=1,
+    )
+    out = capsys.readouterr().out
+    assert "forecastex.order.placed" in out, (
+        f"expected forecastex.order.placed in stdout; got: {out!r}"
+    )
+    assert "place_ms" in out, (
+        f"forecastex.order.placed missing place_ms field; got: {out!r}"
+    )
+
+
 # ── check_depth / best_executable_price ───────────────────────────────────
 
 
@@ -295,3 +320,184 @@ async def test_cancel_all_delegates():
 async def test_list_open_orders_by_client_id_returns_empty():
     adapter = ForecastExAdapter(client=_mock_client())
     assert await adapter.list_open_orders_by_client_id("ARB-") == []
+
+
+# ── Sell-side: side-alias acceptance ──────────────────────────────────────
+
+
+async def test_place_unwind_sell_accepts_sell_yes_side_alias():
+    """The engine may pass either 'yes' (original bought side) or 'SELL_YES'
+    (post-translation by callers that don't know the venue is BUY-symmetric).
+    Both must route to a SELL on the same conid."""
+    client = _mock_client()
+    adapter = ForecastExAdapter(client=client)
+    await adapter.place_unwind_sell(
+        arb_id="a", market_id="111", canonical_id="X",
+        side="SELL_YES", qty=5,
+    )
+    kwargs = client.place_order.await_args.kwargs
+    assert kwargs["side"] == "SELL"
+
+# ── Sell-side (place_resting_sell / place_unwind_sell) ───────────────────
+
+
+async def test_place_resting_sell_uses_gtc_and_sells_same_conid():
+    """Resting sell should call client.place_order with side=SELL and GTC.
+
+    The same conid we bought is the one we sell — IBKR position accounting
+    handles the offset; no opposite-leg routing required.
+    """
+    client = _mock_client(place_response={
+        "order_id": "rest-1", "order_status": "Submitted",
+        "filled_quantity": 0, "avg_price": 0.0,
+    })
+    adapter = ForecastExAdapter(client=client)
+    order = await adapter.place_resting_sell(
+        arb_id="arb-1", market_id="111", canonical_id="X",
+        side="yes", price=0.55, qty=10,
+    )
+    assert order.order_id == "rest-1"
+    assert order.status == OrderStatus.SUBMITTED
+    kwargs = client.place_order.await_args.kwargs
+    assert kwargs["side"] == "SELL"
+    assert kwargs["conid"] == "111"
+    assert kwargs["tif"] == "GTC"
+    assert kwargs["price"] == 0.55
+    assert kwargs["quantity"] == 10
+
+
+async def test_place_unwind_sell_uses_ioc_at_panic_price():
+    client = _mock_client(place_response={
+        "order_id": "unw-1", "order_status": "Filled",
+        "filled_quantity": 10, "avg_price": 0.02,
+    })
+    adapter = ForecastExAdapter(client=client)
+    order = await adapter.place_unwind_sell(
+        arb_id="arb-1", market_id="222", canonical_id="X",
+        side="no", qty=10, panic_price=0.01,
+    )
+    assert order.status == OrderStatus.FILLED
+    assert order.fill_qty == 10
+    kwargs = client.place_order.await_args.kwargs
+    assert kwargs["side"] == "SELL"
+    assert kwargs["tif"] == "IOC"
+    assert kwargs["price"] == 0.01
+
+
+async def test_place_unwind_sell_default_panic_price_is_one_cent():
+    client = _mock_client()
+    adapter = ForecastExAdapter(client=client)
+    await adapter.place_unwind_sell(
+        arb_id="arb-1", market_id="333", canonical_id="X",
+        side="yes", qty=5,
+    )
+    assert client.place_order.await_args.kwargs["price"] == 0.01
+
+
+async def test_place_resting_sell_snaps_price():
+    client = _mock_client()
+    adapter = ForecastExAdapter(client=client)
+    await adapter.place_resting_sell(
+        arb_id="arb-1", market_id="111", canonical_id="X",
+        side="yes", price=0.5733, qty=1,
+    )
+    assert client.place_order.await_args.kwargs["price"] == 0.57
+
+
+async def test_place_resting_sell_skips_phase4_hardlock():
+    """Closing exposure must NEVER be blocked by gates that stop opening.
+
+    Phase4 cap of $10 would block a $50 BUY but must not block a sell of
+    the same notional — otherwise a naked leg can never be unwound.
+    """
+    client = _mock_client()
+    adapter = ForecastExAdapter(client=client, phase4_max_usd=10.0)
+    order = await adapter.place_resting_sell(
+        arb_id="arb-1", market_id="111", canonical_id="X",
+        side="yes", price=0.50, qty=100,  # $50 notional, > $10 cap
+    )
+    assert order.status == OrderStatus.FILLED  # default mock response
+    client.place_order.assert_awaited_once()
+
+
+async def test_place_unwind_sell_skips_phase5_hardlock():
+    client = _mock_client()
+    adapter = ForecastExAdapter(
+        client=client,
+        phase4_max_usd=1000.0,
+        phase5_max_usd=5.0,
+    )
+    order = await adapter.place_unwind_sell(
+        arb_id="arb-1", market_id="111", canonical_id="X",
+        side="yes", qty=100,  # $1 notional at default 0.01 — but check still skipped
+    )
+    assert order.status == OrderStatus.FILLED
+    client.place_order.assert_awaited_once()
+
+
+async def test_place_unwind_sell_skips_supervisor_armed():
+    """Supervisor-armed must not block close-exposure paths."""
+    supervisor = SimpleNamespace(is_armed=True)
+    client = _mock_client()
+    adapter = ForecastExAdapter(client=client, supervisor=supervisor)
+    order = await adapter.place_unwind_sell(
+        arb_id="arb-1", market_id="111", canonical_id="X",
+        side="yes", qty=10, panic_price=0.01,
+    )
+    assert order.status == OrderStatus.FILLED
+    client.place_order.assert_awaited_once()
+
+
+async def test_place_resting_sell_skips_supervisor_armed():
+    supervisor = SimpleNamespace(is_armed=True)
+    client = _mock_client()
+    adapter = ForecastExAdapter(client=client, supervisor=supervisor)
+    order = await adapter.place_resting_sell(
+        arb_id="arb-1", market_id="111", canonical_id="X",
+        side="yes", price=0.50, qty=10,
+    )
+    assert order.status == OrderStatus.FILLED
+    client.place_order.assert_awaited_once()
+
+
+async def test_place_unwind_sell_returns_failed_on_client_exception():
+    """Sell path must never propagate exceptions across the boundary —
+    the engine relies on a terminal Order to drive recovery."""
+    client = _mock_client(place_exc=RuntimeError("gateway 503"))
+    adapter = ForecastExAdapter(client=client)
+    order = await adapter.place_unwind_sell(
+        arb_id="arb-1", market_id="111", canonical_id="X",
+        side="yes", qty=5, panic_price=0.01,
+    )
+    assert order.status == OrderStatus.FAILED
+    assert "gateway 503" in order.error
+    assert "place_unwind_sell" in order.error
+
+
+async def test_place_resting_sell_returns_failed_on_client_exception():
+    client = _mock_client(place_exc=RuntimeError("auth lost"))
+    adapter = ForecastExAdapter(client=client)
+    order = await adapter.place_resting_sell(
+        arb_id="arb-1", market_id="111", canonical_id="X",
+        side="yes", price=0.50, qty=5,
+    )
+    assert order.status == OrderStatus.FAILED
+    assert "auth lost" in order.error
+
+
+async def test_place_resting_sell_partial_fill_status():
+    """A resting sell may take an instant partial when there's already a
+    crossing bid for some of the qty."""
+    client = _mock_client(place_response={
+        "order_id": "rest-partial",
+        "order_status": "PartiallyFilled",
+        "filled_quantity": 3,
+        "avg_price": 0.55,
+    })
+    adapter = ForecastExAdapter(client=client)
+    order = await adapter.place_resting_sell(
+        arb_id="arb-1", market_id="111", canonical_id="X",
+        side="yes", price=0.55, qty=10,
+    )
+    assert order.status == OrderStatus.PARTIAL
+    assert order.fill_qty == 3

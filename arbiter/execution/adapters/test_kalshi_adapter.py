@@ -276,6 +276,31 @@ async def test_fok_success_records_circuit_success():
     adapter.circuit.record_success.assert_called()
 
 
+@pytest.mark.asyncio
+async def test_post_order_logs_place_ms_telemetry(capsys):
+    """V19: every Kalshi POST must emit a ``kalshi.order.placed`` log line
+    carrying ``place_ms`` so operators can see per-leg wire latency in the
+    live-fire trace.
+    """
+    body = json.dumps({
+        "order": {
+            "order_id": "K-LAT",
+            "status": "executed",
+            "fill_count_fp": "10.00",
+            "yes_price_dollars": "0.5500",
+        },
+    })
+    adapter = _make_adapter(_session_with_post(200, body))
+    await adapter.place_fok("ARB-LAT", "T", "C", "yes", 0.55, 10)
+    out = capsys.readouterr().out
+    assert "kalshi.order.placed" in out, (
+        f"expected kalshi.order.placed log in stdout; got: {out!r}"
+    )
+    assert "place_ms" in out, (
+        f"kalshi.order.placed log missing place_ms field; got: {out!r}"
+    )
+
+
 # ─── check_depth ─────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
