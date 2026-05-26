@@ -2397,6 +2397,28 @@ class ArbiterAPI:
                         expected_settlement += spent  # conservative: assume breakeven
                     open_positions += 1
 
+        # Fold stranded reconciler positions into the operator-visible
+        # open count. The reconciler tracks lots the engine never put
+        # in `_executions` (crashed-session leftovers); reporting them
+        # here keeps the headline number truthful when the engine has
+        # forgotten about them. Cost basis is included in deployed
+        # capital so the dashboard's "money out" tally is right too.
+        recon = getattr(self, "stranded_reconciler", None)
+        tracked = getattr(recon, "tracked", None) if recon is not None else None
+        stranded_count = 0
+        stranded_cost = 0.0
+        stranded_mtm = 0.0
+        if isinstance(tracked, dict) and tracked:
+            for pos in tracked.values():
+                stranded_count += 1
+                stranded_cost += abs(float(getattr(pos, "cost_basis_usd", 0.0) or 0.0))
+                stranded_mtm += float(getattr(pos, "mtm_usd", 0.0) or 0.0)
+        deployed_capital += stranded_cost
+        # MTM on the venue is the best estimate of what the stranded
+        # cost basis will return at settlement (or sooner if auto-closed).
+        expected_settlement += stranded_mtm
+        open_positions += stranded_count
+
         expected_profit_at_settlement = round(expected_settlement - deployed_capital, 2)
         estimated_equity = round(total_current + expected_settlement, 2)
         # Balance-method P&L (settles-included). Excludes deposits because
@@ -2446,6 +2468,9 @@ class ArbiterAPI:
             "expected_settlement": round(expected_settlement, 2),
             "expected_profit_at_settlement": expected_profit_at_settlement,
             "open_positions": open_positions,
+            "stranded_count": stranded_count,
+            "stranded_cost_usd": round(stranded_cost, 4),
+            "stranded_mtm_usd": round(stranded_mtm, 4),
         })
 
     async def handle_deposits(self, request):
@@ -2850,6 +2875,40 @@ class ArbiterAPI:
                 zero_fill_count += 1
         portfolio_snapshot = self._portfolio_monitor_snapshot()
         total_fees = sum(e.opportunity.total_fees * e.opportunity.suggested_qty for e in executions)
+        # ── Stranded-position inclusion (FILL-01 audit 2026-05-26) ────
+        # The portfolio monitor only sees positions the engine tracks in
+        # its execution list. Positions left behind by crashed sessions
+        # or recovery-path drops are NOT in that list — they only live
+        # in the StrandedPositionReconciler's tracker. Folding them into
+        # the portfolio summary stops the API from reporting "0 open,
+        # $0 exposure" while the venues actually hold 25 lots worth $54.
+        engine_exposure = (
+            float(portfolio_snapshot.total_exposure) if portfolio_snapshot else 0.0
+        )
+        engine_unrealized = (
+            float(portfolio_snapshot.unrealized_pnl) if portfolio_snapshot else 0.0
+        )
+        stranded_exposure = 0.0
+        stranded_unrealized = 0.0
+        stranded_count = 0
+        recon = getattr(self, "stranded_reconciler", None)
+        tracked = getattr(recon, "tracked", None) if recon is not None else None
+        if isinstance(tracked, dict) and tracked:
+            for pos in tracked.values():
+                stranded_count += 1
+                stranded_exposure += abs(float(getattr(pos, "cost_basis_usd", 0.0) or 0.0))
+                stranded_unrealized += float(getattr(pos, "unrealized_usd", 0.0) or 0.0)
+        # ``open_positions`` is the operator-visible "what's on the
+        # venue right now" count. Engine-tracked open arbs plus any
+        # stranded lots the reconciler is babysitting.
+        engine_open = 0
+        for e in executions:
+            yes_fill = float(getattr(e.leg_yes, "fill_qty", 0.0) or 0.0)
+            no_fill = float(getattr(e.leg_no, "fill_qty", 0.0) or 0.0)
+            if (yes_fill > 0 or no_fill > 0) and e.status in (
+                "filled", "submitted", "simulated"
+            ):
+                engine_open += 1
         return web.json_response({
             "total_executions": len(executions),
             "realized_pnl": round(realized, 4),
@@ -2861,8 +2920,15 @@ class ArbiterAPI:
             "arb_pnl": round(arb, 4),
             "unwind_pnl": round(unwind, 4),
             "estimated_fees": round(total_fees, 4),
-            "unrealized_pnl": round(portfolio_snapshot.unrealized_pnl, 4) if portfolio_snapshot else 0.0,
-            "total_exposure": round(portfolio_snapshot.total_exposure, 4) if portfolio_snapshot else 0.0,
+            "unrealized_pnl": round(engine_unrealized + stranded_unrealized, 4),
+            "total_exposure": round(engine_exposure + stranded_exposure, 4),
+            "engine_unrealized_pnl": round(engine_unrealized, 4),
+            "engine_exposure": round(engine_exposure, 4),
+            "stranded_count": stranded_count,
+            "stranded_exposure": round(stranded_exposure, 4),
+            "stranded_unrealized_pnl": round(stranded_unrealized, 4),
+            "open_positions": engine_open + stranded_count,
+            "engine_open_positions": engine_open,
             "dry_run": self.config.scanner.dry_run,
             "drift_guard_active": True,
         })
@@ -4049,23 +4115,52 @@ class ArbiterAPI:
     def _portfolio_snapshot(self) -> dict:
         snapshot = self._portfolio_monitor_snapshot()
         if snapshot is not None:
-            return snapshot.to_dict()
-
-        dry_run = self.config.scanner.dry_run
-        return {
-            "timestamp": time.time(),
-            "total_exposure": 0.0,
-            "total_open_positions": 0,
-            "total_hedged": 0,
-            "total_unhedged": 0,
-            "by_venue": {},
-            "by_canonical": {},
-            "violations": [],
-            "unsettled_positions": 0,
-            "realized_pnl_today": 0.0,
-            "unrealized_pnl": 0.0,
-            "dry_run": dry_run,
-        }
+            out = snapshot.to_dict()
+        else:
+            dry_run = self.config.scanner.dry_run
+            out = {
+                "timestamp": time.time(),
+                "total_exposure": 0.0,
+                "total_open_positions": 0,
+                "total_hedged": 0,
+                "total_unhedged": 0,
+                "by_venue": {},
+                "by_canonical": {},
+                "violations": [],
+                "unsettled_positions": 0,
+                "realized_pnl_today": 0.0,
+                "unrealized_pnl": 0.0,
+                "dry_run": dry_run,
+            }
+        # Fold stranded reconciler tracking into the portfolio snapshot
+        # so the main /api/portfolio endpoint cannot under-report what's
+        # actually on the venues (FILL-01 audit 2026-05-26 — the engine
+        # said "0 open" while reconciler tracked 25 lots worth $54).
+        recon = getattr(self, "stranded_reconciler", None)
+        tracked = getattr(recon, "tracked", None) if recon is not None else None
+        if isinstance(tracked, dict) and tracked:
+            stranded_exposure = 0.0
+            stranded_unrealized = 0.0
+            stranded_count = 0
+            for pos in tracked.values():
+                stranded_count += 1
+                stranded_exposure += abs(float(getattr(pos, "cost_basis_usd", 0.0) or 0.0))
+                stranded_unrealized += float(getattr(pos, "unrealized_usd", 0.0) or 0.0)
+            out["stranded_count"] = stranded_count
+            out["stranded_exposure"] = round(stranded_exposure, 4)
+            out["stranded_unrealized_pnl"] = round(stranded_unrealized, 4)
+            out["engine_open_positions"] = int(out.get("total_open_positions") or 0)
+            out["engine_exposure"] = round(float(out.get("total_exposure") or 0.0), 4)
+            out["total_open_positions"] = (
+                int(out.get("total_open_positions") or 0) + stranded_count
+            )
+            out["total_exposure"] = round(
+                float(out.get("total_exposure") or 0.0) + stranded_exposure, 4
+            )
+            out["unrealized_pnl"] = round(
+                float(out.get("unrealized_pnl") or 0.0) + stranded_unrealized, 4
+            )
+        return out
 
     @staticmethod
     def _json_timestamp(value) -> Optional[str]:
