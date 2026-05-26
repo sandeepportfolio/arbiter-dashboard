@@ -149,6 +149,17 @@ class MockConn:
         return None
 
     async def fetch(self, query: str, *args):
+        compact_query = " ".join(query.split())
+        if (
+            "SELECT status, COUNT(*) AS total" in compact_query
+            and "GROUP BY status" in compact_query
+            and "market_mappings" in compact_query
+        ):
+            counts: dict[str, int] = {}
+            for m in self._mappings.values():
+                s = str(m.get("status") or "")
+                counts[s] = counts.get(s, 0) + 1
+            return [MockRecord({"status": s, "total": n}) for s, n in counts.items()]
         if "SELECT * FROM market_mappings WHERE status = $1 ORDER BY description LIMIT $2" in query:
             status_filter = args[0]
             limit = args[1] if len(args) > 1 else len(self._mappings)
@@ -865,6 +876,50 @@ async def test_all_prioritizes_active_status_over_expired(mock_pool):
         f"expected both confirmed rows surfaced first; got statuses={statuses}"
     )
 
+    await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_count_by_status_returns_all_buckets(mock_pool):
+    """count_by_status feeds the /api/system mapping summary, so it must
+    return every status bucket present in the table (including expired) —
+    not just the candidate/review pair that count_candidates returns."""
+    store = MarketMappingStore("postgres://mock/mock")
+    await store.connect()
+
+    fixtures = [
+        ("C1", "Confirmed 1", MappingStatus.CONFIRMED),
+        ("C2", "Confirmed 2", MappingStatus.CONFIRMED),
+        ("R1", "Review 1", MappingStatus.REVIEW),
+        ("CA1", "Cand 1", MappingStatus.CANDIDATE),
+        ("CA2", "Cand 2", MappingStatus.CANDIDATE),
+        ("CA3", "Cand 3", MappingStatus.CANDIDATE),
+        ("E1", "Expired 1", MappingStatus.EXPIRED),
+        ("X1", "Rejected 1", MappingStatus.REJECTED),
+    ]
+    for cid, desc, status in fixtures:
+        await store.upsert(MarketMapping(
+            canonical_id=cid, description=desc, status=status,
+            kalshi_market_id=f"k-{cid}", polymarket_slug=f"p-{cid}",
+        ))
+
+    counts = await store.count_by_status()
+    assert counts == {
+        "confirmed": 2,
+        "review": 1,
+        "candidate": 3,
+        "expired": 1,
+        "rejected": 1,
+    }
+
+    await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_count_by_status_empty_returns_empty_dict(mock_pool):
+    store = MarketMappingStore("postgres://mock/mock")
+    await store.connect()
+    assert await store.count_by_status() == {}
     await store.disconnect()
 
 

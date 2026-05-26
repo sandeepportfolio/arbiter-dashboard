@@ -139,6 +139,17 @@ def test_api_and_dashboard_contracts():
         assert isinstance(get_json("/api/errors"), list)
         assert isinstance(get_json("/api/manual-positions"), list)
 
+        # /api/logs — recent system events sourced from execution_incidents.
+        # Must return the documented envelope regardless of whether the
+        # store has rows; the dashboard polls this endpoint and a 404 broke
+        # the alerts dropdown prior to this fix.
+        logs_resp = get_json("/api/logs")
+        assert isinstance(logs_resp, dict)
+        assert "logs" in logs_resp
+        assert isinstance(logs_resp["logs"], list)
+        assert logs_resp["count"] == len(logs_resp["logs"])
+        assert "source" in logs_resp
+
         # /api/alerts — aggregator feeding the ops console dropdown. Must
         # return the documented envelope even when the engine has no
         # incidents, trades, mappings, or safety events to draw from.
@@ -905,6 +916,94 @@ def test_rate_limit_ws_event_shape():
                 await loop_task
             except (asyncio.CancelledError, BaseException):
                 pass
+
+    free_port()
+    asyncio.run(_run())
+
+
+def test_system_endpoint_includes_mappings_summary():
+    """/api/system surfaces a `mappings` block so operators can see
+    status counts + discovery state without a second round-trip to
+    /api/mappings/metrics + /api/discovery/status.
+    """
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async def _run():
+        api = await _make_rate_limit_api()
+
+        # Wire a fake mapping_store with a count_by_status() method.
+        class _FakeStore:
+            async def count_by_status(self):
+                return {
+                    "confirmed": 72, "candidate": 113, "review": 76,
+                    "expired": 36977, "rejected": 111,
+                }
+
+        api.mapping_store = _FakeStore()
+        api._pm_us_metrics = {
+            "auto_discovery_candidates_pending": 189,
+            "auto_discovery_last_written": 7,
+        }
+
+        app = web.Application()
+        app.router.add_get("/api/system", api.handle_system)
+        async with TestClient(TestServer(app)) as client:
+            response = await client.get("/api/system")
+            assert response.status == 200
+            body = await response.json()
+            assert "mappings" in body, (
+                f"/api/system missing 'mappings'; keys={list(body)}"
+            )
+            mappings = body["mappings"]
+            assert mappings["status_counts"]["confirmed"] == 72
+            assert mappings["status_counts"]["candidate"] == 113
+            assert mappings["status_counts"]["review"] == 76
+            assert mappings["status_counts"]["expired"] == 36977
+            assert mappings["active_total"] == 72 + 113 + 76
+            assert mappings["expired_total"] == 36977
+            assert mappings["rejected_total"] == 111
+            disc = mappings["discovery"]
+            assert "phase" in disc and "status" in disc
+            assert disc["candidates_pending"] == 189
+            assert disc["last_written"] == 7
+
+    free_port()
+    asyncio.run(_run())
+
+
+def test_system_endpoint_mapping_summary_falls_back_to_runtime_cache():
+    """When mapping_store is None (or count_by_status missing), the snapshot
+    falls back to counting MARKET_MAP entries — never blank."""
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+    from arbiter.mapping.market_map import MARKET_MAP
+
+    async def _run():
+        api = await _make_rate_limit_api()
+        api.mapping_store = None
+        # Seed two confirmed + one candidate in runtime cache (snapshot copy).
+        original = dict(MARKET_MAP)
+        MARKET_MAP.clear()
+        MARKET_MAP.update({
+            "X-1": {"status": "confirmed"},
+            "X-2": {"status": "confirmed"},
+            "X-3": {"status": "candidate"},
+        })
+        try:
+            app = web.Application()
+            app.router.add_get("/api/system", api.handle_system)
+            async with TestClient(TestServer(app)) as client:
+                response = await client.get("/api/system")
+                assert response.status == 200
+                body = await response.json()
+                m = body["mappings"]
+                assert m["status_counts"] == {"confirmed": 2, "candidate": 1}
+                assert m["active_total"] == 3
+                assert m["expired_total"] == 0
+        finally:
+            MARKET_MAP.clear()
+            MARKET_MAP.update(original)
 
     free_port()
     asyncio.run(_run())

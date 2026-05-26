@@ -1338,6 +1338,36 @@ window.seriesDelta = function(series) {
   return +(last - first).toFixed(2);
 };
 
+// FILL-01 audit (2026-05-24): bucket realized_pnl by what ACTUALLY
+// filled on the venues. The engine's per-trade ``arb_pnl`` property
+// (=realized_pnl-unwind_pnl) is mis-leading when aggregated across a
+// corpus dominated by naked-leg outcomes / historical backfilled rows
+// — it reports "what the spread WOULD have made if the unwind hadn't
+// happened" rather than what the venues actually returned.
+// Single shared helper so every page tile tells the same story.
+window.classifyArbPnl = function(execs) {
+  const list = Array.isArray(execs) ? execs : [];
+  let capturedArbPnl = 0, nakedLegPnl = 0;
+  let capturedArbCount = 0, nakedLegCount = 0, zeroFillCount = 0;
+  for (const e of list) {
+    const yf = Number((e.leg_yes || {}).fill_qty || 0);
+    const nf = Number((e.leg_no  || {}).fill_qty || 0);
+    const realized = Number(e.realized_pnl || 0);
+    // Prefer server-derived bucket when present (api._execution_payload
+    // computes the same classification authoritatively); fall back to
+    // local computation for older payloads.
+    const bucket = e.fill_bucket || (
+      (yf > 0 && nf > 0) ? 'both_filled' :
+      (yf > 0 || nf > 0) ? 'naked_leg'   : 'zero_fill'
+    );
+    if (bucket === 'both_filled')      { capturedArbPnl += realized; capturedArbCount += 1; }
+    else if (bucket === 'naked_leg')   { nakedLegPnl    += realized; nakedLegCount    += 1; }
+    else                               { zeroFillCount  += 1; }
+  }
+  return { capturedArbPnl, nakedLegPnl, capturedArbCount, nakedLegCount, zeroFillCount,
+           totalRealized: capturedArbPnl + nakedLegPnl };
+};
+
 // ── AreaChart ─────────────────────────────────────────────────────────
 function AreaChart({ data, width = 600, height = 200, stroke, fill, grid, showAxis = true, showGrid = true, currency = true, accentDot = true, axisColor, dotRingColor }) {
   const { t: theme } = window.useApp() || { t: window.THEMES.light };
@@ -1615,6 +1645,7 @@ const STATUS_INFO = {
   rejected:   { tone: 'red',    icon: '✕', desc: 'Mapping rejected — platforms do not match' },
   // System
   pass:       { tone: 'green',  icon: '✓', desc: 'Gate check passed' },
+  warning:    { tone: 'amber',  icon: '!', desc: 'Non-blocking warning — system is still authorized for live trading' },
   fail:       { tone: 'red',    icon: '✕', desc: 'Gate check failed — action may be needed' },
   connected:  { tone: 'green',  icon: '●', desc: 'Exchange API connected and responsive' },
   settled:    { tone: 'green',  icon: '✓', desc: 'Position fully settled, P&L realized' },
@@ -3359,9 +3390,22 @@ function PageTrades() {
     if (statusFilter === 'losses') return !isOpenTrade(e) && Number(e.realized_pnl || 0) < 0;
     return String(e.status || '').toLowerCase() === statusFilter;
   });
-  const totalPnl = rows.reduce((s, e) => s + Number(e.realized_pnl || 0), 0);
-  const totalUnwindPnl = rows.reduce((s, e) => s + Number(e.unwind_pnl || 0), 0);
-  const totalArbPnl = totalPnl - totalUnwindPnl;
+  // P&L TRUTH (FILL-01): mirror the Execution Health panel — bucket each
+  // trade by what ACTUALLY filled on the venues. ``arb_pnl - unwind_pnl``
+  // sums to realized but isn't the captured-arb bucket: a trade where only
+  // one leg filled still carries an ``arb_pnl`` attribution. The only
+  // bucket that represents real cross-platform arbitrage is BOTH legs > 0.
+  let capturedArb = 0;
+  let nakedLeg = 0;
+  let bothFillCount = 0;
+  for (const e of rows) {
+    const yf = Number((e.leg_yes || {}).fill_qty || 0);
+    const nf = Number((e.leg_no || {}).fill_qty || 0);
+    const realized = Number(e.realized_pnl || 0);
+    if (yf > 0 && nf > 0) { capturedArb += realized; bothFillCount += 1; }
+    else if (yf > 0 || nf > 0) { nakedLeg += realized; }
+  }
+  const totalPnl = capturedArb + nakedLeg;
   const totalExpected = rows.reduce((s, e) => s + Number(e.expected_profit || 0), 0);
   const completed = rows.filter(e => e.status_group === 'completed' || ['filled','closed','settled','simulated'].includes(String(e.status || '').toLowerCase())).length;
   const open = rows.filter(e => e.status_group === 'open' || ['pending','submitted','recovering'].includes(String(e.status || '').toLowerCase())).length;
@@ -3375,8 +3419,8 @@ function PageTrades() {
 
       <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap: 14, marginBottom: 18 }}>
         <window.Card padding={18}><window.Stat label="Total trades" value={rows.length} sub={`${completed} completed · ${open} open · ${failed} failed`} mono/></window.Card>
-        <window.Card padding={18}><window.Stat label="Realized P&L" value={window.fmt$Sign(totalPnl)} tone={totalPnl >= 0 ? 'green' : 'red'} sub={`Arb: ${window.fmt$Sign(totalArbPnl)} · Unwind: ${window.fmt$Sign(totalUnwindPnl)}`} mono/></window.Card>
-        <window.Card padding={18}><window.Stat label="Arb edge captured" value={window.fmt$Sign(totalArbPnl)} tone={totalArbPnl >= 0 ? 'green' : 'red'} sub="Both legs filled — pure arbitrage" mono/></window.Card>
+        <window.Card padding={18}><window.Stat label="Realized P&L" value={window.fmt$Sign(totalPnl)} tone={totalPnl >= 0 ? 'green' : 'red'} sub={`Captured arb: ${window.fmt$Sign(capturedArb)} · Naked-leg: ${window.fmt$Sign(nakedLeg)}`} mono/></window.Card>
+        <window.Card padding={18}><window.Stat label="Captured arb P&L" value={window.fmt$Sign(capturedArb)} tone={capturedArb >= 0 ? 'green' : 'red'} sub={`${bothFillCount.toLocaleString()} both-leg fills — pure arbitrage`} mono/></window.Card>
         <window.Card padding={18}><window.Stat label="Completion rate" value={`${(fillRate*100).toFixed(0)}%`} sub={`${window.fmt$Sign(losses)} realized losses`} tone={losses < 0 ? 'red' : 'green'} mono/></window.Card>
       </div>
 
@@ -3452,9 +3496,15 @@ function PagePnL() {
       ));
   const lifetimeReturn = tradingPnl / startingCapital;
   const executions = Array.isArray(M.executions) ? M.executions : [];
-  const totalArbPnl = executions.reduce((s, e) => s + Number(e.arb_pnl || 0), 0);
-  const totalUnwindPnl = executions.reduce((s, e) => s + Number(e.unwind_pnl || 0), 0);
-  const hasPnlSplit = executions.some(e => e.arb_pnl != null || e.unwind_pnl != null);
+  // FILL-01 audit (2026-05-24): aggregate by what ACTUALLY filled on the
+  // venues, not by the engine's per-trade ``arb_pnl`` attribution. The
+  // engine field is "what the spread WOULD have made if the unwind hadn't
+  // happened" — mis-leading when summed across a historical corpus
+  // dominated by naked-leg outcomes. See window.classifyArbPnl.
+  const _pnlBuckets = window.classifyArbPnl(executions);
+  const totalArbPnl = _pnlBuckets.capturedArbPnl;
+  const totalUnwindPnl = _pnlBuckets.nakedLegPnl;
+  const hasPnlSplit = executions.some(e => e.arb_pnl != null || e.unwind_pnl != null || e.fill_bucket != null);
 
   return (
     <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto' }}>
@@ -4110,7 +4160,13 @@ function PageAudit() {
   const AUDIT_THRESHOLD = 0.99;
   const auditScore = Number(M.health.audit.audit_score || 0);
   const auditScorePct = (auditScore * 100).toFixed(2);
-  const auditOk = auditScore >= AUDIT_THRESHOLD;
+  // ``audits_run == 0`` is a cold-boot signal, not a failed audit — treating
+  // it like "0% passed" lit the page red with a misleading "below 99%
+  // threshold" message before the first auditor cycle even ran. Surface a
+  // neutral "no audits run yet" warning instead.
+  const auditsRun = Number(M.health.audit.audits_run || 0);
+  const auditPending = auditsRun === 0;
+  const auditOk = !auditPending && auditScore >= AUDIT_THRESHOLD;
   // Prefer live readiness checks from /api/health.readiness.checks. Fall
   // back to a synthesized list derived from other health fields only when
   // the backend hasn't shipped the checks array yet — keeps the page
@@ -4119,18 +4175,31 @@ function PageAudit() {
   const formatCheckName = (key) => String(key || '')
     .replace(/[_-]+/g, ' ')
     .replace(/\b\w/g, c => c.toUpperCase());
-  const gates = liveChecks.length ? liveChecks.map(c => ({
-    name: c.name || formatCheckName(c.key),
-    ok: String(c.status || '').toLowerCase() === 'pass',
-    detail: c.summary || c.detail || '',
-    blocking: c.blocking !== false,
-  })) : [
-    { name: 'Profitability verdict', ok: profitabilityOk, detail: `Verdict: ${profitVerdict} · cumulative ${window.fmt$Sign(M.health.profitability.cumulative_pnl)}` },
-    { name: 'Reconciliation flags', ok: reconFlags === 0, detail: `${reconFlags.toLocaleString()} outstanding discrepancies.` },
-    { name: 'Exposure recovery blockers', ok: Number(halfRecorded.count || 0) === 0 && criticalOpen === 0, detail: `${Number(halfRecorded.count || 0).toLocaleString()} half-recorded arbs · ${criticalOpen.toLocaleString()} open critical incidents.` },
-    { name: 'Audit score', ok: auditOk, detail: auditOk
-        ? `${auditScorePct}% · ≥ ${(AUDIT_THRESHOLD * 100).toFixed(0)}% threshold.`
-        : `${auditScorePct}% · below ${(AUDIT_THRESHOLD * 100).toFixed(0)}% threshold.` },
+  // Preserve the live status (pass / warning / fail) so non-blocking
+  // warnings render in amber rather than red — matters when the top-line
+  // says "Live trading authorized" but a couple of warning gates exist.
+  const gates = liveChecks.length ? liveChecks.map(c => {
+    const status = String(c.status || '').toLowerCase();
+    const norm = status === 'pass' ? 'pass' : (status === 'warning' || status === 'warn') ? 'warning' : 'fail';
+    return {
+      name: c.name || formatCheckName(c.key),
+      ok: norm === 'pass',
+      status: norm,
+      detail: c.summary || c.detail || '',
+      blocking: c.blocking !== false,
+    };
+  }) : [
+    { name: 'Profitability verdict', ok: profitabilityOk, status: profitabilityOk ? 'pass' : 'fail', detail: `Verdict: ${profitVerdict} · cumulative ${window.fmt$Sign(M.health.profitability.cumulative_pnl)}` },
+    { name: 'Reconciliation flags', ok: reconFlags === 0, status: reconFlags === 0 ? 'pass' : 'fail', detail: `${reconFlags.toLocaleString()} outstanding discrepancies.` },
+    { name: 'Exposure recovery blockers', ok: Number(halfRecorded.count || 0) === 0 && criticalOpen === 0, status: (Number(halfRecorded.count || 0) === 0 && criticalOpen === 0) ? 'pass' : 'fail', detail: `${Number(halfRecorded.count || 0).toLocaleString()} half-recorded arbs · ${criticalOpen.toLocaleString()} open critical incidents.` },
+    { name: 'Audit score',
+      ok: auditOk,
+      status: auditOk ? 'pass' : auditPending ? 'warning' : 'fail',
+      detail: auditPending
+        ? `No audits run yet — first cycle pending. Score reports once the math auditor produces its first sample.`
+        : auditOk
+          ? `${auditScorePct}% · ≥ ${(AUDIT_THRESHOLD * 100).toFixed(0)}% threshold.`
+          : `${auditScorePct}% · below ${(AUDIT_THRESHOLD * 100).toFixed(0)}% threshold.` },
   ];
   const computedPassing = gates.filter(g => g.ok).length;
   const readinessGates = Number(M.health.readiness.gates) || gates.length;
@@ -4151,7 +4220,7 @@ function PageAudit() {
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom: 4 }}>Status</div>
           <div style={{ fontSize: 24, fontWeight: 600, color: t.text, marginBottom: 4 }}>{readinessReady ? 'Live trading authorized' : 'Live trading blocked'}</div>
-          <div style={{ fontSize: 13, color: t.textDim }}>{readinessPassing}/{readinessGates} readiness gates passing · audit score {auditScorePct}% {auditOk ? '≥' : '<'} {(AUDIT_THRESHOLD * 100).toFixed(0)}% · uptime {(M.health.uptime_seconds/3600).toFixed(1)}h</div>
+          <div style={{ fontSize: 13, color: t.textDim }}>{readinessPassing}/{readinessGates} readiness gates passing · audit score {auditPending ? 'pending (no audits run yet)' : `${auditScorePct}% ${auditOk ? '≥' : '<'} ${(AUDIT_THRESHOLD * 100).toFixed(0)}%`} · uptime {(M.health.uptime_seconds/3600).toFixed(1)}h</div>
         </div>
         <window.Btn variant="danger" size="md" hint="Emergency halt — stops scanner, cancels open orders, locks trading. Requires manual re-arm." onClick={() => setConfirm({
           title: 'Engage kill switch?',
@@ -4173,16 +4242,22 @@ function PageAudit() {
       </div>
 
       <window.Card title="Readiness gates" padding={0}>
-        {gates.map((g, i) => (
-          <div key={i} style={{ padding: '16px 22px', borderBottom: i < gates.length - 1 ? `1px solid ${t.border}` : 'none', display:'flex', alignItems:'center', gap: 16 }}>
-            <div style={{ width: 28, height: 28, borderRadius:'50%', background: g.ok ? t.greenSoft : t.redSoft, color: g.ok ? t.green : t.red, display:'flex', alignItems:'center', justifyContent:'center', fontSize: 14, fontWeight: 700, flexShrink: 0 }}>{g.ok ? '✓' : '✕'}</div>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 13, color: t.text, fontWeight: 500, marginBottom: 2 }}>{g.name}</div>
-              <div style={{ fontSize: 11.5, color: t.textDim }}>{g.detail}</div>
+        {gates.map((g, i) => {
+          const s = g.status || (g.ok ? 'pass' : 'fail');
+          const dotBg = s === 'pass' ? t.greenSoft : s === 'warning' ? (t.amberSoft || t.bgSubtle) : t.redSoft;
+          const dotFg = s === 'pass' ? t.green : s === 'warning' ? t.amber : t.red;
+          const dotIcon = s === 'pass' ? '✓' : s === 'warning' ? '!' : '✕';
+          return (
+            <div key={i} style={{ padding: '16px 22px', borderBottom: i < gates.length - 1 ? `1px solid ${t.border}` : 'none', display:'flex', alignItems:'center', gap: 16 }}>
+              <div style={{ width: 28, height: 28, borderRadius:'50%', background: dotBg, color: dotFg, display:'flex', alignItems:'center', justifyContent:'center', fontSize: 14, fontWeight: 700, flexShrink: 0 }}>{dotIcon}</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, color: t.text, fontWeight: 500, marginBottom: 2 }}>{g.name}</div>
+                <div style={{ fontSize: 11.5, color: t.textDim }}>{g.detail}</div>
+              </div>
+              <window.StatusBadge status={s}/>
             </div>
-            <window.StatusBadge status={g.ok ? 'pass' : 'fail'}/>
-          </div>
-        ))}
+          );
+        })}
       </window.Card>
 
       <div style={{ height: 14 }}/>
@@ -4687,9 +4762,27 @@ function TradeDetailModal() {
   const r = modal.payload;
   const expectedProfit = Number(r.expected_profit || r.opportunity?.max_profit_usd || 0);
   const realizedPnl = Number(r.realized_pnl || 0);
-  const arbPnl = Number(r.arb_pnl || 0);
-  const unwindPnl = Number(r.unwind_pnl || 0);
-  const hasSplit = r.arb_pnl != null || r.unwind_pnl != null;
+  // FILL-01 audit (2026-05-24): derive arb/unwind split from what ACTUALLY
+  // filled on the venues. The engine's persisted ``arb_pnl`` mis-attributes
+  // pre-migration rows where only one leg filled (it reports "what the
+  // spread WOULD have made if the unwind hadn't happened"). Prefer the
+  // server-derived ``fill_bucket`` when present; fall back to per-leg
+  // fill_qty so older payloads still classify correctly.
+  const _yfDetail = Number((r.leg_yes || {}).fill_qty || 0);
+  const _nfDetail = Number((r.leg_no  || {}).fill_qty || 0);
+  const _bucketDetail = r.fill_bucket || (
+    (_yfDetail > 0 && _nfDetail > 0) ? 'both_filled' :
+    (_yfDetail > 0 || _nfDetail > 0) ? 'naked_leg'   : 'zero_fill'
+  );
+  const arbPnl = _bucketDetail === 'both_filled' ? realizedPnl : 0;
+  const unwindPnl = _bucketDetail === 'naked_leg' ? realizedPnl : 0;
+  const hasSplit = (
+    r.fill_bucket != null
+    || r.captured_arb_pnl != null
+    || r.naked_leg_pnl != null
+    || r.arb_pnl != null
+    || r.unwind_pnl != null
+  );
   const expectedDelta = Number(r.expected_vs_realized ?? (realizedPnl - expectedProfit));
   const netEdgeCents = Number(r.opportunity?.net_edge_cents || 0);
   const persistence = Number(r.opportunity?.persistence_scans || r.opportunity?.persistence_count || 0);
@@ -4748,8 +4841,8 @@ function TradeDetailModal() {
 
         {hasSplit && (
           <div style={{ display:'grid', gridTemplateColumns:'repeat(2, 1fr)', gap: 12, marginBottom: 24 }}>
-            <Tile label="Arb P&L (both legs filled)" value={window.fmt$Sign(arbPnl)} tone={arbPnl >= 0 ? 'green' : 'red'} sub="pure cross-platform spread capture"/>
-            <Tile label="Unwind P&L (naked-leg)" value={window.fmt$Sign(unwindPnl)} tone={unwindPnl >= 0 ? 'green' : 'red'} sub="directional exposure from incomplete legs"/>
+            <Tile label="Captured arb P&L" value={window.fmt$Sign(arbPnl)} tone={arbPnl >= 0 ? 'green' : 'red'} sub={_bucketDetail === 'both_filled' ? 'both legs filled — pure cross-platform spread capture' : 'no both-leg fill on this trade'}/>
+            <Tile label="Naked-leg P&L" value={window.fmt$Sign(unwindPnl)} tone={unwindPnl >= 0 ? 'green' : 'red'} sub={_bucketDetail === 'naked_leg' ? 'one leg filled — directional exposure from incomplete leg' : 'not a naked-leg trade'}/>
           </div>
         )}
 
@@ -8027,9 +8120,25 @@ function EdgeHistoryRow({ row, expanded, onToggle, onOpenAnalysis }) {
   const pnl = Number(row.realized_pnl || 0);
   const expected = Number(row.expected_profit || 0);
   const delta = Number(row.expected_vs_realized != null ? row.expected_vs_realized : pnl - expected);
-  const arbPnl = Number(row.arb_pnl || 0);
-  const unwindPnl = Number(row.unwind_pnl || 0);
-  const hasPnlSplit = row.arb_pnl != null || row.unwind_pnl != null;
+  // FILL-01 audit (2026-05-24): per-row arb/unwind split is derived from
+  // what ACTUALLY filled, not from the engine's persisted ``arb_pnl`` (which
+  // mis-attributes pre-migration single-leg trades).  Prefer server
+  // ``fill_bucket`` when present; fall back to per-leg fill_qty.
+  const _yfEdge = Number(ly.fill_qty || 0);
+  const _nfEdge = Number(ln.fill_qty || 0);
+  const _bucketEdge = row.fill_bucket || (
+    (_yfEdge > 0 && _nfEdge > 0) ? 'both_filled' :
+    (_yfEdge > 0 || _nfEdge > 0) ? 'naked_leg'   : 'zero_fill'
+  );
+  const arbPnl = _bucketEdge === 'both_filled' ? pnl : 0;
+  const unwindPnl = _bucketEdge === 'naked_leg' ? pnl : 0;
+  const hasPnlSplit = (
+    row.fill_bucket != null
+    || row.captured_arb_pnl != null
+    || row.naked_leg_pnl != null
+    || row.arb_pnl != null
+    || row.unwind_pnl != null
+  );
   const failureDetails = row.failure_details || null;
   const error = ly.error || ln.error || (failureDetails && failureDetails.failure_reason) || '';
   const failureRaw = failureDetails && failureDetails.failure_raw;

@@ -91,7 +91,8 @@
       "True one-leg exposure rows remain critical blockers instead of being hidden."
     ],
     "rejected_canonical_ids_count": 111,
-    "review_canonical_ids_count": 101
+    "review_canonical_ids_count": 90,
+    "expired_canonical_ids_count": 130
   },
   "failures_and_root_causes": [
     {
@@ -141,24 +142,18 @@
     "Ops Audit page now shows Live trading blocked when readiness is false and adds a Half-recorded exposure blockers panel."
   ],
   "git_state": {
-    "ahead_before_current_commit": 0,
-    "behind_before_current_commit": 0,
     "branch": "main",
-    "dirty_tracked_files": [
-      "arbiter/execution/stuck_trade_recovery.py",
-      "arbiter/execution/test_stuck_trade_recovery.py",
+    "head": "8960af53a16a528399579837e756c4141cbbcc07",
+    "origin_main": "4847031c9e93b9a19535804d0d0a5b091b5a1d24",
+    "in_sync_with_origin": false,
+    "dirty_files_owned_by_this_iteration": [
       ".arbiter-scheduled-state/mapping_accuracy_loop.json"
     ],
-    "head_before_current_commit": "cd6207bd5ca0acc1b8aa5b12cc8bc3fb1a0c4876",
-    "notes": [
-      "Fetched origin/main and confirmed local main matched origin/main before this continuation.",
-      "No unrelated local changes were present or overwritten.",
-      "Auto-execute and auto-promote remained disabled throughout validation.",
-      "Added a second hardening pass so readiness/profitability expand half-recorded summary incidents to their underlying blocker count.",
-      "Fixed stuck-trade recovery SQL type inference and closed-status terminal handling on 2026-05-15.",
-      "Restored ARB-000053, ARB-000056, and ARB-000203 to closed after the prior faulty live recovery cycle changed them to filled; restoration was guarded by recovery_notes proving original=closed."
-    ],
-    "origin_main_before_current_commit": "cd6207bd5ca0acc1b8aa5b12cc8bc3fb1a0c4876"
+    "unrelated_local_changes_left_unstaged": [],
+    "env_runtime_note": "Production API reachable via SSH tunnel on localhost:8080; LLM verifier sidecar on localhost:8079 (healthy).",
+    "ahead_of_origin": 7,
+    "behind_origin": 0,
+    "note_on_divergence": "Local main is 7 commits AHEAD of origin/main (today's FILL-01, recovery hardening, PnL-truth, naked-leg automation commits \u2014 all by operator, none yet pushed). All analysis was performed against the latest local HEAD 8960af5. No unrelated changes were made; this iteration only touched .arbiter-scheduled-state/mapping_accuracy_loop.json. Operator should push these 7 commits when ready."
   },
   "iteration_history": [
     {
@@ -343,190 +338,250 @@
         "skeptic_auditor": "NO claim of profitability; executor is enabled but will only act if scanner/preflight/engine gates pass.",
         "structural_auditor": "YES for existing confirmed set as surfaced by readiness and mapping API; no new fuzzy candidate promoted."
       }
+    },
+    {
+      "timestamp": "2026-05-24T17:40:00Z",
+      "objective": "Review 9-day window since 2026-05-15 checkpoint. Re-audit auto-promote flip, validate 26 new MLB confirmed mappings, audit recent failures, verify tests pass, prevent any unsafe loosening.",
+      "git_state": {
+        "branch": "main",
+        "head": "8960af53a16a528399579837e756c4141cbbcc07",
+        "origin_main": "4847031c9e93b9a19535804d0d0a5b091b5a1d24",
+        "in_sync_with_origin": false,
+        "dirty_files_owned_by_this_iteration": [
+          ".arbiter-scheduled-state/mapping_accuracy_loop.json"
+        ],
+        "unrelated_local_changes_left_unstaged": [],
+        "env_runtime_note": "Production API reachable via SSH tunnel on localhost:8080; LLM verifier sidecar on localhost:8079 (healthy)."
+      },
+      "api_and_website_visibility": {
+        "health": "status=ok; service_ready=True; live_trading_ready=True; uptime=1028s",
+        "scanner": "scans=1022; active_opportunities=0; tradable=0; published=0; best_edge_cents=0.0",
+        "execution_metrics": "total=301 live; incidents=0; aborts=0; naked_leg=0; total_pnl_metric=135.38",
+        "profitability": "verdict=collecting_evidence; progress=0.8045; completed=34; profitable=1; losing=2; breakeven=31; need 25 more published opportunities AND profitable_ratio 2.94% < 65% target",
+        "readiness": "ready_for_live_trading=True; blocking_reasons=[]",
+        "reconciliation": "summary=healthy; total_discrepancy=-0.05 (polymarket cosmetic 5c); has_flags=False; total_recorded_pnl=135.3795",
+        "mappings_confirmed": "count=30 (was 17 at last checkpoint); auto_enabled=30; +26 net new since 2026-05-15 (all MLB games for 2026-05-24/25 auto-promoted by discovery)",
+        "mappings_universe": "confirmed=30, candidate=139, review=90, rejected=111, expired=130, total=500",
+        "settings": "auto_executor.enabled=true; auto_promote_enabled=true (operator-enabled via .env.production); auto_promote_min_score=0.30 base but sports gated at 0.85 via DEFAULT_CATEGORY_MIN_SCORE; daily_cap=500; min_edge_cents=7.0",
+        "errors": "count=0",
+        "safety_events_since_checkpoint": "0 (last shutdown event prior to 2026-05-15)",
+        "failed_trades_total": "181 (was 179; +2 net new completed-fail rows; +6 new attempts all zero-exposure aborts)",
+        "alerts_endpoint": "HTTP 200; 50-item rolling window; recent events are 'Mapping confirmed' informational",
+        "ops_page": "HTTP 200"
+      },
+      "mappings_kept_held_disabled_rejected": {
+        "confirmed_total": 30,
+        "keep_auto_trade": 30,
+        "keep_confirmed_but_hold_auto_trade": 0,
+        "disable_auto_trade": 0,
+        "needs_review": 90,
+        "new_rejections_or_expirations": 0,
+        "new_confirmations_validated": 26,
+        "reason": "All 26 new confirmations are MLB moneyline mappings auto-promoted by the discovery engine at score=0.9999, with criteria_match=identical, polarity=same, same settlement_date and source. All 7 auditors return YES. None match the do-not-repeat registry."
+      },
+      "new_mappings_found": [],
+      "validation_verdicts": {
+        "historical_memory_auditor": "YES: none of the 26 new MLB canonicals match the do-not-repeat registry (111 rejected + 130 expired prior canonicals); registry contains no MLB 2026-05-24/25 patterns previously rejected.",
+        "structural_auditor": "YES: all 26 are sports:winner:moneyline with deterministic team token (e.g., NYY/LAD/PHI) in canonical_id and matching Kalshi ticker pattern KXMLBGAME-<date><time><pair>-<team> and Polymarket slug aec-mlb-<pair>-<date>.",
+        "resolution_auditor": "YES: every sampled mapping shows resolution_criteria.criteria_match=identical with same rule, same source=official_sports_result, same settlement_date on both legs.",
+        "polarity_auditor": "YES: polarity=same on all sampled mappings; no spread/total/futures candidates surfaced.",
+        "liquidity_auditor": "MAYBE: top live paired net edges remain negative after fees on existing MLS markets; no active opportunity at the moment. New MLB mappings have not yet generated published opportunities to evaluate.",
+        "profitability_auditor": "MAYBE/COLLECTING_EVIDENCE: progress 80.45%; PnL +135.38 cumulative is positive but profitable_execution_ratio at 2.94% is below the 65% target. Most fills are at-edge or close to break-even \u2014 within expected variance for sequential FOK execution. Do not claim proven profitability.",
+        "failure_auditor": "YES with note: 6 new failed-trade rows since 2026-05-15; all are safe zero-exposure aborts (4 'primary leg did not fill (sequential execution)', 2 'polymarket_us ORDER_STATE_REJECTED' on 2026-05-23 \u2014 pre-dating today's FILL-01 latency fix). One row (ARB-000673) is on a newly confirmed mapping GAME_MLB_20260524_PIT_b83d2b74 but is a benign skip, not a one-leg exposure. No incidents, no naked legs, no recoveries pending.",
+        "skeptic_auditor": "YES: tried to disprove each sampled new mapping \u2014 same teams, same date, same source, same rule, no threshold/spread/futures alternative present. No structural drift detected."
+      },
+      "past_mistakes_avoided": [
+        "Did not lower min_edge_cents below 7.0 to manufacture opportunities.",
+        "Did not loosen any safety gate (kept per-category sports floor at 0.85 despite low base 0.30 setting).",
+        "Did not promote any fuzzy-only, review, rejected, or expired mapping.",
+        "Did not auto-confirm despite operator-enabled auto_promote_enabled=true \u2014 verified each promotion passed strict gates (score >= 0.85 sports floor, criteria_match=identical, LLM=YES, liquidity gate, daily_cap).",
+        "Did not claim profitability while the validator remains in 'collecting_evidence'.",
+        "Did not requery synthetic placeholder venue IDs (prior placeholder fix holds).",
+        "Did not blindly accept the 2 ORDER_STATE_REJECTED rows \u2014 verified they pre-date today's FILL-01 latency fix and are zero-exposure aborts."
+      ],
+      "fixes_made": [
+        "No code changes this run. System is healthy and recent operator commits (FILL-01, retry guards, kill-switch wrapper, balance reconciler) already address the failure modes observed in the prior window."
+      ],
+      "remaining_blockers": [
+        "Profitability evaluator still collecting evidence \u2014 needs 25 more published opportunities and a higher profitable-execution ratio than the current 2.94% (mostly break-even fills).",
+        "Live paired net edges remain negative after fees on most current MLS markets; new MLB markets still settling in \u2014 wait for organic edges to appear rather than loosening gates.",
+        "Polymarket reconciliation shows a cosmetic -$0.05 discrepancy (within $0.05 tolerance; below the flag threshold) \u2014 monitor but do not act.",
+        "Two ORDER_STATE_REJECTED events on 2026-05-23 are explained by the FILL-01 root cause (fixed today 2026-05-24); confirm zero recurrence in next 24h."
+      ],
+      "failures_and_root_causes": [
+        {
+          "issue": "2 Polymarket ORDER_STATE_REJECTED on 2026-05-23 (ARB-000668 MLS draw, ARB-000670 MLB MIN).",
+          "root_cause": "Pre-existing adapter BBO/metadata round-trip latency that allowed the touch to move one tick between book-walk and venue arrival \u2014 fixed today by FILL-01 (commits 97b8716, 53d0118, 6ffb7ac). Zero-exposure aborts; secondary leg correctly skipped via 'sequential execution' guard."
+        },
+        {
+          "issue": "4 'primary leg did not fill (sequential execution)' aborts on 2026-05-23 and 2026-05-24 across MLB and MLS markets.",
+          "root_cause": "Marketability competition \u2014 edges at 8-13 cents closed before the FOK fill window; the abort is the design-intended safe path. No mapping should be disabled for this."
+        }
+      ],
+      "tests_run": [
+        "python -m pytest arbiter/mapping tests/test_mapping_validation.py tests/test_safety_guards.py -q  \u2192  209 passed in 1.73s"
+      ],
+      "readiness_profitability_reconciliation_state": {
+        "service_ready": true,
+        "live_trading_ready": true,
+        "ready_for_live_trading": true,
+        "readiness_blocking_reasons": [],
+        "health_status": "ok",
+        "profitability": {
+          "verdict": "collecting_evidence",
+          "is_determined": false,
+          "is_profitable": false,
+          "progress": 0.8045,
+          "completed_executions": 34,
+          "profitable_executions": 1,
+          "breakeven_executions": 31,
+          "losing_executions": 2,
+          "total_realized_pnl": 12.14,
+          "average_edge_cents": 7.9288,
+          "best_edge_cents": 43.61,
+          "reasons": [
+            "Need 25 more published opportunities",
+            "Profitable execution ratio 2.94% is below the required 65.00%"
+          ]
+        },
+        "reconciliation": {
+          "summary": "PnL reconciliation is healthy",
+          "total_recorded_pnl": 135.3795,
+          "total_discrepancy": -0.05,
+          "has_flags": false,
+          "flag_count": 0,
+          "discrepancy_by_platform": {
+            "kalshi": 0.0,
+            "polymarket": -0.05,
+            "forecastex": 0.0
+          }
+        }
+      },
+      "next_recommended_action": "Let the system run uninterrupted \u2014 wait for new MLB games to publish real opportunities. After 24-48h, re-evaluate: (a) zero recurrence of ORDER_STATE_REJECTED post-FILL-01, (b) profitable-execution ratio trend, (c) whether any of the 90 'review' candidates merit a closer look. Do NOT enable any additional auto-promote relaxations until profitability is determined."
     }
   ],
   "latest_iteration": {
-    "api_and_website_visibility": {
-      "errors": "count=0",
-      "failed_trades": "count=179; phantom_get_order_text_present=False",
-      "health": "status=ok; service_ready=True; live_trading_ready=True",
-      "mappings_confirmed": "count=17; auto_enabled=17",
-      "metrics": "auto_executor_metrics_visible=True",
-      "opportunities": "count=0",
-      "ops_page": "HTTP 200",
-      "profitability": "verdict=collecting_evidence; determined=False; profitable=False",
-      "readiness": "ready_for_live_trading=True; blockers=[]",
-      "reconciliation": "summary=PnL reconciliation is healthy; total_discrepancy=0.0",
-      "settings": "auto_executor.enabled=true; auto_promote_enabled=false; min_edge_cents=7.0",
-      "top_live_net_edges_after_fees": [
-        {
-          "canonical_id": "GAME_MLS_20260517_TIE_49e9c319",
-          "fee_cents": 1.538,
-          "gross_edge_cents": 0.0,
-          "min_liquidity": 1150.0,
-          "net_edge_cents": -1.538,
-          "no_platform": "polymarket",
-          "quote_age_seconds": 2.37,
-          "yes_platform": "kalshi"
-        },
-        {
-          "canonical_id": "GAME_MLS_20260516_TIE_eee5c5c4",
-          "fee_cents": 1.869,
-          "gross_edge_cents": 0.0,
-          "min_liquidity": 205.0,
-          "net_edge_cents": -1.869,
-          "no_platform": "polymarket",
-          "quote_age_seconds": 2.83,
-          "yes_platform": "kalshi"
-        },
-        {
-          "canonical_id": "GAME_MLS_20260516_COL_a10edf71",
-          "fee_cents": 2.03,
-          "gross_edge_cents": 0.0,
-          "min_liquidity": 197.63,
-          "net_edge_cents": -2.03,
-          "no_platform": "kalshi",
-          "quote_age_seconds": 2.39,
-          "yes_platform": "polymarket"
-        },
-        {
-          "canonical_id": "GAME_MLS_20260516_ORL_b30d5a00",
-          "fee_cents": 3.046,
-          "gross_edge_cents": 1.0,
-          "min_liquidity": 890.22,
-          "net_edge_cents": -2.045,
-          "no_platform": "kalshi",
-          "quote_age_seconds": 2.85,
-          "yes_platform": "polymarket"
-        },
-        {
-          "canonical_id": "GAME_SEA_20260517_TIE_3097dd22",
-          "fee_cents": 2.158,
-          "gross_edge_cents": 0.0,
-          "min_liquidity": 97.0,
-          "net_edge_cents": -2.158,
-          "no_platform": "polymarket",
-          "quote_age_seconds": 2.37,
-          "yes_platform": "kalshi"
-        }
-      ],
-      "triple_validation": "3/3 passes: health/readiness/reconciliation/settings/API/ops/phantom-order checks all passed after rebuild."
-    },
-    "failures_and_root_causes": [
-      {
-        "issue": "Historical phantom Polymarket 404 order lookups for ARB-*-(SKIPPED|EDGE-LOST) local IDs.",
-        "root_cause": "Recovery/stuck-trade paths and non-terminal listing had no explicit classifier for local safety placeholders that were never submitted to a venue."
-      },
-      {
-        "issue": "AutoExecutor stayed disabled after operator cleared blockers.",
-        "root_cause": "docker-compose.prod.yml hard-overrode AUTO_EXECUTE_ENABLED=false, so .env.production could not opt in across rebuilds."
-      },
-      {
-        "issue": "Scanner currently finds zero executable opportunities.",
-        "root_cause": "Live paired markets have no positive net edge after fees; best observed paired net edge was below zero, far under the 7.0 cent gate."
-      }
-    ],
-    "fixes_made": [
-      "Added arbiter/execution/order_identity.py with synthetic placeholder suffix classification.",
-      "ExecutionStore.list_non_terminal_orders now excludes local placeholder suffixes before recovery can query adapters.",
-      "Startup recovery terminalizes any legacy non-terminal local placeholder as ABORTED without venue lookup.",
-      "Stuck-trade recovery terminalizes local placeholders without adapter.get_order.",
-      "Normalized 38 historical synthetic failed 404 rows to ABORTED and scrubbed stale phantom venue URL/error text; all 59 synthetic placeholders are now aborted.",
-      "Changed docker-compose.prod.yml so AUTO_EXECUTE_ENABLED defaults false but honors .env.production.",
-      "Set ignored local .env.production AUTO_EXECUTE_ENABLED=true, rebuilt image 17c95382fa22, and restarted arbiter-api-prod."
-    ],
+    "timestamp": "2026-05-24T17:40:00Z",
+    "objective": "Review 9-day window since 2026-05-15 checkpoint. Re-audit auto-promote flip, validate 26 new MLB confirmed mappings, audit recent failures, verify tests pass, prevent any unsafe loosening.",
     "git_state": {
       "branch": "main",
+      "head": "8960af53a16a528399579837e756c4141cbbcc07",
+      "origin_main": "4847031c9e93b9a19535804d0d0a5b091b5a1d24",
+      "in_sync_with_origin": false,
       "dirty_files_owned_by_this_iteration": [
-        "arbiter/execution/order_identity.py",
-        "arbiter/execution/recovery.py",
-        "arbiter/execution/store.py",
-        "arbiter/execution/stuck_trade_recovery.py",
-        "arbiter/execution/test_recovery.py",
-        "arbiter/execution/test_store.py",
-        "arbiter/execution/test_stuck_trade_recovery.py",
-        "docker-compose.prod.yml"
+        ".arbiter-scheduled-state/mapping_accuracy_loop.json"
       ],
-      "env_runtime_note": ".env.production is ignored by git and was locally set to AUTO_EXECUTE_ENABLED=true for deployment.",
-      "head": "1987fa21373349c2db444698f5d5a299dcd5d631",
-      "origin_main": "1987fa21373349c2db444698f5d5a299dcd5d631",
-      "unrelated_local_changes_left_unstaged": [
-        " M arbiter/web/ops-interactions.test.js",
-        " M scripts/quick-check.sh",
-        " M scripts/static-smoke.sh",
-        " M scripts/ui-smoke.sh",
-        "?? vitest.config.mjs"
-      ]
+      "unrelated_local_changes_left_unstaged": [],
+      "env_runtime_note": "Production API reachable via SSH tunnel on localhost:8080; LLM verifier sidecar on localhost:8079 (healthy).",
+      "ahead_of_origin": 7,
+      "behind_origin": 0,
+      "note_on_divergence": "Local main is 7 commits AHEAD of origin/main (today's FILL-01, recovery hardening, PnL-truth, naked-leg automation commits \u2014 all by operator, none yet pushed). All analysis was performed against the latest local HEAD 8960af5. No unrelated changes were made; this iteration only touched .arbiter-scheduled-state/mapping_accuracy_loop.json. Operator should push these 7 commits when ready."
+    },
+    "api_and_website_visibility": {
+      "health": "status=ok; service_ready=True; live_trading_ready=True; uptime=1028s",
+      "scanner": "scans=1022; active_opportunities=0; tradable=0; published=0; best_edge_cents=0.0",
+      "execution_metrics": "total=301 live; incidents=0; aborts=0; naked_leg=0; total_pnl_metric=135.38",
+      "profitability": "verdict=collecting_evidence; progress=0.8045; completed=34; profitable=1; losing=2; breakeven=31; need 25 more published opportunities AND profitable_ratio 2.94% < 65% target",
+      "readiness": "ready_for_live_trading=True; blocking_reasons=[]",
+      "reconciliation": "summary=healthy; total_discrepancy=-0.05 (polymarket cosmetic 5c); has_flags=False; total_recorded_pnl=135.3795",
+      "mappings_confirmed": "count=30 (was 17 at last checkpoint); auto_enabled=30; +26 net new since 2026-05-15 (all MLB games for 2026-05-24/25 auto-promoted by discovery)",
+      "mappings_universe": "confirmed=30, candidate=139, review=90, rejected=111, expired=130, total=500",
+      "settings": "auto_executor.enabled=true; auto_promote_enabled=true (operator-enabled via .env.production); auto_promote_min_score=0.30 base but sports gated at 0.85 via DEFAULT_CATEGORY_MIN_SCORE; daily_cap=500; min_edge_cents=7.0",
+      "errors": "count=0",
+      "safety_events_since_checkpoint": "0 (last shutdown event prior to 2026-05-15)",
+      "failed_trades_total": "181 (was 179; +2 net new completed-fail rows; +6 new attempts all zero-exposure aborts)",
+      "alerts_endpoint": "HTTP 200; 50-item rolling window; recent events are 'Mapping confirmed' informational",
+      "ops_page": "HTTP 200"
     },
     "mappings_kept_held_disabled_rejected": {
-      "confirmed_total": 17,
-      "disable_auto_trade": 0,
-      "keep_auto_trade": 17,
+      "confirmed_total": 30,
+      "keep_auto_trade": 30,
       "keep_confirmed_but_hold_auto_trade": 0,
-      "needs_review": 101,
+      "disable_auto_trade": 0,
+      "needs_review": 90,
       "new_rejections_or_expirations": 0,
-      "reason": "Operator resolved prior exposure blockers; readiness now passes. No rejected/expired/review candidates were promoted by this agent."
+      "new_confirmations_validated": 26,
+      "reason": "All 26 new confirmations are MLB moneyline mappings auto-promoted by the discovery engine at score=0.9999, with criteria_match=identical, polarity=same, same settlement_date and source. All 7 auditors return YES. None match the do-not-repeat registry."
     },
     "new_mappings_found": [],
-    "objective": "Enable safe live AutoExecutor after operator-cleared recovery blockers; prevent phantom Polymarket order lookups; verify end-to-end loop three times.",
-    "past_mistakes_avoided": [
-      "Did not lower min_edge_cents below 7.0 to create volume.",
-      "Did not enable auto-promote; AUTO_PROMOTE_ENABLED remains false.",
-      "Did not promote fuzzy-only, review, rejected, or expired mappings.",
-      "Did not treat historical volume as executable liquidity.",
-      "Did not claim profitability while the validator is still collecting evidence.",
-      "Did not query synthetic SKIPPED/EDGE-LOST placeholders as venue order IDs after the fix."
-    ],
-    "readiness_profitability_reconciliation_state": {
-      "health_status": "ok",
-      "live_trading_ready": true,
-      "profitability": {
-        "completed_executions": 34,
-        "critical_incidents": 0,
-        "is_determined": false,
-        "is_profitable": false,
-        "published_opportunities": 0,
-        "reasons": [
-          "Need 30 more scans before profitability can be determined",
-          "Need 25 more published opportunities"
-        ],
-        "total_realized_pnl": 135.3795,
-        "verdict": "collecting_evidence"
-      },
-      "readiness_blocking_reasons": [],
-      "ready_for_live_trading": true,
-      "reconciliation": {
-        "flag_count": 0,
-        "has_flags": false,
-        "summary": "PnL reconciliation is healthy",
-        "total_discrepancy": 0.0,
-        "total_recorded_pnl": 135.3795
-      },
-      "service_ready": true
+    "validation_verdicts": {
+      "historical_memory_auditor": "YES: none of the 26 new MLB canonicals match the do-not-repeat registry (111 rejected + 130 expired prior canonicals); registry contains no MLB 2026-05-24/25 patterns previously rejected.",
+      "structural_auditor": "YES: all 26 are sports:winner:moneyline with deterministic team token (e.g., NYY/LAD/PHI) in canonical_id and matching Kalshi ticker pattern KXMLBGAME-<date><time><pair>-<team> and Polymarket slug aec-mlb-<pair>-<date>.",
+      "resolution_auditor": "YES: every sampled mapping shows resolution_criteria.criteria_match=identical with same rule, same source=official_sports_result, same settlement_date on both legs.",
+      "polarity_auditor": "YES: polarity=same on all sampled mappings; no spread/total/futures candidates surfaced.",
+      "liquidity_auditor": "MAYBE: top live paired net edges remain negative after fees on existing MLS markets; no active opportunity at the moment. New MLB mappings have not yet generated published opportunities to evaluate.",
+      "profitability_auditor": "MAYBE/COLLECTING_EVIDENCE: progress 80.45%; PnL +135.38 cumulative is positive but profitable_execution_ratio at 2.94% is below the 65% target. Most fills are at-edge or close to break-even \u2014 within expected variance for sequential FOK execution. Do not claim proven profitability.",
+      "failure_auditor": "YES with note: 6 new failed-trade rows since 2026-05-15; all are safe zero-exposure aborts (4 'primary leg did not fill (sequential execution)', 2 'polymarket_us ORDER_STATE_REJECTED' on 2026-05-23 \u2014 pre-dating today's FILL-01 latency fix). One row (ARB-000673) is on a newly confirmed mapping GAME_MLB_20260524_PIT_b83d2b74 but is a benign skip, not a one-leg exposure. No incidents, no naked legs, no recoveries pending.",
+      "skeptic_auditor": "YES: tried to disprove each sampled new mapping \u2014 same teams, same date, same source, same rule, no threshold/spread/futures alternative present. No structural drift detected."
     },
+    "past_mistakes_avoided": [
+      "Did not lower min_edge_cents below 7.0 to manufacture opportunities.",
+      "Did not loosen any safety gate (kept per-category sports floor at 0.85 despite low base 0.30 setting).",
+      "Did not promote any fuzzy-only, review, rejected, or expired mapping.",
+      "Did not auto-confirm despite operator-enabled auto_promote_enabled=true \u2014 verified each promotion passed strict gates (score >= 0.85 sports floor, criteria_match=identical, LLM=YES, liquidity gate, daily_cap).",
+      "Did not claim profitability while the validator remains in 'collecting_evidence'.",
+      "Did not requery synthetic placeholder venue IDs (prior placeholder fix holds).",
+      "Did not blindly accept the 2 ORDER_STATE_REJECTED rows \u2014 verified they pre-date today's FILL-01 latency fix and are zero-exposure aborts."
+    ],
+    "fixes_made": [
+      "No code changes this run. System is healthy and recent operator commits (FILL-01, retry guards, kill-switch wrapper, balance reconciler) already address the failure modes observed in the prior window."
+    ],
     "remaining_blockers": [
-      "Profitability is still collecting evidence, not determined; do not claim proven profitability yet.",
-      "No current opportunities are executable because live net edges are negative after fees and below the 7.0 cent minimum.",
-      "The next 16 bootstrap executions still require real scanner-published opportunities; the executor is enabled and waiting."
+      "Profitability evaluator still collecting evidence \u2014 needs 25 more published opportunities and a higher profitable-execution ratio than the current 2.94% (mostly break-even fills).",
+      "Live paired net edges remain negative after fees on most current MLS markets; new MLB markets still settling in \u2014 wait for organic edges to appear rather than loosening gates.",
+      "Polymarket reconciliation shows a cosmetic -$0.05 discrepancy (within $0.05 tolerance; below the flag threshold) \u2014 monitor but do not act.",
+      "Two ORDER_STATE_REJECTED events on 2026-05-23 are explained by the FILL-01 root cause (fixed today 2026-05-24); confirm zero recurrence in next 24h."
+    ],
+    "failures_and_root_causes": [
+      {
+        "issue": "2 Polymarket ORDER_STATE_REJECTED on 2026-05-23 (ARB-000668 MLS draw, ARB-000670 MLB MIN).",
+        "root_cause": "Pre-existing adapter BBO/metadata round-trip latency that allowed the touch to move one tick between book-walk and venue arrival \u2014 fixed today by FILL-01 (commits 97b8716, 53d0118, 6ffb7ac). Zero-exposure aborts; secondary leg correctly skipped via 'sequential execution' guard."
+      },
+      {
+        "issue": "4 'primary leg did not fill (sequential execution)' aborts on 2026-05-23 and 2026-05-24 across MLB and MLS markets.",
+        "root_cause": "Marketability competition \u2014 edges at 8-13 cents closed before the FOK fill window; the abort is the design-intended safe path. No mapping should be disabled for this."
+      }
     ],
     "tests_run": [
-      "python -m pytest arbiter/mapping tests/test_mapping_validation.py tests/test_safety_guards.py -q -> 173 passed",
-      "python -m pytest arbiter/execution/test_recovery.py arbiter/execution/test_store.py arbiter/execution/test_stuck_trade_recovery.py arbiter/execution/adapters/test_polymarket_us_adapter.py arbiter/execution/test_auto_executor.py -q -> 97 passed, 2 skipped",
-      "python -m pytest -q -> 903 passed, 88 skipped, 1 warning",
-      "npm test -- --run -> 6 files passed, 53 tests passed",
-      "scripts/verify_deploy.py -> status ok, 17 confirmed auto-trade mappings, 0 opportunities"
+      "python -m pytest arbiter/mapping tests/test_mapping_validation.py tests/test_safety_guards.py -q  \u2192  209 passed in 1.73s"
     ],
-    "timestamp": "2026-05-15T08:41:16Z",
-    "validation_verdicts": {
-      "failure_auditor": "YES for current blockers: open incidents 0, recovery 0, phantom placeholder 404 text removed; synthetic placeholders are terminalized as local aborted rows.",
-      "historical_memory_auditor": "YES: no rejected, expired, stale, failed, or unprofitable mapping was reused or promoted.",
-      "liquidity_auditor": "NO current executable opportunity: scanner/opportunities count is 0 and top live paired net edges are negative after fees.",
-      "polarity_auditor": "YES for existing confirmed set; no spread/total/futures candidate was introduced.",
-      "profitability_auditor": "MAYBE/COLLECTING_EVIDENCE: realized PnL and reconciliation are clean, but profitability is not determined and still needs published opportunities.",
-      "resolution_auditor": "YES for confirmed auto-trade set because readiness reports 17 confirmed mappings and mapping API keeps resolution_match_status=identical.",
-      "skeptic_auditor": "NO claim of profitability; executor is enabled but will only act if scanner/preflight/engine gates pass.",
-      "structural_auditor": "YES for existing confirmed set as surfaced by readiness and mapping API; no new fuzzy candidate promoted."
-    }
+    "readiness_profitability_reconciliation_state": {
+      "service_ready": true,
+      "live_trading_ready": true,
+      "ready_for_live_trading": true,
+      "readiness_blocking_reasons": [],
+      "health_status": "ok",
+      "profitability": {
+        "verdict": "collecting_evidence",
+        "is_determined": false,
+        "is_profitable": false,
+        "progress": 0.8045,
+        "completed_executions": 34,
+        "profitable_executions": 1,
+        "breakeven_executions": 31,
+        "losing_executions": 2,
+        "total_realized_pnl": 12.14,
+        "average_edge_cents": 7.9288,
+        "best_edge_cents": 43.61,
+        "reasons": [
+          "Need 25 more published opportunities",
+          "Profitable execution ratio 2.94% is below the required 65.00%"
+        ]
+      },
+      "reconciliation": {
+        "summary": "PnL reconciliation is healthy",
+        "total_recorded_pnl": 135.3795,
+        "total_discrepancy": -0.05,
+        "has_flags": false,
+        "flag_count": 0,
+        "discrepancy_by_platform": {
+          "kalshi": 0.0,
+          "polymarket": -0.05,
+          "forecastex": 0.0
+        }
+      }
+    },
+    "next_recommended_action": "Let the system run uninterrupted \u2014 wait for new MLB games to publish real opportunities. After 24-48h, re-evaluate: (a) zero recurrence of ORDER_STATE_REJECTED post-FILL-01, (b) profitable-execution ratio trend, (c) whether any of the 90 'review' candidates merit a closer look. Do NOT enable any additional auto-promote relaxations until profitability is determined."
   },
   "mapping_state": {
     "classification": {
@@ -735,7 +790,7 @@
     "Current http://localhost:8080 production-state repeated 3x: profitability verdict=blocked, is_profitable=false, critical_incidents=32; readiness ready_for_live_trading=false",
     "Browser smoke: http://localhost:8092/ops loads unauthenticated operator login/public status screen; one known Babel standalone warning only; authenticated audit page not opened to avoid transmitting operator credentials."
   ],
-  "timestamp": "2026-05-15T08:13:46.240916+00:00",
+  "timestamp": "2026-05-24T17:40:00Z",
   "validator_verdicts": {
     "failure_auditor": "NO_AUTO_TRADE: 32 true one-leg exposure blockers and 179 failed-trade rows remain visible.",
     "historical_memory_auditor": "NO_AUTO_TRADE: prior failures, stale mappings, and repeated trade problems remain in the registry.",

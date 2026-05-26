@@ -860,6 +860,26 @@ class MarketMappingStore:
         finally:
             await self._pool.release(conn)
 
+    async def count_by_status(self) -> Dict[str, int]:
+        """Return a {status: count} dict over the full mapping universe.
+
+        Single GROUP BY query so it stays cheap on tables with ~40k expired
+        rows. Used by /api/system to surface a one-shot mapping summary
+        without forcing operators to call /api/mappings/metrics separately.
+        """
+        conn = await self.acquire()
+        try:
+            rows = await conn.fetch(
+                """
+                SELECT status, COUNT(*) AS total
+                FROM market_mappings
+                GROUP BY status
+                """
+            )
+            return {str(r["status"]): int(r["total"]) for r in rows}
+        finally:
+            await self._pool.release(conn)
+
     async def compute_metrics(
         self,
         *,

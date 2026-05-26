@@ -264,6 +264,8 @@ class ArbiterAPI:
         self._discovery_run_seq = 0
         self._discovery_status: dict[str, Any] = self._empty_discovery_status()
         self._discovery_task: Optional[asyncio.Task] = None
+        self._mapping_summary_cache: dict[str, Any] = {}
+        self._mapping_summary_cache_ts: float = 0.0
         self._mapping_validation_history: dict[str, list[dict[str, Any]]] = {}
         # SAFE-04: periodic broadcaster task for rate_limit_state events.
         # Started in serve(); cancelled on shutdown.
@@ -454,6 +456,7 @@ class ArbiterAPI:
         app.router.add_post("/api/settings", self.handle_settings_update)
         app.router.add_get("/api/errors", self.handle_errors)
         app.router.add_get("/api/alerts", self.handle_alerts)
+        app.router.add_get("/api/logs", self.handle_logs)
         app.router.add_post("/api/errors/{incident_id}", self.handle_incident_action)
         app.router.add_get("/api/manual-positions", self.handle_manual_positions)
         app.router.add_post("/api/manual-positions/{position_id}", self.handle_manual_position_action)
@@ -826,6 +829,32 @@ class ArbiterAPI:
             status_group = "failed"
         else:
             status_group = status or "unknown"
+
+        # FILL-01 audit (2026-05-24): classify realized_pnl by what actually
+        # filled on the venues, not by the engine's ``arb_pnl`` property
+        # (which reports "what the spread WOULD have made if the unwind
+        # hadn't happened" — misleading when the corpus is dominated by
+        # naked-leg outcomes and historical backfilled rows).
+        #   captured_arb_pnl — BOTH legs filled (real cross-platform capture)
+        #   naked_leg_pnl    — exactly ONE leg filled (settlement luck)
+        #   fill_bucket      — categorical for downstream consumers
+        yes_fill = float((payload.get("leg_yes") or {}).get("fill_qty") or 0.0)
+        no_fill = float((payload.get("leg_no") or {}).get("fill_qty") or 0.0)
+        if yes_fill > 0 and no_fill > 0:
+            captured_arb_pnl = realized_pnl
+            naked_leg_pnl = 0.0
+            fill_bucket = "both_filled"
+        elif yes_fill > 0 or no_fill > 0:
+            captured_arb_pnl = 0.0
+            naked_leg_pnl = realized_pnl
+            fill_bucket = "naked_leg"
+        else:
+            captured_arb_pnl = 0.0
+            naked_leg_pnl = 0.0
+            fill_bucket = "zero_fill"
+        payload["captured_arb_pnl"] = round(captured_arb_pnl, 4)
+        payload["naked_leg_pnl"] = round(naked_leg_pnl, 4)
+        payload["fill_bucket"] = fill_bucket
 
         payload["expected_profit"] = expected_profit
         payload["expected_cost"] = expected_cost
@@ -2034,6 +2063,52 @@ class ArbiterAPI:
                 logger.warning("Failed to load persisted incidents for /api/errors: %s", exc)
         return web.json_response(list(incidents.values()))
 
+    async def handle_logs(self, request):
+        """GET /api/logs — recent system events sourced from execution_incidents.
+
+        The repo does not persist a free-form log stream, so this endpoint
+        surfaces the closest structured equivalent: the last ``limit``
+        incidents (default 100, capped at 500), ordered newest-first,
+        across all statuses. Each row carries the severity, message,
+        metadata, and the open/resolved/expired lifecycle state so the
+        operator can scan recent system activity without tailing the
+        container logs.
+
+        Query params:
+          limit  — int, 1..500, default 100
+          status — optional filter ("open", "resolved", "expired")
+        """
+        try:
+            limit = int(request.query.get("limit", "100"))
+        except (TypeError, ValueError):
+            limit = 100
+        limit = min(max(limit, 1), 500)
+        status = request.query.get("status")
+        if status is not None:
+            status = status.strip() or None
+
+        if self.execution_store is None:
+            return web.json_response({"logs": [], "count": 0, "source": "memory-only"})
+        try:
+            rows = await self.execution_store.list_incidents(
+                status=status,
+                limit=limit,
+            )
+        except Exception as exc:
+            logger.warning("Failed to load logs from execution_incidents: %s", exc)
+            return web.json_response(
+                {"error": str(exc), "logs": [], "count": 0},
+                status=503,
+            )
+        logs = [r.to_dict() for r in rows]
+        return web.json_response({
+            "logs": logs,
+            "count": len(logs),
+            "source": "execution_incidents",
+            "limit": limit,
+            "status_filter": status,
+        })
+
     async def handle_alerts(self, request):
         """GET /api/alerts — aggregated feed of recent significant events.
 
@@ -2736,22 +2811,53 @@ class ArbiterAPI:
     async def handle_portfolio_summary(self, request):
         """Return aggregated portfolio performance summary.
 
-        ``realized_pnl`` is the total realized cash change (arb edge plus
-        any naked-leg unwind P&L).  ``arb_pnl`` is the pure arbitrage
-        component (both legs filled, paired).  ``unwind_pnl`` is the
-        directional component from naked-leg auto-unwinds.  Distinguishing
-        the two prevents the audit 2026-05 case where $129.48 of $135.38
-        "profit" was directional luck on unhedged Kalshi positions.
+        ``realized_pnl`` is the total realized cash change.
+
+        ``captured_arb_pnl`` / ``naked_leg_pnl`` bucket realized_pnl by what
+        ACTUALLY filled on the venues (FILL-01 audit 2026-05-24):
+          captured_arb_pnl — both legs filled (real cross-platform capture)
+          naked_leg_pnl    — exactly one leg filled (settlement luck)
+        These are the truthful numbers for dashboards.
+
+        ``arb_pnl`` and ``unwind_pnl`` are the engine's per-trade attribution
+        (arb_pnl = realized_pnl - unwind_pnl). Kept for backwards compat,
+        but consumers should prefer captured_arb_pnl/naked_leg_pnl because
+        the engine attribution is mis-leading when summed across a corpus
+        dominated by naked-leg outcomes or backfilled historical rows.
         """
         executions = getattr(self.engine, "_executions", [])
         realized = sum(e.realized_pnl for e in executions)
         unwind = sum(float(getattr(e, "unwind_pnl", 0.0) or 0.0) for e in executions)
         arb = realized - unwind
+        # Fill-bucketed truth (single source — same logic as
+        # _execution_payload and ops.html ExecutionHealthPanel).
+        captured_arb = 0.0
+        naked_leg = 0.0
+        captured_arb_count = 0
+        naked_leg_count = 0
+        zero_fill_count = 0
+        for e in executions:
+            yes_fill = float(getattr(e.leg_yes, "fill_qty", 0.0) or 0.0)
+            no_fill = float(getattr(e.leg_no, "fill_qty", 0.0) or 0.0)
+            r = float(e.realized_pnl or 0.0)
+            if yes_fill > 0 and no_fill > 0:
+                captured_arb += r
+                captured_arb_count += 1
+            elif yes_fill > 0 or no_fill > 0:
+                naked_leg += r
+                naked_leg_count += 1
+            else:
+                zero_fill_count += 1
         portfolio_snapshot = self._portfolio_monitor_snapshot()
         total_fees = sum(e.opportunity.total_fees * e.opportunity.suggested_qty for e in executions)
         return web.json_response({
             "total_executions": len(executions),
             "realized_pnl": round(realized, 4),
+            "captured_arb_pnl": round(captured_arb, 4),
+            "naked_leg_pnl": round(naked_leg, 4),
+            "captured_arb_count": captured_arb_count,
+            "naked_leg_count": naked_leg_count,
+            "zero_fill_count": zero_fill_count,
             "arb_pnl": round(arb, 4),
             "unwind_pnl": round(unwind, 4),
             "estimated_fees": round(total_fees, 4),
@@ -3698,6 +3804,57 @@ class ArbiterAPI:
         }
         return self._settings_snapshot()
 
+    async def _mapping_summary_snapshot(self) -> dict[str, Any]:
+        """Cheap mapping snapshot for /api/system.
+
+        Returns {status_counts, active_total, expired_total, candidates_pending,
+        discovery: {phase, status, message, updated_at, last_written}}. Cached
+        for 30s so the WS bootstrap fan-out doesn't hammer Postgres.
+        """
+        now = time.time()
+        if (
+            self._mapping_summary_cache
+            and (now - self._mapping_summary_cache_ts) < 30.0
+        ):
+            return self._mapping_summary_cache
+
+        status_counts: dict[str, int] = {}
+        if self.mapping_store is not None:
+            count_by_status = getattr(self.mapping_store, "count_by_status", None)
+            if callable(count_by_status):
+                try:
+                    status_counts = await count_by_status()
+                except Exception as exc:
+                    logger.warning("mapping count_by_status failed: %s", exc)
+        if not status_counts:
+            for _cid, mapping in MARKET_MAP.items():
+                status = str(mapping.get("status") or "candidate")
+                status_counts[status] = status_counts.get(status, 0) + 1
+
+        active = sum(
+            int(status_counts.get(s, 0)) for s in ("confirmed", "candidate", "review")
+        )
+        pm_us = getattr(self, "_pm_us_metrics", {}) or {}
+        discovery = {
+            "phase": self._discovery_status.get("phase"),
+            "status": self._discovery_status.get("status"),
+            "message": self._discovery_status.get("message"),
+            "updated_at": self._discovery_status.get("updated_at"),
+            "completed_at": self._discovery_status.get("completed_at"),
+            "candidates_pending": int(pm_us.get("auto_discovery_candidates_pending", 0)),
+            "last_written": int(pm_us.get("auto_discovery_last_written", 0)),
+        }
+        summary = {
+            "status_counts": status_counts,
+            "active_total": active,
+            "expired_total": int(status_counts.get("expired", 0)),
+            "rejected_total": int(status_counts.get("rejected", 0)),
+            "discovery": discovery,
+        }
+        self._mapping_summary_cache = summary
+        self._mapping_summary_cache_ts = now
+        return summary
+
     async def _build_system_snapshot(self) -> dict:
         balances = {
             platform: {
@@ -3812,6 +3969,7 @@ class ArbiterAPI:
                 "manual_positions": len(self.engine.manual_positions),
                 "incidents": len(self.engine.incidents),
             },
+            "mappings": await self._mapping_summary_snapshot(),
             "tracked_markets": tracked_markets,
         }
 
