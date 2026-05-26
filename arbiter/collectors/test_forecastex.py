@@ -463,48 +463,95 @@ async def test_collector_disables_parent_event_conids_after_probes(patched_marke
 
 
 async def test_resolve_event_children_returns_empty_when_all_endpoints_fail(client):
-    """IBKR returns 503 for FORECASTX EC info on weekends; the resolver must
-    swallow those failures and return [] rather than raising.
+    """IBKR returns 503 for FORECASTX strikes on weekends; the resolver
+    must swallow those failures across all probed months and return []
+    rather than raising. This is the candidate-not-resolvable signal
+    the upstream service uses to bucket attempts as ibkr_503.
     """
     with aioresponses() as m:
-        # Every /iserver/secdef/info call returns 503.
-        m.post(re.compile(r".*/iserver/secdef/info.*"), status=503, body="", repeat=True)
-        m.get(re.compile(r".*/iserver/secdef/info.*"), status=503, body="", repeat=True)
-        # /trsrv/secdef returns a parent entry with no ticker, so the search
-        # fallback won't trigger either.
-        m.get(re.compile(r".*/trsrv/secdef.*"), payload={"secdef": [{"conid": 733131966}]})
-        # secdef/search fallback returns just the parent itself.
-        m.post(
-            re.compile(r".*/iserver/secdef/search.*"),
-            payload=[{"conid": "733131966", "symbol": "HORC"}],
-        )
-        children = await client.resolve_event_children("733131966")
+        # Every /iserver/secdef/strikes call returns 503.
+        m.get(re.compile(r".*/iserver/secdef/strikes.*"), status=503, body="", repeat=True)
+        children = await client.resolve_event_children("733131966", months=("NOV26",))
     assert children == []
     await client.close()
 
 
 async def test_resolve_event_children_returns_children_when_secdef_info_works(client):
-    """When IBKR's secdef/info returns children for a working month, the
-    resolver returns them as conid+right+strike dicts.
+    """Documented IBKR FORECASTX flow (verified live 2026-05-25):
+      1. GET /iserver/secdef/strikes?conid=X&exchange=FORECASTX&sectype=OPT&month=NOV26
+         → {"call": [1.0, 2.0], "put": [1.0, 2.0]}
+      2. GET /iserver/secdef/info?...&strike=1.0
+         → items: [{conid, right=C|P, strike}]
+    The resolver must call strikes first, then walk each unique strike
+    via info and assemble the full child list.
     """
     with aioresponses() as m:
-        # First few months 503, then NOV26 returns two children (Y and N).
-        m.post(re.compile(r".*/iserver/secdef/info.*"), status=503, body="", repeat=True)
+        # strikes endpoint returns two strikes
         m.get(
-            re.compile(r".*/iserver/secdef/info.*"),
+            re.compile(r".*/iserver/secdef/strikes.*"),
+            payload={"call": [1.0, 2.0], "put": [1.0, 2.0]},
+            repeat=True,
+        )
+        # info endpoint returns Call + Put per strike — return different
+        # conid sets per call so we can verify both strikes were probed.
+        # aioresponses matches in registration order.
+        m.get(
+            re.compile(r".*/iserver/secdef/info.*strike=1.*"),
             payload={"items": [
-                {"conid": "733131967", "right": "Y", "strike": 0.5},
-                {"conid": "733131968", "right": "N", "strike": 0.5},
+                {"conid": "1001", "right": "C", "strike": 1.0,
+                 "desc2": "NOV26 1 YES @FORECASTX", "maturityDate": "20270104"},
+                {"conid": "1002", "right": "P", "strike": 1.0,
+                 "desc2": "NOV26 1 NO @FORECASTX", "maturityDate": "20270104"},
             ]},
             repeat=True,
         )
-        children = await client.resolve_event_children("733131966", months=("NOV26",))
-    # Resolver collects up to the first month that returns a non-empty list.
-    assert len(children) == 2
+        m.get(
+            re.compile(r".*/iserver/secdef/info.*strike=2.*"),
+            payload={"items": [
+                {"conid": "2001", "right": "C", "strike": 2.0,
+                 "desc2": "NOV26 2 YES @FORECASTX", "maturityDate": "20270104"},
+                {"conid": "2002", "right": "P", "strike": 2.0,
+                 "desc2": "NOV26 2 NO @FORECASTX", "maturityDate": "20270104"},
+            ]},
+            repeat=True,
+        )
+        children = await client.resolve_event_children(
+            "733131966", months=("NOV26",),
+        )
+    # 2 strikes × Call+Put = 4 children
     conids = {c["conid"] for c in children}
-    assert conids == {"733131967", "733131968"}
+    assert conids == {"1001", "1002", "2001", "2002"}
+    # Right enum is C/P verbatim (IBKR convention)
     rights = {c["right"] for c in children}
-    assert "Y" in rights and "N" in rights
+    assert "C" in rights and "P" in rights
+    # source field carries strike + month for traceability
+    assert all("strike=" in c.get("source", "") for c in children)
+    await client.close()
+
+
+async def test_resolve_event_children_uses_correct_sectype_opt(client):
+    """Regression: previous implementation used sectype=EC which IBKR
+    returns 400/503 for. The fix is sectype=OPT per docs.interactive
+    brokers.com/campus/ibkr-api-page/event-contracts/. This test
+    asserts the wire request carries the OPT enum.
+    """
+    captured: list[str] = []
+
+    with aioresponses() as m:
+        def _capture(url, **kwargs):
+            captured.append(str(url))
+            from aioresponses.core import CallbackResult
+            return CallbackResult(payload={"call": [], "put": []})
+
+        m.get(re.compile(r".*/iserver/secdef/strikes.*"), callback=_capture, repeat=True)
+        await client.resolve_event_children("733131966", months=("NOV26",))
+
+    assert captured, "should have hit /iserver/secdef/strikes"
+    assert "sectype=OPT" in captured[0], (
+        f"expected sectype=OPT in wire request; got: {captured[0]}"
+    )
+    assert "exchange=FORECASTX" in captured[0]
+    assert "month=NOV26" in captured[0]
     await client.close()
 
 

@@ -1,13 +1,14 @@
 """Tests for ForecastExChildResolver.
 
-The resolver re-runs IBKR's child-conid resolution for parent conids
-the collector has disabled. Tests exercise: candidate selection,
-success path (DB upsert + collector reactivate), IBKR 503/400 buckets,
-no-children, dry-run, env config.
+The resolver uses IBKR's documented sectype=OPT discovery flow
+(secdef/strikes → secdef/info per strike) to find tradeable YES/NO
+child contracts under FORECASTX event parents. Tests exercise the
+full pipeline: candidate selection, strike-aware Call (YES) picking,
+tradeability snapshot warm-up, no-children handling, IBKR error
+buckets, dry-run, env config, and the short-circuit cap.
 """
 from __future__ import annotations
 
-import asyncio
 import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -32,70 +33,182 @@ def _seed_market_map():
     settings_module.MARKET_MAP.update(original)
 
 
-def _confirmed(cid: str, fx_conid: str):
+def _confirmed(cid: str, fx_conid: str, not_available: bool = False):
     return {
         "canonical_id": cid,
         "status": "confirmed",
         "forecastex": fx_conid,
+        "forecastex_not_available": not_available,
         "kalshi": f"K-{cid}",
         "polymarket": f"P-{cid}",
         "allow_auto_trade": True,
     }
 
 
-def _stub_mapping(cid: str, fx_conid: str):
-    """Stand-in for what mapping_store.get returns — only needs the
-    forecastex_contract_id slot the resolver writes back."""
-    return SimpleNamespace(canonical_id=cid, forecastex_contract_id=fx_conid)
+def _stub_mapping(cid: str, fx_conid: str, not_available: bool = False):
+    """Mapping-store record stub — exposes the fields the resolver writes."""
+    return SimpleNamespace(
+        canonical_id=cid,
+        forecastex_contract_id=fx_conid,
+        forecastex_not_available=not_available,
+    )
 
 
-async def test_run_once_picks_up_inactive_parents_and_attaches_children():
-    settings_module.MARKET_MAP["DEM_HOUSE_2026"] = _confirmed("DEM_HOUSE_2026", "733131966")
-    settings_module.MARKET_MAP["GAME_X"] = _confirmed("GAME_X", "999999")
+def _tradeable_snapshot():
+    """A snapshot with bid (84), ask (86) — passes is_tradeable_snapshot."""
+    return {"31": "C0.78", "84": "0.78", "86": "0.81"}
 
-    # Collector: parent 733131966 is inactive, 999999 is NOT — so only
-    # one candidate should be resolved.
+
+def _empty_snapshot():
+    """A snapshot with no bid/ask — fails is_tradeable_snapshot."""
+    return {"conid": "x", "conidEx": "x", "7295": "0.00"}
+
+
+async def test_picks_call_yes_child_and_attaches_when_tradeable(monkeypatch):
+    """Happy path: resolver picks the Call (YES) child, snapshots it,
+    confirms tradeability (bid/ask > 0), and persists the conid to the
+    mapping store.
+    """
+    settings_module.MARKET_MAP["DEM_HOUSE_2026"] = _confirmed(
+        "DEM_HOUSE_2026", "733131966",
+    )
     collector = MagicMock()
     collector._inactive_conids = {"733131966"}
     collector.reactivate_conid = MagicMock()
 
     client = MagicMock()
+    # Two children: Call (YES) at strike 1, Put (NO) at strike 1.
     client.resolve_event_children = AsyncMock(return_value=[
-        {"conid": "888888", "right": "Y", "source": "secdef/info:POST:NOV26"},
-        {"conid": "888889", "right": "N", "source": "secdef/info:POST:NOV26"},
+        {"conid": "762089343", "right": "C", "strike": 1.0,
+         "source": "secdef/info:OPT:NOV26:strike=1.0", "desc": "NOV26 1 YES @FORECASTX"},
+        {"conid": "762089344", "right": "P", "strike": 1.0,
+         "source": "secdef/info:OPT:NOV26:strike=1.0", "desc": "NOV26 1 NO @FORECASTX"},
     ])
+    client.market_snapshot = AsyncMock(return_value=_tradeable_snapshot())
 
     store = MagicMock()
     store.get = AsyncMock(return_value=_stub_mapping("DEM_HOUSE_2026", "733131966"))
     store.upsert = AsyncMock()
 
     res = ForecastExChildResolver(
-        forecastex_client=client,
-        forecastex_collector=collector,
-        mapping_store=store,
+        forecastex_client=client, forecastex_collector=collector, mapping_store=store,
     )
 
     snap = await res.run_once()
-    assert snap.candidates_count == 1, "only inactive-parent mappings are candidates"
     assert snap.resolved_count == 1
     assert snap.failed_count == 0
-    # Mapping store was called with the YES child conid
+    assert snap.attempts[0]["outcome"] == "resolved"
+    assert snap.attempts[0]["child_conid"] == "762089343"
+    # Persisted with the Call conid AND not_available reset
     assert store.upsert.await_count == 1
     upserted = store.upsert.await_args.args[0]
-    assert upserted.forecastex_contract_id == "888888"
-    # Collector was reactivated for BOTH old parent (just in case) and new child
-    assert collector.reactivate_conid.call_count == 2
+    assert upserted.forecastex_contract_id == "762089343"
+    assert upserted.forecastex_not_available is False
+    # Collector reactivate fired for parent + child
     args = {c.args[0] for c in collector.reactivate_conid.call_args_list}
-    assert "733131966" in args and "888888" in args
+    assert "733131966" in args and "762089343" in args
 
 
-async def test_run_once_skips_mappings_without_inactive_parent():
-    """Mappings whose conid is still being polled successfully (not in
-    the inactive set) MUST NOT be re-resolved — they're already working.
+async def test_dem_canonical_id_picks_strike_1_call(monkeypatch):
+    """Political-control hint: DEM_HOUSE_2026 must pick the Dem-side
+    Call (strike 1) when both strikes' Calls are present.
     """
-    settings_module.MARKET_MAP["WORKING"] = _confirmed("WORKING", "111")
+    settings_module.MARKET_MAP["DEM_HOUSE_2026"] = _confirmed(
+        "DEM_HOUSE_2026", "733131966",
+    )
     collector = MagicMock()
-    collector._inactive_conids = set()  # nothing disabled
+    collector._inactive_conids = {"733131966"}
+    client = MagicMock()
+    client.resolve_event_children = AsyncMock(return_value=[
+        {"conid": "DEM_CALL", "right": "C", "strike": 1.0},
+        {"conid": "DEM_PUT",  "right": "P", "strike": 1.0},
+        {"conid": "REP_CALL", "right": "C", "strike": 2.0},
+        {"conid": "REP_PUT",  "right": "P", "strike": 2.0},
+    ])
+    client.market_snapshot = AsyncMock(return_value=_tradeable_snapshot())
+    store = MagicMock()
+    store.get = AsyncMock(return_value=_stub_mapping("DEM_HOUSE_2026", "733131966"))
+    store.upsert = AsyncMock()
+
+    res = ForecastExChildResolver(
+        forecastex_client=client, forecastex_collector=collector, mapping_store=store,
+    )
+    snap = await res.run_once()
+    assert snap.attempts[0]["child_conid"] == "DEM_CALL"
+
+
+async def test_gop_canonical_id_picks_strike_2_call(monkeypatch):
+    """The mirror case: GOP_HOUSE_2026 must pick the Rep-side Call
+    (strike 2). Without this hint, both party mappings would attach
+    to the same Call conid and the cross-platform arb math breaks.
+    """
+    settings_module.MARKET_MAP["GOP_HOUSE_2026"] = _confirmed(
+        "GOP_HOUSE_2026", "733131966",
+    )
+    collector = MagicMock()
+    collector._inactive_conids = {"733131966"}
+    client = MagicMock()
+    client.resolve_event_children = AsyncMock(return_value=[
+        {"conid": "DEM_CALL", "right": "C", "strike": 1.0},
+        {"conid": "REP_CALL", "right": "C", "strike": 2.0},
+    ])
+    client.market_snapshot = AsyncMock(return_value=_tradeable_snapshot())
+    store = MagicMock()
+    store.get = AsyncMock(return_value=_stub_mapping("GOP_HOUSE_2026", "733131966"))
+    store.upsert = AsyncMock()
+
+    res = ForecastExChildResolver(
+        forecastex_client=client, forecastex_collector=collector, mapping_store=store,
+    )
+    snap = await res.run_once()
+    assert snap.attempts[0]["child_conid"] == "REP_CALL"
+
+
+async def test_marks_unavailable_when_child_not_tradeable():
+    """When the resolved Call child returns empty bid/ask after 3
+    snapshot warm-up attempts (the MLB→CPI mis-mapping case), the
+    resolver must mark the mapping as ``forecastex_not_available`` so
+    it stops being a candidate. Without this the resolver loops
+    forever on the same parent.
+    """
+    settings_module.MARKET_MAP["GAME_MLB_X"] = _confirmed("GAME_MLB_X", "831072197")
+    collector = MagicMock()
+    collector._inactive_conids = {"831072197"}
+    collector.reactivate_conid = MagicMock()
+
+    client = MagicMock()
+    client.resolve_event_children = AsyncMock(return_value=[
+        {"conid": "882350597", "right": "C", "strike": 305.0,
+         "desc": "MAY26 305 YES @FORECASTX"},
+    ])
+    # Snapshot returns empty fields → not tradeable across all warm-ups
+    client.market_snapshot = AsyncMock(return_value=_empty_snapshot())
+
+    store = MagicMock()
+    store.get = AsyncMock(return_value=_stub_mapping("GAME_MLB_X", "831072197"))
+    store.upsert = AsyncMock()
+
+    res = ForecastExChildResolver(
+        forecastex_client=client, forecastex_collector=collector, mapping_store=store,
+    )
+    snap = await res.run_once()
+    assert snap.attempts[0]["outcome"] == "marked_unavailable"
+    # mapping_store.upsert was called with forecastex_not_available=True
+    assert store.upsert.await_count == 1
+    upserted = store.upsert.await_args.args[0]
+    assert upserted.forecastex_not_available is True
+
+
+async def test_skips_mappings_flagged_not_available():
+    """forecastex_not_available=true mappings MUST NOT re-enter the
+    candidate pool — otherwise marked_unavailable becomes a perpetual
+    re-mark cycle.
+    """
+    settings_module.MARKET_MAP["WAS_BAD"] = _confirmed(
+        "WAS_BAD", "111", not_available=True,
+    )
+    collector = MagicMock()
+    collector._inactive_conids = {"111"}
     client = MagicMock()
     client.resolve_event_children = AsyncMock()
     store = MagicMock()
@@ -106,6 +219,45 @@ async def test_run_once_skips_mappings_without_inactive_parent():
     snap = await res.run_once()
     assert snap.candidates_count == 0
     assert client.resolve_event_children.await_count == 0
+
+
+async def test_no_call_in_children_marks_unavailable():
+    """A child set with only Puts (no Call) means there's no YES
+    contract for us to attach. Mark unavailable instead of looping.
+    """
+    settings_module.MARKET_MAP["A"] = _confirmed("A", "111")
+    collector = MagicMock()
+    collector._inactive_conids = {"111"}
+    client = MagicMock()
+    client.resolve_event_children = AsyncMock(return_value=[
+        {"conid": "P1", "right": "P", "strike": 1.0},
+        {"conid": "P2", "right": "P", "strike": 2.0},
+    ])
+    client.market_snapshot = AsyncMock(return_value=_empty_snapshot())
+    store = MagicMock()
+    store.get = AsyncMock(return_value=_stub_mapping("A", "111"))
+    store.upsert = AsyncMock()
+
+    res = ForecastExChildResolver(
+        forecastex_client=client, forecastex_collector=collector, mapping_store=store,
+    )
+    snap = await res.run_once()
+    assert snap.attempts[0]["outcome"] == "marked_unavailable"
+
+
+async def test_run_once_skips_mappings_without_inactive_parent():
+    settings_module.MARKET_MAP["WORKING"] = _confirmed("WORKING", "111")
+    collector = MagicMock()
+    collector._inactive_conids = set()
+    client = MagicMock()
+    client.resolve_event_children = AsyncMock()
+    store = MagicMock()
+
+    res = ForecastExChildResolver(
+        forecastex_client=client, forecastex_collector=collector, mapping_store=store,
+    )
+    snap = await res.run_once()
+    assert snap.candidates_count == 0
 
 
 async def test_skips_non_confirmed_mappings():
@@ -146,11 +298,6 @@ async def test_no_children_returned_records_attempt_but_does_not_upsert():
 
 
 async def test_ibkr_503_classified_distinct_from_other_errors():
-    """Weekend 503s on IBKR's FORECASTX endpoints get their own
-    outcome bucket so the ops UI can clearly say "waiting on venue"
-    vs. "code is broken".
-    """
-    import aiohttp
     from aiohttp import ClientResponseError, RequestInfo
     from yarl import URL
 
@@ -181,8 +328,9 @@ async def test_dry_run_does_not_call_upsert():
     collector.reactivate_conid = MagicMock()
     client = MagicMock()
     client.resolve_event_children = AsyncMock(return_value=[
-        {"conid": "222", "right": "Y"},
+        {"conid": "222", "right": "C", "strike": 1.0},
     ])
+    client.market_snapshot = AsyncMock(return_value=_tradeable_snapshot())
     store = MagicMock()
     store.upsert = AsyncMock()
 
@@ -197,29 +345,6 @@ async def test_dry_run_does_not_call_upsert():
     assert collector.reactivate_conid.call_count == 0
 
 
-async def test_falls_back_to_first_child_when_no_right_field():
-    settings_module.MARKET_MAP["A"] = _confirmed("A", "111")
-    collector = MagicMock()
-    collector._inactive_conids = {"111"}
-    collector.reactivate_conid = MagicMock()
-    client = MagicMock()
-    # No "right" or "Y" — resolver must still pick something.
-    client.resolve_event_children = AsyncMock(return_value=[
-        {"conid": "first", "right": ""},
-        {"conid": "second", "right": ""},
-    ])
-    store = MagicMock()
-    store.get = AsyncMock(return_value=_stub_mapping("A", "111"))
-    store.upsert = AsyncMock()
-
-    res = ForecastExChildResolver(
-        forecastex_client=client, forecastex_collector=collector, mapping_store=store,
-    )
-    snap = await res.run_once()
-    assert snap.resolved_count == 1
-    assert snap.attempts[0]["child_conid"] == "first"
-
-
 def test_resolver_from_env_returns_none_when_wiring_missing(monkeypatch):
     """Dev/test contexts without ForecastEx wired must not crash."""
     assert resolver_from_env(
@@ -228,9 +353,6 @@ def test_resolver_from_env_returns_none_when_wiring_missing(monkeypatch):
 
 
 def test_resolver_from_env_clamps_short_interval(monkeypatch):
-    """An overly short interval would burn IBKR's rate-limit budget;
-    enforce a 60s floor.
-    """
     monkeypatch.setenv("FX_CHILD_RESOLVE_INTERVAL_S", "5")
     res = resolver_from_env(
         forecastex_client=object(),
@@ -254,12 +376,9 @@ def test_resolver_from_env_honors_dry_run(monkeypatch):
 
 
 async def test_run_once_short_circuits_after_three_consecutive_503s():
-    """When IBKR's /iserver/secdef/* endpoint is down (weekend), the
-    resolver must not block the asyncio loop for 2+ hours probing 24
-    conids × 10 endpoints × 30s timeout. After 3 consecutive 503s we
-    short-circuit the remaining candidates and pick up next cycle.
-    """
-    import aiohttp
+    """When IBKR's /iserver/secdef/* endpoint is down, the resolver
+    must short-circuit after 3 consecutive failures so the cycle
+    doesn't block the asyncio loop for hours."""
     from aiohttp import ClientResponseError, RequestInfo
     from yarl import URL
 
@@ -280,15 +399,8 @@ async def test_run_once_short_circuits_after_three_consecutive_503s():
         forecastex_client=client, forecastex_collector=collector, mapping_store=store,
     )
     snap = await res.run_once()
-    # All 10 candidates failed, but resolve_event_children was only
-    # called 3 times (after that the short-circuit fires).
     assert snap.candidates_count == 10
     assert snap.failed_count == 10
-    assert client.resolve_event_children.await_count == 3, (
-        f"expected short-circuit after 3 IBKR 503s, "
-        f"got {client.resolve_event_children.await_count} calls"
-    )
-    # All attempts surface as ibkr_503 (the 3 real ones AND the 7
-    # short-circuited ones) so the ops UI still shows the right outcome.
+    assert client.resolve_event_children.await_count == 3
     outcomes = {a["outcome"] for a in snap.attempts}
     assert outcomes == {"ibkr_503"}

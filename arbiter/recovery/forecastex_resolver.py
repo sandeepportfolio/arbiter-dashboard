@@ -170,6 +170,12 @@ class ForecastExChildResolver:
         """Return mappings where the FX conid exists but the collector
         has it disabled (parent not tradeable) — those are the only
         resolution candidates worth probing each cycle.
+
+        Skips mappings flagged ``forecastex_not_available=true``
+        because the resolver already determined no tradeable child
+        exists for that parent (e.g. the wrong-product-class MLB→CPI
+        mismatches surfaced 2026-05-25). Re-probing those every cycle
+        would burn IBKR's rate-limit budget and loop indefinitely.
         """
         from arbiter.config.settings import MARKET_MAP
 
@@ -177,6 +183,8 @@ class ForecastExChildResolver:
         out: List[tuple] = []
         for canonical_id, mapping in MARKET_MAP.items():
             if mapping.get("status") != "confirmed":
+                continue
+            if bool(mapping.get("forecastex_not_available")):
                 continue
             conid = str(mapping.get("forecastex") or "").strip()
             if not conid:
@@ -227,6 +235,11 @@ class ForecastExChildResolver:
                 consecutive_failures = 0
             elif attempt.outcome == "dry_run":
                 # Dry-run reached the child, IBKR was healthy — reset.
+                consecutive_failures = 0
+            elif attempt.outcome == "marked_unavailable":
+                # IBKR responded successfully; we just determined the
+                # parent has no tradeable binary child for our purpose.
+                # That's a clean termination state, not a failure cluster.
                 consecutive_failures = 0
             else:
                 consecutive_failures += 1
@@ -281,26 +294,70 @@ class ForecastExChildResolver:
                 detail="resolve_event_children returned empty list (IBKR endpoint may be down or contract has no child option chain)",
             )
 
-        # Pick the YES side. Convention from forecastex_discovery: right
-        # in {"Y","C","1","YES"} → YES; otherwise first child.
-        yes_child = next(
-            (c for c in children
-             if str(c.get("right", "")).upper() in ("Y", "C", "1", "YES")),
-            children[0],
-        )
-        child_conid = str(yes_child.get("conid") or "").strip()
+        # Pick the YES side — IBKR right=C is the Call which pays $1 when
+        # the strike outcome resolves true (e.g. HORC strike=1 Call =
+        # "Dems win House"). For canonical_ids that encode a party hint
+        # (DEM_*, GOP_*, etc.) prefer the matching strike.
+        yes_child = self._select_yes_child(canonical_id, children)
+        child_conid = str(yes_child.get("conid") or "").strip() if yes_child else ""
         if not child_conid:
-            return ResolveAttempt(
-                canonical_id=canonical_id, parent_conid=parent_conid,
-                ts=now, outcome="no_children",
-                detail="children returned without a conid field",
+            # No Call-right entry in the returned set; mark not-available
+            # so the operator can override manually.
+            return await self._mark_unavailable(
+                canonical_id, parent_conid,
+                reason="no Call (YES) child returned",
             )
 
         if self._dry_run:
             return ResolveAttempt(
                 canonical_id=canonical_id, parent_conid=parent_conid,
                 ts=now, outcome="dry_run", child_conid=child_conid,
-                detail=f"would have attached child conid {child_conid}",
+                detail=(
+                    f"would have attached child conid {child_conid} "
+                    f"(strike={yes_child.get('strike')} desc={yes_child.get('desc','')[:60]})"
+                ),
+            )
+
+        # Tradeability check: snapshot the child twice (IBKR warms its
+        # snapshot cache on the first call) before mutating the DB. A
+        # non-tradeable child (e.g. an MLB-tagged conid that actually
+        # points to a CPI/GDP economic indicator with no current market
+        # data) would otherwise replace one bad conid with another and
+        # the resolver would loop forever on the same parent.
+        tradeable = False
+        last_snap: Dict[str, Any] = {}
+        try:
+            for attempt_no in (1, 2, 3):
+                await asyncio.sleep(1.0)
+                snap = await self._client.market_snapshot(child_conid)
+                last_snap = snap or {}
+                # Import here to avoid a circular import at module load.
+                from arbiter.collectors.forecastex import ForecastExClient
+                if ForecastExClient.is_tradeable_snapshot(snap):
+                    tradeable = True
+                    break
+        except Exception as exc:
+            return ResolveAttempt(
+                canonical_id=canonical_id, parent_conid=parent_conid,
+                ts=now, outcome="exception", child_conid=child_conid,
+                detail=f"tradeability snapshot failed: {exc}",
+            )
+
+        if not tradeable:
+            # IBKR returned a child conid but it has no live bid/ask —
+            # this is the multi-strike CPI/GDP case where the parent
+            # discovery matched the wrong product class. Mark the
+            # mapping as forecastex_not_available so the resolver stops
+            # retrying. Operator can still attach a known-good conid
+            # via the manual override endpoint.
+            return await self._mark_unavailable(
+                canonical_id, parent_conid,
+                reason=(
+                    f"child {child_conid} resolved but not tradeable after 3 "
+                    f"snapshot warmups (strike={yes_child.get('strike')} "
+                    f"desc={(yes_child.get('desc') or '')[:60]}); "
+                    f"raw snapshot keys={sorted(last_snap.keys())[:8]}"
+                ),
             )
 
         # Persist the child conid via the mapping store. The
@@ -312,15 +369,16 @@ class ForecastExChildResolver:
             if mapping is None:
                 return ResolveAttempt(
                     canonical_id=canonical_id, parent_conid=parent_conid,
-                    ts=now, outcome="exception",
+                    ts=now, outcome="exception", child_conid=child_conid,
                     detail="mapping disappeared between candidate selection and update",
                 )
             mapping.forecastex_contract_id = child_conid
+            mapping.forecastex_not_available = False
             await self._mapping_store.upsert(mapping)
         except Exception as exc:
             return ResolveAttempt(
                 canonical_id=canonical_id, parent_conid=parent_conid,
-                ts=now, outcome="exception",
+                ts=now, outcome="exception", child_conid=child_conid,
                 detail=f"mapping_store.upsert failed: {exc}",
             )
 
@@ -338,12 +396,107 @@ class ForecastExChildResolver:
             parent_conid=parent_conid,
             child_conid=child_conid,
             right=yes_child.get("right"),
+            strike=yes_child.get("strike"),
             source=yes_child.get("source"),
         )
         return ResolveAttempt(
             canonical_id=canonical_id, parent_conid=parent_conid,
             ts=now, outcome="resolved", child_conid=child_conid,
-            detail=f"attached child conid {child_conid} (right={yes_child.get('right')})",
+            detail=(
+                f"attached child {child_conid} "
+                f"(strike={yes_child.get('strike')} desc={(yes_child.get('desc') or '')[:60]})"
+            ),
+        )
+
+    @staticmethod
+    def _select_yes_child(
+        canonical_id: str, children: List[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """Choose the right Call child for this mapping.
+
+        - Filter to Call (right=C) — IBKR's YES contract.
+        - Group by strike value and pick the strike that matches the
+          canonical_id's party/side hint when available (DEM/GOP for
+          political control markets; Dem ↔ strike 1, GOP ↔ strike 2 per
+          the IBKR HORC schema verified live 2026-05-25).
+        - When no hint matches, pick the lowest strike (the canonical
+          binary YES contract for 1-strike events).
+        """
+        calls = [c for c in children if str(c.get("right", "")).upper() == "C"]
+        if not calls:
+            return None
+        # Sort by strike for deterministic selection.
+        try:
+            calls.sort(key=lambda c: float(c.get("strike") or 0))
+        except (TypeError, ValueError):
+            pass
+        upper_cid = canonical_id.upper()
+        # Political-control party hint: DEM/GOP map to strike 1 / 2 on
+        # HORC and SENM per IBKR's schema.
+        if "DEM_" in upper_cid or "DEMOCRAT" in upper_cid:
+            return next(
+                (c for c in calls if float(c.get("strike") or 0) <= 1.0001),
+                calls[0],
+            )
+        if (
+            "GOP_" in upper_cid or "REP_" in upper_cid
+            or "REPUBLICAN" in upper_cid
+        ):
+            return next(
+                (c for c in calls if float(c.get("strike") or 0) >= 1.9999),
+                calls[-1],
+            )
+        return calls[0]
+
+    async def _mark_unavailable(
+        self, canonical_id: str, parent_conid: str, reason: str,
+    ) -> ResolveAttempt:
+        """Persist forecastex_not_available=true so the resolver stops
+        re-trying the same parent every cycle. The mapping's
+        forecastex_contract_id is preserved so an operator can see what
+        was attempted; the not_available flag is what the
+        forecastex_discovery skip and the collector candidate filter
+        both honor.
+        """
+        now = time.time()
+        if self._dry_run:
+            return ResolveAttempt(
+                canonical_id=canonical_id, parent_conid=parent_conid,
+                ts=now, outcome="dry_run",
+                detail=f"would have marked not_available: {reason}",
+            )
+        try:
+            mapping = await self._mapping_store.get(canonical_id)
+            if mapping is None:
+                return ResolveAttempt(
+                    canonical_id=canonical_id, parent_conid=parent_conid,
+                    ts=now, outcome="exception",
+                    detail="mapping disappeared during not_available mark",
+                )
+            mapping.forecastex_not_available = True
+            await self._mapping_store.upsert(mapping)
+        except Exception as exc:
+            return ResolveAttempt(
+                canonical_id=canonical_id, parent_conid=parent_conid,
+                ts=now, outcome="exception",
+                detail=f"mark_unavailable upsert failed: {exc}",
+            )
+        # Drop the conid from the collector's inactive set so it stops
+        # being a resolver candidate next cycle (the candidate filter
+        # requires the conid to be in _inactive_conids).
+        try:
+            self._collector.reactivate_conid(parent_conid)
+        except Exception:
+            pass
+        logger.info(
+            "forecastex_resolver.marked_unavailable",
+            canonical_id=canonical_id, parent_conid=parent_conid,
+            reason=reason,
+        )
+        return ResolveAttempt(
+            canonical_id=canonical_id, parent_conid=parent_conid,
+            ts=now, outcome="marked_unavailable",
+            detail=reason[:200],
         )
 
 

@@ -343,86 +343,121 @@ class ForecastExClient:
     async def resolve_event_children(
         self, parent_conid: str, *, months: tuple[str, ...] = (),
     ) -> list[dict]:
-        """Try every known IBKR endpoint to enumerate the YES/NO child
-        contracts under a FORECASTX event parent.
+        """Enumerate the YES/NO child contracts under a FORECASTX event
+        parent using the documented IBKR Web API discovery flow.
 
-        Returns a list of ``{"conid": ..., "right": "Y"|"N"|"C"|"P", ...}`` dicts.
-        Empty list if every strategy fails — callers must handle that
-        gracefully because IBKR's FORECASTX endpoints return 503 on weekends
-        and are inconsistently supported even on weekdays.
+        Per docs.interactivebrokers.com/campus/ibkr-api-page/event-
+        contracts/ (verified live 2026-05-25 against the IBKR Client
+        Portal gateway), ForecastEx products are modeled as OPTIONS:
 
-        Strategies tried (in order):
-          1. POST /iserver/secdef/info with sectype=EC + each month
-          2. GET  /iserver/secdef/info  with sectype=EC + each month
-          3. POST /iserver/secdef/search with the parent's ticker + secType=EC
-          4. /trsrv/secdef hasOptions check + symbol-derived search
+          1. /iserver/secdef/strikes?conid=<parent>&exchange=FORECASTX
+             &sectype=OPT&month=<MMMYY>
+             → returns {call: [...strikes], put: [...strikes]}
+          2. /iserver/secdef/info?...&strike=<X>
+             → returns [{conid, right=C|P, strike, desc2, maturityDate}]
+
+        ``right=C`` is the YES (Call) child; ``right=P`` is the NO (Put).
+
+        Returns a list of ``{conid, right, strike, source, maturityDate,
+        desc}`` dicts for ALL strike/right combinations found. Empty
+        list when no strikes exist in any probed month (caller decides
+        whether to mark the parent ``forecastex_not_available``).
+
+        ``months`` may be empty (uses a built-in 12-month + 12-month
+        candidate list) or a tuple of MMMYY strings. We stop at the
+        FIRST month that returns non-empty strikes so a single-event
+        contract like HORC (NOV26 only) doesn't waste rate-limit budget
+        probing 24 other months.
+
+        Previous implementation used ``sectype=EC`` which returned
+        empty results AND triggered 503s on the EC endpoint — known
+        to be flaky / unsupported per IBKR's own docs. The OPT path
+        is the documented one and works on weekdays AND weekends.
         """
         children: list[dict] = []
-        month_candidates = months or ("NOV26", "DEC26", "JAN27", "202611", "202612")
+        if months:
+            month_candidates = tuple(months)
+        else:
+            # Span 2026 + 2027 so per-event maturity months are covered.
+            month_candidates = tuple(
+                f"{m}{y}"
+                for y in ("26", "27")
+                for m in (
+                    "JAN","FEB","MAR","APR","MAY","JUN",
+                    "JUL","AUG","SEP","OCT","NOV","DEC",
+                )
+            )
 
-        # Strategy 1+2 — secdef/info with sectype=EC
-        for method in ("POST", "GET"):
-            for month in month_candidates:
-                try:
-                    if method == "POST":
-                        payload = await self._request(
-                            "POST", "/iserver/secdef/info",
-                            json_body={
-                                "conid": str(parent_conid),
-                                "sectype": "EC",
-                                "month": month,
-                            },
-                        )
-                    else:
-                        payload = await self._request(
-                            "GET", "/iserver/secdef/info",
-                            params={
-                                "conid": str(parent_conid),
-                                "sectype": "EC",
-                                "month": month,
-                            },
-                        )
-                except Exception:
-                    continue
-                # Successful payloads carry a list of contracts under "items"
-                # or directly as a list.
-                items = payload.get("items") if isinstance(payload, dict) else payload
-                if isinstance(items, list) and items:
-                    for item in items:
-                        if isinstance(item, dict) and item.get("conid"):
-                            children.append({
-                                "conid": str(item["conid"]),
-                                "right": str(item.get("right") or item.get("putOrCall") or ""),
-                                "strike": item.get("strike"),
-                                "source": f"secdef/info:{method}:{month}",
-                            })
-                    if children:
-                        return children
-
-        # Strategy 3 — search by parent ticker
-        secdef = await self.get_trsrv_secdef(parent_conid)
-        ticker = str(secdef.get("ticker") or secdef.get("symbol") or "").strip()
-        if ticker:
+        # Step 1: enumerate strikes per month until one comes back non-empty.
+        hit_month: Optional[str] = None
+        calls: list[float] = []
+        puts: list[float] = []
+        for month in month_candidates:
             try:
                 payload = await self._request(
-                    "POST", "/iserver/secdef/search",
-                    json_body={"symbol": ticker, "secType": "EC"},
+                    "GET", "/iserver/secdef/strikes",
+                    params={
+                        "conid": str(parent_conid),
+                        "exchange": "FORECASTX",
+                        "sectype": "OPT",
+                        "month": month,
+                    },
                 )
-                items = payload.get("items") if isinstance(payload, dict) else payload
-                if isinstance(items, list):
-                    for item in items:
-                        if not isinstance(item, dict):
-                            continue
-                        conid = str(item.get("conid") or "").strip()
-                        if conid and conid != str(parent_conid):
-                            children.append({
-                                "conid": conid,
-                                "right": "",
-                                "strike": None,
-                                "source": f"secdef/search:{ticker}",
-                            })
             except Exception:
-                pass
+                # 503 / circuit-open / timeout — try next month rather
+                # than aborting the whole sequence.
+                continue
+            if not isinstance(payload, dict):
+                continue
+            month_calls = list(payload.get("call") or [])
+            month_puts = list(payload.get("put") or [])
+            if month_calls or month_puts:
+                hit_month = month
+                calls = month_calls
+                puts = month_puts
+                break
+
+        if hit_month is None:
+            return children
+
+        # Step 2: for each unique strike value (Call ∪ Put), call
+        # /iserver/secdef/info to retrieve the contract pair. This is
+        # the only endpoint that returns the actual child conid.
+        unique_strikes: list[float] = sorted(set(calls) | set(puts))
+        for strike in unique_strikes:
+            try:
+                info_payload = await self._request(
+                    "GET", "/iserver/secdef/info",
+                    params={
+                        "conid": str(parent_conid),
+                        "exchange": "FORECASTX",
+                        "sectype": "OPT",
+                        "month": hit_month,
+                        "strike": str(strike),
+                    },
+                )
+            except Exception:
+                continue
+            items = (
+                info_payload.get("items")
+                if isinstance(info_payload, dict) else info_payload
+            )
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                conid = str(item.get("conid") or "").strip()
+                if not conid:
+                    continue
+                children.append({
+                    "conid": conid,
+                    "right": str(item.get("right") or "").upper(),
+                    "strike": item.get("strike"),
+                    "maturity_date": item.get("maturityDate"),
+                    "desc": item.get("desc2") or item.get("desc1") or "",
+                    "source": f"secdef/info:OPT:{hit_month}:strike={strike}",
+                })
 
         return children
 
