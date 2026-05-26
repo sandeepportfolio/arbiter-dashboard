@@ -518,6 +518,46 @@ async def test_close_market_action_unwinds_polymarket_midterm():
     assert pos.mitigation_action == "closed"
 
 
+async def test_mitigation_engine_decision_attached_per_position():
+    """When a price_store + market_map_provider are wired, every
+    tracked position gets a full MitigationEngine decision dict
+    surfaced via mitigation_decision."""
+    engine = MagicMock()
+    engine._record_incident = AsyncMock()
+    adapter = MagicMock()
+    adapter.place_unwind_sell = AsyncMock()
+    adapter.place_fok = AsyncMock()
+
+    class _Store:
+        async def get_all_for_market(self, canonical_id):
+            return {}
+
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), engine=engine,
+        adapters={"kalshi": adapter},
+        auto_close=False,
+        price_store=_Store(),
+        market_map_provider=lambda: {},
+    )
+    rec._fetch_kalshi_positions = AsyncMock(return_value=[
+        _stub_pos(market_id="K-EV-CHECK", qty=10, cost_basis_usd=5.0,
+                  best_bid=0.45, best_ask=0.55),
+    ])
+    rec._fetch_polymarket_us_positions = AsyncMock(return_value=[])
+    rec._fetch_forecastex_positions = AsyncMock(return_value=[])
+
+    snap = await rec.run_once()
+    pos = rec.tracked[("kalshi", "K-EV-CHECK")]
+    assert pos.mitigation_decision is not None
+    # Engine decisions carry an action + rationale + profitability.
+    assert pos.mitigation_decision.get("action") in (
+        "HOLD_TO_SETTLE", "CLOSE_NOW", "COMPLETE_ARB", "MANUAL_REVIEW", "HEDGE",
+    )
+    assert "profitability" in pos.mitigation_decision
+    # snapshot dict carries it through to the API/UI consumers.
+    assert any(s.get("mitigation_decision") is not None for s in snap.stranded)
+
+
 async def test_classification_runs_when_auto_close_off_so_ui_can_render():
     """auto_close=False is the safety default. Operators still need
     to see the recommended action on each tracked position so they

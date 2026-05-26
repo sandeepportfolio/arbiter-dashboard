@@ -2873,62 +2873,90 @@ function ExecutionHealthPanel() {
                 <div style={{ fontSize:18, fontWeight:700, color: strandedTotalUnrealized >= 0 ? t.green : t.red, fontFamily:window.FONTS.mono }}>{window.fmt$Sign(strandedTotalUnrealized)}</div>
               </div>
             </div>
-            {/* Action split — at-a-glance summary of what the policy will do per lot. */}
+            {/* Action split — at-a-glance summary of what the
+                MitigationEngine recommends across the corpus. Engine
+                returns lowercase action keys (complete_arb /
+                hold_to_settle / close_now / hedge / manual_review);
+                legacy classifier keys (let_settle / close_market /
+                closed / large_notional / illiquid_no_bbo /
+                spread_too_wide / no_adapter) still appear when the
+                engine isn't wired. Pill color encodes operational
+                outcome regardless of which source produced it. */}
             <div style={{ display:'flex', gap:14, marginBottom:8, flexWrap:'wrap', fontSize:10.5, fontFamily:window.FONTS.mono }}>
               {Object.entries(strandedActionCounts).sort((a,b)=>b[1]-a[1]).map(([k,v]) => {
                 const color = (
-                  k === 'closed' ? t.green :
-                  k === 'close_market' ? t.amber :
-                  k === 'let_settle' ? t.textDim :
-                  (k === 'large_notional' || k === 'illiquid_no_bbo' || k === 'spread_too_wide') ? t.red :
+                  k === 'closed' || k === 'complete_arb' ? t.green :
+                  k === 'close_market' || k === 'close_now' || k === 'hedge' ? t.amber :
+                  k === 'let_settle' || k === 'hold_to_settle' ? t.textDim :
+                  k === 'manual_review' || k === 'large_notional' || k === 'illiquid_no_bbo' || k === 'spread_too_wide' || k === 'no_adapter' ? t.red :
                   t.textMuted
                 );
                 return (
-                  <span key={k} title={`${v} stranded ${v === 1 ? 'position' : 'positions'} classified ${k}`} style={{ color, padding:'2px 8px', borderRadius:99, background:t.bgSubtle, border:`1px solid ${t.border}` }}>
+                  <span key={k} title={`${v} stranded ${v === 1 ? 'position' : 'positions'} → engine action: ${k}`} style={{ color, padding:'2px 8px', borderRadius:99, background:t.bgSubtle, border:`1px solid ${t.border}` }}>
                     {k}: <strong style={{ color:t.text }}>{v}</strong>
                   </span>
                 );
               })}
             </div>
             <div style={{ display:'grid', gap:4 }}>
-              {strandedList.slice(0, 20).map((p, i) => {
-                const action = String(p.mitigation_action || 'unknown');
+              {strandedList.slice(0, 30).map((p, i) => {
+                // Prefer the rich MitigationEngine decision when present;
+                // fall back to the legacy classifier label for older snapshots.
+                const dec = p.mitigation_decision || null;
+                const engineAction = dec ? String(dec.action || '') : '';
+                const action = engineAction || String(p.mitigation_action || 'unknown');
+                const upper = action.toUpperCase();
+                const autonomousOk = dec ? !!dec.autonomous_ok : false;
+                const confidence = dec ? String(dec.confidence || 'medium') : '';
                 const actionColor = (
-                  action === 'closed' ? t.green :
-                  action === 'close_market' ? t.amber :
-                  action === 'let_settle' ? t.textDim :
-                  action === 'large_notional' || action === 'illiquid_no_bbo' || action === 'spread_too_wide' ? t.red :
+                  upper === 'COMPLETE_ARB' || upper === 'CLOSED' ? t.green :
+                  upper === 'CLOSE_NOW' ? t.amber :
+                  upper === 'HOLD_TO_SETTLE' || upper === 'LET_SETTLE' ? t.textDim :
+                  upper === 'MANUAL_REVIEW' || upper === 'LARGE_NOTIONAL' || upper === 'ILLIQUID_NO_BBO' || upper === 'SPREAD_TOO_WIDE' ? t.red :
+                  upper === 'HEDGE' ? t.amber :
                   t.textMuted
                 );
                 const actionLabel = (
-                  action === 'let_settle' ? 'LET SETTLE (penny)' :
-                  action === 'close_market' ? (strandedAutoClose ? 'will close at market' : 'CLOSE AT MARKET (auto-close OFF)') :
-                  action === 'closed' ? '✓ closed' :
-                  action === 'large_notional' ? 'MANUAL: large notional' :
-                  action === 'illiquid_no_bbo' ? 'MANUAL: illiquid' :
-                  action === 'spread_too_wide' ? 'MANUAL: wide spread' :
-                  action === 'no_adapter' ? 'no venue adapter' :
+                  upper === 'COMPLETE_ARB' ? `COMPLETE ARB → ${(dec && dec.complete_arb && dec.complete_arb.venue) || ''}` :
+                  upper === 'CLOSE_NOW' ? (strandedAutoClose ? 'CLOSE NOW (auto)' : 'CLOSE NOW (auto-close OFF)') :
+                  upper === 'HOLD_TO_SETTLE' ? 'HOLD TO SETTLE' :
+                  upper === 'LET_SETTLE' ? 'LET SETTLE (penny)' :
+                  upper === 'CLOSED' ? '✓ closed' :
+                  upper === 'MANUAL_REVIEW' ? 'MANUAL REVIEW' :
+                  upper === 'HEDGE' ? 'HEDGE (operator)' :
+                  upper === 'LARGE_NOTIONAL' ? 'MANUAL: large notional' :
+                  upper === 'ILLIQUID_NO_BBO' ? 'MANUAL: illiquid' :
+                  upper === 'SPREAD_TOO_WIDE' ? 'MANUAL: wide spread' :
+                  upper === 'NO_ADAPTER' ? 'no venue adapter' :
                   action
                 );
-                const cps = Number(p.cost_per_share || (Number(p.cost_basis_usd || 0) / Math.max(Math.abs(Number(p.qty || 0)), 1)));
+                const prof = dec && dec.profitability ? dec.profitability : {};
+                const cps = Number(p.cost_per_share || prof.cost_per_share || (Number(p.cost_basis_usd || 0) / Math.max(Math.abs(Number(p.qty || 0)), 1)));
                 const exp = (p.seconds_to_expiry != null)
                   ? ` · ${(Number(p.seconds_to_expiry) > 0 ? Math.round(Number(p.seconds_to_expiry) / 86400) + 'd to expiry' : 'expired')}`
                   : '';
-                const titleTip = `${p.platform} · ${p.market_id} · ${p.title || ''} · cost $${Number(p.cost_basis_usd).toFixed(2)} (${cps.toFixed(3)}/sh) · mtm $${Number(p.mtm_usd).toFixed(2)} · bbo ${Number(p.best_bid).toFixed(3)}/${Number(p.best_ask).toFixed(3)} · age ${Math.round(Number(p.age_seconds || 0))}s${exp} · action: ${actionLabel} · result: ${p.auto_close_result || '—'}`;
+                const evRow = dec ? ` · implied P=${(Number(prof.implied_settle_probability || 0) * 100).toFixed(1)}% · EV $${Number(prof.expected_value_at_settle_usd || 0).toFixed(2)} vs close $${Number(prof.close_proceeds_usd || 0).toFixed(2)}` : '';
+                const rationaleTip = (dec && dec.rationale) ? `\n— ${dec.rationale}` : '';
+                const titleTip = `${p.platform} · ${p.market_id} · ${p.title || ''} · cost $${Number(p.cost_basis_usd).toFixed(2)} (${cps.toFixed(3)}/sh) · mtm $${Number(p.mtm_usd).toFixed(2)} · bbo ${Number(p.best_bid).toFixed(3)}/${Number(p.best_ask).toFixed(3)} · age ${Math.round(Number(p.age_seconds || 0))}s${exp}${evRow} · action: ${actionLabel}${rationaleTip} · result: ${p.auto_close_result || '—'}`;
                 return (
-                  <div key={(p.platform || '') + '-' + (p.market_id || '') + '-' + i} title={titleTip} style={{ fontSize:10.5, color:t.textDim, fontFamily:window.FONTS.mono, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', display:'flex', gap:10 }}>
+                  <div key={(p.platform || '') + '-' + (p.market_id || '') + '-' + i} title={titleTip} style={{ fontSize:10.5, color:t.textDim, fontFamily:window.FONTS.mono, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', display:'flex', gap:10, alignItems:'center' }}>
                     <span style={{ color:t.text, minWidth:80 }}>{p.platform}</span>
                     <span style={{ color:t.text, flex:'1 1 auto', overflow:'hidden', textOverflow:'ellipsis' }}>{p.market_id}</span>
                     <span style={{ color: Number(p.qty) >= 0 ? t.green : t.red }}>{Number(p.qty) >= 0 ? '+' : ''}{Number(p.qty).toFixed(0)} {p.side}</span>
                     <span style={{ color:t.textMuted }}>cost {window.fmt$Sign(-Math.abs(Number(p.cost_basis_usd)))}</span>
                     <span style={{ color: Number(p.unrealized_usd) >= 0 ? t.green : t.red }}>{window.fmt$Sign(Number(p.unrealized_usd))}</span>
-                    <span style={{ color: actionColor, minWidth:200, overflow:'hidden', textOverflow:'ellipsis', fontWeight: 700 }}>{actionLabel}</span>
+                    {dec && (
+                      <span title={`engine confidence=${confidence}; ${autonomousOk ? 'safe to execute autonomously' : 'requires operator review'}`} style={{ fontSize:9, padding:'1px 6px', borderRadius:99, background:t.bgSubtle, color: autonomousOk ? t.green : t.amber, border:`1px solid ${t.border}` }}>
+                        {autonomousOk ? 'auto' : 'review'}
+                      </span>
+                    )}
+                    <span style={{ color: actionColor, minWidth:240, overflow:'hidden', textOverflow:'ellipsis', fontWeight: 700 }}>{actionLabel}</span>
                   </div>
                 );
               })}
-              {strandedList.length > 20 && (
+              {strandedList.length > 30 && (
                 <div style={{ fontSize:10.5, color:t.textMuted, marginTop:4 }}>
-                  … and {(strandedList.length - 20).toLocaleString()} more (showing top 20)
+                  … and {(strandedList.length - 30).toLocaleString()} more (showing top 30)
                 </div>
               )}
             </div>

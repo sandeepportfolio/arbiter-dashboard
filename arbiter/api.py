@@ -2805,7 +2805,13 @@ class ArbiterAPI:
         return web.json_response({"violations": fallback.get("violations", [])})
 
     async def handle_portfolio_positions(self, request):
-        """Return all open positions with full details."""
+        """Return all open positions with full details.
+
+        Combines engine-tracked arb legs with the StrandedPositionReconciler's
+        truth (so FILL-01 stranded lots — including all FX positions —
+        appear in the operator-visible list, not just in the engine's
+        in-memory _executions array).
+        """
         positions = []
         if hasattr(self.engine, "_executions"):
             for e in self.engine._executions:
@@ -2830,6 +2836,41 @@ class ArbiterAPI:
                     "unwind_pnl": float(getattr(e, "unwind_pnl", 0.0) or 0.0),
                     "arb_pnl": float(getattr(e, "arb_pnl", e.realized_pnl)),
                     "created_at": e.timestamp,
+                    "source": "engine",
+                })
+        # Append stranded reconciler positions (any venue, including FX).
+        recon = getattr(self, "stranded_reconciler", None)
+        tracked = getattr(recon, "tracked", None) if recon is not None else None
+        if isinstance(tracked, dict):
+            for pos in tracked.values():
+                positions.append({
+                    "arb_id": None,
+                    "canonical_id": pos.market_id,   # no canonical mapping for orphan lots
+                    "description": pos.title or pos.market_id,
+                    "quantity": int(abs(pos.qty)),
+                    "yes_platform": pos.platform if pos.side == "YES" else None,
+                    "no_platform": pos.platform if pos.side == "NO" else None,
+                    "yes_price": None,
+                    "no_price": None,
+                    "gross_edge_cents": None,
+                    "net_edge_cents": None,
+                    "status": "stranded",
+                    "yes_fill_price": pos.best_bid if pos.side == "YES" else None,
+                    "no_fill_price": pos.best_bid if pos.side == "NO" else None,
+                    "yes_fill_qty": int(abs(pos.qty)) if pos.side == "YES" else 0,
+                    "no_fill_qty": int(abs(pos.qty)) if pos.side == "NO" else 0,
+                    "realized_pnl": None,
+                    "unwind_pnl": None,
+                    "arb_pnl": None,
+                    "created_at": pos.first_seen_ts,
+                    "source": "stranded_reconciler",
+                    "platform": pos.platform,
+                    "side": pos.side,
+                    "cost_basis_usd": round(pos.cost_basis_usd, 4),
+                    "mtm_usd": round(pos.mtm_usd, 4),
+                    "unrealized_usd": round(pos.unrealized_usd, 4),
+                    "mitigation_action": pos.mitigation_action,
+                    "mitigation_decision": pos.mitigation_decision,
                 })
         return web.json_response({"positions": positions})
 

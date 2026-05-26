@@ -88,6 +88,13 @@ class StrandedPosition:
     # Persists across cycles so the UI can render the table without
     # waiting for a fresh classify pass.
     mitigation_action: str = "unknown"
+    # Full decision dict emitted by the MitigationEngine — carries the
+    # profitability snapshot, the structured action (COMPLETE_ARB /
+    # HOLD_TO_SETTLE / CLOSE_NOW / HEDGE / MANUAL_REVIEW), the
+    # rationale, and (when applicable) the missing-leg venue + price
+    # for an arb completion. Plumbed straight through to the API +
+    # ops.html so the operator sees the full reasoning chain.
+    mitigation_decision: Optional[Dict[str, Any]] = None
 
     @property
     def cost_per_share(self) -> float:
@@ -120,6 +127,7 @@ class StrandedPosition:
             "auto_close_attempted": self.auto_close_attempted,
             "auto_close_result": self.auto_close_result,
             "mitigation_action": self.mitigation_action,
+            "mitigation_decision": self.mitigation_decision,
         }
 
 
@@ -156,20 +164,51 @@ class StrandedPositionReconciler:
         config,
         adapters: Optional[Dict[str, Any]] = None,
         engine: Optional[Any] = None,
+        forecastex_client: Optional[Any] = None,
+        price_store: Optional[Any] = None,
+        market_map_provider: Optional[Any] = None,
         interval_s: float = 300.0,
         auto_close: bool = False,
         max_auto_close_notional_usd: float = 30.0,
         max_auto_close_spread_bps: float = 1000.0,  # 10¢ wide max
         penny_cost_threshold_usd: float = 0.05,
         let_settle_window_seconds: float = 7 * 24 * 3600.0,
+        mitigation_engine: Optional[Any] = None,
     ) -> None:
         self._config = config
         self._adapters = adapters or {}
         self._engine = engine
+        self._forecastex_client = forecastex_client
+        self._price_store = price_store
+        self._market_map_provider = market_map_provider
         self._interval_s = max(30.0, float(interval_s))
         self._auto_close = bool(auto_close)
         self._max_auto_close_notional_usd = float(max_auto_close_notional_usd)
         self._max_auto_close_spread_bps = float(max_auto_close_spread_bps)
+        # Lazy-construct the mitigation engine if the caller didn't
+        # supply one; gives test paths a quick override hook while
+        # production wiring just passes price_store + market_map.
+        if mitigation_engine is None and price_store is not None:
+            from arbiter.recovery.mitigation_engine import (
+                MitigationConfig as _MitConfig, MitigationEngine as _MitEng,
+            )
+            self._mitigation_engine = _MitEng(
+                price_store=price_store,
+                market_map_provider=(
+                    market_map_provider
+                    or (lambda: __import__(
+                        "arbiter.config.settings", fromlist=["MARKET_MAP"]
+                    ).MARKET_MAP)
+                ),
+                adapters=self._adapters,
+                config=_MitConfig(
+                    penny_cost_threshold_usd=float(penny_cost_threshold_usd),
+                    max_autonomous_notional_usd=float(max_auto_close_notional_usd),
+                    max_autonomous_spread_bps=float(max_auto_close_spread_bps),
+                ),
+            )
+        else:
+            self._mitigation_engine = mitigation_engine
         # Penny-position protection: lots whose per-share cost is at or
         # below this threshold get the "let_settle" recommendation
         # instead of an auto-close attempt. Closing a 23-share lot of
@@ -261,6 +300,7 @@ class StrandedPositionReconciler:
         for platform, fetch in (
             ("kalshi", self._fetch_kalshi_positions),
             ("polymarket", self._fetch_polymarket_us_positions),
+            ("forecastex", self._fetch_forecastex_positions),
         ):
             try:
                 for pos in await fetch():
@@ -297,10 +337,6 @@ class StrandedPositionReconciler:
             if key not in observed:
                 del self._tracked[key]
 
-        # Emit incident for each newly-observed stranded lot.
-        for key in new_keys:
-            await self._emit_stranded_incident(self._tracked[key])
-
         # Refresh classification on EVERY position EVERY cycle so the
         # ops UI shows the current recommendation even when auto-close
         # is OFF (operator observation mode). Idempotent — pure read
@@ -314,12 +350,75 @@ class StrandedPositionReconciler:
                     platform=pos.platform, market_id=pos.market_id, err=str(exc),
                 )
 
-        # Optional auto-close pass.
+        # Run the sophisticated MitigationEngine on every position so
+        # the ops UI sees the full cost-benefit chain regardless of
+        # whether auto-close is enabled. Engine output sets the
+        # mitigation_action label too (overriding the legacy classify
+        # output) so the action badge matches the engine's decision.
+        if self._mitigation_engine is not None:
+            for pos in list(self._tracked.values()):
+                try:
+                    decision = await self._mitigation_engine.decide(pos)
+                    pos.mitigation_decision = decision.to_dict()
+                    # Map engine action → legacy action label so the
+                    # existing ops UI badge keeps working.
+                    pos.mitigation_action = decision.action.lower()
+                except Exception as exc:
+                    logger.warning(
+                        "stranded_reconciler.mitigation_engine_failed",
+                        platform=pos.platform, market_id=pos.market_id,
+                        err=str(exc),
+                    )
+
+        # Emit incident only for new lots that need operator attention.
+        # Autonomous-OK decisions (HOLD_TO_SETTLE penny lots,
+        # CLOSE_NOW within auto-cap, COMPLETE_ARB within auto-cap)
+        # mitigate silently — the operator already gets the action
+        # outcome via the ops dashboard and Telegram only fires on
+        # decisions that genuinely need their eyes (MANUAL_REVIEW,
+        # HEDGE, oversized CLOSE_NOW). Reduces the 25-position
+        # Telegram burst that the 2026-05-26 cycle generated from
+        # 25 alerts → ~2 alerts.
+        for key in new_keys:
+            pos = self._tracked[key]
+            dec = pos.mitigation_decision or {}
+            action_upper = str(dec.get("action") or "").upper()
+            autonomous_ok = bool(dec.get("autonomous_ok"))
+            # Always alert on unclassified positions (engine wasn't
+            # wired) — defensive against silent loss of visibility.
+            if not action_upper:
+                await self._emit_stranded_incident(pos)
+                continue
+            # Silent mitigation when the engine has a confident
+            # autonomous recommendation. Operator still sees it on
+            # the dashboard; no Telegram burst.
+            if autonomous_ok and action_upper in (
+                "HOLD_TO_SETTLE", "CLOSE_NOW", "COMPLETE_ARB",
+            ):
+                logger.info(
+                    "stranded_reconciler.silent_mitigation",
+                    platform=pos.platform,
+                    market_id=pos.market_id,
+                    action=action_upper,
+                    rationale=str(dec.get("rationale") or "")[:160],
+                )
+                continue
+            await self._emit_stranded_incident(pos)
+
+        # Auto-mitigation pass — uses the engine's decision when
+        # auto_close is enabled. Only autonomous_ok decisions execute
+        # silently; the rest leave an incident for operator review.
         if self._auto_close:
             for pos in list(self._tracked.values()):
                 if pos.auto_close_attempted:
                     continue
-                await self._maybe_auto_close(pos)
+                if self._mitigation_engine is not None and pos.mitigation_decision:
+                    await self._execute_decision(pos)
+                else:
+                    # Fallback to the legacy single-shot close gate
+                    # (kept for tests + dev environments that don't
+                    # wire the engine).
+                    await self._maybe_auto_close(pos)
 
         duration_ms = (time.monotonic() - t0) * 1000.0
         snapshot = ReconcilerSnapshot(
@@ -501,6 +600,90 @@ class StrandedPositionReconciler:
             await client.close()
         return out
 
+    async def _fetch_forecastex_positions(self) -> List[StrandedPosition]:
+        """Read IBKR portfolio positions and surface FORECASTX lots.
+
+        The IBKR portfolio endpoint mixes ForecastEx contracts with
+        non-FORECASTX inventory (the user may also hold equities), so
+        we filter by ``listingExchange`` / ``contractDesc`` containing
+        the FORECASTX marker. The conid → BBO snapshot reuses the
+        same ``market_snapshot`` path the collector uses.
+        """
+        client = self._forecastex_client
+        if client is None or not getattr(client, "account_id", ""):
+            return []
+        try:
+            positions = await client.positions()
+        except Exception as exc:
+            raise RuntimeError(f"forecastex.positions fetch: {exc}") from exc
+        if not positions:
+            return []
+        out: List[StrandedPosition] = []
+        for p in positions:
+            if not isinstance(p, dict):
+                continue
+            # Filter to FORECASTX inventory only — the user may hold
+            # other IBKR products in the same account.
+            exchange = str(p.get("listingExchange") or p.get("exchange") or "").upper()
+            desc = str(p.get("contractDesc") or p.get("name") or "").upper()
+            if "FORECASTX" not in exchange and "FORECASTX" not in desc:
+                continue
+            try:
+                net = float(p.get("position") or 0)
+            except (TypeError, ValueError):
+                net = 0.0
+            if net == 0:
+                continue
+            conid = str(p.get("conid") or "").strip()
+            if not conid:
+                continue
+            # Cost basis: IBKR reports ``avgCost`` per contract (in
+            # dollars). FORECASTX child contracts settle to $1 so a
+            # 0.55 avgCost on 10 shares means $5.50 cost basis.
+            try:
+                avg_cost = float(p.get("avgCost") or 0)
+            except (TypeError, ValueError):
+                avg_cost = 0.0
+            qty_abs = abs(net)
+            cost = avg_cost * qty_abs
+            mtm_per_share = float(p.get("mktPrice") or 0) or avg_cost
+            mtm = mtm_per_share * qty_abs
+            best_bid = best_ask = 0.0
+            try:
+                snap = await client.market_snapshot(conid)
+                # 84 = bid, 86 = ask in IBKR's field-code dialect.
+                bid_raw = snap.get("84") if isinstance(snap, dict) else None
+                ask_raw = snap.get("86") if isinstance(snap, dict) else None
+                if bid_raw is not None:
+                    try:
+                        best_bid = float(str(bid_raw).lstrip("C").strip())
+                    except (TypeError, ValueError):
+                        best_bid = 0.0
+                if ask_raw is not None:
+                    try:
+                        best_ask = float(str(ask_raw).lstrip("C").strip())
+                    except (TypeError, ValueError):
+                        best_ask = 0.0
+            except Exception:
+                pass
+            out.append(
+                StrandedPosition(
+                    platform="forecastex",
+                    market_id=conid,
+                    side="YES" if net > 0 else "NO",
+                    qty=float(net),
+                    cost_basis_usd=cost,
+                    mtm_usd=mtm,
+                    unrealized_usd=mtm - cost,
+                    best_bid=best_bid,
+                    best_ask=best_ask,
+                    title=desc[:80],
+                    first_seen_ts=time.time(),
+                    last_seen_ts=time.time(),
+                )
+            )
+        return out
+
     # ─── incident + auto-close ────────────────────────────────────────────
 
     @staticmethod
@@ -569,6 +752,168 @@ class StrandedPositionReconciler:
                 platform=pos.platform,
                 market_id=pos.market_id,
                 err=str(exc),
+            )
+
+    async def _execute_decision(self, pos: StrandedPosition) -> None:
+        """Execute a MitigationEngine decision against the live venues.
+
+        Decision actions map to concrete venue calls:
+          - COMPLETE_ARB    → place_fok on the missing-leg adapter
+                              (BUY for the canonical opposite side).
+                              If it fills, the original stranded leg
+                              becomes part of a real arb and we record
+                              that fact on the position.
+          - HOLD_TO_SETTLE  → no-op. We mark attempted so the cycle
+                              skip-list doesn't reclassify forever;
+                              the engine will still REFRESH the
+                              decision every cycle so the operator
+                              sees fresh EV.
+          - CLOSE_NOW       → place_unwind_sell on this position's
+                              venue at the bid (same path the legacy
+                              auto-close gate used).
+          - HEDGE           → place_fok on hedge venue (not yet
+                              implemented — falls through to manual).
+          - MANUAL_REVIEW   → mark attempted, leave the incident open
+                              for operator action.
+        """
+        from arbiter.recovery.mitigation_engine import (
+            CLOSE_NOW as _CLOSE_NOW,
+            COMPLETE_ARB as _COMPLETE_ARB,
+            HEDGE as _HEDGE,
+            HOLD_TO_SETTLE as _HOLD,
+            MANUAL_REVIEW as _MANUAL,
+        )
+        decision = pos.mitigation_decision or {}
+        action = str(decision.get("action") or "").upper()
+        autonomous = bool(decision.get("autonomous_ok"))
+
+        if action == _HOLD:
+            pos.auto_close_attempted = True
+            pos.auto_close_result = (
+                f"HOLD_TO_SETTLE: {decision.get('rationale', '')[:200]}"
+            )
+            return
+        if action == _MANUAL:
+            pos.auto_close_attempted = True
+            pos.auto_close_result = (
+                f"MANUAL_REVIEW: {decision.get('rationale', '')[:200]}"
+            )
+            return
+        if not autonomous:
+            pos.auto_close_attempted = True
+            pos.auto_close_result = (
+                f"{action}: needs operator approval — {decision.get('rationale', '')[:160]}"
+            )
+            return
+        if action == _COMPLETE_ARB:
+            await self._execute_complete_arb(pos, decision)
+            return
+        if action == _CLOSE_NOW:
+            await self._execute_close_now(pos, decision)
+            return
+        if action == _HEDGE:
+            # Hedge execution intentionally deferred — surfaces as
+            # operator-review until we have a tested hedge path.
+            pos.auto_close_attempted = True
+            pos.auto_close_result = (
+                f"HEDGE: deferred to operator — {decision.get('rationale', '')[:160]}"
+            )
+            return
+        # Unknown action — defensive default.
+        pos.auto_close_attempted = True
+        pos.auto_close_result = f"unknown action {action!r}"
+
+    async def _execute_complete_arb(
+        self, pos: StrandedPosition, decision: Dict[str, Any],
+    ) -> None:
+        """Place the missing arb leg on the recommended venue.
+
+        Uses the venue adapter's ``place_fok`` (the same path the live
+        executor uses to enter new arbs) so the order goes through
+        every safety gate the engine relies on for normal trades.
+        """
+        info = decision.get("complete_arb") or {}
+        venue = info.get("venue")
+        market_id = info.get("market_id")
+        side = str(info.get("side") or "").lower()
+        price = float(info.get("price") or 0.0)
+        qty = int(info.get("qty") or 0)
+        canonical_id = info.get("canonical_id") or pos.market_id
+        adapter = self._adapters.get(venue) if venue else None
+        if adapter is None or not hasattr(adapter, "place_fok") or qty <= 0:
+            pos.auto_close_attempted = True
+            pos.auto_close_result = (
+                f"COMPLETE_ARB blocked: venue={venue!r} has no place_fok"
+            )
+            return
+        try:
+            arb_id = self._strand_arb_id(pos.platform, pos.market_id)
+            order = await adapter.place_fok(
+                arb_id=arb_id,
+                market_id=market_id,
+                canonical_id=canonical_id,
+                side=side,
+                price=price,
+                qty=qty,
+            )
+            pos.auto_close_attempted = True
+            fill = float(getattr(order, "fill_qty", 0) or 0)
+            status = getattr(getattr(order, "status", None), "value", str(getattr(order, "status", "")))
+            pos.auto_close_result = (
+                f"COMPLETE_ARB: placed BUY {qty} {side.upper()} on {venue} "
+                f"@ ${price:.4f} → status={status} fill_qty={fill}"
+            )
+            logger.info(
+                "stranded_reconciler.complete_arb_attempt",
+                pos_platform=pos.platform,
+                pos_market_id=pos.market_id,
+                arb_venue=venue, arb_market_id=market_id, arb_side=side,
+                price=price, qty=qty, status=status, fill_qty=fill,
+            )
+        except Exception as exc:
+            pos.auto_close_attempted = True
+            pos.auto_close_result = f"COMPLETE_ARB exception: {exc}"
+            logger.warning(
+                "stranded_reconciler.complete_arb_failed",
+                pos_platform=pos.platform, pos_market_id=pos.market_id,
+                venue=venue, err=str(exc),
+            )
+
+    async def _execute_close_now(
+        self, pos: StrandedPosition, decision: Dict[str, Any],
+    ) -> None:
+        """Place a market sell (IOC) on the position's own venue."""
+        adapter = self._adapters.get(pos.platform)
+        if adapter is None or not hasattr(adapter, "place_unwind_sell"):
+            pos.auto_close_attempted = True
+            pos.auto_close_result = "CLOSE_NOW blocked: no place_unwind_sell"
+            return
+        try:
+            order = await adapter.place_unwind_sell(
+                arb_id=self._strand_arb_id(pos.platform, pos.market_id),
+                market_id=pos.market_id,
+                canonical_id=pos.market_id,
+                side=pos.side.lower(),
+                qty=int(abs(pos.qty)),
+            )
+            pos.auto_close_attempted = True
+            fill = float(getattr(order, "fill_qty", 0) or 0)
+            status = getattr(getattr(order, "status", None), "value", str(getattr(order, "status", "")))
+            pos.mitigation_action = "closed" if fill > 0 else "close_now"
+            pos.auto_close_result = (
+                f"CLOSE_NOW: status={status} fill_qty={fill}"
+            )
+            logger.info(
+                "stranded_reconciler.close_now_done",
+                platform=pos.platform, market_id=pos.market_id,
+                qty=pos.qty, status=status, fill_qty=fill,
+            )
+        except Exception as exc:
+            pos.auto_close_attempted = True
+            pos.auto_close_result = f"CLOSE_NOW exception: {exc}"
+            logger.warning(
+                "stranded_reconciler.close_now_failed",
+                platform=pos.platform, market_id=pos.market_id, err=str(exc),
             )
 
     def classify_action(self, pos: StrandedPosition) -> str:
@@ -705,7 +1050,10 @@ class StrandedPositionReconciler:
             )
 
 
-def reconciler_from_env(*, config, adapters, engine) -> StrandedPositionReconciler:
+def reconciler_from_env(
+    *, config, adapters, engine,
+    forecastex_client=None, price_store=None, market_map_provider=None,
+) -> StrandedPositionReconciler:
     """Build a reconciler with config sourced from env vars.
 
     Env vars:
@@ -745,6 +1093,9 @@ def reconciler_from_env(*, config, adapters, engine) -> StrandedPositionReconcil
         config=config,
         adapters=adapters,
         engine=engine,
+        forecastex_client=forecastex_client,
+        price_store=price_store,
+        market_map_provider=market_map_provider,
         interval_s=interval,
         auto_close=auto_close,
         max_auto_close_notional_usd=max_usd,
