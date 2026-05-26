@@ -146,24 +146,65 @@ async def test_decide_hold_when_implied_prob_above_close_proceeds():
 
 
 @pytest.mark.asyncio
-async def test_decide_manual_when_no_bbo():
+async def test_decide_small_no_bbo_holds_silently():
+    """Small position (notional ≤ unactionable cap) with no BBO →
+    HOLD_TO_SETTLE silently. The operator literally cannot close
+    when there's no book, so a MANUAL_REVIEW alert is pure noise.
+    Reproduces the KXMLBNL-26-PHI alert (70 YES @ $0.06 = $4.20)
+    that the user got 2026-05-26 — must NOT alert anymore.
+    """
     eng = MitigationEngine(
         adapters={"kalshi": _adapter()},
         market_map_provider=lambda: {},
+        config=MitigationConfig(unactionable_max_notional_usd=10.0),
     )
-    pos = _pos(qty=10, cost_basis_usd=5.0, best_bid=0.0, best_ask=0.0)
+    pos = _pos(qty=70, cost_basis_usd=4.20, best_bid=0.0, best_ask=0.0)
+    d = await eng.decide(pos)
+    assert d.action == HOLD_TO_SETTLE
+    assert d.autonomous_ok is True
+    assert "unactionable" in d.rationale.lower()
+
+
+@pytest.mark.asyncio
+async def test_decide_large_no_bbo_still_alerts_operator():
+    """Above the unactionable cap, no BBO → MANUAL_REVIEW.
+    Operator needs visibility on a $50 stranded position even when
+    the book is currently empty (they may want to monitor for book
+    reappearing and time a manual close)."""
+    eng = MitigationEngine(
+        adapters={"kalshi": _adapter()},
+        market_map_provider=lambda: {},
+        config=MitigationConfig(unactionable_max_notional_usd=10.0),
+    )
+    pos = _pos(qty=100, cost_basis_usd=50.0, best_bid=0.0, best_ask=0.0)
     d = await eng.decide(pos)
     assert d.action == MANUAL_REVIEW
     assert d.autonomous_ok is False
 
 
 @pytest.mark.asyncio
-async def test_decide_manual_when_no_adapter():
+async def test_decide_small_no_adapter_holds_silently():
+    """Small position on a venue with no execution adapter → silent
+    HOLD. Same logic: operator can't act, alert is noise."""
     eng = MitigationEngine(
         adapters={},                       # no kalshi adapter
         market_map_provider=lambda: {},
+        config=MitigationConfig(unactionable_max_notional_usd=10.0),
     )
     pos = _pos(qty=10, cost_basis_usd=5.0, best_bid=0.30, best_ask=0.32)
+    d = await eng.decide(pos)
+    assert d.action == HOLD_TO_SETTLE
+    assert d.autonomous_ok is True
+
+
+@pytest.mark.asyncio
+async def test_decide_large_no_adapter_still_alerts_operator():
+    eng = MitigationEngine(
+        adapters={},
+        market_map_provider=lambda: {},
+        config=MitigationConfig(unactionable_max_notional_usd=10.0),
+    )
+    pos = _pos(qty=100, cost_basis_usd=50.0, best_bid=0.30, best_ask=0.32)
     d = await eng.decide(pos)
     assert d.action == MANUAL_REVIEW
     assert "no adapter" in d.rationale.lower()

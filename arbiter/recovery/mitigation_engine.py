@@ -322,6 +322,14 @@ class MitigationConfig:
     # Notional ceiling (USD) for autonomous execution. Larger positions
     # always go through operator review regardless of recommendation.
     max_autonomous_notional_usd: float = 30.0
+    # When the venue has no live BBO / no adapter AND notional is below
+    # this threshold, the engine returns HOLD_TO_SETTLE (silent) rather
+    # than MANUAL_REVIEW. Reasoning: a $4 Kalshi position with no
+    # resting bid will SETTLE in days; the operator can do nothing
+    # about it until then, and a Telegram alert is pure noise. Above
+    # this threshold the operator wants visibility because they may
+    # want to babysit a manual close once a book reappears.
+    unactionable_max_notional_usd: float = 10.0
 
 
 class MitigationEngine:
@@ -393,6 +401,44 @@ class MitigationEngine:
                 autonomous_ok=True,  # silent — no operator alert needed
             )
 
+        # Unactionable small-notional gate. When the venue has no
+        # adapter or the market has no live BBO, we can't execute a
+        # close OR a complete-arb. For small notional positions the
+        # only path forward IS to wait for settlement — the operator
+        # genuinely has nothing to do. Returning HOLD_TO_SETTLE
+        # (autonomous, silent) suppresses the Telegram burst that
+        # would otherwise fire every cycle the book stays empty.
+        # 2026-05-26 incident: KXMLBNL-26-PHI (70 YES @ $0.06 = $4.20
+        # total) had no Kalshi BBO and triggered a noisy MANUAL_REVIEW
+        # alert despite the operator having no recourse — that's the
+        # exact noise this gate kills.
+        notional_now = abs(prof.cost_basis_usd)
+        unactionable_cap = float(getattr(cfg, "unactionable_max_notional_usd", 0.0) or 0.0)
+        if (
+            (not has_close or prof.best_bid <= 0 or prof.best_ask <= 0)
+            and notional_now <= unactionable_cap
+        ):
+            reason_bits: List[str] = []
+            if not has_close:
+                reason_bits.append(f"no adapter on {pos.platform}")
+            if prof.best_bid <= 0 or prof.best_ask <= 0:
+                reason_bits.append(
+                    f"no live BBO ({prof.best_bid:.4f}/{prof.best_ask:.4f})"
+                )
+            return MitigationDecision(
+                action=HOLD_TO_SETTLE,
+                rationale=(
+                    f"unactionable small lot — {', '.join(reason_bits)}; "
+                    f"notional ${notional_now:.2f} ≤ ${unactionable_cap:.2f} "
+                    f"unactionable cap. Position will SETTLE on its own; "
+                    f"operator has no available action before that, so "
+                    f"silent hold avoids noise."
+                ),
+                profitability=prof,
+                confidence="high",
+                autonomous_ok=True,
+            )
+
         if not has_close:
             return MitigationDecision(
                 action=MANUAL_REVIEW,
@@ -408,7 +454,9 @@ class MitigationEngine:
                 rationale=(
                     f"no live BBO on {pos.platform} ({prof.best_bid:.4f}/"
                     f"{prof.best_ask:.4f}) — cannot price a close or hedge "
-                    f"without painting the market"
+                    f"without painting the market (notional ${notional_now:.2f} "
+                    f"exceeds unactionable cap ${unactionable_cap:.2f}, so "
+                    f"operator review surfaces it)"
                 ),
                 profitability=prof,
                 confidence="low",

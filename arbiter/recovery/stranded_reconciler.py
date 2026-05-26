@@ -192,6 +192,10 @@ class StrandedPositionReconciler:
             from arbiter.recovery.mitigation_engine import (
                 MitigationConfig as _MitConfig, MitigationEngine as _MitEng,
             )
+            try:
+                _unact_cap = float(os.getenv("STRANDED_UNACTIONABLE_MAX_USD", "10") or "10")
+            except (TypeError, ValueError):
+                _unact_cap = 10.0
             self._mitigation_engine = _MitEng(
                 price_store=price_store,
                 market_map_provider=(
@@ -205,6 +209,7 @@ class StrandedPositionReconciler:
                     penny_cost_threshold_usd=float(penny_cost_threshold_usd),
                     max_autonomous_notional_usd=float(max_auto_close_notional_usd),
                     max_autonomous_spread_bps=float(max_auto_close_spread_bps),
+                    unactionable_max_notional_usd=_unact_cap,
                 ),
             )
         else:
