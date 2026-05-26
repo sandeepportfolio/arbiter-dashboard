@@ -548,6 +548,116 @@ async def test_wait_for_trigger_honors_timeout_when_no_trigger(monkeypatch):
     assert not res._wake_event.is_set()
 
 
+async def test_strikes_cache_hits_avoid_re_querying_same_parent(monkeypatch):
+    """Two canonical_ids sharing the same parent conid must only cost
+    ONE strikes call. Verified live 2026-05-26: HORC parent serves
+    both DEM_HOUSE and GOP_HOUSE, so the cache cuts strikes calls in
+    half whenever a political-control event spans both party sides.
+    """
+    settings_module.MARKET_MAP["DEM_HOUSE_2026"] = _confirmed("DEM_HOUSE_2026", "733131966")
+    settings_module.MARKET_MAP["GOP_HOUSE_2026"] = _confirmed("GOP_HOUSE_2026", "733131966")
+    collector = MagicMock()
+    collector._inactive_conids = {"733131966"}
+    collector.reactivate_conid = MagicMock()
+
+    client = MagicMock()
+    client.resolve_event_children = AsyncMock(return_value=[
+        {"conid": "DEM_CALL", "right": "C", "strike": 1.0},
+        {"conid": "REP_CALL", "right": "C", "strike": 2.0},
+    ])
+    client.market_snapshot = AsyncMock(side_effect=_parent_then_tradeable_snapshot("733131966"))
+    store = MagicMock()
+    store.get = AsyncMock(side_effect=[
+        _stub_mapping("DEM_HOUSE_2026", "733131966"),
+        _stub_mapping("GOP_HOUSE_2026", "733131966"),
+    ])
+    store.upsert = AsyncMock()
+
+    # Stub the pacing sleep so the test stays under a second.
+    monkeypatch.setattr(
+        "arbiter.recovery.forecastex_resolver.asyncio.sleep", AsyncMock(),
+    )
+
+    res = ForecastExChildResolver(
+        forecastex_client=client, forecastex_collector=collector, mapping_store=store,
+    )
+    snap = await res.run_once()
+
+    # Both candidates resolved, but ONE strikes call (cache hit on the
+    # second).
+    assert snap.resolved_count == 2
+    assert client.resolve_event_children.await_count == 1
+    assert "733131966" in res._strikes_cache
+
+
+async def test_pacing_waits_between_distinct_parent_strikes_calls(monkeypatch):
+    """Successive strikes calls for DIFFERENT parents must be paced.
+    The wrapper enforces ``_strikes_min_gap_s`` between back-to-back
+    /iserver/secdef/strikes hits so IBKR's bucket has time to refill —
+    without it, all 41 candidates 429'd in one prod cycle.
+    """
+    settings_module.MARKET_MAP["A"] = _confirmed("A", "P_A")
+    settings_module.MARKET_MAP["B"] = _confirmed("B", "P_B")
+    collector = MagicMock()
+    collector._inactive_conids = {"P_A", "P_B"}
+    collector.reactivate_conid = MagicMock()
+
+    client = MagicMock()
+    # Empty result so nothing gets cached and both candidates pay
+    # the pacing toll.
+    client.resolve_event_children = AsyncMock(return_value=[])
+    client.market_snapshot = AsyncMock(side_effect=lambda c: _empty_snapshot())
+    store = MagicMock()
+
+    sleep_calls: list[float] = []
+
+    async def _record_sleep(delay):
+        sleep_calls.append(delay)
+
+    monkeypatch.setattr(
+        "arbiter.recovery.forecastex_resolver.asyncio.sleep", _record_sleep,
+    )
+
+    res = ForecastExChildResolver(
+        forecastex_client=client, forecastex_collector=collector, mapping_store=store,
+    )
+    res._strikes_min_gap_s = 3.0
+    await res.run_once()
+
+    # At least one sleep in [2.5, 3.0] (the pacing gap between A and B).
+    pacing_sleeps = [s for s in sleep_calls if 2.5 <= s <= 3.0]
+    assert pacing_sleeps, (
+        f"expected a pacing sleep ~3s between distinct strikes calls; "
+        f"got sleeps={sleep_calls}"
+    )
+
+
+async def test_empty_strikes_result_is_not_cached(monkeypatch):
+    """An empty children list (parent has no FX option chain, OR a
+    transient 503/429-exhaustion) must NOT poison the cache —
+    subsequent cycles need to retry rather than be told permanently
+    that this parent has no children."""
+    settings_module.MARKET_MAP["X"] = _confirmed("X", "P_X")
+    collector = MagicMock()
+    collector._inactive_conids = {"P_X"}
+    collector.reactivate_conid = MagicMock()
+
+    client = MagicMock()
+    client.resolve_event_children = AsyncMock(return_value=[])
+    client.market_snapshot = AsyncMock(side_effect=lambda c: _empty_snapshot())
+    store = MagicMock()
+
+    monkeypatch.setattr(
+        "arbiter.recovery.forecastex_resolver.asyncio.sleep", AsyncMock(),
+    )
+
+    res = ForecastExChildResolver(
+        forecastex_client=client, forecastex_collector=collector, mapping_store=store,
+    )
+    await res.run_once()
+    assert "P_X" not in res._strikes_cache
+
+
 def test_trigger_is_idempotent_and_safe_before_loop_start():
     """trigger() must be safe to call before start() — wiring code may
     register it during initialization, before the loop is running."""

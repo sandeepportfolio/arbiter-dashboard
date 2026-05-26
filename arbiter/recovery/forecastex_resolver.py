@@ -131,6 +131,21 @@ class ForecastExChildResolver:
         # container restart almost always races ahead of the collector's
         # initial disable batch with an empty inactive set.
         self._wake_event: asyncio.Event = asyncio.Event()
+        # Lifetime cache of successful resolve_event_children lookups,
+        # keyed by parent_conid. Avoids re-querying /iserver/secdef/
+        # strikes (which IBKR rate-limits tightly — verified 2026-05-26
+        # that every one of 41 candidates 429'd in a single cycle when
+        # we re-asked for the same data we'd already resolved). Empty
+        # results are NOT cached so a temporary 503/429 doesn't poison
+        # future cycles.
+        self._strikes_cache: Dict[str, List[Dict[str, Any]]] = {}
+        # Monotonic timestamp of the last actual IBKR strikes call —
+        # used to pace successive calls so we stay under the rate limit.
+        self._last_strikes_call_t: float = 0.0
+        # Minimum gap between successive strikes calls, in seconds.
+        # IBKR's bucket on /iserver/secdef/strikes refills slow enough
+        # that back-to-back calls 429 immediately.
+        self._strikes_min_gap_s: float = 3.0
 
     @property
     def last_snapshot(self) -> Optional[ResolverSnapshot]:
@@ -153,6 +168,39 @@ class ForecastExChildResolver:
             except (asyncio.CancelledError, Exception):
                 pass
             self._task = None
+
+    async def _resolve_event_children_cached(
+        self, parent_conid: str,
+    ) -> List[Dict[str, Any]]:
+        """Cached + paced wrapper around ``client.resolve_event_children``.
+
+        Two protections against IBKR's tight strikes-endpoint rate limit:
+
+        1. Lifetime cache of successful (non-empty) lookups. Two
+           confirmed mappings that share an underlying parent conid
+           (e.g. DEM_HOUSE and GOP_HOUSE on the HORC event) only
+           ever cost ONE strikes call, not two. The cache persists
+           across resolver cycles so steady-state re-runs are free.
+        2. Pacing — we ensure at least ``_strikes_min_gap_s`` seconds
+           elapse between consecutive strikes calls across ALL
+           candidates in a cycle. The previous behavior burst-queried
+           every candidate as fast as possible, which 429'd 41/41 in
+           prod 2026-05-26.
+
+        Empty results are NOT cached: a transient 503 or fully-429'd
+        cycle would otherwise poison the cache forever.
+        """
+        cached = self._strikes_cache.get(parent_conid)
+        if cached:
+            return list(cached)
+        elapsed = time.monotonic() - self._last_strikes_call_t
+        if elapsed < self._strikes_min_gap_s:
+            await asyncio.sleep(self._strikes_min_gap_s - elapsed)
+        self._last_strikes_call_t = time.monotonic()
+        children = await self._client.resolve_event_children(parent_conid)
+        if children:
+            self._strikes_cache[parent_conid] = list(children)
+        return children
 
     def trigger(self) -> None:
         """Wake the resolver loop early.
@@ -241,9 +289,18 @@ class ForecastExChildResolver:
         t0 = time.monotonic()
         self._cycle_count += 1
         candidates = self._candidate_canonical_ids()
+        # Sort by parent_conid so candidates sharing the same underlying
+        # are processed back-to-back. The first one pays the strikes
+        # call; the rest hit ``_strikes_cache`` for free. Without this
+        # adjacency, the cache still wins, but pacing waits could fire
+        # between two cache-hits that didn't actually call IBKR.
+        candidates = sorted(candidates, key=lambda pair: pair[1])
+        unique_parents = len({c for _, c in candidates})
         logger.info(
             "forecastex_resolver.cycle_start",
             cycle=self._cycle_count, candidates=len(candidates),
+            unique_parents=unique_parents,
+            cached_parents=len(self._strikes_cache),
         )
         attempts: List[ResolveAttempt] = []
         resolved = failed = 0
@@ -368,7 +425,7 @@ class ForecastExChildResolver:
             )
 
         try:
-            children = await self._client.resolve_event_children(parent_conid)
+            children = await self._resolve_event_children_cached(parent_conid)
         except Exception as exc:
             # The client wraps IBKR errors as ClientResponseError; check
             # status for the most actionable bucket.

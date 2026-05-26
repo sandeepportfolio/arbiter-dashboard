@@ -253,10 +253,12 @@ async def test_client_429_exhausts_retries(client):
 
 async def test_strikes_429_uses_exponential_backoff(client, monkeypatch):
     """V19 regression: /iserver/secdef/strikes 429 retries MUST use the
-    exponential ladder 1s/3s/9s regardless of Retry-After (IBKR sometimes
-    returns ``Retry-After: 1`` which floods straight back into another 429).
-    Verify the sleep delays match the ladder by capturing every asyncio.sleep
-    call from the retry path.
+    exponential ladder regardless of Retry-After (IBKR sometimes returns
+    ``Retry-After: 1`` which floods straight back into another 429).
+
+    Ladder bumped from 1/3/9s → 5/15/45s on 2026-05-26 after observing
+    every one of 41 resolver candidates 429 in a single cycle — the
+    prior ladder retried too aggressively to let IBKR's bucket refill.
     """
     sleeps: list[float] = []
 
@@ -281,10 +283,10 @@ async def test_strikes_429_uses_exponential_backoff(client, monkeypatch):
                 params={"conid": "1", "exchange": "FORECASTX",
                         "sectype": "OPT", "month": "NOV26"},
             )
-    # First two 429s should sleep 1s then 3s (we don't get a third sleep
+    # First two 429s should sleep 5s then 15s (we don't get a third sleep
     # because the 3rd retry exhausts and raises).
-    assert sleeps[:2] == [1.0, 3.0], (
-        f"expected exponential 1s,3s ladder on /iserver/secdef/strikes; got {sleeps[:2]}"
+    assert sleeps[:2] == [5.0, 15.0], (
+        f"expected exponential 5s,15s ladder on /iserver/secdef/strikes; got {sleeps[:2]}"
     )
     await client.close()
 

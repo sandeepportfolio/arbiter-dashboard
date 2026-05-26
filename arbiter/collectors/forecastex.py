@@ -181,14 +181,18 @@ class ForecastExClient:
 
                     if resp.status == 429:
                         # Honor Retry-After when present; otherwise fall back
-                        # to exponential 1s, 3s, 9s. The discovery endpoint
+                        # to exponential backoff. The discovery endpoint
                         # /iserver/secdef/strikes ALWAYS uses the exponential
                         # ladder — IBKR's rate limit on it is tight enough
                         # that a flat 1s/1s/1s would flood straight back into
-                        # a 429 (verified 2026-05-25).
+                        # a 429 (verified 2026-05-25). Bumped from 1/3/9s to
+                        # 5/15/45s on 2026-05-26 after observing every one of
+                        # 41 resolver candidates 429'd in a single cycle —
+                        # the prior ladder retried too aggressively to let
+                        # the rate-limit bucket refill.
                         header_retry = resp.headers.get("Retry-After")
                         is_strikes = path.startswith("/iserver/secdef/strikes")
-                        exp_backoff = (1.0, 3.0, 9.0)[min(attempt, 2)]
+                        exp_backoff = (5.0, 15.0, 45.0)[min(attempt, 2)] if is_strikes else (1.0, 3.0, 9.0)[min(attempt, 2)]
                         if is_strikes:
                             retry_after = exp_backoff
                         elif header_retry:
