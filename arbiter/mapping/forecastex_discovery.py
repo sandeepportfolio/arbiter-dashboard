@@ -63,6 +63,120 @@ def _overlap_score(a: str, b: str) -> float:
 # is keyword-driven and capped at ~15 results per query, so we issue
 # multiple queries and dedupe by conid. Add new keywords as ForecastEx
 # expands beyond elections into sports / weather / etc.
+# ── Aggressive FX catalog enumeration (2026-05-26) ────────────────────
+# IBKR's /iserver/secdef/search is keyword-driven and caps at ~15 results
+# per query. Live probe against host.docker.internal:5000 enumerated 323
+# unique FORECASTX events across politics / economics / crypto / weather
+# / sports / business / awards. The literal symbol-prefix keywords below
+# guarantee each parent gets surfaced by at least ONE search call so the
+# discover() pass sees the full catalog (dedupe by conid is automatic).
+#
+# IMPORTANT: enumerating the parent ≠ resolving children. Binary
+# political events (SENM, HORC, AXX*, MXX*, etc.) follow the
+# strike=1.0/2.0 pattern and resolve cleanly via secdef/info — these
+# trade. Multi-outcome events (CPI, FEDRC, GDP, BTC threshold ladders)
+# have parent IND conids but IBKR's Client Portal API does NOT return
+# their child OPT conids via secdef/strikes — that's a confirmed
+# upstream limitation. Those parents enter the resolver, return
+# no_children for 3 cycles, and get auto-quarantined by the existing
+# _NO_CHILDREN_MARK_THRESHOLD logic.
+_FX_SYMBOL_SEEDS: tuple[str, ...] = (
+    # Political — US federal
+    "horc", "senm", "pcd", "pcr", "prpa", "presh", "prest",
+    "prazh", "prgah", "prmih", "prnch", "prnvh", "prpah", "prwih",
+    "pnfed",
+    # State Senate general (AXX***)
+    "axxak", "axxga", "axxky", "axxla", "axxme", "axxmi", "axxmt",
+    "axxnc", "axxne", "axxnh", "axxnj", "axxnm", "axxok", "axxtx",
+    "axxva", "axxwv",
+    # State Governor general (MXX***)
+    "mxxak", "mxxaz", "mxxca", "mxxco", "mxxfl", "mxxga", "mxxil",
+    "mxxks", "mxxmi", "mxxmn", "mxxnh", "mxxnm", "mxxnv", "mxxny",
+    "mxxpa", "mxxri", "mxxsd", "mxxtn", "mxxtx", "mxxwi", "mxdec",
+    # Governor party primaries (GP***)
+    "gpakr", "gpazr", "gpcad", "gpfld", "gpflr", "gpgad", "gpgar",
+    "gpksd", "gpksr", "gpmdr", "gpmed", "gpmer", "gpmid", "gpmir",
+    "gpnvd", "gpnyd", "gpnyr", "gpohd", "gpohr", "gppar", "gptnr",
+    "gptxd", "gptxr", "gpvad", "gpvar", "gpwid", "gpwir",
+    # Senate primaries (BXX***, OXX***, SR***, CXX***)
+    "bxxfl", "bxxia", "bxxmi", "bxxwv",
+    "oxxco", "oxxct", "oxxia", "oxxma", "oxxmn", "oxxor", "oxxri", "oxxvt",
+    "srazl", "srflm", "srmir", "srmts", "srneo", "srnvb", "srohm",
+    "srpam", "srptx", "srwih",
+    "cxxga", "cxxva",
+    # House district primaries (Hxx**, Ixx**)
+    "h02ne", "h03pa", "h06ky", "h08oh", "h13ga",
+    "i01ga", "i11ga",
+    "ky04r",
+    # State Senate (other patterns) + others
+    "xxxla", "xxxma", "xxxme", "xxxmi", "xxxnh", "xxxok", "xxxtx", "xxxva",
+    "zxxaz", "zxxnv", "zxxpa", "zxxwi",
+    # General (G***)
+    "g01ga", "g01sd", "g02al", "g02mn", "g02nv", "g10pa", "g11nj", "g16fl",
+    # Justice primaries / others
+    "j04ca", "j04wa", "j11ca", "j22ca", "j40ca",
+    "exxfl", "exxoh",
+    # International political
+    "prech", "preco", "premp",
+    # Mayoral / municipal
+    "mlaxg", "mnycd", "mnycg",
+    # Economics — Fed / rates / CPI / GDP / PPI / employment
+    "cpi", "cpic", "cpiy", "cpcey", "pcey", "ppiy", "rgdp", "gdp",
+    "unr", "rsm", "hs", "nhs", "inflm", "jolt", "ff", "ffdec", "fedrc",
+    "fedlg", "fedro", "dissa", "dissn", "uscci",
+    # Retail sales sub-categories
+    "ur443", "ur444", "ur451", "ur453", "uspsr", "usip",
+    # International economics
+    "cagdp", "canhi", "caunr", "ezgdp", "ezunr", "gdpau", "gdpge", "gdpjp",
+    "hkgdp", "sggdp", "cpige", "cpiin", "cpijp", "cpisp",
+    # Regional US CPI (R***)
+    "rcatl", "rcbos", "rcchi", "rcdet", "rclax", "rcmia", "rcmsp",
+    "rcmwe", "rcnyc", "rcpac", "rcphl", "rcsal", "rcsth", "rcwdc", "rcwst",
+    # Regional US GDP (GDQ**)
+    "gdqca", "gdqfl", "gdqga", "gdqil", "gdqnj", "gdqny", "gdqoh",
+    "gdqpa", "gdqtx", "gdqwa",
+    # Crypto thresholds
+    "cbbtc", "cbeth", "cbsol", "cbxrp",
+    "cfbtc", "cfdog", "cfsol", "cfxrp",
+    "cte2a", "cte2b", "cte2c",
+    "yxhbt", "yxhdg", "yxhet", "yxhso", "yxhxr",
+    "yxlbt", "yxldg", "yxlet", "yxlso", "yxlxr",
+    "hleth", "hletl",
+    # Weather — daily temp highs (UH***), drought, hurricanes, carbon
+    "uhatl", "uhbna", "uhbos", "uhdca", "uhdfw", "uhhou", "uhlax",
+    "uhlga", "uhmdw", "uhmia", "uhokc", "uhphx", "uhsea", "uhsfo",
+    "ullga", "ulokc", "utcbo", "uthvt", "utlao", "uttai", "utumo",
+    "dhokc", "dlokc", "taokc", "ustm", "usdr", "usce", "hcab", "hlf", "hlfre",
+    # Sports — championship futures
+    # (NFL/MLB/NHL/NBA championship variants exist on K side as KX***,
+    # but the only FX champ markets surfaced were NFL/NCAAF — keep the
+    # current binary champion mappings on the K↔P pair side. No FX
+    # symbols below; the resolver still handles those via K mappings.)
+    # Air travel / fuel / shipping
+    "airtd", "airti", "airtt", "airus", "chicc", "macd", "ma",
+    "ipi",
+    # Business / corporate events
+    "cenvd", "itnvd", "mtssx",
+    # Misc — entertainment, science, geopolitics
+    "peace", "uvr1p", "scttt", "euaia", "fedlg", "ustrf",
+    "puseg", "renya", "renyc", "retxc", "reusa", "reusc",
+    "rpnyc", "recac", "trfls", "ngp", "gsl", "gce", "ccs", "acd",
+    "bpmi", "spifl", "spiga", "spioh", "spipa",
+    "frerc", "eucb", "jpusd", "skdec",
+    "mort1", "mort2",
+    "cmcac", "cmcan", "codts",
+    "emcac", "emcar", "emcax",
+    "chde1", "chde5",
+    "groh", "grva",
+    "senc",
+    "gcyco", "gcyrm", "gcywh",
+    "cs", "op",
+    # State Ballot Measures
+    "bamca",
+    "hookc",
+)
+
+
 DEFAULT_SEED_KEYWORDS: tuple[str, ...] = (
     # Political (current FORECASTX inventory)
     "election", "senate", "house", "governor", "primary", "general",
@@ -141,11 +255,32 @@ DEFAULT_SEED_KEYWORDS: tuple[str, ...] = (
     "production", "factory", "shipments", "deliveries",
     "tesla deliveries", "tesla production", "f150", "model y",
     "iphone shipments", "iphone sales",
-    # Crypto threshold expansion (incl. SOL specifics IBKR adds)
     "solana 200", "solana 300", "solana 500",
     "xrp 3", "xrp 5",
     "btc 200k", "btc 250k", "btc 300k", "eth 8k", "eth 15k",
 )
+
+
+def _dedupe_seeds(seeds: tuple[str, ...], extras: tuple[str, ...]) -> tuple[str, ...]:
+    """Order-preserving dedup so the seed list stays diff-stable."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for s in seeds + extras:
+        k = s.lower().strip()
+        if not k or k in seen:
+            continue
+        seen.add(k)
+        out.append(k)
+    return tuple(out)
+
+
+# 2026-05-26 full catalog sweep: append every FORECASTX SYMBOL the live
+# IBKR probe surfaced (323 unique events). Symbol-prefix queries
+# guarantee IBKR's search returns the exact parent row even when
+# keyword similarity fails. Discovery's conid-keyed dedup makes
+# duplicate enumerations free; here we still dedupe at the seed level
+# so each query happens exactly once per pass.
+DEFAULT_SEED_KEYWORDS = _dedupe_seeds(DEFAULT_SEED_KEYWORDS, _FX_SYMBOL_SEEDS)
 
 # Conservative threshold. Below this, log the near-miss but do not write.
 # 0.30 picks up "U.S House Midterm Winner" ↔ "US House Control" (3-of-9

@@ -328,3 +328,37 @@ def test_default_seed_keywords_are_lowercase_strings():
     # Make sure we cover both election and sports for future inventory.
     assert "election" in DEFAULT_SEED_KEYWORDS
     assert "mlb" in DEFAULT_SEED_KEYWORDS
+
+
+def test_seed_keywords_cover_known_fx_symbols():
+    """2026-05-26 catalog sweep: confirm the seed list contains every
+    high-value FORECASTX symbol the live IBKR probe surfaced. These are
+    the exact symbols IBKR returns as parent IND conids — if discovery
+    doesn't query for them, those parents never make it into the
+    candidate set and operators lose visibility into the catalog
+    expansion (state Senate / Governor / CPI variants / GDP / crypto).
+    """
+    # Sample across categories — not exhaustive, but a representative
+    # tripwire that catches accidental seed-list truncation.
+    must_include = {
+        "horc", "senm",              # binary political (resolvable)
+        "axxtx", "axxga", "axxnc",   # state Senate general
+        "mxxca", "mxxfl", "mxxtx",   # state Governor general
+        "gpgar", "gptxr",            # governor primaries
+        "cpi", "cpic", "cpiy",       # CPI variants
+        "rgdp", "gdp", "gdqtx",      # GDP variants
+        "fedrc", "ff", "ffdec",      # Fed rate / decision
+        "cbbtc", "cbeth", "yxhbt",   # crypto thresholds
+        "uhatl", "uhnyc" if False else "uhlga",  # weather (LGA is NYC code in FX)
+    }
+    missing = must_include - set(DEFAULT_SEED_KEYWORDS)
+    assert not missing, f"seed list missing FX symbols: {sorted(missing)}"
+
+
+def test_seed_keywords_are_deduplicated():
+    """No keyword should appear twice — IBKR's search is idempotent but
+    duplicates burn one extra HTTP call per pass for zero new conids."""
+    assert len(DEFAULT_SEED_KEYWORDS) == len(set(DEFAULT_SEED_KEYWORDS)), (
+        f"duplicate seeds: "
+        f"{sorted(k for k in set(DEFAULT_SEED_KEYWORDS) if DEFAULT_SEED_KEYWORDS.count(k) > 1)}"
+    )

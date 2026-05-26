@@ -353,6 +353,48 @@ async def test_no_children_returned_records_attempt_but_does_not_upsert():
     assert snap.attempts[0]["outcome"] == "no_children"
 
 
+async def test_multi_outcome_parent_quarantines_after_threshold_cycles():
+    """Multi-outcome FX events (CPI, FEDRC, GDP, BTC threshold ladders)
+    DON'T expose tradeable children via IBKR's Client Portal API — the
+    /secdef/strikes endpoint returns empty for those parents (confirmed
+    live probe 2026-05-26). After _NO_CHILDREN_MARK_THRESHOLD cycles of
+    empty responses, the resolver MUST quarantine the parent so it
+    stops burning IBKR rate budget. This is the graceful path that
+    keeps the 'no errors' invariant from the catalog expansion: every
+    new non-binary FX parent added by the expanded seed list gets
+    quietly retired after 3 cycles.
+    """
+    settings_module.MARKET_MAP["ECON_CPI_2026"] = _confirmed("ECON_CPI_2026", "573031126")
+    collector = MagicMock()
+    collector._inactive_conids = {"573031126"}
+    collector.reactivate_conid = MagicMock()
+
+    client = MagicMock()
+    client.resolve_event_children = AsyncMock(return_value=[])  # always empty
+    client.market_snapshot = AsyncMock(return_value=_empty_snapshot())
+
+    store = MagicMock()
+    store.get = AsyncMock(return_value=_stub_mapping("ECON_CPI_2026", "573031126"))
+    store.upsert = AsyncMock()
+
+    res = ForecastExChildResolver(
+        forecastex_client=client, forecastex_collector=collector, mapping_store=store,
+    )
+    # Cycle 1 + 2: records no_children, does NOT upsert.
+    snap1 = await res.run_once()
+    assert snap1.attempts[0]["outcome"] == "no_children"
+    assert store.upsert.await_count == 0
+    snap2 = await res.run_once()
+    assert snap2.attempts[0]["outcome"] == "no_children"
+    assert store.upsert.await_count == 0
+    # Cycle 3: hits the threshold, marks unavailable.
+    snap3 = await res.run_once()
+    assert snap3.attempts[0]["outcome"] == "marked_unavailable"
+    assert store.upsert.await_count == 1
+    upserted = store.upsert.await_args.args[0]
+    assert upserted.forecastex_not_available is True
+
+
 async def test_ibkr_503_classified_distinct_from_other_errors():
     from aiohttp import ClientResponseError, RequestInfo
     from yarl import URL
