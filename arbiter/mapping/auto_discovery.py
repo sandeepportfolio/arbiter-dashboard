@@ -913,30 +913,59 @@ async def _apply_auto_promote(
             return candidate, result
 
     promoted_this_pass = 0
+    semantic_review_pass = 0
     reason_counts: dict[str, int] = {}
     for candidate, result in await asyncio.gather(*(_evaluate(candidate) for candidate in candidates)):
         candidate["auto_promote_reason"] = result.reason
-        reason_counts[result.reason] = reason_counts.get(result.reason, 0) + 1
-        if not result.promoted or promoted_this_pass >= max_promotions:
-            if not result.promoted:
-                candidate["allow_auto_trade"] = False
-                candidate["review_note"] = f"Auto-promote gate: {result.reason}"
+        match_key = result.reason if not getattr(result, "is_semantic", False) else "semantic_review"
+        reason_counts[match_key] = reason_counts.get(match_key, 0) + 1
+        if not result.promoted:
+            candidate["allow_auto_trade"] = False
+            candidate["review_note"] = f"Auto-promote gate: {result.reason}"
             continue
-
-        promoted_this_pass += 1
-        candidate["status"] = "confirmed"
-        candidate["allow_auto_trade"] = True
-        candidate["resolution_match_status"] = "identical"
-        candidate["resolution_criteria"] = _candidate_resolution_criteria(
-            candidate,
-            operator_note="Auto-promoted by discovery engine after structured + LLM + liquidity checks.",
-        )
-        candidate["notes"] = "Auto-promoted by discovery engine."
-        candidate["review_note"] = ""
+        # Daily-cap budget applies to the LIVE-tradable structural path
+        # only; semantic-review candidates don't consume the cap because
+        # they don't auto-trade. This keeps the cap meaningful even when
+        # the semantic-review surface is large.
+        if getattr(result, "is_structural", False):
+            if promoted_this_pass >= max_promotions:
+                candidate["allow_auto_trade"] = False
+                candidate["review_note"] = "Auto-promote gate: daily_cap"
+                continue
+            promoted_this_pass += 1
+            # Centralized cage: structural → confirmed+live-tradable.
+            from arbiter.mapping.auto_promote import apply_promotion
+            apply_promotion(candidate, result)
+            candidate["resolution_criteria"] = _candidate_resolution_criteria(
+                candidate,
+                operator_note="Auto-promoted by discovery engine after structured + LLM + liquidity checks.",
+            )
+            candidate["notes"] = "Auto-promoted by discovery engine."
+        else:
+            # Semantic-only — SAFETY CAGE: never live-tradable. Route
+            # to operator-review surface so a human can flip
+            # allow_auto_trade after eyeballing the pair.
+            from arbiter.mapping.auto_promote import apply_promotion
+            apply_promotion(candidate, result)
+            candidate["resolution_match_status"] = "identical"
+            candidate["resolution_criteria"] = _candidate_resolution_criteria(
+                candidate,
+                operator_note=(
+                    "Semantic-only auto-promote: similarity gate cleared but "
+                    "no structural parser fired. Operator must verify event "
+                    "identity before promoting to live-tradable."
+                ),
+            )
+            candidate["notes"] = (
+                "Surfaced to review by discovery engine — semantic-only "
+                "match; needs operator confirmation."
+            )
+            semantic_review_pass += 1
 
     logger.info(
-        "auto_discovery: auto-promote summary — %d promoted, %d total, settings: min_score=%.2f max_days=%d advisory=%d, reasons: %s",
-        promoted_this_pass, len(candidates), min_score, max_days, advisory_scans,
+        "auto_discovery: auto-promote summary — %d promoted (structural), %d semantic→review, %d total, settings: min_score=%.2f max_days=%d advisory=%d, reasons: %s",
+        promoted_this_pass, semantic_review_pass, len(candidates),
+        min_score, max_days, advisory_scans,
         ", ".join(f"{r}={c}" for r, c in sorted(reason_counts.items(), key=lambda x: -x[1])),
     )
     _emit_progress(

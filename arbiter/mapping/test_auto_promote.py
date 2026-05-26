@@ -14,7 +14,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from arbiter.mapping.auto_promote import PromotionResult, maybe_promote
+from arbiter.mapping.auto_promote import (
+    PromotionResult,
+    apply_promotion,
+    maybe_promote,
+)
 from arbiter.mapping.resolution_check import MarketFacts, ResolutionMatch
 
 
@@ -636,3 +640,212 @@ async def test_per_category_settings_override_default_table():
 
     assert not result.promoted
     assert result.reason == "score_low"
+
+
+# ════════════════════════════════════════════════════════════════════════
+# PROMOTION SAFETY CAGE — semantic-only candidates must NEVER reach
+# confirmed+allow_auto_trade=True. Every regression fixture below mirrors
+# a real-world failure pattern surfaced by past mapping audits.
+# ════════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.asyncio
+async def test_structural_promote_carries_structural_match_type():
+    """Sanity: structural path → match_type='structural' so the caller
+    can route to confirmed+allow_auto_trade=True."""
+    settings = _make_settings()
+    candidate = _make_candidate(score=0.92)
+    candidate["structural_match"] = True
+    orderbooks = _make_orderbooks(200.0, 200.0)
+    llm = _make_llm_verifier("YES")
+    result = await maybe_promote(
+        candidate, settings=settings, orderbooks=orderbooks,
+        llm_verifier=llm, today_promoted_count=0, cooling_state={},
+        resolution_checker=_resolution_check_identical,
+    )
+    assert result.promoted and result.reason == "promoted"
+    assert result.match_type == "structural"
+    assert result.is_structural and not result.is_semantic
+
+
+@pytest.mark.asyncio
+async def test_semantic_only_promote_carries_semantic_match_type():
+    """When structural_match is False and only the score>=0.92 bypass
+    fires, the result must announce match_type='semantic' so the caller
+    can apply the safety cage."""
+    settings = _make_settings()
+    candidate = _make_candidate(score=0.93)
+    candidate["structural_match"] = False     # NO structural parser
+    orderbooks = _make_orderbooks(200.0, 200.0)
+    llm = _make_llm_verifier("YES")
+    result = await maybe_promote(
+        candidate, settings=settings, orderbooks=orderbooks,
+        llm_verifier=llm, today_promoted_count=0, cooling_state={},
+        resolution_checker=_resolution_check_identical,
+    )
+    assert result.promoted
+    assert result.match_type == "semantic"
+    assert result.is_semantic and not result.is_structural
+
+
+def test_apply_promotion_cage_structural_path_is_live_tradable():
+    candidate = {"kalshi_ticker": "X"}
+    apply_promotion(
+        candidate,
+        PromotionResult(promoted=True, reason="promoted", match_type="structural"),
+    )
+    assert candidate["status"] == "confirmed"
+    assert candidate["allow_auto_trade"] is True
+    assert candidate["promotion_match_type"] == "structural"
+
+
+def test_apply_promotion_cage_semantic_path_routes_to_review_not_live():
+    """SAFETY CAGE: semantic-only never becomes live-tradable."""
+    candidate = {"kalshi_ticker": "X"}
+    apply_promotion(
+        candidate,
+        PromotionResult(promoted=True, reason="promoted", match_type="semantic"),
+    )
+    assert candidate["status"] == "review", (
+        "Semantic-only promote MUST land at review, not confirmed"
+    )
+    assert candidate["allow_auto_trade"] is False, (
+        "Semantic-only promote MUST NOT set allow_auto_trade=True"
+    )
+    assert candidate["promotion_match_type"] == "semantic"
+    assert "operator" in candidate["review_note"].lower()
+
+
+def test_apply_promotion_cage_rejection_does_not_flip_status():
+    """When the gate rejects (promoted=False), status must not flip."""
+    candidate = {"status": "candidate", "kalshi_ticker": "X"}
+    apply_promotion(
+        candidate, PromotionResult(promoted=False, reason="llm_no"),
+    )
+    assert candidate["status"] == "candidate"
+    assert candidate["allow_auto_trade"] is False
+    assert "llm_no" in candidate["review_note"]
+
+
+# ─── Known-bad regression fixtures ────────────────────────────────────
+# Each constructs a candidate that historically slipped past Gate 3
+# semantic similarity (>= 0.92) and should now ALWAYS land at review,
+# not confirmed+live-tradable.
+
+async def _cage_check(candidate, *, score=0.94):
+    """Build a settings/orderbook/llm trio so the ONLY differentiator
+    is structural_match=False → semantic-only path. Confirms the cage
+    keeps the candidate out of confirmed+live-tradable."""
+    settings = _make_settings()
+    candidate.setdefault("score", score)
+    candidate["structural_match"] = False
+    orderbooks = _make_orderbooks(200.0, 200.0)
+    llm = _make_llm_verifier("YES")
+    result = await maybe_promote(
+        candidate, settings=settings, orderbooks=orderbooks,
+        llm_verifier=llm, today_promoted_count=0, cooling_state={},
+        resolution_checker=_resolution_check_identical,
+    )
+    apply_promotion(candidate, result)
+    return candidate, result
+
+
+@pytest.mark.asyncio
+async def test_known_bad_same_text_different_date_caged():
+    """Two markets with identical text — semantic 1.0 — but the
+    structural parser would catch a date mismatch. Without parser
+    fire → semantic-only → MUST cage."""
+    candidate = _make_candidate(score=0.99)
+    candidate["kalshi_title"] = "Will BTC reach $100k?"
+    candidate["poly_question"] = "Will BTC reach $100k?"
+    candidate, _ = await _cage_check(candidate)
+    assert candidate["status"] != "confirmed"
+    assert candidate["allow_auto_trade"] is False
+
+
+@pytest.mark.asyncio
+async def test_known_bad_winner_vs_spread_caged():
+    """Kalshi 'will X win' vs Poly 'will X cover the spread'. Same
+    team name dominates tokens; mechanics differ. Without structural
+    parser fire → MUST cage."""
+    candidate = _make_candidate(score=0.94)
+    candidate["kalshi_title"] = "Will Philadelphia Eagles win against Dallas Cowboys?"
+    candidate["poly_question"] = "Will Philadelphia Eagles cover the spread against Dallas Cowboys?"
+    candidate, _ = await _cage_check(candidate)
+    assert candidate["status"] != "confirmed"
+
+
+@pytest.mark.asyncio
+async def test_known_bad_flipped_polarity_caged():
+    """Semantic-only sports candidate must STILL cage even if the
+    sports-specific polarity gate doesn't fire on a non-sports category."""
+    candidate = _make_candidate(score=0.94)
+    candidate["category"] = "midterms"     # polarity gate skipped (sports-only)
+    candidate["polarity"] = "flipped"
+    candidate, _ = await _cage_check(candidate)
+    assert candidate["status"] != "confirmed"
+
+
+@pytest.mark.asyncio
+async def test_known_bad_parent_forecastex_conid_caged():
+    """A semantic-only candidate pointing at a parent FORECASTX conid
+    (no live bid/ask) must NOT become live-tradable."""
+    candidate = _make_candidate(score=0.93)
+    candidate["forecastex_contract_id"] = "745923952"  # SENM parent
+    candidate["forecastex_is_parent"] = True
+    candidate, _ = await _cage_check(candidate)
+    assert candidate["status"] != "confirmed"
+
+
+@pytest.mark.asyncio
+async def test_known_bad_different_threshold_caged():
+    """$100k vs $110k threshold — semantic high but numeric meaning differs."""
+    candidate = _make_candidate(score=0.95)
+    candidate["kalshi_title"] = "Will Bitcoin reach $100,000 by Dec 31?"
+    candidate["poly_question"] = "Will Bitcoin reach $110,000 by Dec 31?"
+    candidate, _ = await _cage_check(candidate)
+    assert candidate["status"] != "confirmed"
+
+
+@pytest.mark.asyncio
+async def test_known_bad_different_settlement_source_caged():
+    """Different oracles (BLS vs Investing.com) — same question text
+    can settle to different outcomes hours apart."""
+    candidate = _make_candidate(score=0.94)
+    candidate["kalshi_resolution_source"] = "BLS"
+    candidate["polymarket_resolution_source"] = "Investing.com"
+    candidate, _ = await _cage_check(candidate)
+    assert candidate["status"] != "confirmed"
+
+
+@pytest.mark.asyncio
+async def test_known_bad_sports_geography_false_positive_caged():
+    """'New York Yankees' vs 'New York Governor' shares 'New York' —
+    geographic overlap drives semantic score high; must cage."""
+    candidate = _make_candidate(score=0.93)
+    candidate["kalshi_title"] = "Will the New York Yankees win the World Series?"
+    candidate["poly_question"] = "Will the New York Governor be a Democrat in 2027?"
+    candidate, _ = await _cage_check(candidate)
+    assert candidate["status"] != "confirmed"
+
+
+@pytest.mark.asyncio
+async def test_known_bad_multi_leg_vs_binary_caged():
+    """Multi-outcome (5 candidates) vs binary YES/NO. The arb math
+    doesn't work for non-binary; must cage."""
+    candidate = _make_candidate(score=0.94)
+    candidate["kalshi_outcome_set"] = ("Trump", "Vance", "Haley", "DeSantis", "Cheney")
+    candidate["polymarket_outcome_set"] = ("Yes", "No")
+    candidate, _ = await _cage_check(candidate)
+    assert candidate["status"] != "confirmed"
+
+
+@pytest.mark.asyncio
+async def test_known_bad_same_event_different_market_type_caged():
+    """Kalshi 'win total' (number) vs Poly 'make playoffs' (binary) —
+    same team / season, different mechanics."""
+    candidate = _make_candidate(score=0.94)
+    candidate["kalshi_title"] = "Will the Dallas Cowboys win 10+ games in 2026?"
+    candidate["poly_question"] = "Will the Dallas Cowboys make the 2026 NFL playoffs?"
+    candidate, _ = await _cage_check(candidate)
+    assert candidate["status"] != "confirmed"

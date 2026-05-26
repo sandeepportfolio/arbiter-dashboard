@@ -122,12 +122,74 @@ except Exception:
 
 @dataclass
 class PromotionResult:
-    """Result of the auto-promote gate evaluation."""
+    """Result of the auto-promote gate evaluation.
+
+    ``match_type`` records WHICH evidence path the candidate cleared:
+      * ``"structural"`` — deterministic category-specific parser proved
+        same event / outcome / date / type / source. Safe to flip to
+        ``confirmed + allow_auto_trade=True`` without operator review.
+      * ``"semantic"`` — only the high-confidence semantic similarity
+        bypass cleared (no structural parser fired). Live-money trading
+        from semantic-only matches has historically created bad arbs
+        (winner vs spread, different settlement source, polarity flips
+        the LLM missed). Callers MUST route these to operator review
+        (``status="review"``, ``allow_auto_trade=False``) — never to
+        ``confirmed+allow_auto_trade=True``. See ``apply_promotion`` for
+        the caller-side cage.
+      * ``""`` (empty) — gate failed; ``promoted=False``.
+    """
     promoted: bool
     reason: str  # one of: "auto_promote_disabled", "score_low", "resolution_divergent",
                  #       "structural_unverified", "resolution_pending", "llm_no", "llm_maybe",
                  #       "liquidity_low", "date_out_of_window",
                  #       "daily_cap", "cooling_off", "promoted"
+    match_type: str = ""
+
+    @property
+    def is_structural(self) -> bool:
+        return self.promoted and self.match_type == "structural"
+
+    @property
+    def is_semantic(self) -> bool:
+        return self.promoted and self.match_type == "semantic"
+
+
+def apply_promotion(candidate: dict, result: PromotionResult) -> None:
+    """Mutate a candidate dict in place per the cage policy.
+
+    Structural matches go straight to ``confirmed+allow_auto_trade=True``.
+    Semantic-only matches go to ``review+allow_auto_trade=False`` so an
+    operator can inspect the pair before any live-money trade fires
+    against it.  Failed promotions get a ``review_note`` documenting the
+    reason but do not flip status (caller decides whether to leave them
+    at ``candidate`` or surface to ``review`` based on the reason).
+
+    Centralizing this in one helper means every promotion site uses the
+    same cage — no caller can accidentally promote a semantic-only
+    candidate to live-tradable.
+    """
+    if not result.promoted:
+        candidate["allow_auto_trade"] = False
+        candidate["review_note"] = f"Auto-promote gate: {result.reason}"
+        return
+    if result.is_structural:
+        candidate["status"] = "confirmed"
+        candidate["allow_auto_trade"] = True
+        candidate["promotion_match_type"] = "structural"
+        candidate["resolution_match_status"] = "identical"
+        candidate["review_note"] = ""
+        return
+    # semantic-only — SAFETY CAGE: route to review, never live-tradable.
+    candidate["status"] = "review"
+    candidate["allow_auto_trade"] = False
+    candidate["promotion_match_type"] = "semantic"
+    # Surface why an operator should look — gate passed but evidence is
+    # similarity-only, not structural proof.
+    candidate["review_note"] = (
+        "Semantic-only auto-promote (score ≥ SEMANTIC_PROMOTE_MIN_SCORE) "
+        "cleared resolution + LLM gates but lacks structural parser proof. "
+        "Operator must verify event identity before flipping allow_auto_trade."
+    )
 
 
 # ─── Depth calculation ────────────────────────────────────────────────────────
@@ -343,4 +405,4 @@ async def maybe_promote(
     # ── All gates passed ──────────────────────────────────────────────────────
     match_type = "structural" if is_structural else "semantic"
     logger.info("auto_promote PROMOTED candidate=%s score=%.3f match=%s", ticker, score, match_type)
-    return PromotionResult(promoted=True, reason="promoted")
+    return PromotionResult(promoted=True, reason="promoted", match_type=match_type)

@@ -115,6 +115,36 @@ DEFAULT_SEED_KEYWORDS: tuple[str, ...] = (
     "north korea", "nato", "un", "united nations", "g7", "g20",
     "summit", "ceasefire", "treaty", "sanction", "tariff", "trade war",
     "peace deal", "border", "invasion",
+    # ── 2026-05-26 Phase 3 expansion: state-level political races ──
+    # FORECASTX's political coverage has been expanding state-by-state
+    # but our previous seed list relied on top-level keywords (election,
+    # senate, governor) which IBKR's search caps at ~15 results per
+    # query. Naming the high-volume races explicitly produces 60+ extra
+    # hits per pass with no duplicate cost (dedup by conid). Targets
+    # the 11 confirmed candidate political_event conids that show up
+    # in MARKET_MAP but aren't yet bound to a Kalshi/PMUS mapping.
+    "ohio", "texas", "florida", "arizona", "pennsylvania", "michigan",
+    "wisconsin", "georgia", "nevada", "north carolina", "virginia",
+    "new york", "california", "illinois", "minnesota",
+    "ohio senate", "ohio governor",
+    "texas senate", "texas governor",
+    "florida senate", "florida governor",
+    "arizona senate", "arizona governor",
+    "pennsylvania senate", "pennsylvania governor",
+    "michigan senate", "michigan governor",
+    "wisconsin senate", "wisconsin governor",
+    "georgia senate", "georgia governor",
+    "nevada senate", "nevada governor",
+    "north carolina senate", "north carolina governor",
+    "virginia senate", "virginia governor",
+    # Production / fundraising events
+    "production", "factory", "shipments", "deliveries",
+    "tesla deliveries", "tesla production", "f150", "model y",
+    "iphone shipments", "iphone sales",
+    # Crypto threshold expansion (incl. SOL specifics IBKR adds)
+    "solana 200", "solana 300", "solana 500",
+    "xrp 3", "xrp 5",
+    "btc 200k", "btc 250k", "btc 300k", "eth 8k", "eth 15k",
 )
 
 # Conservative threshold. Below this, log the near-miss but do not write.
