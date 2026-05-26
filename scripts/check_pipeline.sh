@@ -1,14 +1,43 @@
 #!/bin/bash
+# Pipeline diagnostic — credential-safe.
+#
+# Reads OPS_EMAIL / OPS_PASSWORD from the environment (or an env file if
+# given). Never echo the password, never bake it into the script. If
+# the env vars aren't set, point the operator at the canonical source
+# instead of failing silently.
 export PATH=/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:$PATH
 
-# Login
-RESP=$(curl -s --max-time 10 -X POST http://localhost:8080/api/auth/login \
+API_BASE="${ARBITER_API_BASE:-http://localhost:8080}"
+ENV_FILE="${ARBITER_ENV_FILE:-.env.production}"
+
+if [ -z "$OPS_EMAIL" ] || [ -z "$OPS_PASSWORD" ]; then
+  if [ -f "$ENV_FILE" ]; then
+    # shellcheck disable=SC1090
+    set -a; . "$ENV_FILE"; set +a
+  fi
+fi
+
+if [ -z "$OPS_EMAIL" ] || [ -z "$OPS_PASSWORD" ]; then
+  echo "ERROR: OPS_EMAIL / OPS_PASSWORD not set."
+  echo "  Export them in your shell or place them in $ENV_FILE."
+  exit 2
+fi
+
+# Build the login body in Python so the password never appears on a
+# command line and never lands in shell history / process listings.
+LOGIN_BODY=$(OPS_EMAIL="$OPS_EMAIL" OPS_PASSWORD="$OPS_PASSWORD" \
+  python3 -c 'import os, json; print(json.dumps({"email": os.environ["OPS_EMAIL"], "password": os.environ["OPS_PASSWORD"]}))')
+
+RESP=$(curl -s --max-time 10 -X POST "$API_BASE/api/auth/login" \
   -H 'Content-Type: application/json' \
-  -d '{"email": "sparx.sandeep@gmail.com", "password": "saibaba1"}')
-TOKEN=$(echo "$RESP" | python3 -c 'import sys,json; print(json.load(sys.stdin)["token"])')
+  --data-binary "$LOGIN_BODY")
+unset LOGIN_BODY
+TOKEN=$(echo "$RESP" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("token",""))' 2>/dev/null)
 
 if [ -z "$TOKEN" ]; then
-  echo "LOGIN FAILED: $RESP"
+  # Print only HTTP-level fail signal — never echo the password or the
+  # raw response body (it may contain server-side echoes of the request).
+  echo "LOGIN FAILED (no token returned)"
   exit 1
 fi
 
