@@ -439,6 +439,82 @@ class ForecastExClient:
                 break
 
         if hit_month is None:
+            # IBKR's ``/iserver/secdef/strikes`` returns
+            # ``{call: [], put: []}`` for some FORECASTX parent conids
+            # even when ``/iserver/secdef/info`` does return the strike
+            # 1.0 / 2.0 child contracts (verified live 2026-05-26 on
+            # SENM 745923952 — US Senate Majority — where strikes was
+            # empty on every NOV/OCT/DEC month but info?strike=1.0
+            # cleanly returned the DEM and GOP child Call/Put conids).
+            # HORC (House Control) does NOT have this quirk, so the
+            # primary path above succeeds for it; the fallback is here
+            # purely to cover the per-conid IBKR bug.
+            #
+            # Gate the fallback on the parent name containing a binary
+            # political-control marker. Without the gate, the same 24 ×
+            # 2 = 48 calls would fire against every wrong-attached
+            # multi-strike CPI/GDP/PCE parent in the system, which
+            # ``/iserver/secdef/info`` 500s on — burning IBKR's rate
+            # budget for nothing. The keyword set matches the binary
+            # FORECASTX inventory (HORC, SENM, presidential winner,
+            # gubernatorial winners) where strikes 1.0/2.0 are the
+            # canonical YES/NO encodings.
+            sd = await self.get_trsrv_secdef(parent_conid)
+            parent_name = (
+                str(sd.get("name") or "").upper() if isinstance(sd, dict) else ""
+            )
+            if any(kw in parent_name for kw in (
+                "HOUSE", "SENATE", "CONTROL", "MAJORITY",
+                "PRESIDENT", "ELECTION", "GOVERNOR",
+            )):
+                # Election-bearing months only — the political
+                # FORECASTX inventory matures around Jan after a Nov
+                # election, so NOV<YY> is the IBKR ``month`` string for
+                # essentially every binary control market. Three months
+                # of fallback budget keeps the worst-case per-parent
+                # cost at 6 calls when nothing matches.
+                for month in ("NOV26", "NOV27", "NOV28"):
+                    month_hits = 0
+                    for fallback_strike in (1.0, 2.0):
+                        try:
+                            info_payload = await self._request(
+                                "GET", "/iserver/secdef/info",
+                                params={
+                                    "conid": str(parent_conid),
+                                    "exchange": "FORECASTX",
+                                    "sectype": "OPT",
+                                    "month": month,
+                                    "strike": str(fallback_strike),
+                                },
+                            )
+                        except Exception:
+                            continue
+                        items = (
+                            info_payload.get("items")
+                            if isinstance(info_payload, dict) else info_payload
+                        )
+                        if not isinstance(items, list):
+                            continue
+                        for item in items:
+                            if not isinstance(item, dict):
+                                continue
+                            conid = str(item.get("conid") or "").strip()
+                            if not conid:
+                                continue
+                            children.append({
+                                "conid": conid,
+                                "right": str(item.get("right") or "").upper(),
+                                "strike": item.get("strike"),
+                                "maturity_date": item.get("maturityDate"),
+                                "desc": item.get("desc2") or item.get("desc1") or "",
+                                "source": f"secdef/info-fallback:OPT:{month}:strike={fallback_strike}",
+                            })
+                            month_hits += 1
+                    if month_hits:
+                        # First month that yielded children wins —
+                        # don't fan out across other months once we
+                        # have a complete YES/NO strike pair.
+                        break
             return children
 
         # Step 2: for each unique strike value (Call ∪ Put), call

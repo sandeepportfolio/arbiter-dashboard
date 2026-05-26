@@ -146,6 +146,21 @@ class ForecastExChildResolver:
         # IBKR's bucket on /iserver/secdef/strikes refills slow enough
         # that back-to-back calls 429 immediately.
         self._strikes_min_gap_s: float = 3.0
+        # Per-parent counter of consecutive ``no_children`` outcomes.
+        # When a parent stays empty for ``_NO_CHILDREN_MARK_THRESHOLD``
+        # cycles in a row, we mark every mapping bound to it
+        # ``forecastex_not_available`` so the candidate filter stops
+        # re-probing it next cycle. Catches wrong-domain discovery
+        # attachments (e.g. sports mappings auto-matched to regional
+        # CPI events whose secdef/info 500s on every strike) that
+        # would otherwise burn IBKR rate-limit budget forever.
+        self._no_children_counts: Dict[str, int] = {}
+
+    # Three failed cycles before declaring a parent permanently
+    # unresolvable. Lower than that and a single weekend IBKR outage
+    # would wrongly disable healthy events; higher and the 39 bad
+    # MLB→CPI attachments would clog the candidate set for days.
+    _NO_CHILDREN_MARK_THRESHOLD: int = 3
 
     @property
     def last_snapshot(self) -> Optional[ResolverSnapshot]:
@@ -441,11 +456,39 @@ class ForecastExChildResolver:
             )
 
         if not children:
+            count = self._no_children_counts.get(parent_conid, 0) + 1
+            self._no_children_counts[parent_conid] = count
+            if count >= self._NO_CHILDREN_MARK_THRESHOLD:
+                # Persistent emptiness — either IBKR genuinely doesn't
+                # expose children for this conid (wrong-domain discovery
+                # attach, e.g. MLB game mapping bound to a regional CPI
+                # event) or the secdef endpoint is permanently broken
+                # for it. Either way, marking the mapping unavailable
+                # stops it from being a candidate so future cycles
+                # don't waste budget retrying.
+                self._no_children_counts.pop(parent_conid, None)
+                return await self._mark_unavailable(
+                    canonical_id, parent_conid,
+                    reason=(
+                        f"resolve_event_children empty after {count} "
+                        f"consecutive cycles — likely wrong-domain "
+                        f"discovery attach or unsupported IBKR conid"
+                    ),
+                )
             return ResolveAttempt(
                 canonical_id=canonical_id, parent_conid=parent_conid,
                 ts=now, outcome="no_children",
-                detail="resolve_event_children returned empty list (IBKR endpoint may be down or contract has no child option chain)",
+                detail=(
+                    f"resolve_event_children returned empty list "
+                    f"(attempt {count}/{self._NO_CHILDREN_MARK_THRESHOLD} "
+                    f"before mark_unavailable)"
+                ),
             )
+
+        # Children resolved — reset the per-parent no_children counter
+        # so a transient empty cycle doesn't accumulate toward the
+        # mark-unavailable threshold for a healthy parent.
+        self._no_children_counts.pop(parent_conid, None)
 
         # Pick the YES side — IBKR right=C is the Call which pays $1 when
         # the strike outcome resolves true (e.g. HORC strike=1 Call =
