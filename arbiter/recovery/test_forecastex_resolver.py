@@ -64,6 +64,18 @@ def _empty_snapshot():
     return {"conid": "x", "conidEx": "x", "7295": "0.00"}
 
 
+def _parent_then_tradeable_snapshot(parent_conid: str):
+    """AsyncMock side_effect: empty for the parent conid (so the resolver's
+    self-heal short-circuit moves past warmup) and tradeable for any other
+    conid (so the downstream child tradeability warm-up succeeds).
+    """
+    async def _side(conid, *args, **kwargs):
+        if str(conid) == str(parent_conid):
+            return _empty_snapshot()
+        return _tradeable_snapshot()
+    return _side
+
+
 async def test_picks_call_yes_child_and_attaches_when_tradeable(monkeypatch):
     """Happy path: resolver picks the Call (YES) child, snapshots it,
     confirms tradeability (bid/ask > 0), and persists the conid to the
@@ -84,7 +96,7 @@ async def test_picks_call_yes_child_and_attaches_when_tradeable(monkeypatch):
         {"conid": "762089344", "right": "P", "strike": 1.0,
          "source": "secdef/info:OPT:NOV26:strike=1.0", "desc": "NOV26 1 NO @FORECASTX"},
     ])
-    client.market_snapshot = AsyncMock(return_value=_tradeable_snapshot())
+    client.market_snapshot = AsyncMock(side_effect=_parent_then_tradeable_snapshot("733131966"))
 
     store = MagicMock()
     store.get = AsyncMock(return_value=_stub_mapping("DEM_HOUSE_2026", "733131966"))
@@ -125,7 +137,7 @@ async def test_dem_canonical_id_picks_strike_1_call(monkeypatch):
         {"conid": "REP_CALL", "right": "C", "strike": 2.0},
         {"conid": "REP_PUT",  "right": "P", "strike": 2.0},
     ])
-    client.market_snapshot = AsyncMock(return_value=_tradeable_snapshot())
+    client.market_snapshot = AsyncMock(side_effect=_parent_then_tradeable_snapshot("733131966"))
     store = MagicMock()
     store.get = AsyncMock(return_value=_stub_mapping("DEM_HOUSE_2026", "733131966"))
     store.upsert = AsyncMock()
@@ -152,7 +164,7 @@ async def test_gop_canonical_id_picks_strike_2_call(monkeypatch):
         {"conid": "DEM_CALL", "right": "C", "strike": 1.0},
         {"conid": "REP_CALL", "right": "C", "strike": 2.0},
     ])
-    client.market_snapshot = AsyncMock(return_value=_tradeable_snapshot())
+    client.market_snapshot = AsyncMock(side_effect=_parent_then_tradeable_snapshot("733131966"))
     store = MagicMock()
     store.get = AsyncMock(return_value=_stub_mapping("GOP_HOUSE_2026", "733131966"))
     store.upsert = AsyncMock()
@@ -330,7 +342,7 @@ async def test_dry_run_does_not_call_upsert():
     client.resolve_event_children = AsyncMock(return_value=[
         {"conid": "222", "right": "C", "strike": 1.0},
     ])
-    client.market_snapshot = AsyncMock(return_value=_tradeable_snapshot())
+    client.market_snapshot = AsyncMock(side_effect=_parent_then_tradeable_snapshot("111"))
     store = MagicMock()
     store.upsert = AsyncMock()
 
@@ -343,6 +355,87 @@ async def test_dry_run_does_not_call_upsert():
     assert snap.attempts[0]["child_conid"] == "222"
     assert store.upsert.await_count == 0
     assert collector.reactivate_conid.call_count == 0
+
+
+async def test_self_heal_reactivates_tradeable_child_without_re_resolving():
+    """Regression — if a previously-resolved child conid (e.g. 762089343
+    DEM_HOUSE) is wrongly added to the collector's inactive set during
+    an IBKR snapshot warmup race, the resolver must:
+      1. Detect the conid is ALREADY a tradeable child (snapshot returns
+         bid/ask) BEFORE calling resolve_event_children.
+      2. Reactivate it in the collector and return outcome=
+         ``reactivated_child`` — NOT consume IBKR rate-limit budget on
+         a futile parent→child enumeration cycle.
+
+    Without this, the resolver would call resolve_event_children on a
+    child OPT conid (which IBKR returns no strikes for), record
+    ``no_children`` forever, and the wrongly-disabled child would
+    remain inactive across resolver cycles.
+    """
+    settings_module.MARKET_MAP["DEM_HOUSE_2026"] = _confirmed(
+        "DEM_HOUSE_2026", "762089343",
+    )
+    collector = MagicMock()
+    collector._inactive_conids = {"762089343"}
+    collector.reactivate_conid = MagicMock()
+
+    client = MagicMock()
+    # The candidate conid itself returns a tradeable snapshot —
+    # signalling it's a child that was wrongly disabled, not a parent.
+    client.market_snapshot = AsyncMock(return_value=_tradeable_snapshot())
+    client.resolve_event_children = AsyncMock()
+
+    store = MagicMock()
+    store.upsert = AsyncMock()
+
+    res = ForecastExChildResolver(
+        forecastex_client=client, forecastex_collector=collector, mapping_store=store,
+    )
+    snap = await res.run_once()
+
+    assert snap.resolved_count == 1
+    assert snap.attempts[0]["outcome"] == "reactivated_child"
+    assert snap.attempts[0]["child_conid"] == "762089343"
+    # Critical: resolve_event_children must NOT have been called for
+    # the already-tradeable child — that would waste IBKR rate-limit
+    # budget and uselessly probe an OPT conid's nonexistent option chain.
+    assert client.resolve_event_children.await_count == 0
+    # Collector reactivation MUST fire so the next collector cycle
+    # actually picks the conid back up.
+    collector.reactivate_conid.assert_called_once_with("762089343")
+    # No mapping mutation — we kept the existing child_id intact.
+    assert store.upsert.await_count == 0
+
+
+async def test_self_heal_falls_through_to_resolution_when_snapshot_empty():
+    """Inverse of the self-heal test: when the candidate conid returns
+    an empty snapshot (true parent), the resolver must proceed with the
+    normal resolve_event_children flow rather than short-circuiting.
+    """
+    settings_module.MARKET_MAP["A"] = _confirmed("A", "111")
+    collector = MagicMock()
+    collector._inactive_conids = {"111"}
+    collector.reactivate_conid = MagicMock()
+
+    client = MagicMock()
+    # Parent (111) snapshots empty → self-heal does NOT short-circuit.
+    # Child (222) snapshots tradeable → tradeability check passes.
+    client.market_snapshot = AsyncMock(side_effect=_parent_then_tradeable_snapshot("111"))
+    client.resolve_event_children = AsyncMock(return_value=[
+        {"conid": "222", "right": "C", "strike": 1.0,
+         "source": "secdef/info:OPT:NOV26:strike=1.0"},
+    ])
+
+    store = MagicMock()
+    store.get = AsyncMock(return_value=_stub_mapping("A", "111"))
+    store.upsert = AsyncMock()
+
+    res = ForecastExChildResolver(
+        forecastex_client=client, forecastex_collector=collector, mapping_store=store,
+    )
+    snap = await res.run_once()
+    assert snap.attempts[0]["outcome"] == "resolved"
+    assert client.resolve_event_children.await_count == 1
 
 
 def test_resolver_from_env_returns_none_when_wiring_missing(monkeypatch):

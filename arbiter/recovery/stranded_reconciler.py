@@ -204,12 +204,19 @@ class StrandedPositionReconciler:
         self._cycle_count += 1
         errors: List[str] = []
         observed: Dict[tuple, StrandedPosition] = {}
+        # Platforms whose fetch raised this cycle. We MUST NOT prune
+        # previously-tracked positions for these platforms — a venue
+        # outage would otherwise wipe the tracker, and the next
+        # successful cycle would re-classify every still-stranded lot
+        # as "new" and re-emit an incident + Telegram alert per lot.
+        # This is the dedup invariant the operator relies on.
+        failed_platforms: set = set()
 
         # Each venue contributes its observed positions. Failures on one
         # venue must not block the others — best-effort scan.
-        for fetch in (
-            self._fetch_kalshi_positions,
-            self._fetch_polymarket_us_positions,
+        for platform, fetch in (
+            ("kalshi", self._fetch_kalshi_positions),
+            ("polymarket", self._fetch_polymarket_us_positions),
         ):
             try:
                 for pos in await fetch():
@@ -219,6 +226,7 @@ class StrandedPositionReconciler:
                 err = f"{fetch.__name__}: {exc}"
                 logger.warning("stranded_reconciler.fetch_failed", err=err)
                 errors.append(err)
+                failed_platforms.add(platform)
 
         now = time.time()
         # Merge with persistent tracker so first_seen_ts stays stable.
@@ -236,7 +244,12 @@ class StrandedPositionReconciler:
             self._tracked[key] = pos
 
         # Prune positions that vanished from the venue (closed / settled).
+        # Skip pruning for platforms whose fetch failed this cycle — those
+        # positions are not "vanished", we just don't have fresh truth.
         for key in list(self._tracked.keys()):
+            platform = key[0]
+            if platform in failed_platforms:
+                continue
             if key not in observed:
                 del self._tracked[key]
 

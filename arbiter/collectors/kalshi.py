@@ -89,6 +89,11 @@ class KalshiCollector:
     Maps Kalshi series_ticker/event_ticker to canonical market IDs.
     """
 
+    # Surfaced by BalanceMonitor (`getattr(collector, "balance_source", "")`)
+    # so the /api/balances payload tells operators which endpoint produced the
+    # number. Parity with PolymarketUSCollector and ForecastExCollector.
+    balance_source: str = "kalshi:/portfolio/balance"
+
     def __init__(self, config: KalshiConfig, price_store: PriceStore):
         self.config = config
         self.store = price_store

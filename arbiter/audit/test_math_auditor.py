@@ -9,6 +9,8 @@ from .math_auditor import (
     MathAuditor,
     _kalshi_fee,
     _polymarket_fee,
+    _forecastex_fee,
+    _FORECASTEX_FLAT_FEE_PER_CONTRACT,
     DISCREPANCY_THRESHOLD,
 )
 
@@ -68,6 +70,22 @@ class TestFeeModels:
         # polymarket_order_fee(price, quantity=1, category=cat) should equal _polymarket_fee(price, cat)
         assert abs(polymarket_order_fee(0.60, category="politics") - _polymarket_fee(0.60, "politics")) < 1e-10
 
+    def test_forecastex_fee_default_flat(self):
+        # Flat $0.005/contract regardless of price — the value scanner.compute_fee
+        # produces when the collector-supplied fee_rate is missing.
+        assert _forecastex_fee(0.50, quantity=100) == pytest.approx(_FORECASTEX_FLAT_FEE_PER_CONTRACT)
+        assert _forecastex_fee(0.10, quantity=100) == pytest.approx(_FORECASTEX_FLAT_FEE_PER_CONTRACT)
+        assert _forecastex_fee(0.90, quantity=100) == pytest.approx(_FORECASTEX_FLAT_FEE_PER_CONTRACT)
+
+    def test_forecastex_fee_uses_collector_rate(self):
+        # When the PricePoint exposes fee_rate (per-contract), shadow must honor it.
+        assert _forecastex_fee(0.50, quantity=10, fee_rate=0.01) == pytest.approx(0.01)
+        assert _forecastex_fee(0.50, quantity=10, fee_rate=0.0) == pytest.approx(_FORECASTEX_FLAT_FEE_PER_CONTRACT)
+
+    def test_forecastex_fee_zero_price(self):
+        assert _forecastex_fee(0.0, quantity=100) == 0.0
+
+
 # ─── Auditor Tests: Clean Opportunities ──────────────────────────────────
 
 class TestAuditorCleanOpps:
@@ -107,6 +125,68 @@ class TestAuditorCleanOpps:
             opp = self._make_kalshi_poly_opp(yp, np)
             result = self.auditor.audit_opportunity(opp)
             assert result.passed, f"Failed for yes={yp}, no={np}: {[f.message for f in result.flags]}"
+
+    def test_clean_forecastex_kalshi_passes(self):
+        """Three-way regression: a ForecastEx leg must produce a clean audit.
+        Before the FX-aware fee model was added, the shadow auditor computed
+        fee=$0 for FX, triggering a false-positive `total_fees` mismatch on
+        every K↔FX or P↔FX opportunity."""
+        yes_price, no_price = 0.45, 0.45
+        qty = max(1, int(100.0 / (yes_price + no_price)))
+        fee_yes = _forecastex_fee(yes_price, quantity=qty)
+        fee_no = _kalshi_fee(no_price, quantity=qty)
+        gross = 1.0 - yes_price - no_price
+        total = fee_yes + fee_no
+        net = gross - total
+        opp = {
+            "canonical_id": "FX_TEST",
+            "yes_platform": "forecastex",
+            "no_platform": "kalshi",
+            "yes_price": yes_price,
+            "no_price": no_price,
+            "gross_edge": gross,
+            "total_fees": total,
+            "net_edge": net,
+            "net_edge_cents": net * 100,
+            "suggested_qty": qty,
+            "max_profit_usd": net * qty,
+            "yes_fee_rate": 0.005,
+            "no_fee_rate": 0.0,
+        }
+        result = self.auditor.audit_opportunity(opp)
+        assert result.passed, (
+            "FX-involving opp must audit clean. Flags: "
+            + str([f.message for f in result.flags])
+        )
+
+    def test_clean_polymarket_forecastex_passes(self):
+        yes_price, no_price = 0.40, 0.50
+        qty = max(1, int(100.0 / (yes_price + no_price)))
+        fee_yes = _polymarket_fee(yes_price, "politics", quantity=qty)
+        fee_no = _forecastex_fee(no_price, quantity=qty)
+        gross = 1.0 - yes_price - no_price
+        total = fee_yes + fee_no
+        net = gross - total
+        opp = {
+            "canonical_id": "FX_POLY_TEST",
+            "yes_platform": "polymarket",
+            "no_platform": "forecastex",
+            "yes_price": yes_price,
+            "no_price": no_price,
+            "gross_edge": gross,
+            "total_fees": total,
+            "net_edge": net,
+            "net_edge_cents": net * 100,
+            "suggested_qty": qty,
+            "max_profit_usd": net * qty,
+            "yes_fee_rate": 0.04,
+            "no_fee_rate": 0.005,
+        }
+        result = self.auditor.audit_opportunity(opp)
+        assert result.passed, (
+            "Poly↔FX opp must audit clean. Flags: "
+            + str([f.message for f in result.flags])
+        )
 
 # ─── Auditor Tests: Discrepancy Detection ────────────────────────────────
 

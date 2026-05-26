@@ -134,11 +134,79 @@ async def test_client_place_order_buy_only(client):
     await client.close()
 
 
-async def test_client_place_order_rejects_sell(client):
-    with pytest.raises(ValueError, match="only BUY is supported"):
+async def test_client_place_order_rejects_invalid_side(client):
+    with pytest.raises(ValueError, match="must be BUY or SELL"):
         await client.place_order(
-            conid="111", side="SELL", price=0.55, quantity=10,
+            conid="111", side="EXERCISE", price=0.55, quantity=10,
         )
+    await client.close()
+
+
+async def test_client_place_order_sell_accepted(client):
+    with aioresponses() as m:
+        m.post(
+            re.compile(rf".*/iserver/account/{ACCOUNT}/orders.*"),
+            payload={"order_id": "sell-1", "order_status": "Filled",
+                     "filled_quantity": 5, "avg_price": 0.42},
+        )
+        resp = await client.place_order(
+            conid="222", side="SELL", price=0.42, quantity=5, tif="IOC",
+        )
+    assert resp["order_id"] == "sell-1"
+    await client.close()
+
+
+async def test_client_place_order_walks_confirmation_reply_chain(client):
+    """IBKR sometimes responds with a confirmation prompt
+    ``[{"id": "<uuid>", "message": [...]}]`` before delivering the order
+    ack. The client should auto-POST ``{"confirmed": true}`` to
+    ``/iserver/reply/<id>`` and return the eventual order record.
+    """
+    reply_id = "abc-reply-1"
+    with aioresponses() as m:
+        # Initial POST returns a confirmation prompt.
+        m.post(
+            re.compile(rf".*/iserver/account/{ACCOUNT}/orders.*"),
+            payload=[{"id": reply_id, "message": ["Order exceeds size warning"]}],
+        )
+        # Reply POST returns the actual order ack.
+        m.post(
+            re.compile(rf".*/iserver/reply/{reply_id}.*"),
+            payload=[{"order_id": "ord-after-reply", "order_status": "Submitted"}],
+        )
+        resp = await client.place_order(
+            conid="333", side="SELL", price=0.30, quantity=2, tif="GTC",
+        )
+    items = resp.get("items") if isinstance(resp, dict) else None
+    assert items is not None
+    assert items[0]["order_id"] == "ord-after-reply"
+    await client.close()
+
+
+async def test_client_place_order_walks_two_chained_replies(client):
+    """The gateway can chain prompts (size warning followed by price
+    warning). The client must walk both before returning the order ack."""
+    reply1 = "r1"
+    reply2 = "r2"
+    with aioresponses() as m:
+        m.post(
+            re.compile(rf".*/iserver/account/{ACCOUNT}/orders.*"),
+            payload=[{"id": reply1, "message": ["size warning"]}],
+        )
+        m.post(
+            re.compile(rf".*/iserver/reply/{reply1}.*"),
+            payload=[{"id": reply2, "message": ["price warning"]}],
+        )
+        m.post(
+            re.compile(rf".*/iserver/reply/{reply2}.*"),
+            payload=[{"order_id": "ord-2-replies", "order_status": "Filled"}],
+        )
+        resp = await client.place_order(
+            conid="444", side="SELL", price=0.05, quantity=1, tif="IOC",
+        )
+    items = resp.get("items") if isinstance(resp, dict) else None
+    assert items is not None
+    assert items[0]["order_id"] == "ord-2-replies"
     await client.close()
 
 
@@ -180,6 +248,44 @@ async def test_client_429_exhausts_retries(client):
             )
         with pytest.raises(RuntimeError, match="rate-limit retry exhausted"):
             await client.accounts()
+    await client.close()
+
+
+async def test_strikes_429_uses_exponential_backoff(client, monkeypatch):
+    """V19 regression: /iserver/secdef/strikes 429 retries MUST use the
+    exponential ladder 1s/3s/9s regardless of Retry-After (IBKR sometimes
+    returns ``Retry-After: 1`` which floods straight back into another 429).
+    Verify the sleep delays match the ladder by capturing every asyncio.sleep
+    call from the retry path.
+    """
+    sleeps: list[float] = []
+
+    async def _record_sleep(delay):
+        sleeps.append(float(delay))
+
+    monkeypatch.setattr("arbiter.collectors.forecastex.asyncio.sleep", _record_sleep)
+
+    # iserver/* paths require the brokerage bridge — return a 200 so the
+    # pre-flight succeeds before the 429s start firing.
+    with aioresponses() as m:
+        m.post(re.compile(r".*/iserver/auth/ssodh/init.*"), payload={"connected": True})
+        for _ in range(3):
+            m.get(
+                re.compile(r".*/iserver/secdef/strikes.*"),
+                status=429,
+                headers={"Retry-After": "1"},  # Ignored on the strikes path.
+            )
+        with pytest.raises(RuntimeError, match="rate-limit retry exhausted"):
+            await client._request(
+                "GET", "/iserver/secdef/strikes",
+                params={"conid": "1", "exchange": "FORECASTX",
+                        "sectype": "OPT", "month": "NOV26"},
+            )
+    # First two 429s should sleep 1s then 3s (we don't get a third sleep
+    # because the 3rd retry exhausts and raises).
+    assert sleeps[:2] == [1.0, 3.0], (
+        f"expected exponential 1s,3s ladder on /iserver/secdef/strikes; got {sleeps[:2]}"
+    )
     await client.close()
 
 
@@ -434,8 +540,14 @@ def test_is_tradeable_snapshot_recognises_empty_parent_event(client):
 
 async def test_collector_disables_parent_event_conids_after_probes(patched_market_map):
     """Parent FORECASTX event conids return only metadata. Polling them
-    forever burns rate-limit budget; after 3 non-tradeable snapshots the
-    collector must mark the conid inactive and stop probing.
+    forever burns rate-limit budget; after enough non-tradeable
+    snapshots the collector must mark the conid inactive and stop
+    probing.
+
+    Threshold is now ``_PROBE_DISABLE_THRESHOLD`` (8 by default) and
+    each ``fetch_markets`` call issues two snapshot HTTP requests via
+    ``_snapshot_with_warmup`` (initial + warmup retry). The test
+    exercises one above-threshold cycle to confirm disable triggers.
     """
     store = PriceStore()
     client = ForecastExClient(gateway_url=GATEWAY, account_id=ACCOUNT)
@@ -448,17 +560,107 @@ async def test_collector_disables_parent_event_conids_after_probes(patched_marke
         "conid": 733131966,
         "7295": "0.00",
     }]
+    fetch_calls = collector._PROBE_DISABLE_THRESHOLD + 1
     with aioresponses() as m:
-        for _ in range(4):
+        # Each fetch_markets issues 2 snapshot HTTPs (initial + warmup),
+        # so register 2× fetch_calls + a small cushion.
+        for _ in range(fetch_calls * 2 + 2):
             m.get(
                 re.compile(r".*/iserver/marketdata/snapshot.*"),
                 payload=parent_snapshot,
             )
-        for _ in range(3):
+        for _ in range(fetch_calls):
             await collector.fetch_markets()
     # The patched_market_map fixture binds conid "111222" to the canonical id.
     assert "111222" in collector._inactive_conids
-    assert collector._parent_probe_counts["111222"] >= 3
+    assert (
+        collector._parent_probe_counts["111222"]
+        >= collector._PROBE_DISABLE_THRESHOLD
+    )
+    await client.close()
+
+
+async def test_collector_warmup_retry_recovers_tradeable_child(patched_market_map):
+    """Regression — IBKR's snapshot field cache warms lazily, so the
+    first call to a freshly-subscribed child conid often returns only
+    metadata keys (no 31/84/86) even though the contract IS tradeable.
+    ``_snapshot_with_warmup`` retries once after a short sleep; the
+    successful second call must produce a PricePoint AND avoid
+    incrementing the parent-probe-counter that would otherwise disable
+    the conid after ~8 cycles.
+
+    This is the bug that disabled 762089343 (DEM_HOUSE) and 773659700
+    (GOP_HOUSE) on 2026-05-26 despite IBKR returning live bid/ask on
+    direct probe seconds later.
+    """
+    store = PriceStore()
+    client = ForecastExClient(gateway_url=GATEWAY, account_id=ACCOUNT)
+    collector = ForecastExCollector(
+        config=ForecastExConfig(), store=store, client=client,
+    )
+    cold_snapshot = [{
+        "conidEx": "111222",
+        "conid": 111222,
+        "_updated": 1779768000000,
+    }]
+    warm_snapshot = [{
+        "conidEx": "111222",
+        "conid": 111222,
+        "31": "0.78",
+        "84": "0.77",
+        "86": "0.79",
+        "7295": "12",
+        "7296": "8",
+    }]
+    with aioresponses() as m:
+        # First fetch: cold then warm (warmup retry kicks in).
+        m.get(
+            re.compile(r".*/iserver/marketdata/snapshot.*"),
+            payload=cold_snapshot,
+        )
+        m.get(
+            re.compile(r".*/iserver/marketdata/snapshot.*"),
+            payload=warm_snapshot,
+        )
+        results = await collector.fetch_markets()
+
+    assert len(results) == 1
+    assert results[0].yes_bid == 0.77
+    assert results[0].yes_ask == 0.79
+    # Warmup-recovered conids must NOT accumulate probe-count.
+    assert "111222" not in collector._inactive_conids
+    assert collector._parent_probe_counts.get("111222", 0) == 0
+    await client.close()
+
+
+async def test_collector_clears_probe_count_on_tradeable_snapshot(patched_market_map):
+    """If a conid was previously seen with a non-tradeable warmup
+    response, a later tradeable snapshot must reset the probe counter
+    so transient warmup blips don't slowly accumulate to the disable
+    threshold over many cycles.
+    """
+    store = PriceStore()
+    client = ForecastExClient(gateway_url=GATEWAY, account_id=ACCOUNT)
+    collector = ForecastExCollector(
+        config=ForecastExConfig(), store=store, client=client,
+    )
+    # Seed prior probe count to simulate earlier cold-cache cycles.
+    collector._parent_probe_counts["111222"] = 5
+
+    tradeable = [{
+        "conidEx": "111222",
+        "conid": 111222,
+        "31": "0.50",
+        "84": "0.49",
+        "86": "0.51",
+    }]
+    with aioresponses() as m:
+        m.get(re.compile(r".*/iserver/marketdata/snapshot.*"), payload=tradeable)
+        results = await collector.fetch_markets()
+
+    assert len(results) == 1
+    assert "111222" not in collector._parent_probe_counts
+    assert "111222" not in collector._inactive_conids
     await client.close()
 
 

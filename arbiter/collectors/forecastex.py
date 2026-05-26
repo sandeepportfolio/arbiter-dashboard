@@ -11,9 +11,9 @@ Modelled after ``polymarket_us.py``:
   - dataclass ``ForecastExCollector`` polling MARKET_MAP entries that carry
     a ``forecastex`` contract id
 
-Only BUY orders are exposed (`place_order(side='BUY')`); ForecastEx contracts
-are resolved by closing the matching YES/NO contract rather than selling, so
-the engine never asks the adapter to SELL.
+BUY and SELL orders are exposed (`place_order(side='BUY'|'SELL')`); the
+adapter sells the same conid we bought to close exposure directly when the
+engine smart-unwinds a naked leg.
 """
 from __future__ import annotations
 
@@ -180,7 +180,24 @@ class ForecastExClient:
                     logger.debug("forecastex %s %s -> %s", method, path, resp.status)
 
                     if resp.status == 429:
-                        retry_after = float(resp.headers.get("Retry-After", "1") or "1")
+                        # Honor Retry-After when present; otherwise fall back
+                        # to exponential 1s, 3s, 9s. The discovery endpoint
+                        # /iserver/secdef/strikes ALWAYS uses the exponential
+                        # ladder — IBKR's rate limit on it is tight enough
+                        # that a flat 1s/1s/1s would flood straight back into
+                        # a 429 (verified 2026-05-25).
+                        header_retry = resp.headers.get("Retry-After")
+                        is_strikes = path.startswith("/iserver/secdef/strikes")
+                        exp_backoff = (1.0, 3.0, 9.0)[min(attempt, 2)]
+                        if is_strikes:
+                            retry_after = exp_backoff
+                        elif header_retry:
+                            try:
+                                retry_after = float(header_retry)
+                            except (TypeError, ValueError):
+                                retry_after = exp_backoff
+                        else:
+                            retry_after = exp_backoff
                         logger.warning(
                             "forecastex 429 on %s, retry in %.1fs (attempt %s/3)",
                             path, retry_after, attempt + 1,
@@ -492,33 +509,89 @@ class ForecastExClient:
         tif: str = "IOC",
         order_type: str = "LMT",
     ) -> dict:
-        """BUY-only LMT/IOC order placement.
+        """LMT order placement (BUY or SELL).
 
-        ForecastEx contracts are designed so closing a position means buying
-        the complementary YES/NO contract — the arbitrage system never asks
-        this adapter to SELL.
+        ForecastEx YES/NO contracts can be bought OR sold against the same
+        conid — selling a YES position you hold long closes the exposure
+        directly without buying the opposite leg. The adapter calls this
+        with ``side="SELL"`` from the smart-unwind path to close naked legs.
+
+        Handles IBKR's confirmation-message reply chain transparently: if
+        the gateway returns ``[{"id": "<reply-id>", "message": [...]}]``
+        instead of an order ack, we POST ``{"confirmed": true}`` to
+        ``/iserver/reply/<reply-id>`` (up to 5 chained prompts) until the
+        gateway emits the actual order record.
         """
         if not self.account_id:
             raise RuntimeError("IBKR_ACCOUNT_ID is not configured")
-        if str(side).upper() != "BUY":
+        normalized_side = str(side).upper()
+        if normalized_side not in ("BUY", "SELL"):
             raise ValueError(
-                f"forecastex.place_order rejects side={side!r}: only BUY is supported"
+                f"forecastex.place_order rejects side={side!r}: must be BUY or SELL"
             )
         body = {
             "orders": [
                 {
                     "conid": int(conid) if str(conid).isdigit() else conid,
                     "orderType": order_type,
-                    "side": "BUY",
+                    "side": normalized_side,
                     "quantity": int(quantity),
                     "price": float(price),
                     "tif": tif,
                 }
             ]
         }
-        return await self._request(
+        response = await self._request(
             "POST", f"/iserver/account/{self.account_id}/orders", json_body=body,
         )
+        return await self._answer_reply_chain(response)
+
+    async def _answer_reply_chain(self, response: dict, *, max_steps: int = 5) -> dict:
+        """Walk through any IBKR confirmation prompts attached to ``response``.
+
+        IBKR Client Portal returns one of two shapes on POST /orders:
+          1. Order ack: ``[{"order_id": ..., "order_status": ...}]``
+          2. Confirmation prompt: ``[{"id": "<uuid>", "message": [...]}]``
+
+        ``_request`` already wraps top-level lists as ``{"items": [...]}``.
+        We unwrap, detect the prompt shape, and reply ``{"confirmed": true}``
+        to ``/iserver/reply/<id>``. The gateway may chain multiple prompts
+        (e.g. price warning then size warning); we follow up to ``max_steps``
+        before giving up to avoid an infinite loop on a broken gateway.
+        """
+        current = response
+        for _ in range(max_steps):
+            items = current.get("items") if isinstance(current, dict) else None
+            entries = items if isinstance(items, list) else (
+                [current] if isinstance(current, dict) else []
+            )
+            if not entries:
+                return current
+            first = entries[0] if isinstance(entries[0], dict) else {}
+            reply_id = first.get("id") or first.get("messageId")
+            message = first.get("message")
+            # Confirmation prompts carry an ``id`` AND a ``message`` list;
+            # order acks carry an ``order_id`` / ``orderId``. Tell them apart
+            # by the absence of an order id.
+            has_order_id = any(
+                isinstance(e, dict) and (e.get("order_id") or e.get("orderId") or e.get("orderStatus") or e.get("order_status"))
+                for e in entries
+            )
+            if has_order_id or not reply_id or not message:
+                return current
+            logger.info(
+                "forecastex.reply.confirm id=%s message=%s",
+                reply_id, str(message)[:200],
+            )
+            current = await self._request(
+                "POST", f"/iserver/reply/{reply_id}",
+                json_body={"confirmed": True},
+            )
+        logger.warning(
+            "forecastex: confirmation reply chain exceeded %s steps — returning last response",
+            max_steps,
+        )
+        return current
 
     async def get_order(self, order_id: str) -> dict:
         # IBKR exposes order state through the live orders endpoint; reading
@@ -692,6 +765,40 @@ class ForecastExCollector:
             },
         )
 
+    # Number of consecutive non-tradeable probes before disabling a conid.
+    # IBKR's /iserver/marketdata/snapshot endpoint warms its field cache
+    # lazily — the first 1–3 calls for a freshly-subscribed child conid
+    # often return only metadata keys (conid/conidEx/_updated) before
+    # bid/ask field codes appear. The original threshold of 3 was tight
+    # enough to disable real tradeable children whenever the collector
+    # happened to first probe them during a cold IBKR session (verified
+    # 2026-05-25: 762089343 DEM_HOUSE and 773659700 GOP_HOUSE both
+    # disabled despite IBKR returning live 84/86 fields seconds later).
+    # 8 probes at the default 1.5s poll cadence gives ~12s of warmup
+    # budget per conid before disabling — still small enough to drop
+    # genuine parent (IND) conids within 15s of startup but wide enough
+    # to absorb IBKR's cold-cache latency.
+    _PROBE_DISABLE_THRESHOLD = 8
+
+    async def _snapshot_with_warmup(self, conid: str) -> dict:
+        """Single snapshot with a one-shot warmup retry.
+
+        IBKR returns metadata-only on the FIRST call to a conid whose
+        field cache hasn't been populated yet (no 31/84/86 keys). A
+        short sleep + second call usually returns the bid/ask. We do
+        this defensively rather than counting the first empty response
+        toward the probe-disable budget, which was disabling real
+        tradeable children during cold IBKR sessions.
+        """
+        snapshot = await self.client.market_snapshot(conid)
+        if snapshot and not ForecastExClient.is_tradeable_snapshot(snapshot):
+            # Only retry once, only when first attempt produced an empty
+            # data-field set — avoids doubling rate-limit cost on the
+            # steady-state path where most conids are warm.
+            await asyncio.sleep(1.0)
+            snapshot = await self.client.market_snapshot(conid)
+        return snapshot
+
     async def fetch_markets(self) -> list[PricePoint]:
         self.refresh_tracked_markets()
         results: list[PricePoint] = []
@@ -701,7 +808,7 @@ class ForecastExCollector:
                 continue
             self.total_fetches += 1
             try:
-                snapshot = await self.client.market_snapshot(conid)
+                snapshot = await self._snapshot_with_warmup(conid)
                 # A successful HTTP response means the IBKR bridge is healthy
                 # — reset the consecutive_errors counter now, BEFORE the
                 # tradeable check. An empty bid/ask snapshot is a market-data
@@ -719,7 +826,7 @@ class ForecastExCollector:
                     self._parent_probe_counts[conid] = (
                         self._parent_probe_counts.get(conid, 0) + 1
                     )
-                    if self._parent_probe_counts[conid] >= 3:
+                    if self._parent_probe_counts[conid] >= self._PROBE_DISABLE_THRESHOLD:
                         self._inactive_conids.add(conid)
                         logger.warning(
                             "ForecastEx conid %s returns no bid/ask after %d "
@@ -729,6 +836,9 @@ class ForecastExCollector:
                             conid, self._parent_probe_counts[conid],
                         )
                     continue
+                # Tradeable snapshot — clear any prior warmup probe count so
+                # a future blip doesn't accumulate toward the disable budget.
+                self._parent_probe_counts.pop(conid, None)
                 price = self._build_price_point(canonical_id, conid, snapshot or {})
                 if price is None:
                     continue

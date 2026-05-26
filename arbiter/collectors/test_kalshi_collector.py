@@ -164,6 +164,14 @@ def test_kalshi_yes_price_does_not_use_last_price():
     asyncio.run(runner())
 
 
+def test_kalshi_collector_exposes_balance_source_for_balance_monitor():
+    # BalanceMonitor reads `getattr(collector, "balance_source", "")` and
+    # surfaces it in /api/balances so operators can see which endpoint
+    # produced the number. Parity with Polymarket-US and ForecastEx.
+    collector = KalshiCollector(KalshiConfig(), PriceStore(ttl=120))
+    assert getattr(collector, "balance_source", "") == "kalshi:/portfolio/balance"
+
+
 def test_kalshi_skips_ambiguous_submarkets_without_confident_match():
     collector = KalshiCollector(KalshiConfig(), PriceStore(ttl=120))
     market = collector._select_market_for_canonical(

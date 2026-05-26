@@ -134,6 +134,10 @@ async def build_opportunity_from_quotes(
     # queues/deques we don't need here). Only the attributes
     # _build_cross_platform_opportunity reads are required:
     scanner = ArbitrageScanner.__new__(ArbitrageScanner)
+    # __new__ skips __init__, so the optional balance-provider attribute the
+    # scanner reads inside _build_cross_platform_opportunity is missing. Set
+    # it to None here so the helper doesn't AttributeError on the read.
+    scanner._balance_provider = None
     # ``_build_cross_platform_opportunity`` + ``_compute_confidence`` read the
     # following fields off ``self.config``; construct the minimal stub.
     scanner.config = SimpleNamespace(

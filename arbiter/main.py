@@ -408,6 +408,44 @@ def _is_stale_auto_resolvable_incident(
     return now - inc_ts > max_age
 
 
+async def rehydrate_open_incidents(
+    store, engine: ExecutionEngine, logger: logging.Logger,
+) -> int:
+    """Pull every open execution_incidents row into ``engine._incidents``.
+
+    The deque is bounded (``maxlen=200``) and starts empty on each boot, so
+    without this rehydration any open critical incident from a prior container
+    session vanishes from the readiness gate on restart and the trade gate
+    re-arms despite the blocking exposure. Idempotent — skips incidents
+    already in the deque so repeat invocations (e.g. live-tests) don't grow
+    duplicates.
+
+    Returns the count of incidents newly appended. Errors are logged and
+    swallowed; a failure here must not block startup.
+    """
+    try:
+        open_incidents = await store.list_incidents(status="open", limit=200)
+    except Exception as exc:  # noqa: BLE001 — startup-safe
+        logger.warning("Failed to rehydrate open incidents: %s", exc)
+        return 0
+    if not open_incidents:
+        return 0
+    existing_ids = {
+        getattr(inc, "incident_id", "") for inc in engine._incidents
+    }
+    rehydrated = 0
+    for inc in open_incidents:
+        if getattr(inc, "incident_id", "") in existing_ids:
+            continue
+        engine._incidents.appendleft(inc)
+        rehydrated += 1
+    if rehydrated:
+        logger.info(
+            "Rehydrated %d open incident(s) into engine._incidents", rehydrated,
+        )
+    return rehydrated
+
+
 async def run_reconciliation_loop(
     reconciler: PnLReconciler,
     monitor: BalanceMonitor,
@@ -1252,6 +1290,16 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
                 )
         except Exception as exc:
             logger.warning("Failed to rehydrate execution history: %s", exc)
+
+    # ── Rehydrate open incidents from database ─────────────────
+    # engine._incidents is a bounded deque initialised empty at boot. Without
+    # this rehydration, any critical incident raised by a prior container
+    # session vanishes from the readiness gate on restart — auto-trade would
+    # re-arm despite the blocking exposure that incident represents. The
+    # helper is extracted so unit tests can exercise it without spinning the
+    # full main() startup path.
+    if store is not None:
+        await rehydrate_open_incidents(store, engine, logger)
 
     # Seed engine._execution_count from the highest arb_id in the DB so
     # newly-minted ARB-NNN identifiers don't collide with persisted rows

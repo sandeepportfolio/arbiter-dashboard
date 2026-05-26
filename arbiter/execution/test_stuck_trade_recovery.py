@@ -121,6 +121,42 @@ def test_derive_status_one_filled_one_aborted_is_recovering():
     ) == "recovering"
 
 
+def test_derive_status_filled_with_zero_fill_qty_is_failed():
+    """Regression: ARB-000682 — Polymarket leg reported status=FILLED but
+    fill_qty=0 (no contracts changed hands) paired with an ABORTED leg.
+    Without fill_qty awareness this stays ``recovering`` forever because
+    the unwind path has nothing to close. The derivation must treat a
+    FILLED-with-zero-fill leg as effectively failed so the arb converges.
+    """
+    zero_filled = Order(
+        order_id="ARB-Z-NO-a", platform="polymarket", market_id="M",
+        canonical_id="C", side="no", price=0.31, quantity=14,
+        status=OrderStatus.FILLED, fill_price=0.31, fill_qty=0,
+    )
+    aborted = Order(
+        order_id="ARB-Z-YES-b", platform="kalshi", market_id="K",
+        canonical_id="C", side="yes", price=0.74, quantity=14,
+        status=OrderStatus.ABORTED, fill_price=0.0, fill_qty=0,
+    )
+    assert _derive_arb_status_from_legs([zero_filled, aborted]) == "failed"
+
+
+def test_derive_status_filled_with_positive_qty_still_recovering():
+    """Counter-check: when fill_qty>0, the naked survivor must still
+    derive to ``recovering`` so the operator sees real exposure."""
+    filled = Order(
+        order_id="ARB-R-NO-a", platform="polymarket", market_id="M",
+        canonical_id="C", side="no", price=0.31, quantity=14,
+        status=OrderStatus.FILLED, fill_price=0.31, fill_qty=14,
+    )
+    aborted = Order(
+        order_id="ARB-R-YES-b", platform="kalshi", market_id="K",
+        canonical_id="C", side="yes", price=0.74, quantity=14,
+        status=OrderStatus.ABORTED, fill_price=0.0, fill_qty=0,
+    )
+    assert _derive_arb_status_from_legs([filled, aborted]) == "recovering"
+
+
 def test_derive_status_single_filled_leg_stays_manual():
     # A half-recorded arb with one filled leg is real exposure, not a filled
     # arb. Startup recovery must keep it as a manual blocker.

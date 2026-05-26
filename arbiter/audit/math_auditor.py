@@ -65,6 +65,30 @@ def _polymarket_fee(
     return (rate * price * (1.0 - price) * quantity) / quantity
 
 
+# ForecastEx is flat per-contract — must match arbiter.config.settings
+# FORECASTEX_TAKER_FEE_PER_CONTRACT but is duplicated here so the shadow
+# auditor stays independent of the scanner's imports.
+_FORECASTEX_FLAT_FEE_PER_CONTRACT = 0.005
+
+
+def _forecastex_fee(
+    price: float,
+    quantity: int = 1,
+    fee_rate: Optional[float] = None,
+) -> float:
+    """ForecastEx: flat $0.005 per contract regardless of price.
+    ``fee_rate`` carries the per-contract value when the collector populated
+    it (matches scanner.compute_fee's contract). Falls back to the default
+    when fee_rate is None / 0."""
+    quantity = max(int(quantity), 1)
+    per_contract = float(fee_rate) if fee_rate else _FORECASTEX_FLAT_FEE_PER_CONTRACT
+    if per_contract < 0:
+        per_contract = 0.0
+    if price <= 0:
+        return 0.0
+    return per_contract
+
+
 # ─── Audit Result ─────────────────────────────────────────────────────────
 
 @dataclass
@@ -428,6 +452,8 @@ class MathAuditor:
             return _kalshi_fee(price, quantity)
         elif platform == "polymarket":
             return _polymarket_fee(price, category="politics", quantity=quantity, fee_rate=fee_rate)
+        elif platform == "forecastex":
+            return _forecastex_fee(price, quantity=quantity, fee_rate=fee_rate)
         return 0.0
 
     def _compute_position_size(

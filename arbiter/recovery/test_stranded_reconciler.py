@@ -278,6 +278,52 @@ async def test_auto_close_not_retried_in_following_cycle():
 
 
 
+async def test_fetch_failure_does_not_prune_tracked_positions_of_failed_venue():
+    """Regression: a transient venue outage MUST NOT wipe the
+    persistent tracker for that venue's stranded positions. If it
+    did, the next successful cycle would re-classify every still-
+    stranded lot as ``new_key`` and re-emit a ``stranded_position``
+    incident (and Telegram alert) per lot. The dedup invariant the
+    operator relies on holds only when prune ignores positions
+    whose platform failed to fetch this cycle.
+    """
+    engine = MagicMock()
+    engine._record_incident = AsyncMock()
+    rec = StrandedPositionReconciler(config=SimpleNamespace(), engine=engine)
+    # Cycle 1: both venues return Kalshi positions seen.
+    rec._fetch_kalshi_positions = AsyncMock(return_value=[
+        _stub_pos(market_id="K-STAYS", qty=5),
+    ])
+    rec._fetch_polymarket_us_positions = AsyncMock(return_value=[])
+    await rec.run_once()
+    assert engine._record_incident.await_count == 1
+    assert ("kalshi", "K-STAYS") in rec.tracked
+
+    # Cycle 2: Kalshi fetch fails outright; Polymarket still healthy
+    # but has nothing. The Kalshi position MUST remain tracked.
+    rec._fetch_kalshi_positions = AsyncMock(
+        side_effect=RuntimeError("kalshi 503"),
+    )
+    rec._fetch_polymarket_us_positions = AsyncMock(return_value=[])
+    snap = await rec.run_once()
+    assert ("kalshi", "K-STAYS") in rec.tracked, (
+        "transient venue outage pruned tracked position — would cause "
+        "incident re-emission on recovery"
+    )
+    assert snap.stranded_count == 1
+    assert any("kalshi" in e.lower() for e in snap.errors)
+
+    # Cycle 3: Kalshi recovers and re-reports the same lot. No new
+    # incident must fire — dedup must hold across the outage.
+    rec._fetch_kalshi_positions = AsyncMock(return_value=[
+        _stub_pos(market_id="K-STAYS", qty=5),
+    ])
+    await rec.run_once()
+    assert engine._record_incident.await_count == 1, (
+        "stranded incident re-emitted after Kalshi recovery — dedup broke"
+    )
+
+
 async def test_fetch_failure_on_one_venue_does_not_kill_cycle():
     """If Polymarket is down, Kalshi positions must still surface and
     the error must appear in the snapshot's ``errors`` list.

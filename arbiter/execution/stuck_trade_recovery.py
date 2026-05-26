@@ -177,36 +177,63 @@ def _row_to_order(row: asyncpg.Record) -> Order:
     )
 
 
-def _derive_arb_status_from_legs(leg_statuses: List[OrderStatus]) -> str:
+def _derive_arb_status_from_legs(
+    legs: List[Any],
+) -> str:
     """Mirror the engine's arb-status derivation closely enough for recovery.
 
-    The engine uses richer signals (which leg filled first, exposure routing,
-    etc.) but for *stuck* trades we only need a defensible terminal state:
-      - both filled → ``filled``
+    Accepts either ``Order`` objects or bare ``OrderStatus`` values. When an
+    Order is provided, a leg with ``status=FILLED`` and ``fill_qty<=0`` is
+    treated as a *zero-fill* — the venue reported the order as terminal but
+    no contracts changed hands — which means there is no naked exposure and
+    the leg behaves like ``FAILED`` for status-derivation purposes. Without
+    this, ARB-000682-style arbs (Polymarket FILLED@0 paired with a Kalshi
+    ABORTED leg) stay in ``recovering`` forever because the unwind has
+    nothing to close.
+
+    Behavior table:
+      - both filled (with qty>0) → ``filled``
       - either FAILED/CANCELLED/ABORTED with no surviving FILLED → ``failed``
-      - one FILLED + the other terminal-not-filled → ``recovering`` stays put
-        UNLESS the survivor is already aborted/cancelled — then ``failed``
+      - one FILLED-with-qty>0 + the other terminal-not-filled → ``recovering``
+      - one FILLED-with-qty==0 + the other terminal → ``failed``
+        (no exposure, no recovery work)
       - fewer than two persisted legs plus a FILLED leg → manual blocker
       - any leg still non-terminal → leave the status alone (we did not get
         a clean answer from the venue and the operator must investigate)
     """
-    filled = sum(1 for s in leg_statuses if s == OrderStatus.FILLED)
-    if len(leg_statuses) < 2:
+    effective: List[OrderStatus] = []
+    for leg in legs:
+        if isinstance(leg, OrderStatus):
+            effective.append(leg)
+            continue
+        status = getattr(leg, "status", None)
+        if not isinstance(status, OrderStatus):
+            continue
+        if status == OrderStatus.FILLED and float(getattr(leg, "fill_qty", 0) or 0) <= 0:
+            # Venue acked the order as terminal but no contracts traded —
+            # no exposure to recover. Demote to FAILED for derivation so
+            # the arb can converge instead of looping forever.
+            effective.append(OrderStatus.FAILED)
+        else:
+            effective.append(status)
+
+    filled = sum(1 for s in effective if s == OrderStatus.FILLED)
+    if len(effective) < 2:
         if filled:
             return ""
-        if leg_statuses and all(s in _TERMINAL_LEG_STATUSES for s in leg_statuses):
+        if effective and all(s in _TERMINAL_LEG_STATUSES for s in effective):
             return "failed"
         return ""
-    has_nonterminal = any(s not in _TERMINAL_LEG_STATUSES for s in leg_statuses)
+    has_nonterminal = any(s not in _TERMINAL_LEG_STATUSES for s in effective)
     if has_nonterminal:
         return ""  # caller keeps original status; will retry on next run
-    if filled == len(leg_statuses) and filled > 0:
+    if filled == len(effective) and filled > 0:
         return "filled"
     if filled == 0:
         return "failed"
     # Mixed: one filled, the other terminal-not-filled → still naked unless
     # the survivor is itself ABORTED (engine recovery cancelled it) → failed.
-    return "recovering" if any(s == OrderStatus.FILLED for s in leg_statuses) else "failed"
+    return "recovering" if any(s == OrderStatus.FILLED for s in effective) else "failed"
 
 
 async def _query_leg_state(
@@ -334,6 +361,7 @@ async def recover_stuck_trades(
             age_seconds=arb["age_seconds"],
         )
         leg_statuses: List[OrderStatus] = []
+        fresh_legs: List[Order] = []
         try:
             for leg_row in arb["legs"]:
                 order = _row_to_order(leg_row)
@@ -341,6 +369,7 @@ async def recover_stuck_trades(
                 adapter = adapters.get(order.platform)
                 fresh, note = await _query_leg_state(adapter, order)
                 leg_statuses.append(fresh.status)
+                fresh_legs.append(fresh)
                 outcome.leg_updates.append(
                     {
                         "order_id": order.order_id,
@@ -360,7 +389,7 @@ async def recover_stuck_trades(
                         outcome.error = f"upsert_order failed: {exc}"
                         errors += 1
 
-            new_status = _derive_arb_status_from_legs(leg_statuses) if leg_statuses else ""
+            new_status = _derive_arb_status_from_legs(fresh_legs) if fresh_legs else ""
             outcome.new_status = new_status or outcome.original_status
 
             note = (

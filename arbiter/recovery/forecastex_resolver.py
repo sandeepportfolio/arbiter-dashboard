@@ -233,6 +233,12 @@ class ForecastExChildResolver:
             if attempt.outcome == "resolved":
                 resolved += 1
                 consecutive_failures = 0
+            elif attempt.outcome == "reactivated_child":
+                # Conid was already a tradeable child — the collector
+                # had it disabled by mistake.  Counts as a successful
+                # heal for the cycle's tally and a healthy-IBKR signal.
+                resolved += 1
+                consecutive_failures = 0
             elif attempt.outcome == "dry_run":
                 # Dry-run reached the child, IBKR was healthy — reset.
                 consecutive_failures = 0
@@ -271,6 +277,53 @@ class ForecastExChildResolver:
         self, canonical_id: str, parent_conid: str,
     ) -> ResolveAttempt:
         now = time.time()
+
+        # Self-heal step — before treating ``parent_conid`` as an event
+        # parent and probing its child option chain, snapshot the conid
+        # itself.  If IBKR returns a tradeable bid/ask, the conid is
+        # ALREADY a working child that was wrongly disabled by the
+        # collector (e.g. during an IBKR snapshot warmup race — see
+        # arbiter.collectors.forecastex._snapshot_with_warmup).  In that
+        # case we reactivate the conid in the collector and return
+        # ``reactivated_child`` rather than wasting a full
+        # ``resolve_event_children`` cycle on it, which would always
+        # fail because a child OPT conid has no further option chain.
+        try:
+            from arbiter.collectors.forecastex import ForecastExClient as _FxClient
+            warmup_snap: Dict[str, Any] = {}
+            for warmup_no in (1, 2, 3):
+                warmup_snap = await self._client.market_snapshot(parent_conid)
+                if _FxClient.is_tradeable_snapshot(warmup_snap):
+                    break
+                await asyncio.sleep(1.0)
+            if _FxClient.is_tradeable_snapshot(warmup_snap):
+                try:
+                    self._collector.reactivate_conid(parent_conid)
+                except Exception:
+                    pass
+                logger.info(
+                    "forecastex_resolver.reactivated_child",
+                    canonical_id=canonical_id,
+                    conid=parent_conid,
+                )
+                return ResolveAttempt(
+                    canonical_id=canonical_id, parent_conid=parent_conid,
+                    ts=now, outcome="reactivated_child",
+                    child_conid=parent_conid,
+                    detail=(
+                        f"conid {parent_conid} is already a tradeable child; "
+                        f"reactivated in collector without re-resolving"
+                    ),
+                )
+        except Exception as exc:
+            # Best-effort warmup probe — fall through to the parent
+            # resolution flow on any failure so we don't lose the
+            # existing ibkr_503/ibkr_400 outcome classification below.
+            logger.debug(
+                "forecastex_resolver.warmup_snapshot_failed",
+                canonical_id=canonical_id, err=str(exc),
+            )
+
         try:
             children = await self._client.resolve_event_children(parent_conid)
         except Exception as exc:
