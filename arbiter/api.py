@@ -452,6 +452,11 @@ class ArbiterAPI:
         # /iserver/secdef/* endpoints aren't returning children (e.g.
         # weekend 503s). Trips the FX collector to re-probe immediately.
         app.router.add_post("/api/market-mappings/{canonical_id}/forecastex_conid", self.handle_set_forecastex_conid)
+        # ForecastEx wiring diagnostic — surfaces per-mapping conid state
+        # (tracked / inactive / resolved / quarantined) and the collector's
+        # live probe counts. Lets the operator see at a glance which
+        # mappings are blocked on what.
+        app.router.add_get("/api/forecastex/diagnostics", self.handle_forecastex_diagnostics)
         app.router.add_get("/api/settings", self.handle_settings)
         app.router.add_post("/api/settings", self.handle_settings_update)
         app.router.add_get("/api/errors", self.handle_errors)
@@ -2044,6 +2049,60 @@ class ArbiterAPI:
             "prior_conid": prior_conid,
             "new_conid": new_conid,
             "actor": actor,
+        })
+
+    async def handle_forecastex_diagnostics(self, request):
+        """GET /api/forecastex/diagnostics — operator visibility into FX
+        wiring state. For each confirmed FX mapping, surfaces:
+          - the attached conid
+          - whether it is currently in the collector's _inactive_conids set
+            (the trip-disable flag the resolver watches)
+          - whether the mapping is flagged forecastex_not_available
+          - the last resolver attempt outcome + timestamp + detail
+
+        Read-only — no side effects. Intended for the ops dashboard
+        to render a "why is FX not trading?" table without operators
+        having to grep logs.
+        """
+        from arbiter.config.settings import MARKET_MAP
+        resolver = getattr(self, "forecastex_resolver", None)
+        last_attempts = (
+            dict(getattr(resolver, "_last_attempts", {}) or {})
+            if resolver is not None else {}
+        )
+        # Collector inactive-set lookup (best-effort across attribute names).
+        inactive: set = set()
+        for attr in ("forecastex_collector", "collectors"):
+            holder = getattr(self, attr, None)
+            fx = holder.get("forecastex") if isinstance(holder, dict) else holder
+            if fx is not None and hasattr(fx, "_inactive_conids"):
+                try:
+                    inactive = set(fx._inactive_conids or set())
+                    break
+                except Exception:
+                    pass
+        rows = []
+        for canonical_id, mapping in MARKET_MAP.items():
+            if mapping.get("status") != "confirmed":
+                continue
+            conid = str(mapping.get("forecastex") or "").strip()
+            if not conid:
+                continue
+            attempt = last_attempts.get(canonical_id)
+            row = {
+                "canonical_id": canonical_id,
+                "conid": conid,
+                "forecastex_not_available": bool(mapping.get("forecastex_not_available")),
+                "in_inactive_set": conid in inactive,
+                "description": mapping.get("description") or canonical_id,
+                "last_attempt": attempt.to_dict() if attempt is not None and hasattr(attempt, "to_dict") else None,
+            }
+            rows.append(row)
+        return web.json_response({
+            "rows": rows,
+            "resolver_running": resolver is not None,
+            "inactive_conid_count": len(inactive),
+            "total_confirmed_fx_mappings": len(rows),
         })
 
     async def handle_errors(self, request):
