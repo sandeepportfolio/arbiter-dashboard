@@ -245,6 +245,8 @@ class TelegramNotifier:
         *,
         dedup_window_sec: float = 60.0,
         max_retries: int = 3,
+        burst_window_sec: float = 10.0,
+        burst_max: int = 5,
     ):
         self.bot_token = bot_token
         self.chat_id = chat_id
@@ -253,6 +255,15 @@ class TelegramNotifier:
         self._dedup_window_sec = max(0.0, float(dedup_window_sec))
         self._max_retries = max(1, int(max_retries))
         self._last_sent: Dict[str, float] = {}
+        # Global burst guard — caps total sends in a rolling window so a
+        # multi-source cascade (kill switch + stranded reconciler + critical
+        # incidents firing in the same second) cannot flood the chat. The
+        # per-key dedup above only protects against the SAME alert repeating;
+        # this is the cross-key ceiling that backstops it.
+        self._burst_window_sec = max(0.0, float(burst_window_sec))
+        self._burst_max = max(1, int(burst_max))
+        self._burst_history: list[float] = []
+        self._burst_dropped: int = 0
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -294,6 +305,23 @@ class TelegramNotifier:
         if self._is_duplicate(dedup_key):
             logger.debug(f"Telegram deduped (key={dedup_key!r}): {message[:80]}...")
             return False
+
+        # Global burst guard: drop the send (after dedup) when the rolling
+        # window has already saturated. Prevents a cross-source storm from
+        # turning the channel into noise during an incident cascade.
+        if self._burst_window_sec > 0:
+            now_burst = time.time()
+            cutoff = now_burst - self._burst_window_sec
+            self._burst_history = [t for t in self._burst_history if t >= cutoff]
+            if len(self._burst_history) >= self._burst_max:
+                self._burst_dropped += 1
+                logger.warning(
+                    "Telegram burst-dropped (%d in %.0fs, total dropped=%d): %s",
+                    len(self._burst_history), self._burst_window_sec,
+                    self._burst_dropped, message[:80],
+                )
+                return False
+            self._burst_history.append(now_burst)
 
         session = await self._get_session()
         url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"

@@ -684,7 +684,7 @@ class ExecutionEngine:
                         opp,
                         "warning",
                         f"Trade gate blocked execution: {gate_reason}",
-                        metadata={"gate": gate_context},
+                        metadata={"event_type": "trade_gate_blocked", "gate": gate_context},
                     )
                 return None
 
@@ -3134,6 +3134,66 @@ class ExecutionEngine:
             except asyncio.QueueFull:
                 logger.debug("Skipping slow incident subscriber")
         logger.warning("[%s] %s", severity.upper(), message)
+        # Telegram route for critical + stranded_position incidents. The
+        # stranded-reconciler docstring promises this routing; without it the
+        # reconciler's discoveries are invisible outside the dashboard. We
+        # skip event_types already routed by SafetySupervisor to avoid double
+        # sends (one_leg_exposure) and kill_switch trips (which fire their
+        # own Telegram via supervisor.trip_kill).
+        event_type = (incident.metadata or {}).get("event_type", "")
+        supervisor_handled = {"one_leg_exposure"}
+        telegram_eligible = (
+            severity == "critical"
+            or event_type == "stranded_position"
+        ) and event_type not in supervisor_handled
+        if telegram_eligible:
+            try:
+                emoji = "🛑" if severity == "critical" else "⚠️"
+                header = (
+                    "STRANDED POSITION"
+                    if event_type == "stranded_position"
+                    else f"CRITICAL INCIDENT ({severity.upper()})"
+                )
+                meta = incident.metadata or {}
+                extra_lines: list[str] = []
+                if event_type == "stranded_position":
+                    side = str(meta.get("side", "")).upper() or "?"
+                    qty_val = meta.get("qty", 0) or 0
+                    try:
+                        qty_abs = abs(int(qty_val))
+                    except (TypeError, ValueError):
+                        qty_abs = 0
+                    platform = str(meta.get("platform", "")).upper() or "?"
+                    title = meta.get("title") or canonical_id
+                    extra_lines.append(f"Market: {title}")
+                    extra_lines.append(
+                        f"{qty_abs} {side} on {platform}"
+                    )
+                    mtm = meta.get("mtm_usd")
+                    unreal = meta.get("unrealized_usd")
+                    if isinstance(mtm, (int, float)):
+                        extra_lines.append(f"MTM: ${float(mtm):+.2f}")
+                    if isinstance(unreal, (int, float)):
+                        extra_lines.append(f"Unrealized: ${float(unreal):+.2f}")
+                msg = (
+                    f"{emoji} <b>{header}</b>\n"
+                    f"<code>{incident.incident_id}</code>\n"
+                    + ("\n".join(extra_lines) + "\n" if extra_lines else "")
+                    + f"{message}"
+                )
+                notifier = getattr(
+                    getattr(self, "balance_monitor", None), "notifier", None
+                )
+                if notifier is not None:
+                    # Dedup on canonical+event so a flapping reconciler/db
+                    # doesn't blast Telegram every loop.
+                    dedup_key = f"incident:{event_type or severity}:{canonical_id}"
+                    await notifier.send(msg, dedup_key=dedup_key)
+            except Exception as exc:
+                logger.warning(
+                    "record_incident: telegram send failed (severity=%s event_type=%s): %s",
+                    severity, event_type, exc,
+                )
         # EXEC-02 / D-16: persist the incident to Postgres if a store is wired.
         if self.store is not None:
             try:

@@ -162,3 +162,57 @@ async def test_transient_exception_is_retried():
             ok = await n.send("hi")
     assert ok is True
     await n.close()
+
+
+@pytest.mark.asyncio
+async def test_global_burst_guard_drops_after_max_in_window():
+    """V6 regression: a multi-source incident cascade (kill switch +
+    stranded reconciler + several critical incidents firing in the same
+    second) must not flood Telegram. After ``burst_max`` sends inside
+    ``burst_window_sec`` ALL further sends drop until the window slides,
+    regardless of dedup_key — this is the cross-key ceiling that backs
+    up per-key dedup.
+    """
+    n = TelegramNotifier(
+        bot_token="t", chat_id="c",
+        dedup_window_sec=0,           # disable per-key dedup so this test
+                                      # exercises the burst ceiling alone
+        burst_window_sec=10.0,
+        burst_max=5,
+    )
+    # 7 attempted sends, each with a unique key (so dedup never fires).
+    responses = [_FakeResponse(200) for _ in range(7)]
+    with patch("aiohttp.ClientSession.post", side_effect=_patch_session_post(responses)):
+        results = [
+            await n.send(f"msg-{i}", dedup_key=f"unique-{i}")
+            for i in range(7)
+        ]
+    # First 5 succeed; remaining 2 drop because the burst guard fires.
+    assert results[:5] == [True, True, True, True, True]
+    assert results[5:] == [False, False]
+    assert n._burst_dropped == 2
+    await n.close()
+
+
+@pytest.mark.asyncio
+async def test_global_burst_guard_window_slides():
+    """After the window passes, the burst guard MUST allow new sends —
+    the protection is rate-limiting, not a permanent block.
+    """
+    n = TelegramNotifier(
+        bot_token="t", chat_id="c",
+        dedup_window_sec=0,
+        burst_window_sec=10.0,
+        burst_max=2,
+    )
+    responses = [_FakeResponse(200) for _ in range(4)]
+    with patch("aiohttp.ClientSession.post", side_effect=_patch_session_post(responses)):
+        a = await n.send("a", dedup_key="k1")
+        b = await n.send("b", dedup_key="k2")
+        c = await n.send("c", dedup_key="k3")  # dropped
+        # Walk all timestamps backwards past the window so the next send
+        # sees an empty rolling history.
+        n._burst_history = [t - 11.0 for t in n._burst_history]
+        d = await n.send("d", dedup_key="k4")  # allowed again
+    assert (a, b, c, d) == (True, True, False, True)
+    await n.close()
