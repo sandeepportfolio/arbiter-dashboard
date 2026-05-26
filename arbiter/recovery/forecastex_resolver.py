@@ -300,10 +300,84 @@ class ForecastExChildResolver:
             out.append((canonical_id, conid))
         return out
 
+    async def _quarantine_wrong_domain_candidates(
+        self, candidates: List[tuple],
+    ) -> List[tuple]:
+        """Drop sports-tagged mappings from the candidate list and mark
+        them ``forecastex_not_available`` so they stop showing up.
+
+        FORECASTX's listed inventory is overwhelmingly political and
+        macro-economic; sports inventory has been promised but never
+        materialised through 2026-05. Despite that, 39 confirmed Kalshi
+        sports mappings (MLB games, NHL Hart trophy lots, etc.) were
+        auto-bound to FORECASTX regional-CPI parents on 2026-05-25
+        because they shared city-name tokens. Each cycle, those 39
+        parents return no_children, hit the per-parent 3-empty mark,
+        and then get cleared — but only after burning ~3 strikes calls
+        per parent against IBKR's tight rate limit.
+
+        This pre-filter looks at the MAPPING (not the conid) and
+        recognises sports-tagged ones up front: their canonical_id /
+        description contain explicit sports tokens (mlb / nfl / nba /
+        etc.). We mark them unavailable immediately and skip them. Net
+        effect: ~120 wasted IBKR calls per cycle disappear, healthy
+        political parents get priority on the rate budget, and the
+        mapping is preserved (the operator can still attach a known-
+        good conid via the manual-override endpoint).
+        """
+        from arbiter.config.settings import MARKET_MAP
+        from arbiter.mapping.forecastex_discovery import _SPORTS_HINT_TOKENS, _tokenize
+
+        kept: List[tuple] = []
+        quarantined: List[str] = []
+        for canonical_id, parent_conid in candidates:
+            mapping = MARKET_MAP.get(canonical_id) or {}
+            text = " ".join(str(v) for v in (
+                canonical_id,
+                mapping.get("description") or "",
+                mapping.get("polymarket_question") or "",
+                mapping.get("kalshi") or "",
+                mapping.get("kalshi_market_id") or "",
+            ) if v)
+            tokens = _tokenize(text)
+            if tokens & _SPORTS_HINT_TOKENS:
+                quarantined.append(canonical_id)
+                # Persist the unavailable flag so the candidate filter
+                # immediately stops re-selecting it next cycle. Use the
+                # existing _mark_unavailable path so the resolver state
+                # (DB + collector inactive set) stays consistent.
+                try:
+                    await self._mark_unavailable(
+                        canonical_id, parent_conid,
+                        reason=(
+                            "sports-tagged mapping with FORECASTX conid — "
+                            "FORECASTX has no live sports inventory; "
+                            "wrong-domain auto-bind from discovery 2026-05-25"
+                        ),
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "forecastex_resolver.quarantine_failed",
+                        canonical_id=canonical_id, err=str(exc),
+                    )
+                continue
+            kept.append((canonical_id, parent_conid))
+        if quarantined:
+            logger.info(
+                "forecastex_resolver.quarantined_wrong_domain",
+                count=len(quarantined),
+                canonical_ids=quarantined[:10],
+            )
+        return kept
+
     async def run_once(self) -> ResolverSnapshot:
         t0 = time.monotonic()
         self._cycle_count += 1
         candidates = self._candidate_canonical_ids()
+        # Pre-flight: drop sports-tagged mappings before any IBKR call
+        # so we don't burn rate budget on the 39 known wrong-domain
+        # attachments from the 2026-05-25 incident.
+        candidates = await self._quarantine_wrong_domain_candidates(candidates)
         # Sort by parent_conid so candidates sharing the same underlying
         # are processed back-to-back. The first one pays the strikes
         # call; the rest hit ``_strikes_cache`` for free. Without this

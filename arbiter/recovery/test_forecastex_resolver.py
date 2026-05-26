@@ -184,7 +184,11 @@ async def test_marks_unavailable_when_child_not_tradeable():
     it stops being a candidate. Without this the resolver loops
     forever on the same parent.
     """
-    settings_module.MARKET_MAP["GAME_MLB_X"] = _confirmed("GAME_MLB_X", "831072197")
+    # Use a non-sports canonical_id so the sports-quarantine pre-filter
+    # does not intercept it before the snapshot-warmup path runs. That
+    # quarantine is tested separately (see
+    # ``test_quarantines_sports_tagged_candidates``).
+    settings_module.MARKET_MAP["FED_RATE_HIKE_X"] = _confirmed("FED_RATE_HIKE_X", "831072197")
     collector = MagicMock()
     collector._inactive_conids = {"831072197"}
     collector.reactivate_conid = MagicMock()
@@ -198,7 +202,7 @@ async def test_marks_unavailable_when_child_not_tradeable():
     client.market_snapshot = AsyncMock(return_value=_empty_snapshot())
 
     store = MagicMock()
-    store.get = AsyncMock(return_value=_stub_mapping("GAME_MLB_X", "831072197"))
+    store.get = AsyncMock(return_value=_stub_mapping("FED_RATE_HIKE_X", "831072197"))
     store.upsert = AsyncMock()
 
     res = ForecastExChildResolver(
@@ -210,6 +214,45 @@ async def test_marks_unavailable_when_child_not_tradeable():
     assert store.upsert.await_count == 1
     upserted = store.upsert.await_args.args[0]
     assert upserted.forecastex_not_available is True
+
+
+async def test_quarantines_sports_tagged_candidates():
+    """Sports-tagged mappings (MLB/NFL/NBA/NHL game IDs etc.) MUST be
+    quarantined before the resolver burns IBKR rate budget on them.
+
+    The 2026-05-25 incident saw 39 wrong-domain attachments (Kalshi
+    sports games auto-bound to FORECASTX regional-CPI events because
+    they shared a city-name token). The pre-flight filter recognises
+    sports tokens in the mapping and marks the conid unavailable
+    immediately, with no IBKR calls fired.
+    """
+    settings_module.MARKET_MAP["KX_MLB_NYY_LAD"] = _confirmed("KX_MLB_NYY_LAD", "999000111")
+    collector = MagicMock()
+    collector._inactive_conids = {"999000111"}
+    collector.reactivate_conid = MagicMock()
+
+    client = MagicMock()
+    # Both IBKR calls below should NEVER be invoked because we filter
+    # the sports candidate out before the strikes/info path runs.
+    client.resolve_event_children = AsyncMock(return_value=[])
+    client.market_snapshot = AsyncMock(return_value=_empty_snapshot())
+
+    store = MagicMock()
+    store.get = AsyncMock(return_value=_stub_mapping("KX_MLB_NYY_LAD", "999000111"))
+    store.upsert = AsyncMock()
+
+    res = ForecastExChildResolver(
+        forecastex_client=client, forecastex_collector=collector, mapping_store=store,
+    )
+    snap = await res.run_once()
+    # No IBKR strikes/info call — that's the whole point of the filter.
+    assert client.resolve_event_children.await_count == 0
+    # Mapping was marked unavailable so it stops re-appearing.
+    assert store.upsert.await_count == 1
+    upserted = store.upsert.await_args.args[0]
+    assert upserted.forecastex_not_available is True
+    # Cycle had zero remaining candidates after the quarantine.
+    assert snap.candidates_count == 0
 
 
 async def test_skips_mappings_flagged_not_available():

@@ -144,6 +144,24 @@ _POLITICAL_HINT_TOKENS: frozenset[str] = frozenset({
     "dem", "party",
 })
 
+# Tokens that mark a FORECASTX event as a regional/macro economic
+# indicator (CPI, GDP, PCE, retail sales, etc.). 2026-05-25 saw 39
+# wrong-domain attachments where Kalshi MLB game mappings were bound
+# to regional-CPI FORECASTX events because they shared a city name
+# token (NYC, ATL, etc.). Treating these as a distinct domain — and
+# refusing to pair them with sports or political mappings — closes
+# that hole. Two failures suffice: (a) the discovery scorer drops
+# the pairing to 0, and (b) the resolver's mark-unavailable path
+# already auto-clears any wrong-domain attachment that's already on
+# disk.
+_ECONOMIC_HINT_TOKENS: frozenset[str] = frozenset({
+    "cpi", "gdp", "pce", "ppi", "fomc", "inflation",
+    "unemployment", "payrolls", "nonfarm", "jobless", "retail",
+    "rates", "rate", "fed", "feds", "powell",
+    "ism", "pmi", "manufacturing", "housing", "starts",
+    "permits", "claims", "consumer", "sentiment", "michigan",
+})
+
 # Marker IBKR uses in companyHeader to identify ForecastEx event listings.
 FORECASTX_MARKER = "FORECASTX"
 
@@ -178,10 +196,26 @@ def _domain_compatible(event_title: str, mapping: MarketMapping) -> bool:
     event_is_political = bool(event_tokens & _POLITICAL_HINT_TOKENS)
     event_is_sports = bool(event_tokens & _SPORTS_HINT_TOKENS)
     mapping_is_political = bool(mapping_tokens & _POLITICAL_HINT_TOKENS)
+    event_is_economic = bool(event_tokens & _ECONOMIC_HINT_TOKENS)
+    mapping_is_economic = bool(mapping_tokens & _ECONOMIC_HINT_TOKENS)
 
     if mapping_is_sports and event_is_political and not event_is_sports:
         return False
     if mapping_is_political and event_is_sports and not event_is_political:
+        return False
+    # Sports↔economic and political↔economic crossovers. Geographic
+    # overlap ("New York Yankees" vs "New York regional CPI") drove
+    # 39 wrong-domain attachments live 2026-05-25 — every cycle of
+    # the resolver burned IBKR rate-limit budget probing these dead
+    # ends. Reject any pairing where one side is clearly economic
+    # and the other clearly isn't.
+    if mapping_is_sports and event_is_economic and not event_is_sports:
+        return False
+    if mapping_is_economic and event_is_sports and not event_is_economic:
+        return False
+    if mapping_is_political and event_is_economic and not event_is_political:
+        return False
+    if mapping_is_economic and event_is_political and not event_is_economic:
         return False
     return True
 
