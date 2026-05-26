@@ -2660,6 +2660,13 @@ function ExecutionHealthPanel() {
   const strandedLastRun = Number(strandedSnap.timestamp || 0);
   const strandedTotalCost = strandedList.reduce((s, p) => s + Math.abs(Number(p.cost_basis_usd || 0)), 0);
   const strandedTotalUnrealized = strandedList.reduce((s, p) => s + Number(p.unrealized_usd || 0), 0);
+  // Aggregate mitigation_action counts so the operator can see the
+  // policy split at a glance (e.g. "23 let_settle / 2 close_market").
+  const strandedActionCounts = strandedList.reduce((acc, p) => {
+    const k = String(p.mitigation_action || 'unknown');
+    acc[k] = (acc[k] || 0) + 1;
+    return acc;
+  }, {});
 
   // ForecastEx child-conid resolver snapshot from /api/system. Surfaces
   // resolver-cycle state so the operator can see whether IBKR's
@@ -2866,22 +2873,56 @@ function ExecutionHealthPanel() {
                 <div style={{ fontSize:18, fontWeight:700, color: strandedTotalUnrealized >= 0 ? t.green : t.red, fontFamily:window.FONTS.mono }}>{window.fmt$Sign(strandedTotalUnrealized)}</div>
               </div>
             </div>
+            {/* Action split — at-a-glance summary of what the policy will do per lot. */}
+            <div style={{ display:'flex', gap:14, marginBottom:8, flexWrap:'wrap', fontSize:10.5, fontFamily:window.FONTS.mono }}>
+              {Object.entries(strandedActionCounts).sort((a,b)=>b[1]-a[1]).map(([k,v]) => {
+                const color = (
+                  k === 'closed' ? t.green :
+                  k === 'close_market' ? t.amber :
+                  k === 'let_settle' ? t.textDim :
+                  (k === 'large_notional' || k === 'illiquid_no_bbo' || k === 'spread_too_wide') ? t.red :
+                  t.textMuted
+                );
+                return (
+                  <span key={k} title={`${v} stranded ${v === 1 ? 'position' : 'positions'} classified ${k}`} style={{ color, padding:'2px 8px', borderRadius:99, background:t.bgSubtle, border:`1px solid ${t.border}` }}>
+                    {k}: <strong style={{ color:t.text }}>{v}</strong>
+                  </span>
+                );
+              })}
+            </div>
             <div style={{ display:'grid', gap:4 }}>
               {strandedList.slice(0, 20).map((p, i) => {
-                const acStatus = p.auto_close_attempted
-                  ? (p.auto_close_result || 'attempted')
-                  : (strandedAutoClose ? 'pending close' : 'observe-only');
-                const acColor = p.auto_close_attempted
-                  ? (String(p.auto_close_result || '').toLowerCase().includes('filled') ? t.green : t.amber)
-                  : t.textMuted;
+                const action = String(p.mitigation_action || 'unknown');
+                const actionColor = (
+                  action === 'closed' ? t.green :
+                  action === 'close_market' ? t.amber :
+                  action === 'let_settle' ? t.textDim :
+                  action === 'large_notional' || action === 'illiquid_no_bbo' || action === 'spread_too_wide' ? t.red :
+                  t.textMuted
+                );
+                const actionLabel = (
+                  action === 'let_settle' ? 'LET SETTLE (penny)' :
+                  action === 'close_market' ? (strandedAutoClose ? 'will close at market' : 'CLOSE AT MARKET (auto-close OFF)') :
+                  action === 'closed' ? '✓ closed' :
+                  action === 'large_notional' ? 'MANUAL: large notional' :
+                  action === 'illiquid_no_bbo' ? 'MANUAL: illiquid' :
+                  action === 'spread_too_wide' ? 'MANUAL: wide spread' :
+                  action === 'no_adapter' ? 'no venue adapter' :
+                  action
+                );
+                const cps = Number(p.cost_per_share || (Number(p.cost_basis_usd || 0) / Math.max(Math.abs(Number(p.qty || 0)), 1)));
+                const exp = (p.seconds_to_expiry != null)
+                  ? ` · ${(Number(p.seconds_to_expiry) > 0 ? Math.round(Number(p.seconds_to_expiry) / 86400) + 'd to expiry' : 'expired')}`
+                  : '';
+                const titleTip = `${p.platform} · ${p.market_id} · ${p.title || ''} · cost $${Number(p.cost_basis_usd).toFixed(2)} (${cps.toFixed(3)}/sh) · mtm $${Number(p.mtm_usd).toFixed(2)} · bbo ${Number(p.best_bid).toFixed(3)}/${Number(p.best_ask).toFixed(3)} · age ${Math.round(Number(p.age_seconds || 0))}s${exp} · action: ${actionLabel} · result: ${p.auto_close_result || '—'}`;
                 return (
-                  <div key={(p.platform || '') + '-' + (p.market_id || '') + '-' + i} title={`${p.platform} · ${p.market_id} · ${p.title || ''} · cost $${Number(p.cost_basis_usd).toFixed(2)} · mtm $${Number(p.mtm_usd).toFixed(2)} · bbo ${Number(p.best_bid).toFixed(3)}/${Number(p.best_ask).toFixed(3)} · age ${Math.round(Number(p.age_seconds || 0))}s · ${acStatus}`} style={{ fontSize:10.5, color:t.textDim, fontFamily:window.FONTS.mono, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', display:'flex', gap:10 }}>
+                  <div key={(p.platform || '') + '-' + (p.market_id || '') + '-' + i} title={titleTip} style={{ fontSize:10.5, color:t.textDim, fontFamily:window.FONTS.mono, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', display:'flex', gap:10 }}>
                     <span style={{ color:t.text, minWidth:80 }}>{p.platform}</span>
                     <span style={{ color:t.text, flex:'1 1 auto', overflow:'hidden', textOverflow:'ellipsis' }}>{p.market_id}</span>
                     <span style={{ color: Number(p.qty) >= 0 ? t.green : t.red }}>{Number(p.qty) >= 0 ? '+' : ''}{Number(p.qty).toFixed(0)} {p.side}</span>
                     <span style={{ color:t.textMuted }}>cost {window.fmt$Sign(-Math.abs(Number(p.cost_basis_usd)))}</span>
                     <span style={{ color: Number(p.unrealized_usd) >= 0 ? t.green : t.red }}>{window.fmt$Sign(Number(p.unrealized_usd))}</span>
-                    <span style={{ color: acColor, minWidth:140, overflow:'hidden', textOverflow:'ellipsis' }}>{acStatus}</span>
+                    <span style={{ color: actionColor, minWidth:200, overflow:'hidden', textOverflow:'ellipsis', fontWeight: 700 }}>{actionLabel}</span>
                   </div>
                 );
               })}

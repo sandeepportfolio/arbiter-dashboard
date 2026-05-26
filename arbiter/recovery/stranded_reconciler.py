@@ -74,8 +74,27 @@ class StrandedPosition:
     title: str
     first_seen_ts: float
     last_seen_ts: float
+    # Market expiry as a unix timestamp. None when the venue did not
+    # publish a settlement time on the position record — we then fall
+    # back to "treat as far from expiry" so the let-settle path doesn't
+    # fire on unknown-dated lots.
+    expiry_ts: Optional[float] = None
     auto_close_attempted: bool = False
     auto_close_result: Optional[str] = None
+    # Operator-facing recommendation produced by ``classify_action``.
+    # One of: ``let_settle`` | ``close_market`` | ``manual_review``
+    # | ``closed`` | ``no_adapter`` | ``illiquid_no_bbo``
+    # | ``spread_too_wide`` | ``large_notional`` | ``unknown``.
+    # Persists across cycles so the UI can render the table without
+    # waiting for a fresh classify pass.
+    mitigation_action: str = "unknown"
+
+    @property
+    def cost_per_share(self) -> float:
+        q = abs(float(self.qty or 0.0))
+        if q <= 0:
+            return 0.0
+        return abs(float(self.cost_basis_usd or 0.0)) / q
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -84,6 +103,7 @@ class StrandedPosition:
             "side": self.side,
             "qty": self.qty,
             "cost_basis_usd": round(self.cost_basis_usd, 4),
+            "cost_per_share": round(self.cost_per_share, 4),
             "mtm_usd": round(self.mtm_usd, 4),
             "unrealized_usd": round(self.unrealized_usd, 4),
             "best_bid": self.best_bid,
@@ -91,9 +111,15 @@ class StrandedPosition:
             "title": self.title,
             "first_seen_ts": self.first_seen_ts,
             "last_seen_ts": self.last_seen_ts,
+            "expiry_ts": self.expiry_ts,
+            "seconds_to_expiry": (
+                round(self.expiry_ts - time.time(), 1)
+                if self.expiry_ts is not None else None
+            ),
             "age_seconds": round(time.time() - self.first_seen_ts, 1),
             "auto_close_attempted": self.auto_close_attempted,
             "auto_close_result": self.auto_close_result,
+            "mitigation_action": self.mitigation_action,
         }
 
 
@@ -132,8 +158,10 @@ class StrandedPositionReconciler:
         engine: Optional[Any] = None,
         interval_s: float = 300.0,
         auto_close: bool = False,
-        max_auto_close_notional_usd: float = 10.0,
+        max_auto_close_notional_usd: float = 30.0,
         max_auto_close_spread_bps: float = 1000.0,  # 10¢ wide max
+        penny_cost_threshold_usd: float = 0.05,
+        let_settle_window_seconds: float = 7 * 24 * 3600.0,
     ) -> None:
         self._config = config
         self._adapters = adapters or {}
@@ -142,6 +170,22 @@ class StrandedPositionReconciler:
         self._auto_close = bool(auto_close)
         self._max_auto_close_notional_usd = float(max_auto_close_notional_usd)
         self._max_auto_close_spread_bps = float(max_auto_close_spread_bps)
+        # Penny-position protection: lots whose per-share cost is at or
+        # below this threshold get the "let_settle" recommendation
+        # instead of an auto-close attempt. Closing a 23-share lot of
+        # 2¢ Hart-trophy NHL longshots on Kalshi costs ~$1 in fees and
+        # captures ~$0.46 of value — strictly negative-EV vs holding
+        # through settlement (binary loses, we recoup $0; binary wins,
+        # we get $1 per share which the close would have foregone). The
+        # 5¢ floor catches every Hart/Vezina/etc. longshot in the
+        # current strand corpus and excludes everything ≥6¢ where
+        # closing IS rational.
+        self._penny_cost_threshold_usd = max(0.0, float(penny_cost_threshold_usd))
+        # Within this window before expiry, penny positions are
+        # auto-classified as "let_settle" regardless of liquidity. The
+        # outer ``let_settle`` recommendation also fires for unknown-
+        # expiry penny positions (we don't have a date to compare to).
+        self._let_settle_window_seconds = max(0.0, float(let_settle_window_seconds))
         self._cycle_count: int = 0
         # Persistent map keyed by (platform, market_id) so dedup survives
         # across cycles — the first_seen_ts only resets when the position
@@ -257,6 +301,19 @@ class StrandedPositionReconciler:
         for key in new_keys:
             await self._emit_stranded_incident(self._tracked[key])
 
+        # Refresh classification on EVERY position EVERY cycle so the
+        # ops UI shows the current recommendation even when auto-close
+        # is OFF (operator observation mode). Idempotent — pure read
+        # plus dict assignment.
+        for pos in list(self._tracked.values()):
+            try:
+                pos.mitigation_action = self.classify_action(pos)
+            except Exception as exc:
+                logger.debug(
+                    "stranded_reconciler.classify_failed",
+                    platform=pos.platform, market_id=pos.market_id, err=str(exc),
+                )
+
         # Optional auto-close pass.
         if self._auto_close:
             for pos in list(self._tracked.values()):
@@ -315,6 +372,7 @@ class StrandedPositionReconciler:
                 ticker = p["ticker"]
                 yes_bid = yes_ask = 0.0
                 title = ""
+                expiry_ts: Optional[float] = None
                 try:
                     mh = auth.get_headers("GET", f"/trade-api/v2/markets/{ticker}")
                     async with session.get(
@@ -324,6 +382,23 @@ class StrandedPositionReconciler:
                         yes_bid = float(mkt.get("yes_bid", 0) or 0) / 100.0
                         yes_ask = float(mkt.get("yes_ask", 0) or 0) / 100.0
                         title = (mkt.get("title") or "")[:80]
+                        # Kalshi exposes ``close_time`` (ISO-8601) on the
+                        # market detail response. Convert to unix ts so
+                        # the classifier can decide "near expiry" without
+                        # re-parsing dates downstream.
+                        close_iso = (
+                            mkt.get("close_time")
+                            or mkt.get("expiration_time")
+                            or ""
+                        )
+                        if close_iso:
+                            from datetime import datetime
+                            try:
+                                expiry_ts = datetime.fromisoformat(
+                                    close_iso.replace("Z", "+00:00")
+                                ).timestamp()
+                            except (TypeError, ValueError):
+                                expiry_ts = None
                 except Exception:
                     # BBO lookup failure is non-fatal; we still report
                     # the position with empty quote fields so the
@@ -345,6 +420,7 @@ class StrandedPositionReconciler:
                         title=title,
                         first_seen_ts=time.time(),
                         last_seen_ts=time.time(),
+                        expiry_ts=expiry_ts,
                     )
                 )
         return out
@@ -382,6 +458,18 @@ class StrandedPositionReconciler:
                 cv = float((p.get("cashValue") or {}).get("value", 0) or 0)
                 md = p.get("marketMetadata", {}) or {}
                 title = (md.get("title") or "")[:80]
+                # Polymarket exposes ``endDate`` as ISO-8601 on the
+                # marketMetadata block. Parse it for the classifier.
+                expiry_ts: Optional[float] = None
+                end_iso = md.get("endDate") or md.get("endDateIso") or ""
+                if end_iso:
+                    try:
+                        from datetime import datetime
+                        expiry_ts = datetime.fromisoformat(
+                            str(end_iso).replace("Z", "+00:00")
+                        ).timestamp()
+                    except (TypeError, ValueError):
+                        expiry_ts = None
                 yes_bid = yes_ask = 0.0
                 try:
                     book = await client.get_market_book(slug)
@@ -406,6 +494,7 @@ class StrandedPositionReconciler:
                         title=title,
                         first_seen_ts=time.time(),
                         last_seen_ts=time.time(),
+                        expiry_ts=expiry_ts,
                     )
                 )
         finally:
@@ -482,50 +571,107 @@ class StrandedPositionReconciler:
                 err=str(exc),
             )
 
-    async def _maybe_auto_close(self, pos: StrandedPosition) -> None:
-        """Conservative auto-close gate. Only attempts close if:
-          - the spread between best_bid and best_ask is within tolerance
-            (illiquid markets are kept for manual review),
-          - the notional is below ``max_auto_close_notional_usd``
-            (large positions warrant operator eyes),
-          - we have an adapter with ``place_unwind_sell``.
+    def classify_action(self, pos: StrandedPosition) -> str:
+        """Return the recommended mitigation action for ``pos``.
 
-        Marks the position as ``auto_close_attempted`` whether the close
-        succeeds or not, so the next cycle does not retry indefinitely.
+        Decision tree (safety > speed):
+
+          1. ``no_adapter`` — venue adapter missing or lacks the
+             ``place_unwind_sell`` hook. Operator must intervene.
+          2. ``let_settle`` — penny position (cost_per_share ≤ penny
+             threshold). Closing fees exceed expected recoverable
+             value, regardless of expiry distance:
+               - Kalshi flat per-contract fee floor swallows the
+                 entire 2¢ NHL Hart-trophy lots when closing 23 of
+                 them; let them expire worthless instead of paying
+                 to confirm worthless.
+               - If the binary resolves YES, holding through expiry
+                 gets us $1/share vs the few cents of MTM we'd lock
+                 in by closing.
+          3. ``large_notional`` — cost basis exceeds the auto-close
+             ceiling. Operator review only.
+          4. ``illiquid_no_bbo`` — no published bid/ask. Cannot price
+             an unwind without painting the market.
+          5. ``spread_too_wide`` — spread > configured bps cap.
+             Auto-closing here locks in the spread as a loss.
+          6. ``close_market`` — has real value AND venue is liquid
+             AND notional fits. This is where the 2 polymarket
+             midterms (~$27 each, fully liquid binaries that won't
+             resolve for months) get auto-mitigated: every day we
+             hold them stranded is a day of opportunity cost the
+             reconciler can recover by selling at the public bid.
         """
         adapter = self._adapters.get(pos.platform)
         if adapter is None or not hasattr(adapter, "place_unwind_sell"):
+            return "no_adapter"
+        cps = pos.cost_per_share
+        if cps > 0 and cps <= self._penny_cost_threshold_usd:
+            return "let_settle"
+        notional = abs(float(pos.cost_basis_usd or 0.0))
+        if notional > self._max_auto_close_notional_usd:
+            return "large_notional"
+        if pos.best_bid <= 0 or pos.best_ask <= 0:
+            return "illiquid_no_bbo"
+        spread_bps = abs(pos.best_ask - pos.best_bid) * 10_000.0
+        if spread_bps > self._max_auto_close_spread_bps:
+            return "spread_too_wide"
+        return "close_market"
+
+    async def _maybe_auto_close(self, pos: StrandedPosition) -> None:
+        """Classify the position, surface the recommendation, and
+        execute the close when (and only when) the classification says
+        ``close_market``. Every other branch marks the position
+        ``auto_close_attempted`` so the next cycle doesn't loop.
+
+        Bias: safety > speed. The ``let_settle`` branch deliberately
+        does NOT touch the venue; we record the recommendation and let
+        the binary resolve naturally so we never pay closing fees that
+        exceed the lot's recoverable value.
+        """
+        action = self.classify_action(pos)
+        pos.mitigation_action = action
+
+        if action == "no_adapter":
             pos.auto_close_attempted = True
             pos.auto_close_result = "no adapter / no place_unwind_sell"
             return
-
-        # Notional check: cost_basis is what we paid; if it exceeds the
-        # auto-close ceiling we keep the position for manual review.
-        notional = abs(float(pos.cost_basis_usd))
-        if notional > self._max_auto_close_notional_usd:
+        if action == "let_settle":
+            # Soft-attempt: keep the recommendation alive across cycles
+            # without ever calling the venue. Mark attempted so the
+            # next cycle doesn't reclassify endlessly (cheap, but
+            # noisy). Operator can override via the manual close hook
+            # if they disagree.
             pos.auto_close_attempted = True
             pos.auto_close_result = (
-                f"notional ${notional:.2f} > auto-close cap "
-                f"${self._max_auto_close_notional_usd:.2f}"
+                f"let_settle: cost/share ${pos.cost_per_share:.4f} ≤ "
+                f"${self._penny_cost_threshold_usd:.2f} threshold — "
+                f"closing fees would exceed recoverable value"
             )
             return
-
-        # Spread / liquidity check.
-        if pos.best_bid <= 0 or pos.best_ask <= 0:
+        if action == "large_notional":
+            pos.auto_close_attempted = True
+            pos.auto_close_result = (
+                f"notional ${abs(pos.cost_basis_usd):.2f} > auto-close cap "
+                f"${self._max_auto_close_notional_usd:.2f} — manual review"
+            )
+            return
+        if action == "illiquid_no_bbo":
             pos.auto_close_attempted = True
             pos.auto_close_result = "illiquid (no bbo) — manual review"
             return
-        spread_bps = abs(pos.best_ask - pos.best_bid) * 10_000.0
-        if spread_bps > self._max_auto_close_spread_bps:
+        if action == "spread_too_wide":
+            spread_bps = abs(pos.best_ask - pos.best_bid) * 10_000.0
             pos.auto_close_attempted = True
             pos.auto_close_result = (
                 f"spread {spread_bps:.0f}bps > cap "
-                f"{self._max_auto_close_spread_bps:.0f}bps"
+                f"{self._max_auto_close_spread_bps:.0f}bps — manual review"
             )
             return
 
-        # Execute the unwind. arb_id reuses the same hash-based id as the
-        # incident so DB joins (and operator-side dedup) line up.
+        # action == "close_market" → execute the unwind. arb_id reuses
+        # the same hash-based id as the incident so DB joins (and
+        # operator-side dedup) line up.
+        adapter = self._adapters[pos.platform]
         try:
             order = await adapter.place_unwind_sell(
                 arb_id=self._strand_arb_id(pos.platform, pos.market_id),
@@ -536,6 +682,7 @@ class StrandedPositionReconciler:
             )
             pos.auto_close_attempted = True
             fill = float(getattr(order, "fill_qty", 0) or 0)
+            pos.mitigation_action = "closed" if fill > 0 else "close_market"
             pos.auto_close_result = (
                 f"status={order.status.value} fill_qty={fill}"
             )
@@ -562,10 +709,12 @@ def reconciler_from_env(*, config, adapters, engine) -> StrandedPositionReconcil
     """Build a reconciler with config sourced from env vars.
 
     Env vars:
-      - STRANDED_RECONCILE_INTERVAL_S  (default 300)
-      - STRANDED_AUTO_CLOSE            (default false — operator review)
-      - STRANDED_AUTO_CLOSE_MAX_USD    (default 10)
+      - STRANDED_RECONCILE_INTERVAL_S      (default 300)
+      - STRANDED_AUTO_CLOSE                (default false — operator review)
+      - STRANDED_AUTO_CLOSE_MAX_USD        (default 30 — covers ~$27 poly midterms)
       - STRANDED_AUTO_CLOSE_MAX_SPREAD_BPS (default 1000 = 10c wide)
+      - STRANDED_PENNY_COST_USD            (default 0.05 — below this, let_settle)
+      - STRANDED_LET_SETTLE_WINDOW_S       (default 604800 = 7d to expiry; informational)
     """
     try:
         interval = float(os.getenv("STRANDED_RECONCILE_INTERVAL_S", "300") or "300")
@@ -575,13 +724,23 @@ def reconciler_from_env(*, config, adapters, engine) -> StrandedPositionReconcil
         "1", "true", "yes", "on",
     )
     try:
-        max_usd = float(os.getenv("STRANDED_AUTO_CLOSE_MAX_USD", "10") or "10")
+        max_usd = float(os.getenv("STRANDED_AUTO_CLOSE_MAX_USD", "30") or "30")
     except (TypeError, ValueError):
-        max_usd = 10.0
+        max_usd = 30.0
     try:
         max_bps = float(os.getenv("STRANDED_AUTO_CLOSE_MAX_SPREAD_BPS", "1000") or "1000")
     except (TypeError, ValueError):
         max_bps = 1000.0
+    try:
+        penny = float(os.getenv("STRANDED_PENNY_COST_USD", "0.05") or "0.05")
+    except (TypeError, ValueError):
+        penny = 0.05
+    try:
+        let_settle_window = float(
+            os.getenv("STRANDED_LET_SETTLE_WINDOW_S", "604800") or "604800"
+        )
+    except (TypeError, ValueError):
+        let_settle_window = 7 * 24 * 3600.0
     return StrandedPositionReconciler(
         config=config,
         adapters=adapters,
@@ -590,4 +749,6 @@ def reconciler_from_env(*, config, adapters, engine) -> StrandedPositionReconcil
         auto_close=auto_close,
         max_auto_close_notional_usd=max_usd,
         max_auto_close_spread_bps=max_bps,
+        penny_cost_threshold_usd=penny,
+        let_settle_window_seconds=let_settle_window,
     )

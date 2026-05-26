@@ -348,11 +348,202 @@ def test_reconciler_from_env_reads_interval_and_caps(monkeypatch):
     monkeypatch.setenv("STRANDED_AUTO_CLOSE", "true")
     monkeypatch.setenv("STRANDED_AUTO_CLOSE_MAX_USD", "5")
     monkeypatch.setenv("STRANDED_AUTO_CLOSE_MAX_SPREAD_BPS", "300")
+    monkeypatch.setenv("STRANDED_PENNY_COST_USD", "0.07")
     rec = reconciler_from_env(config=SimpleNamespace(), adapters={}, engine=None)
     assert rec._interval_s == 120.0
     assert rec._auto_close is True
     assert rec._max_auto_close_notional_usd == 5.0
     assert rec._max_auto_close_spread_bps == 300.0
+    assert rec._penny_cost_threshold_usd == 0.07
+
+
+# ───────────────────────────────────────────────────────────────────────
+# classify_action tests — these document the mitigation policy
+# ───────────────────────────────────────────────────────────────────────
+
+def test_classify_let_settle_for_penny_position():
+    """Penny positions (cost/share ≤ 0.05) → let_settle, regardless of
+    bid liquidity. Closing fees swallow the recoverable value on
+    Kalshi's per-contract floor; binary YES outcome gets $1/share
+    while we'd lock in 2-3¢ MTM by closing.
+    """
+    adapter = MagicMock()
+    adapter.place_unwind_sell = AsyncMock()
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), adapters={"kalshi": adapter},
+        auto_close=True, penny_cost_threshold_usd=0.05,
+    )
+    # 23 contracts of 2¢ Hart-trophy longshot. Liquid book (3¢/4¢).
+    pos = _stub_pos(market_id="K-HART-DUBOIS", qty=23, cost_basis_usd=0.46,
+                    best_bid=0.03, best_ask=0.04)
+    assert rec.classify_action(pos) == "let_settle"
+
+
+def test_classify_close_market_for_real_value_liquid_polymarket():
+    """The 2 polymarket midterms case: $27 cost, liquid binary,
+    tight spread → must auto-close to recover value before months
+    of opportunity cost.
+    """
+    adapter = MagicMock()
+    adapter.place_unwind_sell = AsyncMock()
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), adapters={"polymarket": adapter},
+        auto_close=True,
+        max_auto_close_notional_usd=30.0,
+        max_auto_close_spread_bps=1000.0,
+        penny_cost_threshold_usd=0.05,
+    )
+    pos = _stub_pos(
+        platform="polymarket", market_id="P-MIDTERMS-DEM",
+        qty=50.0, cost_basis_usd=27.0,
+        best_bid=0.53, best_ask=0.55,
+    )
+    assert rec.classify_action(pos) == "close_market"
+
+
+def test_classify_large_notional_skips_auto_close():
+    """A $50 lot exceeds the $30 cap → manual review."""
+    adapter = MagicMock()
+    adapter.place_unwind_sell = AsyncMock()
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), adapters={"polymarket": adapter},
+        auto_close=True, max_auto_close_notional_usd=30.0,
+    )
+    pos = _stub_pos(platform="polymarket", market_id="P-WHALE",
+                    qty=80.0, cost_basis_usd=50.0,
+                    best_bid=0.55, best_ask=0.57)
+    assert rec.classify_action(pos) == "large_notional"
+
+
+def test_classify_no_adapter_when_venue_unconfigured():
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), adapters={},
+        auto_close=True,
+    )
+    pos = _stub_pos(platform="forecastex", market_id="FX-X",
+                    qty=10, cost_basis_usd=2.0)
+    assert rec.classify_action(pos) == "no_adapter"
+
+
+def test_classify_illiquid_no_bbo():
+    adapter = MagicMock()
+    adapter.place_unwind_sell = AsyncMock()
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), adapters={"kalshi": adapter},
+        auto_close=True, penny_cost_threshold_usd=0.05,
+    )
+    pos = _stub_pos(qty=10, cost_basis_usd=5.0,
+                    best_bid=0.0, best_ask=0.0)
+    assert rec.classify_action(pos) == "illiquid_no_bbo"
+
+
+def test_classify_spread_too_wide():
+    adapter = MagicMock()
+    adapter.place_unwind_sell = AsyncMock()
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), adapters={"kalshi": adapter},
+        auto_close=True, max_auto_close_spread_bps=200.0,
+        penny_cost_threshold_usd=0.05,
+    )
+    pos = _stub_pos(qty=10, cost_basis_usd=5.0,
+                    best_bid=0.30, best_ask=0.60)
+    assert rec.classify_action(pos) == "spread_too_wide"
+
+
+async def test_let_settle_action_never_calls_adapter():
+    """Penny → let_settle MUST NOT touch the venue. Fees would eat
+    the entire recoverable value.
+    """
+    engine = MagicMock()
+    engine._record_incident = AsyncMock()
+    adapter = MagicMock()
+    adapter.place_unwind_sell = AsyncMock()
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), engine=engine,
+        adapters={"kalshi": adapter},
+        auto_close=True,
+        penny_cost_threshold_usd=0.05,
+        max_auto_close_notional_usd=30.0,
+        max_auto_close_spread_bps=1000.0,
+    )
+    rec._fetch_kalshi_positions = AsyncMock(return_value=[
+        _stub_pos(market_id="K-PENNY", qty=23, cost_basis_usd=0.46,
+                  best_bid=0.03, best_ask=0.04),
+    ])
+    rec._fetch_polymarket_us_positions = AsyncMock(return_value=[])
+
+    await rec.run_once()
+    assert adapter.place_unwind_sell.await_count == 0
+    pos = rec.tracked[("kalshi", "K-PENNY")]
+    assert pos.mitigation_action == "let_settle"
+    assert "let_settle" in (pos.auto_close_result or "").lower()
+
+
+async def test_close_market_action_unwinds_polymarket_midterm():
+    """A liquid $27 polymarket midterm position → auto-closed."""
+    from arbiter.execution.engine import Order, OrderStatus
+
+    engine = MagicMock()
+    engine._record_incident = AsyncMock()
+    adapter = MagicMock()
+    adapter.place_unwind_sell = AsyncMock(
+        return_value=Order(
+            order_id="UNWIND-MT", platform="polymarket",
+            market_id="P-MIDTERMS", canonical_id="P-MIDTERMS", side="yes",
+            price=0.01, quantity=50,
+            status=OrderStatus.FILLED, fill_qty=50, fill_price=0.53,
+            timestamp=time.time(),
+        )
+    )
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), engine=engine,
+        adapters={"polymarket": adapter},
+        auto_close=True,
+        penny_cost_threshold_usd=0.05,
+        max_auto_close_notional_usd=30.0,
+        max_auto_close_spread_bps=1000.0,
+    )
+    rec._fetch_kalshi_positions = AsyncMock(return_value=[])
+    rec._fetch_polymarket_us_positions = AsyncMock(return_value=[
+        _stub_pos(
+            platform="polymarket", market_id="P-MIDTERMS",
+            qty=50.0, cost_basis_usd=27.0,
+            best_bid=0.53, best_ask=0.55,
+        ),
+    ])
+
+    await rec.run_once()
+    assert adapter.place_unwind_sell.await_count == 1
+    pos = rec.tracked[("polymarket", "P-MIDTERMS")]
+    assert pos.mitigation_action == "closed"
+
+
+async def test_classification_runs_when_auto_close_off_so_ui_can_render():
+    """auto_close=False is the safety default. Operators still need
+    to see the recommended action on each tracked position so they
+    can decide whether to flip the switch.
+    """
+    engine = MagicMock()
+    engine._record_incident = AsyncMock()
+    adapter = MagicMock()
+    adapter.place_unwind_sell = AsyncMock()
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), engine=engine,
+        adapters={"kalshi": adapter},
+        auto_close=False,  # OFF
+        penny_cost_threshold_usd=0.05,
+    )
+    rec._fetch_kalshi_positions = AsyncMock(return_value=[
+        _stub_pos(market_id="K-PENNY-OFF", qty=10, cost_basis_usd=0.20,
+                  best_bid=0.02, best_ask=0.03),
+    ])
+    rec._fetch_polymarket_us_positions = AsyncMock(return_value=[])
+    snap = await rec.run_once()
+    assert adapter.place_unwind_sell.await_count == 0
+    pos = rec.tracked[("kalshi", "K-PENNY-OFF")]
+    assert pos.mitigation_action == "let_settle"
+    # The dict serialization (what the API hands the UI) must carry it.
+    assert any(s["mitigation_action"] == "let_settle" for s in snap.stranded)
 
 
 def test_reconciler_from_env_clamps_interval_minimum(monkeypatch):
