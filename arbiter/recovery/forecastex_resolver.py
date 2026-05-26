@@ -123,6 +123,14 @@ class ForecastExChildResolver:
         self._last_snapshot: Optional[ResolverSnapshot] = None
         self._stopped: bool = False
         self._task: Optional[asyncio.Task] = None
+        # Event-driven wakeup. The collector (or any other caller) sets
+        # this when a new candidate appears — e.g. after a parent conid
+        # exceeds the probe-disable threshold and lands in
+        # ``_inactive_conids``. Without it, the loop only runs once per
+        # ``interval_s`` (default 30 min) and the first cycle after a
+        # container restart almost always races ahead of the collector's
+        # initial disable batch with an empty inactive set.
+        self._wake_event: asyncio.Event = asyncio.Event()
 
     @property
     def last_snapshot(self) -> Optional[ResolverSnapshot]:
@@ -146,23 +154,58 @@ class ForecastExChildResolver:
                 pass
             self._task = None
 
+    def trigger(self) -> None:
+        """Wake the resolver loop early.
+
+        Typically wired into the collector so that as soon as a parent
+        conid hits the probe-disable threshold and joins the inactive
+        set, the resolver runs a cycle within seconds rather than
+        waiting up to ``interval_s`` for the next periodic tick.
+        Idempotent — a burst of rapid-fire calls coalesces into one
+        cycle via the debounce in ``_wait_for_trigger_or_timeout``.
+        """
+        self._wake_event.set()
+
+    async def _wait_for_trigger_or_timeout(self, timeout: float) -> None:
+        """Sleep up to ``timeout`` seconds, returning early when
+        ``trigger()`` fires. Triggered wakeups are followed by a 60s
+        debounce so a burst of disables (e.g. the collector flushing
+        ~30 untradeable parent conids in the first few minutes after
+        startup) coalesces into a single cycle rather than burning
+        through the IBKR rate-limit budget."""
+        try:
+            await asyncio.wait_for(self._wake_event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            return
+        # Clear BEFORE the debounce so any triggers fired during the
+        # debounce window register as a new wake signal for the next
+        # iteration (rather than being silently swallowed).
+        self._wake_event.clear()
+        logger.info("forecastex_resolver.triggered_wake")
+        await asyncio.sleep(60.0)
+
     async def _run_loop(self) -> None:
-        # Initial sleep so the resolver doesn't compete with collector
-        # cold-start for the IBKR rate-limit budget.
         logger.info(
             "forecastex_resolver.loop_started",
             interval_s=self._interval_s, dry_run=self._dry_run,
         )
-        await asyncio.sleep(60.0)
-        logger.info("forecastex_resolver.startup_sleep_complete")
+        # First iteration uses the same wait-or-trigger primitive so
+        # cycle 1 doesn't race ahead of the collector. Verified live
+        # 2026-05-26: with a fixed 60s startup sleep, cycle 1 fired
+        # against an empty _inactive_conids set every restart and the
+        # next cycle was 30 min away — leaving 40 of 43 markets
+        # quote-less. Triggered wakeup fixes this: the collector calls
+        # trigger() as soon as it disables its first parent.
         while not self._stopped:
+            await self._wait_for_trigger_or_timeout(self._interval_s)
+            if self._stopped:
+                break
             try:
                 await self.run_once()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 logger.error("forecastex_resolver.cycle_failed", err=str(exc))
-            await asyncio.sleep(self._interval_s)
 
     # ─── single-cycle entry point (also used by tests + manual API) ───────
 

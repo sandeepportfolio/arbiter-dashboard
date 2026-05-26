@@ -580,6 +580,73 @@ async def test_collector_disables_parent_event_conids_after_probes(patched_marke
     await client.close()
 
 
+async def test_disable_callback_fires_when_parent_conid_disabled(patched_market_map):
+    """The collector must invoke the disable callback the instant it
+    moves a conid to ``_inactive_conids``. Without this hook, the
+    child-conid resolver would wait up to ``interval_s`` (30 min by
+    default) for its next periodic cycle to react — verified live
+    2026-05-26 that cycle 1 races the first batch of disables and
+    sees candidates=0.
+    """
+    store = PriceStore()
+    client = ForecastExClient(gateway_url=GATEWAY, account_id=ACCOUNT)
+    collector = ForecastExCollector(
+        config=ForecastExConfig(), store=store, client=client,
+    )
+    fired_with: list[str] = []
+    collector.set_disable_callback(lambda c: fired_with.append(c))
+
+    parent_snapshot = [{
+        "55": "HORC", "conidEx": "733131966", "conid": 733131966, "7295": "0.00",
+    }]
+    fetch_calls = collector._PROBE_DISABLE_THRESHOLD + 1
+    with aioresponses() as m:
+        for _ in range(fetch_calls * 2 + 2):
+            m.get(
+                re.compile(r".*/iserver/marketdata/snapshot.*"),
+                payload=parent_snapshot,
+            )
+        for _ in range(fetch_calls):
+            await collector.fetch_markets()
+    assert "111222" in collector._inactive_conids
+    assert "111222" in fired_with, (
+        "set_disable_callback registered hook was not invoked when the "
+        "collector moved the conid into _inactive_conids"
+    )
+    await client.close()
+
+
+async def test_disable_callback_exception_does_not_break_fetch(patched_market_map):
+    """A buggy callback (e.g. resolver attribute error during reload)
+    must not propagate up and kill the fetch loop. The disable still
+    happens — only the notification is dropped."""
+    store = PriceStore()
+    client = ForecastExClient(gateway_url=GATEWAY, account_id=ACCOUNT)
+    collector = ForecastExCollector(
+        config=ForecastExConfig(), store=store, client=client,
+    )
+
+    def _broken(_conid: str) -> None:
+        raise RuntimeError("simulated resolver wiring error")
+
+    collector.set_disable_callback(_broken)
+
+    parent_snapshot = [{
+        "55": "HORC", "conidEx": "733131966", "conid": 733131966, "7295": "0.00",
+    }]
+    fetch_calls = collector._PROBE_DISABLE_THRESHOLD + 1
+    with aioresponses() as m:
+        for _ in range(fetch_calls * 2 + 2):
+            m.get(
+                re.compile(r".*/iserver/marketdata/snapshot.*"),
+                payload=parent_snapshot,
+            )
+        for _ in range(fetch_calls):
+            await collector.fetch_markets()
+    assert "111222" in collector._inactive_conids
+    await client.close()
+
+
 async def test_collector_warmup_retry_recovers_tradeable_child(patched_market_map):
     """Regression — IBKR's snapshot field cache warms lazily, so the
     first call to a freshly-subscribed child conid often returns only

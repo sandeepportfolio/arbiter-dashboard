@@ -9,6 +9,7 @@ buckets, dry-run, env config, and the short-circuit cap.
 """
 from __future__ import annotations
 
+import asyncio
 import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -497,3 +498,66 @@ async def test_run_once_short_circuits_after_three_consecutive_503s():
     assert client.resolve_event_children.await_count == 3
     outcomes = {a["outcome"] for a in snap.attempts}
     assert outcomes == {"ibkr_503"}
+
+
+async def test_wait_for_trigger_returns_early_when_event_fires(monkeypatch):
+    """The event-driven wakeup primitive must return well before the
+    periodic interval. This is the production bug: a fixed sleep made
+    cycle 1 race past the collector's first disable batch and the next
+    cycle was 30 min away."""
+    # Stub the debounce sleep so the test doesn't actually wait 60s.
+    monkeypatch.setattr(
+        "arbiter.recovery.forecastex_resolver.asyncio.sleep",
+        AsyncMock(),
+    )
+    res = ForecastExChildResolver(
+        forecastex_client=MagicMock(),
+        forecastex_collector=MagicMock(),
+        mapping_store=MagicMock(),
+        interval_s=3600.0,  # 1 hour — far longer than the test
+    )
+    # Fire the trigger right before the wait so wait_for sees the
+    # event already set and returns immediately.
+    res.trigger()
+    t0 = time.monotonic()
+    await res._wait_for_trigger_or_timeout(3600.0)
+    elapsed = time.monotonic() - t0
+    # Should return in well under a second despite the 3600s timeout.
+    assert elapsed < 1.0
+    # Event was cleared before the debounce so the next iteration
+    # waits fresh.
+    assert not res._wake_event.is_set()
+
+
+async def test_wait_for_trigger_honors_timeout_when_no_trigger(monkeypatch):
+    """If no trigger fires, the wait must time out cleanly (not raise)
+    and return — that's the periodic-tick path."""
+    monkeypatch.setattr(
+        "arbiter.recovery.forecastex_resolver.asyncio.sleep",
+        AsyncMock(),
+    )
+    res = ForecastExChildResolver(
+        forecastex_client=MagicMock(),
+        forecastex_collector=MagicMock(),
+        mapping_store=MagicMock(),
+    )
+    # No trigger before the wait. A very short timeout completes
+    # without anyone setting the event — verifies the TimeoutError
+    # path is swallowed.
+    await res._wait_for_trigger_or_timeout(0.01)
+    assert not res._wake_event.is_set()
+
+
+def test_trigger_is_idempotent_and_safe_before_loop_start():
+    """trigger() must be safe to call before start() — wiring code may
+    register it during initialization, before the loop is running."""
+    res = ForecastExChildResolver(
+        forecastex_client=MagicMock(),
+        forecastex_collector=MagicMock(),
+        mapping_store=MagicMock(),
+    )
+    # Multiple calls before any loop runs must not raise.
+    res.trigger()
+    res.trigger()
+    res.trigger()
+    assert res._wake_event.is_set()

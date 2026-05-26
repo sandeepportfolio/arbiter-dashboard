@@ -22,7 +22,7 @@ import logging
 import ssl
 import time
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Callable, Optional
 
 import aiohttp
 
@@ -662,7 +662,37 @@ class ForecastExCollector:
         # Track how many times each conid returned a non-tradeable snapshot
         # so we can disable untradeable parent-event conids after a few probes.
         self._parent_probe_counts: dict[str, int] = {}
+        # Optional callback the supervisor wires to the child-conid
+        # resolver's ``trigger()``. Invoked the instant we move a conid
+        # into ``_inactive_conids`` so the resolver runs against the
+        # fresh candidate set within seconds instead of waiting for its
+        # next periodic tick (30 min default).
+        self._on_conid_disabled: Optional[Callable[[str], None]] = None
         self.refresh_tracked_markets()
+
+    def set_disable_callback(self, cb: Optional[Callable[[str], None]]) -> None:
+        """Register a callback fired with the conid whenever the
+        collector moves a conid into the inactive set. Pass ``None``
+        to clear. The callback runs synchronously inside the fetch
+        loop, so it MUST be cheap and non-blocking — typically an
+        asyncio.Event.set() forwarder."""
+        self._on_conid_disabled = cb
+
+    def _mark_inactive(self, conid: str) -> None:
+        """Add ``conid`` to the inactive set and fire the disable
+        callback (if any). Centralized so both the probe-budget
+        disable and the 404/410 disable paths notify the resolver
+        consistently."""
+        self._inactive_conids.add(conid)
+        cb = self._on_conid_disabled
+        if cb is not None:
+            try:
+                cb(conid)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.debug(
+                    "ForecastEx disable callback failed for %s: %s",
+                    conid, exc,
+                )
 
     def refresh_tracked_markets(self) -> None:
         """Reload tracked ForecastEx contract ids from MARKET_MAP.
@@ -827,7 +857,7 @@ class ForecastExCollector:
                         self._parent_probe_counts.get(conid, 0) + 1
                     )
                     if self._parent_probe_counts[conid] >= self._PROBE_DISABLE_THRESHOLD:
-                        self._inactive_conids.add(conid)
+                        self._mark_inactive(conid)
                         logger.warning(
                             "ForecastEx conid %s returns no bid/ask after %d "
                             "probes — looks like an untradeable parent event "
@@ -846,7 +876,7 @@ class ForecastExCollector:
                 await self.store.put(price)
             except aiohttp.ClientResponseError as exc:
                 if exc.status in (404, 410):
-                    self._inactive_conids.add(conid)
+                    self._mark_inactive(conid)
                     logger.warning(
                         "ForecastEx conid %s returned %s, disabling",
                         conid, exc.status,

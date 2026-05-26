@@ -1570,6 +1570,23 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
         )
         if fx_resolver is not None:
             api.forecastex_resolver = fx_resolver
+            # Wire the collector → resolver disable trigger so cycle 1
+            # doesn't race ahead of the first parent-conid disable. With
+            # a fixed startup sleep the resolver saw candidates=0 every
+            # restart and waited 30 min for cycle 2; the callback makes
+            # the next cycle fire within ~60s of the first disable
+            # event instead.
+            try:
+                forecastex.set_disable_callback(
+                    lambda _conid: fx_resolver.trigger()
+                )
+            except AttributeError:
+                # Older collector without the hook — harmless; the
+                # periodic interval still picks up disables eventually.
+                logger.warning(
+                    "ForecastEx collector missing set_disable_callback; "
+                    "resolver will rely on periodic interval only"
+                )
             tasks.append(asyncio.create_task(
                 _run_reconciler_lifecycle(fx_resolver, shutdown_event),
                 name="forecastex-child-resolver",
