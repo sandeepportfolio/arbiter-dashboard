@@ -586,6 +586,31 @@ class ArbitrageScanner:
                 self.config.min_edge_cents,
             )
             return "candidate"
+        # ── Phantom-edge filter (binary-market sanity gate) ───────────
+        # A net edge ≥ phantom_edge_threshold_cents on a binary market is
+        # statistically a stale-quote artifact: real binary arbs cluster
+        # well below 20¢ once both venues converge, and edges of 40¢+
+        # almost always reflect ONE side that hasn't updated since the
+        # other moved on resolution news. Require BOTH side quotes to be
+        # fresh-from-the-book (< phantom_edge_max_age_seconds) before we
+        # let it reach the executor. Otherwise downgrade to "candidate"
+        # so the operator still sees it on the dashboard but it never
+        # generates a publish + Telegram + place_order chain.
+        phantom_thr = float(getattr(self.config, "phantom_edge_threshold_cents", 0.0) or 0.0)
+        if phantom_thr > 0 and opportunity.net_edge_cents >= phantom_thr:
+            max_age = float(getattr(self.config, "phantom_edge_max_age_seconds", 5.0) or 5.0)
+            yes_age = float(opportunity.yes_quote_age_seconds or 0.0)
+            no_age = float(opportunity.no_quote_age_seconds or 0.0)
+            if yes_age > max_age or no_age > max_age:
+                logger.warning(
+                    "scanner.phantom_edge_block canonical=%s net=%.2f¢ thr=%.2f¢ "
+                    "yes_age=%.1fs no_age=%.1fs max=%.1fs (likely stale-quote artifact)",
+                    opportunity.canonical_id,
+                    opportunity.net_edge_cents,
+                    phantom_thr,
+                    yes_age, no_age, max_age,
+                )
+                return "candidate"
         return "tradable"
 
     def _should_publish(self, opportunity: ArbitrageOpportunity) -> bool:

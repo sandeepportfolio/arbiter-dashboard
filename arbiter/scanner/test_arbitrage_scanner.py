@@ -338,6 +338,165 @@ def test_scanner_accepts_tight_bid_ask_spread_on_primary_venue():
     asyncio.run(runner())
 
 
+def test_scanner_phantom_edge_filter_blocks_stale_huge_edge():
+    """Edges ≥ phantom threshold with stale quotes never reach publish.
+
+    Reproduces the 85¢/36¢/28¢ phantom failures observed live 2026-05-26:
+    one side hasn't updated since resolution news moved the other 80c+,
+    creating a phantom 85¢ "arb" that disappears the moment the stale
+    side ticks. The publisher must not surface these.
+    """
+    async def runner():
+        store = PriceStore(ttl=300)
+        scanner = ArbitrageScanner(
+            ScannerConfig(
+                min_edge_cents=1.0,
+                persistence_scans=1,
+                max_position_usd=100.0,
+                confidence_threshold=0.0,
+                min_liquidity=10.0,
+                max_bid_ask_spread_cents=0.0,  # disable spread gate
+                phantom_edge_threshold_cents=40.0,
+                phantom_edge_max_age_seconds=5.0,
+            ),
+            store,
+        )
+        original_mapping = MARKET_MAP.get("PHANTOM_TEST")
+        MARKET_MAP["PHANTOM_TEST"] = {
+            "description": "Phantom-edge filter test market",
+            "status": "confirmed",
+            "allow_auto_trade": True,
+            "mapping_score": 0.95,
+            "resolution_match_status": "identical",
+        }
+        # 90¢ phantom: Polymarket quote is 30s stale — still showing
+        # the pre-resolution-news prices that disagree wildly with the
+        # now-resolved-by-news Kalshi side. Each venue's yes+no still
+        # ≈ $1.00 so the binary-sanity guard doesn't fire; only the
+        # cross-venue spread is the giveaway.
+        old_ts = time.time() - 30.0
+        fresh_ts = time.time()
+        await store.put(
+            PricePoint(
+                platform="kalshi",
+                canonical_id="PHANTOM_TEST",
+                yes_price=0.95, no_price=0.05,    # fresh: resolution likely YES
+                yes_volume=100, no_volume=100,
+                timestamp=fresh_ts,
+                raw_market_id="K-PH",
+                yes_market_id="K-PH", no_market_id="K-PH",
+                fee_rate=0.07,
+                mapping_status="confirmed", mapping_score=0.9,
+                yes_bid=0.94, yes_ask=0.96,
+                no_bid=0.04, no_ask=0.06,
+            )
+        )
+        await store.put(
+            PricePoint(
+                platform="polymarket",
+                canonical_id="PHANTOM_TEST",
+                yes_price=0.05, no_price=0.95,    # stale: opposite to Kalshi
+                yes_volume=100, no_volume=100,
+                timestamp=old_ts,
+                raw_market_id="P-PH",
+                yes_market_id="P-YES", no_market_id="P-NO",
+                fee_rate=0.01,
+                mapping_status="confirmed", mapping_score=0.9,
+                yes_bid=0.04, yes_ask=0.06,
+                no_bid=0.94, no_ask=0.96,
+            )
+        )
+        try:
+            opps = await scanner.scan_once()
+            # Find the 85¢ side
+            big = [o for o in opps if o.net_edge_cents >= 40.0]
+            assert big, f"expected a >=40c edge among opps: {[(o.net_edge_cents, o.status) for o in opps]}"
+            # Every >= phantom-threshold opp must be blocked from publish.
+            for o in big:
+                assert o.status != "tradable", (
+                    f"phantom edge {o.net_edge_cents:.1f}¢ should not be tradable"
+                )
+        finally:
+            if original_mapping is None:
+                MARKET_MAP.pop("PHANTOM_TEST", None)
+            else:
+                MARKET_MAP["PHANTOM_TEST"] = original_mapping
+
+    asyncio.run(runner())
+
+
+def test_scanner_phantom_edge_filter_allows_huge_edge_with_fresh_quotes():
+    """A 50¢ edge where BOTH sides are fresh-from-book stays tradable.
+
+    The filter must only catch stale-quote phantoms, not legitimate
+    deep dislocations that briefly happen on event resolution.
+    """
+    async def runner():
+        store = PriceStore(ttl=300)
+        scanner = ArbitrageScanner(
+            ScannerConfig(
+                min_edge_cents=1.0,
+                persistence_scans=1,
+                max_position_usd=100.0,
+                confidence_threshold=0.0,
+                min_liquidity=10.0,
+                max_bid_ask_spread_cents=0.0,
+                phantom_edge_threshold_cents=40.0,
+                phantom_edge_max_age_seconds=5.0,
+            ),
+            store,
+        )
+        original_mapping = MARKET_MAP.get("PHANTOM_FRESH")
+        MARKET_MAP["PHANTOM_FRESH"] = {
+            "description": "Phantom-edge filter — fresh quotes pass",
+            "status": "confirmed",
+            "allow_auto_trade": True,
+            "mapping_score": 0.95,
+            "resolution_match_status": "identical",
+        }
+        # Both venues each have yes+no ≈ $1 (binary-sane), but cross-
+        # venue dislocation is 80¢: buy YES on Kalshi at 0.10, buy NO
+        # on Poly at 0.10 → cost $0.20 → edge 80¢.
+        fresh_ts = time.time()
+        await store.put(
+            PricePoint(
+                platform="kalshi", canonical_id="PHANTOM_FRESH",
+                yes_price=0.10, no_price=0.90,
+                yes_volume=100, no_volume=100, timestamp=fresh_ts,
+                raw_market_id="K-PHF", yes_market_id="K-PHF", no_market_id="K-PHF",
+                fee_rate=0.07,
+                mapping_status="confirmed", mapping_score=0.9,
+                yes_bid=0.09, yes_ask=0.11, no_bid=0.89, no_ask=0.91,
+            )
+        )
+        await store.put(
+            PricePoint(
+                platform="polymarket", canonical_id="PHANTOM_FRESH",
+                yes_price=0.90, no_price=0.10,
+                yes_volume=100, no_volume=100, timestamp=fresh_ts,
+                raw_market_id="P-PHF", yes_market_id="P-YES", no_market_id="P-NO",
+                fee_rate=0.01,
+                mapping_status="confirmed", mapping_score=0.9,
+                yes_bid=0.89, yes_ask=0.91, no_bid=0.09, no_ask=0.11,
+            )
+        )
+        try:
+            opps = await scanner.scan_once()
+            big = [o for o in opps if o.net_edge_cents >= 40.0]
+            assert big, "expected a >=40c edge"
+            assert any(o.status == "tradable" for o in big), (
+                f"fresh-quote >=40c edge should reach tradable, got "
+                f"{[(o.net_edge_cents, o.status, o.yes_quote_age_seconds, o.no_quote_age_seconds) for o in big]}"
+            )
+        finally:
+            if original_mapping is None:
+                MARKET_MAP.pop("PHANTOM_FRESH", None)
+            else:
+                MARKET_MAP["PHANTOM_FRESH"] = original_mapping
+
+    asyncio.run(runner())
+
+
 # ────────────────────────────────────────────────────────────────────────
 # Position-sizing tests for _compute_position_size
 # Bet sizing audit (2026-05-14): added fraction-of-balance cap, $-reserve

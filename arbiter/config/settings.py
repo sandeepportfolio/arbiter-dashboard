@@ -719,6 +719,22 @@ class ScannerConfig:
     edge_scaling_ref_cents: float = field(
         default_factory=lambda: _env_float("EDGE_SCALING_REF_CENTS", 10.0)
     )
+    # ── Phantom-edge filter (defense-in-depth at publish time) ─────────
+    # An edge ≥ this threshold on a binary market is almost always a
+    # stale-quote artifact (one side hasn't updated since the other moved
+    # 80¢+ on resolution news). The execution-layer defenses caught these
+    # at place-order time, but the execution log was clogged with 85¢
+    # phantom-failures that should never have been published in the first
+    # place. When an opportunity's net edge ≥ this cent value, BOTH side
+    # quotes must be at most ``phantom_edge_max_age_seconds`` old or the
+    # opportunity stays in "candidate" status (never reaches subscribers).
+    # 0 = filter disabled.
+    phantom_edge_threshold_cents: float = field(
+        default_factory=lambda: _env_float("PHANTOM_EDGE_THRESHOLD_CENTS", 40.0)
+    )
+    phantom_edge_max_age_seconds: float = field(
+        default_factory=lambda: _env_float("PHANTOM_EDGE_MAX_AGE_S", 5.0)
+    )
 
 
 @dataclass
