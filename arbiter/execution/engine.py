@@ -1421,12 +1421,33 @@ class ExecutionEngine:
             # FOK_SLIPPAGE_TICKS * 0.01 = $0.01 per contract by default.
             # On effective_qty=11 that's $0.11 of additional cost, a tiny
             # fraction of the 7¢+ min net edge requirement.
+            # Slippage buffer is per-platform configurable because the
+            # platforms have different rates of book churn on fast
+            # sports markets: Polymarket's order book on MLB games can
+            # move 1-2 ticks in the 500ms walk-to-place latency
+            # window (verified live 2026-05-26: ARB-000683 had
+            # book_walk@22:44:13.995 say fillable at $0.70, place
+            # order at $0.71 @22:44:14.547, IOC expired with fill=0
+            # because the $0.70 ask was gone by the time the order
+            # arrived). Kalshi's auction book is steadier — 1 tick is
+            # plenty there. Default raised from 1→2 ticks after the
+            # 50-trade zero-fill streak audit.
+            #
+            # Resolution order:
+            #   1. FOK_SLIPPAGE_TICKS_<PLATFORM>  (e.g. POLYMARKET, KALSHI, FORECASTEX)
+            #   2. FOK_SLIPPAGE_TICKS             (global default)
+            #   3. hard default = 2 ticks
+            platform_key = (primary_platform or "").upper()
+            per_platform_env = f"FOK_SLIPPAGE_TICKS_{platform_key}"
             try:
-                fok_slippage_ticks = int(
-                    os.getenv("FOK_SLIPPAGE_TICKS", "1") or "1"
+                _raw = (
+                    os.getenv(per_platform_env)
+                    or os.getenv("FOK_SLIPPAGE_TICKS")
+                    or "2"
                 )
+                fok_slippage_ticks = int(_raw)
             except (TypeError, ValueError):
-                fok_slippage_ticks = 1
+                fok_slippage_ticks = 2
             fok_slippage_ticks = max(0, fok_slippage_ticks)
             if fok_slippage_ticks > 0:
                 tick = 0.01  # Both Kalshi and Polymarket use 1¢ ticks.

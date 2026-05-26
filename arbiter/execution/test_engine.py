@@ -3242,11 +3242,14 @@ def test_arb_execution_separates_arb_pnl_from_unwind_pnl():
     assert arb_legacy.arb_pnl == pytest.approx(2.75)
 
 
-def test_fok_slippage_buffer_lifts_primary_price_by_one_tick():
-    """FILL-01: the engine lifts the FOK primary limit by FOK_SLIPPAGE_TICKS
-    ticks above ``best_executable_price`` so the order can absorb a
-    one-level adverse book move in the wire-latency window. Default
-    buffer is 1 tick = 0.01.
+def test_fok_slippage_buffer_lifts_primary_price_by_two_ticks_default():
+    """FILL-01 + 2026-05-26 zero-fill audit: the engine lifts the FOK
+    primary limit by FOK_SLIPPAGE_TICKS ticks above
+    ``best_executable_price`` so the order absorbs an adverse book
+    move during wire latency. Default was 1 tick — raised to 2 after
+    the live ARB-000683 trace showed Polymarket sports books moving
+    1+ ticks in the 552ms walk-to-place window even with the original
+    buffer.
 
     Wires both legs to FILLED so the test focuses on what limit the
     primary FOK was placed at, not on naked-leg recovery paths.
@@ -3258,7 +3261,9 @@ def test_fok_slippage_buffer_lifts_primary_price_by_one_tick():
         _old_exec = _os_test.environ.get("EXECUTION_ORDER")
         _os_test.environ["EXECUTION_ORDER"] = "poly_first"  # match prod
         _old_buf = _os_test.environ.get("FOK_SLIPPAGE_TICKS")
-        _os_test.environ.pop("FOK_SLIPPAGE_TICKS", None)  # use default (1)
+        _old_pp_buf = _os_test.environ.get("FOK_SLIPPAGE_TICKS_POLYMARKET")
+        _os_test.environ.pop("FOK_SLIPPAGE_TICKS", None)            # use default (2)
+        _os_test.environ.pop("FOK_SLIPPAGE_TICKS_POLYMARKET", None)
         try:
             engine = _build_live_engine_for_safe02_gap()
 
@@ -3302,16 +3307,16 @@ def test_fok_slippage_buffer_lifts_primary_price_by_one_tick():
             assert result is not None
             assert result.status in {"filled", "recovering"}
 
-            # Primary (polymarket YES) was walked at 0.40; with FOK_SLIPPAGE_TICKS=1
-            # the FOK must be placed at 0.41 (0.40 + 0.01) so the venue can
-            # absorb a one-tick adverse move and still fill.
+            # Primary (polymarket YES) walked at 0.40; with the new
+            # 2-tick default the FOK is placed at 0.42 (0.40 + 0.02)
+            # so the venue can absorb a two-tick adverse move.
             poly.place_fok.assert_awaited()
             sent_price = float(poly.place_fok.await_args.kwargs.get(
                 "price",
                 poly.place_fok.await_args.args[4] if len(poly.place_fok.await_args.args) > 4 else 0.0,
             ))
-            assert abs(sent_price - 0.41) < 1e-9, (
-                f"FOK_SLIPPAGE_TICKS=1 must lift 0.40 → 0.41; got {sent_price}"
+            assert abs(sent_price - 0.42) < 1e-9, (
+                f"FOK_SLIPPAGE_TICKS default=2 must lift 0.40 → 0.42; got {sent_price}"
             )
         finally:
             if _old_exec is None:
@@ -3322,6 +3327,84 @@ def test_fok_slippage_buffer_lifts_primary_price_by_one_tick():
                 _os_test.environ.pop("FOK_SLIPPAGE_TICKS", None)
             else:
                 _os_test.environ["FOK_SLIPPAGE_TICKS"] = _old_buf
+            if _old_pp_buf is None:
+                _os_test.environ.pop("FOK_SLIPPAGE_TICKS_POLYMARKET", None)
+            else:
+                _os_test.environ["FOK_SLIPPAGE_TICKS_POLYMARKET"] = _old_pp_buf
+
+    asyncio.run(runner())
+
+
+def test_fok_slippage_buffer_per_platform_override():
+    """FOK_SLIPPAGE_TICKS_<PLATFORM> takes precedence over the global
+    default. Lets the operator dial Polymarket up (fast-moving sports)
+    while keeping Kalshi at the cheaper 1-tick setting.
+    """
+    from arbiter.execution.engine import Order, OrderStatus
+
+    async def runner():
+        import os as _os_test
+        _old_exec = _os_test.environ.get("EXECUTION_ORDER")
+        _old_global = _os_test.environ.get("FOK_SLIPPAGE_TICKS")
+        _old_poly = _os_test.environ.get("FOK_SLIPPAGE_TICKS_POLYMARKET")
+        _os_test.environ["EXECUTION_ORDER"] = "poly_first"
+        _os_test.environ["FOK_SLIPPAGE_TICKS"] = "1"            # global
+        _os_test.environ["FOK_SLIPPAGE_TICKS_POLYMARKET"] = "3"  # per-platform
+        try:
+            engine = _build_live_engine_for_safe02_gap()
+
+            def _mk_filled_adapter(platform: str, side: str, walked_price: float, qty: int):
+                adapter = MagicMock()
+                adapter.platform = platform
+                _wire_live_depth(adapter, walked_price)
+                async def _place(arb_id, market_id, canonical_id, side_, price, qty_, max_affordable=None):
+                    return Order(
+                        order_id=f"ARB-FOK-PP-{platform.upper()}",
+                        platform=platform, market_id=market_id,
+                        canonical_id=canonical_id, side=side_,
+                        price=price, quantity=qty_,
+                        status=OrderStatus.FILLED,
+                        fill_qty=qty_, fill_price=price,
+                        timestamp=time.time(),
+                    )
+                adapter.place_fok = AsyncMock(side_effect=_place)
+                adapter.place_ioc = AsyncMock(side_effect=_place)
+                adapter.get_order = AsyncMock()
+                adapter.cancel_order = AsyncMock(return_value=True)
+                return adapter
+
+            poly = _mk_filled_adapter("polymarket", "yes", 0.40, 100)
+            kalshi = _mk_filled_adapter("kalshi", "no", 0.30, 100)
+            engine.adapters = {"polymarket": poly, "kalshi": kalshi}
+
+            opp = _make_safety_opp(
+                canonical_id="MKT1",
+                yes_platform="polymarket",
+                no_platform="kalshi",
+                yes_price=0.40, no_price=0.30,
+                suggested_qty=100,
+            )
+
+            await engine.execute_opportunity(opp)
+            poly.place_fok.assert_awaited()
+            sent_price = float(poly.place_fok.await_args.kwargs.get(
+                "price",
+                poly.place_fok.await_args.args[4] if len(poly.place_fok.await_args.args) > 4 else 0.0,
+            ))
+            # Per-platform override (3 ticks) wins over the global (1)
+            assert abs(sent_price - 0.43) < 1e-9, (
+                f"PLATFORM override 3 ticks must lift 0.40 → 0.43; got {sent_price}"
+            )
+        finally:
+            for k, v in (
+                ("EXECUTION_ORDER", _old_exec),
+                ("FOK_SLIPPAGE_TICKS", _old_global),
+                ("FOK_SLIPPAGE_TICKS_POLYMARKET", _old_poly),
+            ):
+                if v is None:
+                    _os_test.environ.pop(k, None)
+                else:
+                    _os_test.environ[k] = v
 
     asyncio.run(runner())
 
