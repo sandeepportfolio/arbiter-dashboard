@@ -286,6 +286,14 @@ window.MOCK = (() => {
         min_liquidity: 0,
         confidence_threshold: 0,
         paused: false,
+        // SIGNAL-INTEGRITY (2026-05-27): per-reason skip counters
+        // emitted by the scanner. Currently tracks `dead_ask` (would
+        // trade against a phantom mark price — no live ASK on either
+        // side) and `sub_min_size` (sizing pipeline produced fewer
+        // shares than a platform's minimum order size). Visible in
+        // the Scanner / Edge Quality card so the operator can see
+        // WHY scans are emitting no opportunities.
+        skip_reasons: {},
         history: [],
       },
       execution: { total_executions: 0, filled: 0, failed: 0, recovering: 0 },
@@ -546,6 +554,17 @@ window.MOCK = (() => {
       M.health.scanner.min_liquidity = asNumber(s.min_liquidity, M.health.scanner.min_liquidity);
       M.health.scanner.confidence_threshold = asNumber(s.confidence_threshold, M.health.scanner.confidence_threshold);
       if (s.paused != null) M.health.scanner.paused = !!s.paused;
+      // SIGNAL-INTEGRITY: skip-reason counts from /api/health.
+      // Keys are reason slugs ("dead_ask", "sub_min_size"), values are
+      // counts since process start. Snapshot full dict so a reason
+      // dropping to zero is reflected on the dashboard.
+      if (s.skip_reasons && typeof s.skip_reasons === 'object') {
+        const sr = {};
+        for (const [k, v] of Object.entries(s.skip_reasons)) {
+          sr[String(k)] = asNumber(v, 0);
+        }
+        M.health.scanner.skip_reasons = sr;
+      }
       // Keep history if backend doesn't expose one (dashboard chart needs data).
       if (Array.isArray(s.history) && s.history.length) M.health.scanner.history = s.history;
     }
@@ -2511,6 +2530,46 @@ function PageOverview() {
                   <ScannerMetric label="Published" value={scanPublished.toLocaleString()} sub="queue"/>
                   <ScannerMetric label="Audit feed" value={(M.health.audit.recent_results || []).length.toLocaleString()} sub="recent"/>
                 </div>
+                {/* SIGNAL-INTEGRITY (2026-05-27 audit, ARB-000693..699):
+                    skip-reason ribbon. Surfaces WHY scans produced no
+                    opportunities. `dead_ask` = phantom mark price (no
+                    live ask on a side we'd buy — was producing fake
+                    7.35¢ edges against an empty ForecastEx book).
+                    `sub_min_size` = sizing landed below a platform's
+                    minimum (Polymarket = 5 shares). Both are now
+                    rejected at scan-time instead of placing doomed
+                    orders. Hidden when no skips have been recorded
+                    yet so the card stays clean on fresh starts. */}
+                {(() => {
+                  const sr = (M.health.scanner.skip_reasons || {});
+                  const entries = Object.entries(sr).filter(([, v]) => Number(v) > 0);
+                  if (!entries.length) return null;
+                  const labels = {
+                    dead_ask:     { name: 'Dead ask',      tone: t.amber || t.warn || t.text, hint: 'No live ASK on a side we\'d buy — refusing to trade against a phantom mark price' },
+                    sub_min_size: { name: 'Sub min size',  tone: t.amber || t.warn || t.text, hint: 'Sizing landed below a platform\'s minimum order size (Polymarket = 5 shares)' },
+                  };
+                  return (
+                    <div style={{ marginTop: 14, padding: '10px 12px', borderRadius: 8, background: t.bgSubtle, border: `1px solid ${t.border}` }}>
+                      <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', gap: 12, marginBottom: 8 }}>
+                        <div style={{ fontSize: 10, color: t.textMuted, letterSpacing: '0.08em', textTransform:'uppercase' }}>Signal filters</div>
+                        <div style={{ fontSize: 10.5, color: t.textMuted, fontFamily: window.FONTS.mono }}>since process start</div>
+                      </div>
+                      <div style={{ display:'flex', flexWrap:'wrap', gap: 8 }}>
+                        {entries.map(([reason, count]) => {
+                          const meta = labels[reason] || { name: reason, tone: t.text, hint: '' };
+                          return (
+                            <div key={reason}
+                                 title={meta.hint}
+                                 style={{ display:'flex', alignItems:'baseline', gap: 6, padding: '4px 9px', borderRadius: 6, background: t.bgCard, border: `1px solid ${t.border}` }}>
+                              <span style={{ fontSize: 11, color: t.textDim }}>{meta.name}</span>
+                              <span style={{ fontFamily: window.FONTS.mono, fontSize: 12.5, fontWeight: 650, color: meta.tone }}>{Number(count).toLocaleString()}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })()}
                 <div style={{ marginTop: 16 }}>
                   <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap: 12, marginBottom: 7 }}>
                     <div style={{ fontSize: 10, color: t.textMuted, letterSpacing: '0.08em', textTransform:'uppercase' }}>Best edge history</div>

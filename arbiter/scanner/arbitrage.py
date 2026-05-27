@@ -247,6 +247,13 @@ class ArbitrageScanner:
         self._stable_keys: Dict[str, int] = {}
         self._recent_publish_time: Dict[str, float] = {}
         self._history: Deque[dict] = deque(maxlen=240)
+        # SIGNAL-INTEGRITY (2026-05-27): per-reason skip counters that
+        # surface in /api/scanner/stats so ops.html can show WHY scans
+        # produced no opportunities. Started for dead_ask (no live ASK
+        # on either side — would trade against a phantom mark price)
+        # and sub_min_size (sizing landed below a platform's minimum
+        # order size — order would be rejected pre-fill).
+        self._skip_reasons: Dict[str, int] = {}
 
     def subscribe(self) -> asyncio.Queue:
         queue: asyncio.Queue = asyncio.Queue(maxsize=100)
@@ -361,12 +368,30 @@ class ArbitrageScanner:
         yes_price_point: PricePoint,
         no_price_point: PricePoint,
     ) -> ArbitrageOpportunity | None:
-        # Use executable ASK prices (what you'd actually pay to enter)
-        # Fall back to mid-quote only if ASK is unavailable
-        yes_price = yes_price_point.yes_ask if yes_price_point.yes_ask > 0 else yes_price_point.yes_price
-        no_price = no_price_point.no_ask if no_price_point.no_ask > 0 else no_price_point.no_price
-        if yes_price <= 0 or no_price <= 0:
+        # SIGNAL-INTEGRITY (2026-05-27 audit, ARB-000695/699 GOP_SENATE_2026):
+        # Require a real live ASK on BOTH sides we'd buy. Previously the
+        # builder fell back to `yes_price` (mark/last-trade) when ASK was
+        # zero, which on ForecastEx's dead-book FX leg yielded a fabricated
+        # 7.35¢ edge against a last-trade print of $0.44 — the order book
+        # was empty, no one was actually offering at any price, but the
+        # signal claimed an edge and triggered four executions that all
+        # zero-filled. There is no executable price when ask==0; mark-price
+        # is an information artifact, not a tradeable quote. Matches the
+        # Kalshi precedent in f92c9fc (drop last_price fallbacks from
+        # yes_price/yes_ask paths).
+        yes_ask = float(yes_price_point.yes_ask or 0.0)
+        no_ask = float(no_price_point.no_ask or 0.0)
+        if yes_ask <= 0 or no_ask <= 0:
+            self._skip_reasons["dead_ask"] = self._skip_reasons.get("dead_ask", 0) + 1
+            logger.debug(
+                "scanner.skip canonical=%s reason=dead_ask "
+                "yes_ask=%.4f no_ask=%.4f yes_platform=%s no_platform=%s",
+                canonical_id, yes_ask, no_ask,
+                yes_price_point.platform, no_price_point.platform,
+            )
             return None
+        yes_price = yes_ask
+        no_price = no_ask
 
         # ── Non-binary market guard ───────────────────────────────────
         # A valid binary market has yes_price + no_price ≈ $1.00 on each
@@ -718,7 +743,40 @@ class ArbitrageScanner:
             balance_fraction_cap,
             min_reserve_cap,
         )
-        return max(size, 0)
+        size = max(size, 0)
+
+        # MIN-SIZE-GATE (2026-05-27 audit, ARB-000695/699):
+        # Polymarket US documents a 5-share minimum order size. A
+        # 1-share order at $0.469 ($0.469 notional, sub-min) returned
+        # status=FILLED with cumQuantity=0 — Polymarket's matching
+        # engine accepted the order but matched zero shares because it
+        # was below the minimum. That looks like a "zero-fill" in our
+        # data and costs latency + an arb_id but cannot ever produce a
+        # filled trade. If the natural sizing puts EITHER platform
+        # below its minimum-share floor, skip the opportunity rather
+        # than emit an order destined to be rejected.
+        min_required = 0
+        platform_min_shares = {
+            # Polymarket US documented minimum (see sandbox fixtures).
+            "polymarket": 5,
+            # Kalshi and ForecastEx allow 1-share orders.
+            "kalshi": 1,
+            "forecastex": 1,
+        }
+        for platform in (yes_price_point.platform, no_price_point.platform):
+            min_required = max(min_required, platform_min_shares.get(platform, 1))
+        if size < min_required:
+            self._skip_reasons["sub_min_size"] = (
+                self._skip_reasons.get("sub_min_size", 0) + 1
+            )
+            logger.debug(
+                "scanner.skip sizing reason=sub_min_size "
+                "size=%d min_required=%d yes_platform=%s no_platform=%s",
+                size, min_required,
+                yes_price_point.platform, no_price_point.platform,
+            )
+            return 0
+        return size
 
     def _edge_scalar(self, net_edge_cents: float) -> float:
         """Linear ramp from edge_scaling_min_fraction at min_edge_cents to 1.0
@@ -770,6 +828,11 @@ class ArbitrageScanner:
             "confidence_threshold": self.config.confidence_threshold,
             "published": self._published_count,
             "paused": self._paused,
+            # SIGNAL-INTEGRITY skip counters (dead_ask, sub_min_size, …).
+            # Surfaced in ops.html so the operator can see WHY scans
+            # are emitting no opportunities. See _build_cross_platform_opportunity
+            # and _compute_position_size for emit sites.
+            "skip_reasons": dict(self._skip_reasons),
         }
 
     def pause(self) -> None:

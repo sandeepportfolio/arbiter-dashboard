@@ -821,7 +821,6 @@ class ForecastExCollector:
     ) -> Optional[PricePoint]:
         bid = _amount_value(snapshot.get("84"))
         ask = _amount_value(snapshot.get("86"))
-        last = _amount_value(snapshot.get("31"))
         bid_size = _amount_value(snapshot.get("7295"))
         ask_size = _amount_value(snapshot.get("7296"))
 
@@ -836,8 +835,15 @@ class ForecastExCollector:
 
         yes_bid = _to_dollars(bid)
         yes_ask = _to_dollars(ask)
-        yes_last = _to_dollars(last)
-        yes_price = yes_ask or yes_last or yes_bid
+        # SIGNAL-INTEGRITY (2026-05-27): never let a last-trade print
+        # synthesize an executable yes_price. ForecastEx binaries can
+        # report a stale `31` (last) on a market whose live book has
+        # gone empty (both `84` bid and `86` ask = 0). Using last-trade
+        # as a mark fed a phantom $0.44 into ARB-000695/699 against an
+        # otherwise-dead order book and produced four fabricated
+        # 7.35¢ "edges" that all zero-filled on Polymarket. Matches
+        # the Kalshi fix in f92c9fc.
+        yes_price = yes_ask or yes_bid
         if yes_price <= 0:
             return None
 

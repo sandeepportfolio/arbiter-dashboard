@@ -183,3 +183,134 @@ def test_scanner_includes_forecastex_fee_in_net_edge(canonical_id):
         assert opp.yes_fee == pytest.approx(0.005)
 
     asyncio.run(run())
+
+
+# ── Signal-integrity regression: dead-ask / sub-min-size ────────────────────
+
+
+def test_scanner_skips_when_forecastex_leg_has_dead_ask(canonical_id):
+    """ForecastEx with yes_ask=0 (empty book) must NOT generate an
+    opportunity, even when last-trade mark price suggests a positive edge.
+
+    Reproduces the ARB-000695 / ARB-000699 phantom: GOP_SENATE_2026
+    ForecastEx leg quoted bid=0/ask=0 (dead order book) but yes_price=0.44
+    from a stale last-trade print. Pre-fix scanner fell back to mark and
+    fabricated a 7.35¢ "edge" against an empty book, producing two
+    consecutive zero-fill executions on Polymarket. The fix requires a
+    live ASK on the side we'd buy.
+    """
+    async def run():
+        store = PriceStore(ttl=60)
+        scanner = ArbitrageScanner(_scanner_config(min_edge_cents=0.5), store)
+
+        # Polymarket NO leg is live (ask=0.469).
+        await store.put(_mk_price(
+            "polymarket", canonical_id, yes=0.55, no=0.469, fee_rate=0.05,
+        ))
+
+        # ForecastEx leg: stale mark, but bid=ask=0 — dead book. We craft
+        # this directly because _mk_price derives ask from yes_price.
+        dead_book = PricePoint(
+            platform="forecastex",
+            canonical_id=canonical_id,
+            yes_price=0.44,         # stale last-trade print
+            no_price=0.56,
+            yes_volume=0,
+            no_volume=0,
+            timestamp=time.time(),
+            raw_market_id="fcst-dead",
+            yes_market_id="fcst-dead",
+            no_market_id="fcst-dead",
+            yes_bid=0.0,
+            yes_ask=0.0,
+            no_bid=0.0,
+            no_ask=0.0,
+            fee_rate=0.005,
+            mapping_status="confirmed",
+            mapping_score=1.0,
+        )
+        await store.put(dead_book)
+
+        ops = await scanner.scan_once()
+        # No opportunity should involve the dead-ask ForecastEx leg as a buy.
+        for o in ops:
+            assert not (o.yes_platform == "forecastex"), (
+                f"Scanner emitted dead-ask FX YES leg: {o}"
+            )
+
+    asyncio.run(run())
+
+
+def test_scanner_skips_when_polymarket_qty_below_min_size(canonical_id):
+    """Sub-5-share Polymarket sizing must result in no opportunity.
+
+    Polymarket US documents a 5-share minimum order size. A 1-share order
+    at $0.469 (the ARB-000695/699 footprint) is rejected with zero-fill.
+    The scanner must skip the opp at sizing time instead of placing a
+    doomed order. Recreated by tight liquidity_limited (yes_volume=1) so
+    the sizing pipeline lands on size=1 < min=5.
+    """
+    async def run():
+        store = PriceStore(ttl=60)
+        # min_liquidity=0 so we DON'T fail at the depth gate — we want to
+        # exercise the min-size cap, not the depth gate.
+        scanner = ArbitrageScanner(
+            ScannerConfig(
+                min_edge_cents=0.5,
+                persistence_scans=1,
+                max_position_usd=100.0,
+                confidence_threshold=0.1,
+                min_liquidity=0.0,
+                max_bid_ask_spread_cents=0.0,
+            ),
+            store,
+        )
+
+        kalshi_leg = PricePoint(
+            platform="kalshi",
+            canonical_id=canonical_id,
+            yes_price=0.40,
+            no_price=0.55,
+            yes_bid=0.39, yes_ask=0.40,
+            no_bid=0.54, no_ask=0.55,
+            yes_volume=1,   # forces liquidity_limited=1
+            no_volume=1,
+            timestamp=time.time(),
+            raw_market_id="K1",
+            yes_market_id="K1",
+            no_market_id="K1",
+            fee_rate=0.07,
+            mapping_status="confirmed",
+            mapping_score=1.0,
+        )
+        poly_leg = PricePoint(
+            platform="polymarket",
+            canonical_id=canonical_id,
+            yes_price=0.50,
+            no_price=0.469,
+            yes_bid=0.49, yes_ask=0.50,
+            no_bid=0.468, no_ask=0.469,
+            yes_volume=1,
+            no_volume=1,
+            timestamp=time.time(),
+            raw_market_id="P1",
+            yes_market_id="P1",
+            no_market_id="P1",
+            fee_rate=0.05,
+            mapping_status="confirmed",
+            mapping_score=1.0,
+        )
+        await store.put(kalshi_leg)
+        await store.put(poly_leg)
+
+        ops = await scanner.scan_once()
+        # Any opp that includes Polymarket must have suggested_qty >= 5,
+        # or it must not have been emitted at all.
+        for o in ops:
+            if o.yes_platform == "polymarket" or o.no_platform == "polymarket":
+                assert o.suggested_qty >= 5, (
+                    f"Scanner emitted sub-min-size Polymarket opp: "
+                    f"qty={o.suggested_qty} canonical={o.canonical_id}"
+                )
+
+    asyncio.run(run())
