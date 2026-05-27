@@ -415,9 +415,30 @@ class MathAuditor:
                 ))
 
         # Check both legs filled
+        # FILL-02 (2026-05-27): a leg can be status=filled with
+        # fill_qty=0 when the venue returns IOC-terminal "accepted
+        # but matched zero". That's NOT a naked leg — zero fill
+        # means zero exposure. Require non-zero fill_qty in addition
+        # to the FILLED status. Without this guard, every zero-fill
+        # IOC produced a bogus CRITICAL shadow-audit incident and
+        # blocked the readiness gate.
         yes_status = leg_yes.get("status", "")
         no_status = leg_no.get("status", "")
-        if yes_status in ("filled", "simulated") and no_status not in ("filled", "simulated"):
+        try:
+            yes_filled_qty = float(leg_yes.get("fill_qty", 0) or 0)
+        except (TypeError, ValueError):
+            yes_filled_qty = 0.0
+        try:
+            no_filled_qty = float(leg_no.get("fill_qty", 0) or 0)
+        except (TypeError, ValueError):
+            no_filled_qty = 0.0
+        yes_is_filled = (
+            yes_status in ("filled", "simulated") and yes_filled_qty > 0
+        )
+        no_is_filled = (
+            no_status in ("filled", "simulated") and no_filled_qty > 0
+        )
+        if yes_is_filled and not no_is_filled:
             result.flags.append(AuditFlag(
                 field="leg_mismatch",
                 expected=1.0,
@@ -426,7 +447,7 @@ class MathAuditor:
                 severity="critical",
                 message=f"ONE-LEG RISK: YES={yes_status} but NO={no_status} — unhedged exposure!",
             ))
-        elif no_status in ("filled", "simulated") and yes_status not in ("filled", "simulated"):
+        elif no_is_filled and not yes_is_filled:
             result.flags.append(AuditFlag(
                 field="leg_mismatch",
                 expected=1.0,

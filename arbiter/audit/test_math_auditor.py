@@ -294,16 +294,42 @@ class TestExecutionAudit:
             "gross_edge": 0.13, "total_fees": 0.02, "net_edge": 0.11,
             "net_edge_cents": 11.0, "suggested_qty": 1, "max_profit_usd": 0.11,
         }
+        # FILL-02: leg_yes needs fill_qty > 0 to count as filled.
+        # zero-fill IOCs return status=filled but qty=0 — that's NOT
+        # a naked leg.
         exec_dict = {
             "opportunity": opp,
-            "leg_yes": {"fill_price": 0.42, "status": "filled"},
-            "leg_no": {"fill_price": 0.0, "status": "failed"},
+            "leg_yes": {"fill_price": 0.42, "fill_qty": 1, "status": "filled"},
+            "leg_no": {"fill_price": 0.0, "fill_qty": 0, "status": "failed"},
             "realized_pnl": 0.0,
         }
         result = self.auditor.audit_execution(exec_dict)
         assert not result.passed
         assert any(f.field == "leg_mismatch" for f in result.flags)
         assert any(f.severity == "critical" for f in result.flags)
+
+    def test_zero_fill_ioc_no_false_positive_leg_mismatch(self):
+        """FILL-02 regression: status=filled + fill_qty=0 (IOC
+        accepted, matched zero) must NOT trigger ONE-LEG RISK."""
+        opp = {
+            "canonical_id": "TEST", "yes_platform": "polymarket",
+            "no_platform": "forecastex",
+            "yes_price": 0.46, "no_price": 0.47,
+            "gross_edge": 0.07, "total_fees": 0.02, "net_edge": 0.05,
+            "net_edge_cents": 5.0, "suggested_qty": 1, "max_profit_usd": 0.05,
+        }
+        exec_dict = {
+            "opportunity": opp,
+            # Zero-fill IOC: status=filled but fill_qty=0
+            "leg_yes": {"fill_price": 0.46, "fill_qty": 0, "status": "filled"},
+            "leg_no":  {"fill_price": 0.0,  "fill_qty": 0, "status": "aborted"},
+            "realized_pnl": 0.0,
+        }
+        result = self.auditor.audit_execution(exec_dict)
+        # leg_mismatch flag MUST NOT fire — there's nothing to hedge.
+        assert not any(f.field == "leg_mismatch" for f in result.flags), (
+            "Zero-fill IOC must not trigger naked-leg flag"
+        )
 
     def test_fill_slippage_flagged(self):
         opp = {
