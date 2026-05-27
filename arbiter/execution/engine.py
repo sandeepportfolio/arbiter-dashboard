@@ -1485,23 +1485,65 @@ class ExecutionEngine:
                         buffered_net * 100, MIN_NET_EDGE_CENTS, primary_fok_price,
                     )
 
-            # Step 1: Execute the primary leg (Kalshi FOK)
-            # Pass the opp + net_edge so _place_order_for_leg writes the
-            # parent execution_arbs row in the SAME transaction as this
-            # leg's execution_orders row (C5.1).  Eliminates the historical
-            # zero-leg phantom window.
+            # Step 1: Execute the primary leg.
+            #
+            # FILL-02 (2026-05-27 audit): 100% of recent Polymarket-primary
+            # trades (ARB-000683..690) failed with ``ORDER_STATE_EXPIRED``
+            # fill_qty=0 EVEN WHEN the live book at terminal poll showed
+            # asks at or below our buffered FOK limit. Polymarket's
+            # matching engine routinely kills FOK orders on fast-moving
+            # MLB sports markets because true depth at our limit is
+            # thinner than the book display suggests by the time the
+            # order reaches the matching engine. FOK = all-or-nothing,
+            # so even 1 contract short kills the entire 11-contract order.
+            #
+            # Switch the PRIMARY leg to IOC (immediate-or-cancel) and
+            # accept partial fills. The secondary is then sized to the
+            # ACTUAL primary fill_qty (not the originally-intended
+            # effective_qty). This guarantees we capture whatever depth
+            # IS available on Polymarket without losing 100% of
+            # opportunities to FOK rejection. Tail risk (secondary
+            # partial fill on the scaled-down qty) is absorbed by the
+            # existing naked-leg recovery infrastructure exactly as
+            # before, but the base rate of "zero fill" drops from
+            # ~100% to whatever fraction of opportunities have
+            # truly-zero depth at execution time (~0%).
+            #
+            # Opt-out: EXECUTOR_PRIMARY_TIF=FOK preserves legacy
+            # behavior for venues/operators that prefer atomic fills.
+            # Per-platform override: EXECUTOR_PRIMARY_TIF_<PLATFORM>
+            # (e.g. ..._POLYMARKET=IOC, ..._KALSHI=FOK).
+            primary_platform_key = (primary_platform or "").upper()
+            primary_tif_env = (
+                os.getenv(f"EXECUTOR_PRIMARY_TIF_{primary_platform_key}")
+                or os.getenv("EXECUTOR_PRIMARY_TIF")
+                or "IOC"
+            ).strip().upper()
+            primary_use_ioc = primary_tif_env != "FOK"
+            logger.info(
+                "  primary tif resolution: platform=%s tif=%s use_ioc=%s "
+                "(EXECUTOR_PRIMARY_TIF_%s / EXECUTOR_PRIMARY_TIF env)",
+                primary_platform, primary_tif_env, primary_use_ioc,
+                primary_platform_key,
+            )
+
             primary_leg = await self._place_order_for_leg(
                 arb_id, primary_platform, primary_market,
                 opp.canonical_id, primary_side, primary_fok_price, effective_qty,
+                use_ioc=primary_use_ioc,
                 atomic_arb_stub_opp=opp,
                 atomic_arb_stub_net_edge=getattr(opp, "net_edge", None),
             )
 
-            # Step 2: Only proceed if primary leg FILLED
-            if primary_leg.status != OrderStatus.FILLED:
-                # Primary didn't fill (FOK rejected) — zero exposure, clean exit
+            # Step 2: Accept partial primary fills when IOC.
+            # Zero fill is still a clean exit (no exposure). Any fill
+            # > 0 means we proceed with the secondary at the actual
+            # primary fill_qty.
+            primary_actual_qty = int(primary_leg.fill_qty or 0)
+            if primary_actual_qty <= 0:
                 logger.info(
-                    "  ✗ PRIMARY %s did not fill (status=%s) — $0.00 exposure, skipping secondary",
+                    "  ✗ PRIMARY %s did not fill (status=%s, fill_qty=0) — "
+                    "$0.00 exposure, skipping secondary",
                     primary_side.upper(), primary_leg.status.value,
                 )
                 secondary_leg = Order(
@@ -1517,6 +1559,22 @@ class ExecutionEngine:
                     error="Skipped: primary leg did not fill (sequential execution)",
                 )
             else:
+                # If primary partially filled, scale secondary to the
+                # actual filled quantity so the legs balance. The
+                # remainder of the originally-intended effective_qty
+                # is forgone — we'd rather complete the arb on what
+                # primary actually got than leave it naked chasing the
+                # missing depth.
+                if primary_actual_qty < effective_qty:
+                    logger.warning(
+                        "  ⚠ PRIMARY %s PARTIAL FILL: got %d of %d intended "
+                        "contracts on %s @ $%.4f → scaling secondary to %d",
+                        primary_side.upper(),
+                        primary_actual_qty, effective_qty,
+                        primary_platform, primary_leg.fill_price,
+                        primary_actual_qty,
+                    )
+                    effective_qty = primary_actual_qty
                 # Primary filled — now execute secondary
                 logger.info(
                     "  ✓ PRIMARY %s FILLED: %d contracts @ $%.2f = $%.2f spent on %s → proceeding to %s",

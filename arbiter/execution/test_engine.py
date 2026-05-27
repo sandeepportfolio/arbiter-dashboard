@@ -3308,12 +3308,15 @@ def test_fok_slippage_buffer_lifts_primary_price_by_two_ticks_default():
             assert result.status in {"filled", "recovering"}
 
             # Primary (polymarket YES) walked at 0.40; with the new
-            # 2-tick default the FOK is placed at 0.42 (0.40 + 0.02)
-            # so the venue can absorb a two-tick adverse move.
-            poly.place_fok.assert_awaited()
-            sent_price = float(poly.place_fok.await_args.kwargs.get(
+            # 2-tick default the buffered limit is 0.42 (0.40 + 0.02).
+            # FILL-02 (2026-05-27): primary now uses IOC by default —
+            # the buffer still applies the same way, but the call lands
+            # on place_ioc instead of place_fok.
+            primary_mock = poly.place_ioc if poly.place_ioc.await_count > 0 else poly.place_fok
+            primary_mock.assert_awaited()
+            sent_price = float(primary_mock.await_args.kwargs.get(
                 "price",
-                poly.place_fok.await_args.args[4] if len(poly.place_fok.await_args.args) > 4 else 0.0,
+                primary_mock.await_args.args[4] if len(primary_mock.await_args.args) > 4 else 0.0,
             ))
             assert abs(sent_price - 0.42) < 1e-9, (
                 f"FOK_SLIPPAGE_TICKS default=2 must lift 0.40 → 0.42; got {sent_price}"
@@ -3386,10 +3389,11 @@ def test_fok_slippage_buffer_per_platform_override():
             )
 
             await engine.execute_opportunity(opp)
-            poly.place_fok.assert_awaited()
-            sent_price = float(poly.place_fok.await_args.kwargs.get(
+            primary_mock = poly.place_ioc if poly.place_ioc.await_count > 0 else poly.place_fok
+            primary_mock.assert_awaited()
+            sent_price = float(primary_mock.await_args.kwargs.get(
                 "price",
-                poly.place_fok.await_args.args[4] if len(poly.place_fok.await_args.args) > 4 else 0.0,
+                primary_mock.await_args.args[4] if len(primary_mock.await_args.args) > 4 else 0.0,
             ))
             # Per-platform override (3 ticks) wins over the global (1)
             assert abs(sent_price - 0.43) < 1e-9, (
@@ -3405,6 +3409,192 @@ def test_fok_slippage_buffer_per_platform_override():
                     _os_test.environ.pop(k, None)
                 else:
                     _os_test.environ[k] = v
+
+    asyncio.run(runner())
+
+
+def test_primary_partial_fill_scales_secondary_to_actual_qty():
+    """FILL-02 (2026-05-27): when the IOC primary partially fills,
+    the engine must size the secondary to the ACTUAL primary fill_qty
+    instead of skipping the secondary entirely.
+
+    Reproduces the ARB-000683..690 zero-fill streak where Polymarket
+    FOK rejected 100% of orders even though SOME depth existed at
+    our limit. With IOC + partial-fill scaling, even a 1-of-12 fill
+    gets paired on the secondary so we capture the available arb
+    instead of losing 100% of opportunities.
+    """
+    from arbiter.execution.engine import Order, OrderStatus
+
+    async def runner():
+        import os as _os_test
+        _old_exec = _os_test.environ.get("EXECUTION_ORDER")
+        _old_tif = _os_test.environ.get("EXECUTOR_PRIMARY_TIF")
+        _os_test.environ["EXECUTION_ORDER"] = "poly_first"
+        _os_test.environ.pop("EXECUTOR_PRIMARY_TIF", None)  # default IOC
+        try:
+            engine = _build_live_engine_for_safe02_gap()
+
+            # Primary (poly) IOC fills only 4 of 12 contracts.
+            captured = {"primary_qty": None, "secondary_qty": None}
+            async def _poly_ioc(arb_id, market_id, canonical_id, side_, price, qty_, max_affordable=None):
+                captured["primary_qty"] = qty_
+                return Order(
+                    order_id="POLY-IOC-PARTIAL", platform="polymarket",
+                    market_id=market_id, canonical_id=canonical_id,
+                    side=side_, price=price, quantity=qty_,
+                    status=OrderStatus.FILLED,   # any-fill status
+                    fill_qty=4, fill_price=price,
+                    timestamp=time.time(),
+                )
+            async def _poly_fok(arb_id, market_id, canonical_id, side_, price, qty_, max_affordable=None):
+                # Should NOT be called when IOC is enabled
+                return Order(
+                    order_id="POLY-FOK-UNEXPECTED", platform="polymarket",
+                    market_id=market_id, canonical_id=canonical_id,
+                    side=side_, price=price, quantity=qty_,
+                    status=OrderStatus.FAILED, timestamp=time.time(),
+                )
+
+            poly = MagicMock()
+            poly.platform = "polymarket"
+            _wire_live_depth(poly, 0.40)
+            poly.place_ioc = AsyncMock(side_effect=_poly_ioc)
+            poly.place_fok = AsyncMock(side_effect=_poly_fok)
+            poly.get_order = AsyncMock()
+            poly.cancel_order = AsyncMock(return_value=True)
+
+            async def _kalshi_place(arb_id, market_id, canonical_id, side_, price, qty_, max_affordable=None):
+                captured["secondary_qty"] = qty_
+                return Order(
+                    order_id="KALSHI-FILLED", platform="kalshi",
+                    market_id=market_id, canonical_id=canonical_id,
+                    side=side_, price=price, quantity=qty_,
+                    status=OrderStatus.FILLED,
+                    fill_qty=qty_, fill_price=price,
+                    timestamp=time.time(),
+                )
+            kalshi = MagicMock()
+            kalshi.platform = "kalshi"
+            _wire_live_depth(kalshi, 0.30)
+            kalshi.place_fok = AsyncMock(side_effect=_kalshi_place)
+            kalshi.place_ioc = AsyncMock(side_effect=_kalshi_place)
+            kalshi.get_order = AsyncMock()
+            kalshi.cancel_order = AsyncMock(return_value=True)
+
+            engine.adapters = {"polymarket": poly, "kalshi": kalshi}
+
+            opp = _make_safety_opp(
+                canonical_id="MKT1",
+                yes_platform="polymarket",
+                no_platform="kalshi",
+                yes_price=0.40, no_price=0.30,
+                suggested_qty=12,
+            )
+
+            result = await engine.execute_opportunity(opp)
+            assert result is not None
+
+            # Primary asked for 12, returned fill_qty=4.
+            assert captured["primary_qty"] == 12
+            # Secondary must be scaled to the actual primary fill (4),
+            # not the original intended qty (12).
+            assert captured["secondary_qty"] == 4, (
+                f"Secondary should scale to primary fill_qty=4, got "
+                f"{captured['secondary_qty']}"
+            )
+            # Primary path used IOC, not FOK.
+            assert poly.place_ioc.await_count == 1
+            assert poly.place_fok.await_count == 0
+        finally:
+            if _old_exec is None:
+                _os_test.environ.pop("EXECUTION_ORDER", None)
+            else:
+                _os_test.environ["EXECUTION_ORDER"] = _old_exec
+            if _old_tif is None:
+                _os_test.environ.pop("EXECUTOR_PRIMARY_TIF", None)
+            else:
+                _os_test.environ["EXECUTOR_PRIMARY_TIF"] = _old_tif
+
+    asyncio.run(runner())
+
+
+def test_executor_primary_tif_fok_preserves_legacy_atomic_behavior():
+    """EXECUTOR_PRIMARY_TIF=FOK opts back into atomic-or-skip primary
+    placement. Zero-fill primary → skipped secondary, same as before
+    FILL-02. The env var is the kill-switch for the IOC default."""
+    from arbiter.execution.engine import Order, OrderStatus
+
+    async def runner():
+        import os as _os_test
+        _old_exec = _os_test.environ.get("EXECUTION_ORDER")
+        _old_tif = _os_test.environ.get("EXECUTOR_PRIMARY_TIF")
+        _os_test.environ["EXECUTION_ORDER"] = "poly_first"
+        _os_test.environ["EXECUTOR_PRIMARY_TIF"] = "FOK"
+        try:
+            engine = _build_live_engine_for_safe02_gap()
+
+            async def _ioc(arb_id, market_id, canonical_id, side_, price, qty_, max_affordable=None):
+                return Order(
+                    order_id="UNEXPECTED-IOC", platform="polymarket",
+                    market_id=market_id, canonical_id=canonical_id,
+                    side=side_, price=price, quantity=qty_,
+                    status=OrderStatus.FAILED, timestamp=time.time(),
+                )
+            async def _fok(arb_id, market_id, canonical_id, side_, price, qty_, max_affordable=None):
+                return Order(
+                    order_id="POLY-FOK-FILLED", platform="polymarket",
+                    market_id=market_id, canonical_id=canonical_id,
+                    side=side_, price=price, quantity=qty_,
+                    status=OrderStatus.FILLED,
+                    fill_qty=qty_, fill_price=price,
+                    timestamp=time.time(),
+                )
+
+            poly = MagicMock()
+            poly.platform = "polymarket"
+            _wire_live_depth(poly, 0.40)
+            poly.place_ioc = AsyncMock(side_effect=_ioc)
+            poly.place_fok = AsyncMock(side_effect=_fok)
+            poly.get_order = AsyncMock()
+            poly.cancel_order = AsyncMock(return_value=True)
+
+            kalshi = MagicMock()
+            kalshi.platform = "kalshi"
+            _wire_live_depth(kalshi, 0.30)
+            async def _k(arb_id, market_id, canonical_id, side_, price, qty_, max_affordable=None):
+                return Order(
+                    order_id="KALSHI-OK", platform="kalshi",
+                    market_id=market_id, canonical_id=canonical_id,
+                    side=side_, price=price, quantity=qty_,
+                    status=OrderStatus.FILLED, fill_qty=qty_, fill_price=price,
+                    timestamp=time.time(),
+                )
+            kalshi.place_fok = AsyncMock(side_effect=_k)
+            kalshi.place_ioc = AsyncMock(side_effect=_k)
+            kalshi.get_order = AsyncMock()
+            kalshi.cancel_order = AsyncMock(return_value=True)
+            engine.adapters = {"polymarket": poly, "kalshi": kalshi}
+
+            opp = _make_safety_opp(
+                canonical_id="MKT1",
+                yes_platform="polymarket",
+                no_platform="kalshi",
+                yes_price=0.40, no_price=0.30, suggested_qty=10,
+            )
+            await engine.execute_opportunity(opp)
+            # EXECUTOR_PRIMARY_TIF=FOK routes primary to FOK, NOT IOC.
+            assert poly.place_fok.await_count == 1
+            assert poly.place_ioc.await_count == 0
+        finally:
+            if _old_exec is None:
+                _os_test.environ.pop("EXECUTION_ORDER", None)
+            else:
+                _os_test.environ["EXECUTION_ORDER"] = _old_exec
+            if _old_tif is None:
+                _os_test.environ.pop("EXECUTOR_PRIMARY_TIF", None)
+            else:
+                _os_test.environ["EXECUTOR_PRIMARY_TIF"] = _old_tif
 
     asyncio.run(runner())
 
@@ -3462,9 +3652,12 @@ def test_fok_slippage_buffer_can_be_disabled_via_env():
             result = await engine.execute_opportunity(opp)
             assert result is not None
 
-            sent_price = float(poly.place_fok.await_args.kwargs.get(
+            # FILL-02: primary defaults to IOC now; route the assertion
+            # to whichever method actually fired.
+            primary_mock = poly.place_ioc if poly.place_ioc.await_count > 0 else poly.place_fok
+            sent_price = float(primary_mock.await_args.kwargs.get(
                 "price",
-                poly.place_fok.await_args.args[4] if len(poly.place_fok.await_args.args) > 4 else 0.0,
+                primary_mock.await_args.args[4] if len(primary_mock.await_args.args) > 4 else 0.0,
             ))
             assert abs(sent_price - 0.40) < 1e-9, (
                 f"FOK_SLIPPAGE_TICKS=0 must send at walked price 0.40; got {sent_price}"
