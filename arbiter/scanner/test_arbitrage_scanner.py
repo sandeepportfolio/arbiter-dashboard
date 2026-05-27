@@ -338,6 +338,150 @@ def test_scanner_accepts_tight_bid_ask_spread_on_primary_venue():
     asyncio.run(runner())
 
 
+def test_scanner_per_pair_edge_floor_unlocks_fx_arb_below_global_floor():
+    """PROFITABILITY-01: a 5¢ net edge on a Kalshi×ForecastEx pair
+    must clear the FX-pair floor (4.5¢) even when the global floor
+    is 7¢. Reproduces the 2026-05-27 live finding: DEM_SENATE_2026
+    K_YES + FX_NO at 7c gross / ~5c net was being thrown away.
+    """
+    async def runner():
+        store = PriceStore(ttl=300)
+        scanner = ArbitrageScanner(
+            ScannerConfig(
+                min_edge_cents=7.0,            # global K×P floor
+                persistence_scans=1,
+                max_position_usd=100.0,
+                confidence_threshold=0.0,
+                min_liquidity=10.0,
+                max_bid_ask_spread_cents=0.0,
+            ),
+            store,
+        )
+        original_mapping = MARKET_MAP.get("FX_KP_PROFIT_TEST")
+        MARKET_MAP["FX_KP_PROFIT_TEST"] = {
+            "description": "K×FX cross-venue pair",
+            "status": "confirmed",
+            "allow_auto_trade": True,
+            "mapping_score": 0.95,
+            "resolution_match_status": "identical",
+        }
+        # Kalshi YES 0.46, ForecastEx NO 0.47 → 0.93 cost/pair = 7¢ gross.
+        # After fees (~1.5¢ K + 0.5¢ FX = 2¢) → ~5¢ net edge.
+        # 5¢ < global 7¢ floor but ≥ 4.5¢ FX-K pair floor → must trade.
+        fresh = time.time()
+        await store.put(
+            PricePoint(
+                platform="kalshi", canonical_id="FX_KP_PROFIT_TEST",
+                yes_price=0.46, no_price=0.55,
+                yes_volume=200, no_volume=200, timestamp=fresh,
+                raw_market_id="K-FXKP", yes_market_id="K-FXKP", no_market_id="K-FXKP",
+                fee_rate=0.07,
+                mapping_status="confirmed", mapping_score=0.9,
+                yes_bid=0.455, yes_ask=0.46, no_bid=0.545, no_ask=0.55,
+            )
+        )
+        await store.put(
+            PricePoint(
+                platform="forecastex", canonical_id="FX_KP_PROFIT_TEST",
+                yes_price=0.53, no_price=0.47,
+                yes_volume=200, no_volume=200, timestamp=fresh,
+                raw_market_id="FX-FXKP", yes_market_id="FX-FXKP", no_market_id="FX-FXKP",
+                fee_rate=0.005,  # FX flat 0.5c/contract
+                mapping_status="confirmed", mapping_score=0.9,
+                yes_bid=0.525, yes_ask=0.53, no_bid=0.465, no_ask=0.47,
+            )
+        )
+        try:
+            opps = await scanner.scan_once()
+            fx_arbs = [
+                o for o in opps
+                if "forecastex" in (o.yes_platform, o.no_platform)
+            ]
+            assert fx_arbs, (
+                f"K×FX arb must clear pair floor; got {[(o.yes_platform, o.no_platform, o.net_edge_cents, o.status) for o in opps]}"
+            )
+            # Must be tradable (status='tradable') — net edge ≥ pair floor.
+            assert any(o.status == "tradable" for o in fx_arbs), (
+                f"FX arb should reach tradable status; got {[(o.net_edge_cents, o.status) for o in fx_arbs]}"
+            )
+        finally:
+            if original_mapping is None:
+                MARKET_MAP.pop("FX_KP_PROFIT_TEST", None)
+            else:
+                MARKET_MAP["FX_KP_PROFIT_TEST"] = original_mapping
+
+    asyncio.run(runner())
+
+
+def test_scanner_per_pair_edge_floor_still_blocks_kp_below_kp_floor():
+    """Sanity: a K×P pair at 5¢ net edge MUST still be blocked
+    because the K×P floor (7¢) is still the high-fee threshold —
+    only FX-containing pairs get the looser floor."""
+    async def runner():
+        store = PriceStore(ttl=300)
+        scanner = ArbitrageScanner(
+            ScannerConfig(
+                min_edge_cents=7.0,
+                persistence_scans=1,
+                max_position_usd=100.0,
+                confidence_threshold=0.0,
+                min_liquidity=10.0,
+                max_bid_ask_spread_cents=0.0,
+            ),
+            store,
+        )
+        original_mapping = MARKET_MAP.get("KP_PROFIT_TEST")
+        MARKET_MAP["KP_PROFIT_TEST"] = {
+            "description": "K×P cross-venue pair",
+            "status": "confirmed",
+            "allow_auto_trade": True,
+            "mapping_score": 0.95,
+            "resolution_match_status": "identical",
+        }
+        fresh = time.time()
+        # Sub-floor edge: 0.46 + 0.48 = 0.94 cost = 6¢ gross, ~4¢ net.
+        await store.put(
+            PricePoint(
+                platform="kalshi", canonical_id="KP_PROFIT_TEST",
+                yes_price=0.46, no_price=0.55,
+                yes_volume=200, no_volume=200, timestamp=fresh,
+                raw_market_id="K-KP", yes_market_id="K-KP", no_market_id="K-KP",
+                fee_rate=0.07,
+                mapping_status="confirmed", mapping_score=0.9,
+                yes_bid=0.455, yes_ask=0.46, no_bid=0.545, no_ask=0.55,
+            )
+        )
+        await store.put(
+            PricePoint(
+                platform="polymarket", canonical_id="KP_PROFIT_TEST",
+                yes_price=0.52, no_price=0.48,
+                yes_volume=200, no_volume=200, timestamp=fresh,
+                raw_market_id="P-KP", yes_market_id="P-KP", no_market_id="P-KP",
+                fee_rate=0.01,
+                mapping_status="confirmed", mapping_score=0.9,
+                yes_bid=0.515, yes_ask=0.52, no_bid=0.475, no_ask=0.48,
+            )
+        )
+        try:
+            opps = await scanner.scan_once()
+            # K×P pair at sub-7c net edge → no tradable opps.
+            tradable_kp = [
+                o for o in opps
+                if o.status == "tradable"
+                and set([o.yes_platform, o.no_platform]) == {"kalshi", "polymarket"}
+            ]
+            assert not tradable_kp, (
+                f"K×P below 7c floor must NOT be tradable; got {[(o.net_edge_cents, o.status) for o in tradable_kp]}"
+            )
+        finally:
+            if original_mapping is None:
+                MARKET_MAP.pop("KP_PROFIT_TEST", None)
+            else:
+                MARKET_MAP["KP_PROFIT_TEST"] = original_mapping
+
+    asyncio.run(runner())
+
+
 def test_scanner_phantom_edge_filter_blocks_stale_huge_edge():
     """Edges ≥ phantom threshold with stale quotes never reach publish.
 

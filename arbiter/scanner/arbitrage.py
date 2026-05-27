@@ -448,7 +448,15 @@ class ArbitrageScanner:
         total_fees = (yes_fee_total + no_fee_total) / suggested_qty
         net_edge = gross_edge - total_fees
         net_edge_cents = net_edge * 100.0
-        if net_edge_cents < self.config.min_edge_cents:
+        # PROFITABILITY-01: per-venue-pair edge floor — FX-containing
+        # pairs use a lower floor because FX fees are ~0.5¢/contract
+        # flat vs Kalshi's quadratic schedule. The 7¢ global floor was
+        # calibrated for K×P and was throwing away profitable FX arbs
+        # at 5–6¢ gross net edge.
+        pair_floor = self.config.min_edge_for_pair(
+            yes_price_point.platform, no_price_point.platform,
+        )
+        if net_edge_cents < pair_floor:
             return None
 
         quote_age_seconds = max(yes_price_point.age_seconds, no_price_point.age_seconds)
@@ -578,12 +586,17 @@ class ArbitrageScanner:
         # ── Net edge floor re-check (defense-in-depth) ────────────────
         # Catches stale-price drift between the time the opportunity was
         # built and now, and prevents trading on rounding-error edges.
-        if opportunity.net_edge_cents < self.config.min_edge_cents:
+        # Uses the SAME per-pair floor as the build path so a
+        # status="tradable" gate matches the constructor gate exactly.
+        pair_floor = self.config.min_edge_for_pair(
+            opportunity.yes_platform, opportunity.no_platform,
+        )
+        if opportunity.net_edge_cents < pair_floor:
             logger.debug(
-                "scanner.skip canonical=%s reason=net_edge_below_floor net=%.2f¢ min=%.2f¢",
+                "scanner.skip canonical=%s reason=net_edge_below_floor net=%.2f¢ pair_floor=%.2f¢",
                 opportunity.canonical_id,
                 opportunity.net_edge_cents,
-                self.config.min_edge_cents,
+                pair_floor,
             )
             return "candidate"
         # ── Phantom-edge filter (binary-market sanity gate) ───────────

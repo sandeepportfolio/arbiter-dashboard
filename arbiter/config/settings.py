@@ -678,6 +678,44 @@ class ScannerConfig:
     min_edge_cents: float = field(
         default_factory=lambda: _env_float("MIN_EDGE_CENTS", 7.0)
     )
+    # ── Per-venue-pair edge floors (2026-05-27 PROFITABILITY-01) ──
+    # The global ``min_edge_cents`` was calibrated against Polymarket's
+    # ~3.66¢ median adverse-move latency on Kalshi×Polymarket pairs. It
+    # is the WRONG floor for pairs that include ForecastEx: FX charges
+    # a flat 0.5¢/contract fee vs Kalshi's quadratic fee schedule, so
+    # the break-even gross-edge is materially lower. Live probe
+    # 2026-05-27 surfaced 4 active arbs at 5–6¢ gross net edge on
+    # DEM_SENATE_2026 / GOP_SENATE_2026 (FX×K and FX×P) that the global
+    # 7¢ floor was throwing away despite being profitable after the
+    # actual fee schedule.
+    #
+    # Key format: "<venue1>_<venue2>" sorted alphabetically (so
+    # "forecastex_kalshi" matches both YES-FX/NO-K and YES-K/NO-FX
+    # orderings). Falls back to ``min_edge_cents`` when no entry
+    # matches. Env override:
+    #   MIN_EDGE_CENTS_<VENUE1>_<VENUE2>=4.5
+    # e.g. MIN_EDGE_CENTS_FORECASTEX_KALSHI=4.5
+    min_edge_cents_by_pair: Dict[str, float] = field(
+        default_factory=lambda: {
+            # FX×K: 1.5¢ Kalshi quadratic + 0.5¢ FX flat = ~2¢ fees.
+            # 4.5¢ gross gives ~2.5¢ net profit per contract — small
+            # but realistic and well above the ~0¢ break-even.
+            "forecastex_kalshi": _env_float(
+                "MIN_EDGE_CENTS_FORECASTEX_KALSHI", 4.5,
+            ),
+            # FX×P: 0.5¢ FX + 0.5¢ Poly = ~1¢ total. 4.0¢ gross gives
+            # ~3¢ net. Tighter floor because P moves fast — leave
+            # headroom for slippage.
+            "forecastex_polymarket": _env_float(
+                "MIN_EDGE_CENTS_FORECASTEX_POLYMARKET", 4.0,
+            ),
+            # K×P: keep the 7¢ default (highest combined fees + worst
+            # latency on poly).
+            "kalshi_polymarket": _env_float(
+                "MIN_EDGE_CENTS_KALSHI_POLYMARKET", 7.0,
+            ),
+        }
+    )
     max_position_usd: float = 100.0
     scan_interval: float = 1.0
     confidence_threshold: float = 0.5
@@ -719,6 +757,37 @@ class ScannerConfig:
     edge_scaling_ref_cents: float = field(
         default_factory=lambda: _env_float("EDGE_SCALING_REF_CENTS", 10.0)
     )
+
+    def min_edge_for_pair(self, yes_platform: str, no_platform: str) -> float:
+        """Lookup the per-venue-pair edge floor.
+
+        Semantics: the pair-specific floor is a permission to RELAX
+        below the global floor for known-lower-fee venue combinations
+        (FX has flat 0.5¢/contract fees vs Kalshi's quadratic
+        schedule). The global ``min_edge_cents`` remains the operator
+        ceiling — a pair floor higher than the global doesn't apply
+        (use the global instead).
+
+        Concretely:
+          global=7.0, fx_k_pair=4.5    → fx_k uses 4.5 (relaxed)
+          global=1.0, fx_k_pair=4.5    → fx_k uses 1.0 (global wins)
+          global=7.0, no pair entry    → all use 7.0 (legacy)
+
+        Order-independent: ("kalshi", "forecastex") and
+        ("forecastex", "kalshi") resolve to the same key.
+        """
+        a = (yes_platform or "").strip().lower()
+        b = (no_platform or "").strip().lower()
+        global_floor = float(self.min_edge_cents)
+        if not a or not b or a == b:
+            return global_floor
+        key = "_".join(sorted([a, b]))
+        pair_floor = self.min_edge_cents_by_pair.get(key)
+        if pair_floor is None:
+            return global_floor
+        # Pair floor only RELAXES; never raises above the operator's
+        # global ceiling.
+        return float(min(global_floor, float(pair_floor)))
     # ── Phantom-edge filter (defense-in-depth at publish time) ─────────
     # An edge ≥ this threshold on a binary market is almost always a
     # stale-quote artifact (one side hasn't updated since the other moved

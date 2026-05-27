@@ -49,6 +49,12 @@ class AutoExecutorConfig:
     max_quote_age_s: float = 30.0
     min_depth_usd: float = 25.0
     min_edge_cents_preflight: float = 7.0
+    # PROFITABILITY-01 (2026-05-27): per-venue-pair preflight floors so
+    # FX-containing pairs (lower fees) can clear a smaller threshold
+    # than the K×P-calibrated default. Keyed alphabetically:
+    # "forecastex_kalshi", "forecastex_polymarket", "kalshi_polymarket".
+    # Falls back to ``min_edge_cents_preflight`` when no entry matches.
+    min_edge_cents_preflight_by_pair: dict = field(default_factory=dict)
     # Fail-closed default: unconfirmed mappings are EXCLUDED unless an operator
     # explicitly opts in by setting PREFLIGHT_REQUIRE_MAPPING_CONFIRMED=false.
     # Confirmed mappings have been audited end-to-end; unconfirmed ones are
@@ -66,6 +72,23 @@ class AutoExecutorConfig:
     # this aligns pre-flight with that behaviour so partial-depth books
     # produce smaller trades instead of dropped trades.
     liquidity_adaptive_sizing: bool = True
+
+    def edge_floor_for(self, yes_platform: str, no_platform: str) -> float:
+        """Return the preflight edge floor (cents) for a given venue
+        pair. Pair-specific entries can RELAX the global floor for
+        known-lower-fee combinations (FX) but never raise it above
+        the operator-set global ceiling. Order-independent."""
+        a = (yes_platform or "").strip().lower()
+        b = (no_platform or "").strip().lower()
+        global_floor = float(self.min_edge_cents_preflight)
+        if not a or not b or a == b:
+            return global_floor
+        key = "_".join(sorted([a, b]))
+        pair_floor = self.min_edge_cents_preflight_by_pair.get(key)
+        if pair_floor is None:
+            return global_floor
+        return float(min(global_floor, float(pair_floor)))
+
 
 
 @dataclass
@@ -350,14 +373,17 @@ class AutoExecutor:
             # If recomputed edge falls below the executor pre-flight threshold,
             # skip here too. The price_store-backed pre-flight is optional in
             # tests/legacy wiring, so the clamp path must fail closed by itself.
-            if opp.net_edge_cents < self._config.min_edge_cents_preflight:
+            pair_floor = self._config.edge_floor_for(
+                opp.yes_platform, opp.no_platform,
+            )
+            if opp.net_edge_cents < pair_floor:
                 self.stats.skipped_over_cap += 1
                 log.info(
                     "auto_executor.skip.edge_low_after_clamp",
                     canonical_id=opp.canonical_id,
                     new_net_edge=round(new_net_edge, 4),
                     new_net_edge_cents=round(opp.net_edge_cents, 2),
-                    threshold_cents=self._config.min_edge_cents_preflight,
+                    threshold_cents=pair_floor,
                 )
                 return
 
@@ -558,14 +584,17 @@ class AutoExecutor:
         ) / qty
         net_edge = gross_edge - total_fees_per_unit
         net_edge_cents = net_edge * 100.0
-        if net_edge_cents < self._config.min_edge_cents_preflight:
+        pair_floor = self._config.edge_floor_for(
+            opp.yes_platform, opp.no_platform,
+        )
+        if net_edge_cents < pair_floor:
             self.stats.skipped_edge_collapsed += 1
             log.info(
                 "auto_executor.skip.preflight.edge_collapsed",
                 canonical_id=opp.canonical_id,
                 cached_net_edge_cents=round(opp.net_edge_cents, 2),
                 fresh_net_edge_cents=round(net_edge_cents, 2),
-                threshold_cents=self._config.min_edge_cents_preflight,
+                threshold_cents=pair_floor,
             )
             return None
 
@@ -700,14 +729,17 @@ class AutoExecutor:
             ) / qty
             net_edge = gross_edge - total_fees_per_unit
             net_edge_cents = net_edge * 100.0
-            if net_edge_cents < self._config.min_edge_cents_preflight:
+            pair_floor = self._config.edge_floor_for(
+                opp.yes_platform, opp.no_platform,
+            )
+            if net_edge_cents < pair_floor:
                 self.stats.skipped_edge_collapsed += 1
                 log.info(
                     "auto_executor.skip.preflight.edge_collapsed_after_depth_reduce",
                     canonical_id=opp.canonical_id,
                     reduced_qty=qty,
                     net_edge_cents=round(net_edge_cents, 2),
-                    threshold_cents=self._config.min_edge_cents_preflight,
+                    threshold_cents=pair_floor,
                 )
                 return None
             opp.suggested_qty = qty
@@ -848,6 +880,37 @@ def make_auto_executor_from_env(
         except (TypeError, ValueError):
             return default
 
+    # PROFITABILITY-01: per-venue-pair preflight floors. Reads
+    # PREFLIGHT_MIN_EDGE_CENTS_<VENUE1>_<VENUE2> first, falling back
+    # to MIN_EDGE_CENTS_<VENUE1>_<VENUE2> (so the scanner gate and
+    # preflight gate stay in lockstep), then the hardcoded defaults
+    # tuned to the fee schedule of each pair.
+    def _pair_floor(pair_key: str, default: float) -> float:
+        a, b = pair_key.split("_")
+        env_keys = [
+            f"PREFLIGHT_MIN_EDGE_CENTS_{a.upper()}_{b.upper()}",
+            f"PREFLIGHT_MIN_EDGE_CENTS_{b.upper()}_{a.upper()}",
+            f"MIN_EDGE_CENTS_{a.upper()}_{b.upper()}",
+            f"MIN_EDGE_CENTS_{b.upper()}_{a.upper()}",
+        ]
+        for k in env_keys:
+            v = config_env.get(k)
+            if v is not None and str(v).strip() != "":
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    continue
+        return default
+
+    pair_floors = {
+        # FX×K: ~2¢ combined fees → 4.5¢ gross gives ~2.5¢ net.
+        "forecastex_kalshi": _pair_floor("forecastex_kalshi", 4.5),
+        # FX×P: ~1¢ combined fees → 4.0¢ gross gives ~3¢ net.
+        "forecastex_polymarket": _pair_floor("forecastex_polymarket", 4.0),
+        # K×P: keep the audit-calibrated 7¢ default.
+        "kalshi_polymarket": _pair_floor("kalshi_polymarket", 7.0),
+    }
+
     cfg = AutoExecutorConfig(
         enabled=_bool(config_env.get("AUTO_EXECUTE_ENABLED"), default=False),
         max_position_usd=_float(config_env.get("MAX_POSITION_USD"), 10.0),
@@ -862,6 +925,7 @@ def make_auto_executor_from_env(
             or config_env.get("MIN_EDGE_CENTS"),
             7.0,
         ),
+        min_edge_cents_preflight_by_pair=pair_floors,
         require_mapping_confirmed=_bool(
             config_env.get("PREFLIGHT_REQUIRE_MAPPING_CONFIRMED"), default=True,
         ),
