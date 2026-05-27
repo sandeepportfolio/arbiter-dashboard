@@ -3413,6 +3413,82 @@ def test_fok_slippage_buffer_per_platform_override():
     asyncio.run(runner())
 
 
+def test_zero_fill_ioc_does_not_trigger_false_naked_leg_recovery():
+    """FILL-02 regression (ARB-000694, 2026-05-27): when the IOC
+    primary returns status=FILLED with fill_qty=0 (venue accepted but
+    matched zero contracts), the engine must NOT route to naked-leg
+    recovery. There is no exposure to unwind. Live deploy 2026-05-27
+    flagged this case as a CRITICAL incident with exposure_usd=$0,
+    blocking the readiness gate.
+    """
+    from arbiter.execution.engine import Order, OrderStatus
+
+    async def runner():
+        import os as _os_test
+        _old_exec = _os_test.environ.get("EXECUTION_ORDER")
+        _os_test.environ["EXECUTION_ORDER"] = "poly_first"
+        try:
+            engine = _build_live_engine_for_safe02_gap()
+
+            async def _poly_zero_fill_ioc(arb_id, market_id, canonical_id, side_, price, qty_, max_affordable=None):
+                # Mimic Polymarket's "IOC accepted, matched zero" path.
+                return Order(
+                    order_id="POLY-IOC-ZERO", platform="polymarket",
+                    market_id=market_id, canonical_id=canonical_id,
+                    side=side_, price=price, quantity=qty_,
+                    status=OrderStatus.FILLED,
+                    fill_qty=0, fill_price=price,
+                    timestamp=time.time(),
+                )
+
+            poly = MagicMock()
+            poly.platform = "polymarket"
+            _wire_live_depth(poly, 0.40)
+            poly.place_ioc = AsyncMock(side_effect=_poly_zero_fill_ioc)
+            poly.place_fok = AsyncMock(side_effect=_poly_zero_fill_ioc)
+            poly.get_order = AsyncMock()
+            poly.cancel_order = AsyncMock(return_value=True)
+
+            kalshi = MagicMock()
+            kalshi.platform = "kalshi"
+            _wire_live_depth(kalshi, 0.30)
+            # Kalshi MUST NOT be called — primary zero-filled, so the
+            # engine should skip the secondary entirely.
+            kalshi.place_fok = AsyncMock()
+            kalshi.place_ioc = AsyncMock()
+            kalshi.get_order = AsyncMock()
+            kalshi.cancel_order = AsyncMock(return_value=True)
+            engine.adapters = {"polymarket": poly, "kalshi": kalshi}
+
+            opp = _make_safety_opp(
+                canonical_id="MKT1",
+                yes_platform="polymarket",
+                no_platform="kalshi",
+                yes_price=0.40, no_price=0.30, suggested_qty=10,
+            )
+            result = await engine.execute_opportunity(opp)
+            assert result is not None
+            # Status must be "failed", NOT "recovering". No exposure,
+            # nothing to unwind.
+            assert result.status == "failed", (
+                f"Zero-fill IOC must produce status=failed, not "
+                f"recovering. Got: {result.status}"
+            )
+            # No critical "one_leg_exposure" incident should have fired.
+            # (We don't have direct access to engine.incidents here,
+            # but the .status==failed gate is what kept it in-spec.)
+            # Secondary must NOT have been attempted.
+            assert kalshi.place_fok.await_count == 0
+            assert kalshi.place_ioc.await_count == 0
+        finally:
+            if _old_exec is None:
+                _os_test.environ.pop("EXECUTION_ORDER", None)
+            else:
+                _os_test.environ["EXECUTION_ORDER"] = _old_exec
+
+    asyncio.run(runner())
+
+
 def test_primary_partial_fill_scales_secondary_to_actual_qty():
     """FILL-02 (2026-05-27): when the IOC primary partially fills,
     the engine must size the secondary to the ACTUAL primary fill_qty

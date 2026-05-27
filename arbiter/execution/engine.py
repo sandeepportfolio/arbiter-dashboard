@@ -2000,8 +2000,27 @@ class ExecutionEngine:
         status = "submitted"
         notes: List[str] = []
         needs_recovery = False
+        # FILL-02 (2026-05-27): IOC-terminal venue responses can return
+        # status=FILLED with fill_qty=0 (the IOC was accepted but
+        # matched zero contracts). That's NOT exposure — there's
+        # nothing to recover. Treat such a leg as a non-survivor for
+        # recovery routing. SUBMITTED/PARTIAL legs STILL need recovery
+        # because they may still fill on the venue side; only the
+        # FILLED-with-zero-qty terminal case is the no-op.
+        def _is_survivor(leg) -> bool:
+            if leg.status not in surviving_statuses:
+                return False
+            # FILLED is a terminal status — if it filled zero, it
+            # represents no exposure. SUBMITTED/PARTIAL are non-
+            # terminal; even fill_qty=0 means the order is resting
+            # on the venue and could fill, so recover (cancel) it.
+            if leg.status == OrderStatus.FILLED:
+                return float(leg.fill_qty or 0) > 0
+            return True
+        yes_has_exposure = _is_survivor(leg_yes)
+        no_has_exposure = _is_survivor(leg_no)
         if leg_yes.status in terminal_failed or leg_no.status in terminal_failed:
-            if leg_yes.status in surviving_statuses or leg_no.status in surviving_statuses:
+            if yes_has_exposure or no_has_exposure:
                 status = "recovering"
                 needs_recovery = True
             else:
@@ -2645,8 +2664,21 @@ class ExecutionEngine:
         notes: List[str] = []
         unwind_pnl: float = 0.0
 
-        yes_filled = leg_yes.status == OrderStatus.FILLED
-        no_filled = leg_no.status == OrderStatus.FILLED
+        # FILL-02 (2026-05-27): with IOC primary, an order can return
+        # status=FILLED with fill_qty=0 (the IOC was accepted by the
+        # venue but matched zero contracts). Zero-fill is NOT exposure
+        # — require non-zero fill_qty for the naked-leg trigger to fire.
+        # Otherwise every zero-fill IOC produced a bogus
+        # ``one_leg_exposure`` critical incident with exposure_usd=0.00,
+        # blocking the readiness gate and gating live trading.
+        yes_filled = (
+            leg_yes.status == OrderStatus.FILLED
+            and float(leg_yes.fill_qty or 0) > 0
+        )
+        no_filled = (
+            leg_no.status == OrderStatus.FILLED
+            and float(leg_no.fill_qty or 0) > 0
+        )
 
         if yes_filled ^ no_filled:
             # Classic naked position: exactly one side confirmed filled.
