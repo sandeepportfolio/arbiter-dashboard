@@ -722,6 +722,32 @@ class ScannerConfig:
     persistence_scans: int = 5
     max_quote_age_seconds: float = 15.0
     min_liquidity: float = 25.0
+    # PROFITABILITY-02 (2026-05-27): per-venue-pair liquidity floors so
+    # IBKR's ForecastEx Client Portal API not broadcasting size on
+    # binary political contracts (field 7295/7296 returns 0 even when
+    # the book has real depth) doesn't block every FX arb. Live probe
+    # 2026-05-27 confirmed 3 FX arbs at 4.35–4.86¢ net edge being
+    # flagged status=illiquid because min_available_liquidity came
+    # back as 0.0 from IBKR's size feed. Pair-specific floors permit
+    # FX trades through the gate while keeping K×P at the same 25-
+    # contract guard.
+    #
+    # Semantics: pair-specific entry RELAXES the global floor for
+    # known-thin-book venue combinations. Global remains the ceiling.
+    # Env override:
+    #   MIN_LIQUIDITY_<VENUE1>_<VENUE2>=...
+    # e.g. MIN_LIQUIDITY_FORECASTEX_KALSHI=1
+    # 0 = no liquidity gate (FX side reports volume=0 across the board
+    # via the Client Portal feed; the IOC primary + partial-fill
+    # scaling from FILL-02 absorbs the depth-uncertainty risk if true
+    # depth turns out thinner than expected).
+    min_liquidity_by_pair: Dict[str, float] = field(
+        default_factory=lambda: {
+            "forecastex_kalshi": _env_float("MIN_LIQUIDITY_FORECASTEX_KALSHI", 0.0),
+            "forecastex_polymarket": _env_float("MIN_LIQUIDITY_FORECASTEX_POLYMARKET", 0.0),
+            "kalshi_polymarket": _env_float("MIN_LIQUIDITY_KALSHI_POLYMARKET", 25.0),
+        }
+    )
     slippage_tolerance: float = 0.005
     # Reject opportunities where either venue's bid-ask spread (in cents)
     # exceeds this threshold on the side we'd buy. The DEM_HOUSE_2026 cascade
@@ -757,6 +783,24 @@ class ScannerConfig:
     edge_scaling_ref_cents: float = field(
         default_factory=lambda: _env_float("EDGE_SCALING_REF_CENTS", 10.0)
     )
+
+    def min_liquidity_for_pair(self, yes_platform: str, no_platform: str) -> float:
+        """Lookup the per-venue-pair min-liquidity gate (contracts).
+
+        Same relax-only semantics as ``min_edge_for_pair``: a pair
+        entry can lower the floor below the global ``min_liquidity``
+        but never raise it above the operator's global ceiling.
+        """
+        a = (yes_platform or "").strip().lower()
+        b = (no_platform or "").strip().lower()
+        global_floor = float(self.min_liquidity)
+        if not a or not b or a == b:
+            return global_floor
+        key = "_".join(sorted([a, b]))
+        pair_floor = self.min_liquidity_by_pair.get(key)
+        if pair_floor is None:
+            return global_floor
+        return float(min(global_floor, float(pair_floor)))
 
     def min_edge_for_pair(self, yes_platform: str, no_platform: str) -> float:
         """Lookup the per-venue-pair edge floor.

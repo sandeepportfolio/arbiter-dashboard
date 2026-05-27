@@ -557,12 +557,20 @@ class ArbitrageScanner:
                 self.config.max_quote_age_seconds,
             )
             return "stale"
-        if opportunity.min_available_liquidity < self.config.min_liquidity:
+        # PROFITABILITY-02: per-venue-pair liquidity floor. FX-pair
+        # opportunities use a lower floor because IBKR's Client Portal
+        # doesn't broadcast size for FORECASTX binaries (field 7295/
+        # 7296 returns 0 even when the book has depth). The same
+        # relax-only semantics as the edge floor.
+        liquidity_floor = self.config.min_liquidity_for_pair(
+            opportunity.yes_platform, opportunity.no_platform,
+        )
+        if opportunity.min_available_liquidity < liquidity_floor:
             logger.info(
-                "scanner.skip canonical=%s reason=illiquid liq=%.2f min=%.2f",
+                "scanner.skip canonical=%s reason=illiquid liq=%.2f pair_floor=%.2f",
                 opportunity.canonical_id,
                 opportunity.min_available_liquidity,
-                self.config.min_liquidity,
+                liquidity_floor,
             )
             return "illiquid"
         if opportunity.persistence_count < self.config.persistence_scans:

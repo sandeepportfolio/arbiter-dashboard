@@ -338,6 +338,86 @@ def test_scanner_accepts_tight_bid_ask_spread_on_primary_venue():
     asyncio.run(runner())
 
 
+def test_scanner_per_pair_liquidity_floor_unlocks_fx_arb_with_zero_size():
+    """PROFITABILITY-02: an FX-containing pair with min_available_
+    liquidity=0 (because IBKR's Client Portal doesn't broadcast size
+    on FORECASTX binaries) must still reach tradable when the
+    per-pair liquidity floor is 1. Without this, the 4.35-4.86¢
+    FX arbs found 2026-05-27 are perpetually status=illiquid.
+    """
+    async def runner():
+        store = PriceStore(ttl=300)
+        scanner = ArbitrageScanner(
+            ScannerConfig(
+                min_edge_cents=4.0,            # relaxed for the test
+                persistence_scans=1,
+                max_position_usd=100.0,
+                confidence_threshold=0.0,
+                min_liquidity=25.0,            # global gate, FX should bypass
+                max_bid_ask_spread_cents=0.0,
+                # FX pair entry permits trades with reported volume=0.
+                min_liquidity_by_pair={
+                    "forecastex_kalshi": 0.0,
+                    "forecastex_polymarket": 0.0,
+                    "kalshi_polymarket": 25.0,
+                },
+            ),
+            store,
+        )
+        original_mapping = MARKET_MAP.get("FX_LIQ_TEST")
+        MARKET_MAP["FX_LIQ_TEST"] = {
+            "description": "FX zero-size liquidity test",
+            "status": "confirmed",
+            "allow_auto_trade": True,
+            "mapping_score": 0.95,
+            "resolution_match_status": "identical",
+        }
+        fresh = time.time()
+        # Kalshi side reports 200 volume; FX side reports 0 (IBKR feed)
+        await store.put(
+            PricePoint(
+                platform="kalshi", canonical_id="FX_LIQ_TEST",
+                yes_price=0.46, no_price=0.55,
+                yes_volume=200, no_volume=200, timestamp=fresh,
+                raw_market_id="K-FXLIQ", yes_market_id="K-FXLIQ", no_market_id="K-FXLIQ",
+                fee_rate=0.07,
+                mapping_status="confirmed", mapping_score=0.9,
+                yes_bid=0.455, yes_ask=0.46, no_bid=0.545, no_ask=0.55,
+            )
+        )
+        await store.put(
+            PricePoint(
+                platform="forecastex", canonical_id="FX_LIQ_TEST",
+                yes_price=0.53, no_price=0.47,
+                yes_volume=0, no_volume=0,     # ← IBKR reports zero size
+                timestamp=fresh,
+                raw_market_id="FX-FXLIQ", yes_market_id="FX-FXLIQ", no_market_id="FX-FXLIQ",
+                fee_rate=0.005,
+                mapping_status="confirmed", mapping_score=0.9,
+                yes_bid=0.525, yes_ask=0.53, no_bid=0.465, no_ask=0.47,
+            )
+        )
+        try:
+            opps = await scanner.scan_once()
+            fx_arbs = [
+                o for o in opps
+                if "forecastex" in (o.yes_platform, o.no_platform)
+            ]
+            assert fx_arbs, "K×FX arb must surface even when FX volume=0"
+            tradable = [o for o in fx_arbs if o.status == "tradable"]
+            assert tradable, (
+                f"FX arb should reach tradable status under pair floor=1; "
+                f"got {[(o.net_edge_cents, o.status, o.min_available_liquidity) for o in fx_arbs]}"
+            )
+        finally:
+            if original_mapping is None:
+                MARKET_MAP.pop("FX_LIQ_TEST", None)
+            else:
+                MARKET_MAP["FX_LIQ_TEST"] = original_mapping
+
+    asyncio.run(runner())
+
+
 def test_scanner_per_pair_edge_floor_unlocks_fx_arb_below_global_floor():
     """PROFITABILITY-01: a 5¢ net edge on a Kalshi×ForecastEx pair
     must clear the FX-pair floor (4.5¢) even when the global floor
