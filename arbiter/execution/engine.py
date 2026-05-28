@@ -350,7 +350,17 @@ class RiskManager:
             return False, f"Opportunity not ready: {opp.status}"
         if opp.confidence < self.config.confidence_threshold and not opp.requires_manual:
             return False, f"Low confidence: {opp.confidence:.2f}"
-        if opp.net_edge_cents < self.config.min_edge_cents:
+        # PROFITABILITY-01 (2026-05-28): pair-aware edge floor so K×FX / P×FX
+        # opps with venue-specific lower fees (FX flat 0.5¢/contract vs Kalshi
+        # quadratic) aren't auto-rejected by the legacy 7¢ global floor. The
+        # scanner already uses min_edge_for_pair; the executor preflight too.
+        # The risk manager was the last gate still reading min_edge_cents
+        # directly — every K×FX opp was reaching engine.execute_opportunity
+        # and being rejected here with "Edge too thin" + 5-min cooldown.
+        pair_min_edge = self.config.min_edge_for_pair(
+            opp.yes_platform, opp.no_platform,
+        )
+        if opp.net_edge_cents < pair_min_edge:
             return False, f"Edge too thin: {opp.net_edge_cents:.2f}¢"
         if opp.quote_age_seconds > self.config.max_quote_age_seconds:
             return False, f"Stale quote: {opp.quote_age_seconds:.2f}s"
@@ -935,7 +945,10 @@ class ExecutionEngine:
         ) / max(opp.suggested_qty, 1)
         net_edge = gross_edge - total_fees
         net_edge_cents = net_edge * 100.0
-        if net_edge_cents < self.scanner_config.min_edge_cents:
+        pair_min_edge = self.scanner_config.min_edge_for_pair(
+            opp.yes_platform, opp.no_platform,
+        )
+        if net_edge_cents < pair_min_edge:
             await self._record_incident(
                 arb_id,
                 opp,
@@ -1200,7 +1213,10 @@ class ExecutionEngine:
                 self._aborted_count += 1
                 return None
 
-        MIN_NET_EDGE_CENTS = float(self.scanner_config.min_edge_cents)
+        # Pair-aware floor: matches scanner + risk-manager + auto-executor.
+        MIN_NET_EDGE_CENTS = float(self.scanner_config.min_edge_for_pair(
+            opp.yes_platform, opp.no_platform,
+        ))
         total_cost = opp.yes_price + opp.no_price
         gross_edge = 1.0 - total_cost
         qty = max(1, int(opp.suggested_qty or 1))
