@@ -180,16 +180,17 @@ window.MOCK = (() => {
     balances: {
       kalshi:     { balance: 0, timestamp: 0, is_low: false },
       polymarket: { balance: 0, timestamp: 0, is_low: false },
+      forecastex: { balance: 0, timestamp: 0, is_low: false },
     },
 
     // P&L ─ /api/pnl
     pnl: {
-      starting_balances: { kalshi: 0, polymarket: 0 },
-      current_balances:  { kalshi: 0, polymarket: 0 },
-      total_deposits:    { kalshi: 0, polymarket: 0 },
+      starting_balances: { kalshi: 0, polymarket: 0, forecastex: 0 },
+      current_balances:  { kalshi: 0, polymarket: 0, forecastex: 0 },
+      total_deposits:    { kalshi: 0, polymarket: 0, forecastex: 0 },
       total_deposits_all_platforms: 0,
-      recorded_trading_pnl: { kalshi: 0, polymarket: 0 },
-      balance_change_by_platform: { kalshi: 0, polymarket: 0 },
+      recorded_trading_pnl: { kalshi: 0, polymarket: 0, forecastex: 0 },
+      balance_change_by_platform: { kalshi: 0, polymarket: 0, forecastex: 0 },
       total_balance: 0,
       cash_balance: 0,
       estimated_equity: 0,
@@ -225,6 +226,21 @@ window.MOCK = (() => {
 
     // Portfolio snapshot ─ /api/portfolio
     portfolio: { positions: [], violations: [], total_exposure: 0, unrealized_pnl: 0 },
+
+    // Recovery blockers ─ /api/recovery/half-recorded
+    recovery: {
+      halfRecorded: {
+        available: false,
+        status: 'unknown',
+        allow_auto_trade: false,
+        action_required: null,
+        count: 0,
+        filled_leg_count: 0,
+        total_filled_notional: 0,
+        by_canonical: [],
+        arbs: [],
+      },
+    },
 
     // Operator settings ─ /api/settings (nested: scanner, alerts,
     // auto_executor, mapping, mode, meta). Null until first fetch.
@@ -270,14 +286,26 @@ window.MOCK = (() => {
         min_liquidity: 0,
         confidence_threshold: 0,
         paused: false,
+        // SIGNAL-INTEGRITY (2026-05-27): per-reason skip counters
+        // emitted by the scanner. Currently tracks `dead_ask` (would
+        // trade against a phantom mark price — no live ASK on either
+        // side) and `sub_min_size` (sizing pipeline produced fewer
+        // shares than a platform's minimum order size). Visible in
+        // the Scanner / Edge Quality card so the operator can see
+        // WHY scans are emitting no opportunities.
+        skip_reasons: {},
         history: [],
       },
       execution: { total_executions: 0, filled: 0, failed: 0, recovering: 0 },
       audit: { audit_score: 0, audits_run: 0, total_flags: 0, critical_flags: 0, pass_rate: 0, recent_results: [] },
       profitability: { verdict: 'unknown', cumulative_pnl: 0, published_opportunities: 0, active_opportunities: 0, average_edge_cents: 0, best_edge_cents: 0 },
       reconciliation: { reconciliation_count: 0, flag_count: 0 },
-      readiness: { ready: false, gates: 0, passing: 0 },
+      readiness: { ready: false, gates: 0, passing: 0, checks: [], blocking_reasons: [], warnings: [] },
     },
+
+    // /api/system snapshot — includes auto_executor.stats so the operator
+    // desk can see exactly why opportunities are being skipped.
+    system: null,
 
     // Edge-bucket histogram. Computed at render time from current
     // opportunities; backend doesn't expose this directly.
@@ -364,9 +392,14 @@ window.MOCK = (() => {
 
   function mergeBalances(M, balances) {
     if (!balances || typeof balances !== 'object') return;
-    for (const platform of ['kalshi', 'polymarket']) {
+    for (const platform of ['kalshi', 'polymarket', 'forecastex']) {
       const b = balances[platform];
       if (b && typeof b === 'object') {
+        // ensure the slot exists for third-platform entries that arrived
+        // before the runtime model was hydrated.
+        if (!M.balances[platform]) {
+          M.balances[platform] = { balance: 0, timestamp: 0, is_low: false };
+        }
         M.balances[platform] = {
           balance: asNumber(b.balance, M.balances[platform].balance),
           timestamp: asNumber(b.timestamp, M.balances[platform].timestamp),
@@ -521,6 +554,17 @@ window.MOCK = (() => {
       M.health.scanner.min_liquidity = asNumber(s.min_liquidity, M.health.scanner.min_liquidity);
       M.health.scanner.confidence_threshold = asNumber(s.confidence_threshold, M.health.scanner.confidence_threshold);
       if (s.paused != null) M.health.scanner.paused = !!s.paused;
+      // SIGNAL-INTEGRITY: skip-reason counts from /api/health.
+      // Keys are reason slugs ("dead_ask", "sub_min_size"), values are
+      // counts since process start. Snapshot full dict so a reason
+      // dropping to zero is reflected on the dashboard.
+      if (s.skip_reasons && typeof s.skip_reasons === 'object') {
+        const sr = {};
+        for (const [k, v] of Object.entries(s.skip_reasons)) {
+          sr[String(k)] = asNumber(v, 0);
+        }
+        M.health.scanner.skip_reasons = sr;
+      }
       // Keep history if backend doesn't expose one (dashboard chart needs data).
       if (Array.isArray(s.history) && s.history.length) M.health.scanner.history = s.history;
     }
@@ -557,9 +601,12 @@ window.MOCK = (() => {
       if (health.readiness.gates != null) M.health.readiness.gates = asNumber(health.readiness.gates, M.health.readiness.gates);
       if (health.readiness.passing != null) M.health.readiness.passing = asNumber(health.readiness.passing, M.health.readiness.passing);
       if (Array.isArray(health.readiness.checks)) {
+        M.health.readiness.checks = health.readiness.checks;
         M.health.readiness.gates = health.readiness.checks.length;
         M.health.readiness.passing = health.readiness.checks.filter(c => c && c.status === 'pass').length;
       }
+      if (Array.isArray(health.readiness.blocking_reasons)) M.health.readiness.blocking_reasons = health.readiness.blocking_reasons;
+      if (Array.isArray(health.readiness.warnings)) M.health.readiness.warnings = health.readiness.warnings;
       if (health.readiness.ready_for_live_trading != null) M.health.readiness.ready = !!health.readiness.ready_for_live_trading;
       else if (health.readiness.ready != null) M.health.readiness.ready = !!health.readiness.ready;
     }
@@ -600,9 +647,12 @@ window.MOCK = (() => {
     if (readiness.gates != null) M.health.readiness.gates = asNumber(readiness.gates, M.health.readiness.gates);
     if (readiness.passing != null) M.health.readiness.passing = asNumber(readiness.passing, M.health.readiness.passing);
     if (Array.isArray(readiness.checks)) {
+      M.health.readiness.checks = readiness.checks;
       M.health.readiness.gates = readiness.checks.length;
       M.health.readiness.passing = readiness.checks.filter(c => c && c.status === 'pass').length;
     }
+    if (Array.isArray(readiness.blocking_reasons)) M.health.readiness.blocking_reasons = readiness.blocking_reasons;
+    if (Array.isArray(readiness.warnings)) M.health.readiness.warnings = readiness.warnings;
     if (readiness.ready_for_live_trading != null) M.health.readiness.ready = !!readiness.ready_for_live_trading;
     else if (readiness.ready != null) M.health.readiness.ready = !!readiness.ready;
   }
@@ -635,6 +685,18 @@ window.MOCK = (() => {
     };
   }
 
+  function mergeHalfRecordedRecovery(M, recovery) {
+    if (!recovery || typeof recovery !== 'object') return;
+    M.recovery = M.recovery || {};
+    M.recovery.halfRecorded = {
+      ...M.recovery.halfRecorded,
+      ...recovery,
+      by_canonical: Array.isArray(recovery.by_canonical) ? recovery.by_canonical : [],
+      arbs: Array.isArray(recovery.arbs) ? recovery.arbs : [],
+      allow_auto_trade: false,
+    };
+  }
+
   function currentTradingPnl(M) {
     const pnl = M && M.pnl ? M.pnl : {};
     const direct = Number(pnl.net_trading_pnl);
@@ -644,10 +706,16 @@ window.MOCK = (() => {
     const cash = Number(pnl.net_cash_change);
     if (Number.isFinite(cash)) return +cash.toFixed(2);
     const byPlatform = pnl.balance_change_by_platform || {};
-    const platformTotal = asNumber(byPlatform.kalshi, 0) + asNumber(byPlatform.polymarket, 0);
+    const platformTotal = asNumber(byPlatform.kalshi, 0)
+      + asNumber(byPlatform.polymarket, 0)
+      + asNumber(byPlatform.forecastex, 0);
     if (platformTotal) return +platformTotal.toFixed(2);
     const recorded = pnl.recorded_trading_pnl || {};
-    return +(asNumber(recorded.kalshi, 0) + asNumber(recorded.polymarket, 0)).toFixed(2);
+    return +(
+      asNumber(recorded.kalshi, 0)
+      + asNumber(recorded.polymarket, 0)
+      + asNumber(recorded.forecastex, 0)
+    ).toFixed(2);
   }
 
   function capitalBasis(M) {
@@ -655,7 +723,9 @@ window.MOCK = (() => {
     const direct = Number(pnl.capital_basis);
     if (Number.isFinite(direct) && Math.abs(direct) > 0.005) return Math.abs(direct);
     const starts = pnl.starting_balances || {};
-    const startTotal = asNumber(starts.kalshi, 0) + asNumber(starts.polymarket, 0);
+    const startTotal = asNumber(starts.kalshi, 0)
+      + asNumber(starts.polymarket, 0)
+      + asNumber(starts.forecastex, 0);
     if (Math.abs(startTotal) > 0.005) return Math.abs(startTotal);
     const total = asNumber(pnl.total_balance, 0);
     const tradePnl = currentTradingPnl(M);
@@ -842,7 +912,7 @@ window.MOCK = (() => {
            confirmedMappings, candidateMappings, reviewMappings, rejectedMappings, expiredMappings,
            mappingMetrics,
            settings, reconciliation, readiness, profitability,
-           failedTrades, errors, portfolio, discovery] = await Promise.all([
+           failedTrades, errors, portfolio, halfRecordedRecovery, discovery, system] = await Promise.all([
       safeJson('/api/health'),
       safeJson('/api/balances'),
       safeJson('/api/opportunities'),
@@ -862,7 +932,9 @@ window.MOCK = (() => {
       safeJson('/api/failed-trades'),
       safeJson('/api/errors'),
       safeJson('/api/portfolio'),
+      safeJson('/api/recovery/half-recorded'),
       safeJson('/api/discovery/status'),
+      safeJson('/api/system'),
     ]);
     mergeHealth(M, health);
     mergeBalances(M, balances);
@@ -885,7 +957,11 @@ window.MOCK = (() => {
     mergeFailedTrades(M, failedTrades);
     mergeErrors(M, errors);
     mergePortfolio(M, portfolio);
+    mergeHalfRecordedRecovery(M, halfRecordedRecovery);
     mergeDiscovery(M, discovery);
+    if (system && typeof system === 'object') {
+      M.system = system;
+    }
     // Keep live chart buffers moving between backend series snapshots.
     ensureEquityFallback(M);
     appendScannerHistory(M);
@@ -1281,6 +1357,36 @@ window.seriesDelta = function(series) {
   return +(last - first).toFixed(2);
 };
 
+// FILL-01 audit (2026-05-24): bucket realized_pnl by what ACTUALLY
+// filled on the venues. The engine's per-trade ``arb_pnl`` property
+// (=realized_pnl-unwind_pnl) is mis-leading when aggregated across a
+// corpus dominated by naked-leg outcomes / historical backfilled rows
+// — it reports "what the spread WOULD have made if the unwind hadn't
+// happened" rather than what the venues actually returned.
+// Single shared helper so every page tile tells the same story.
+window.classifyArbPnl = function(execs) {
+  const list = Array.isArray(execs) ? execs : [];
+  let capturedArbPnl = 0, nakedLegPnl = 0;
+  let capturedArbCount = 0, nakedLegCount = 0, zeroFillCount = 0;
+  for (const e of list) {
+    const yf = Number((e.leg_yes || {}).fill_qty || 0);
+    const nf = Number((e.leg_no  || {}).fill_qty || 0);
+    const realized = Number(e.realized_pnl || 0);
+    // Prefer server-derived bucket when present (api._execution_payload
+    // computes the same classification authoritatively); fall back to
+    // local computation for older payloads.
+    const bucket = e.fill_bucket || (
+      (yf > 0 && nf > 0) ? 'both_filled' :
+      (yf > 0 || nf > 0) ? 'naked_leg'   : 'zero_fill'
+    );
+    if (bucket === 'both_filled')      { capturedArbPnl += realized; capturedArbCount += 1; }
+    else if (bucket === 'naked_leg')   { nakedLegPnl    += realized; nakedLegCount    += 1; }
+    else                               { zeroFillCount  += 1; }
+  }
+  return { capturedArbPnl, nakedLegPnl, capturedArbCount, nakedLegCount, zeroFillCount,
+           totalRealized: capturedArbPnl + nakedLegPnl };
+};
+
 // ── AreaChart ─────────────────────────────────────────────────────────
 function AreaChart({ data, width = 600, height = 200, stroke, fill, grid, showAxis = true, showGrid = true, currency = true, accentDot = true, axisColor, dotRingColor }) {
   const { t: theme } = window.useApp() || { t: window.THEMES.light };
@@ -1480,7 +1586,7 @@ const fmt$Sign = (v, d = 2) => v == null ? '—' : (v >= 0 ? '+$' : '−$') + Ma
 const fmtC = v => v == null ? '—' : v.toFixed(1) + '¢';
 const fmtPct = (v, d = 2) => v == null ? '—' : (v >= 0 ? '+' : '') + (v * 100).toFixed(d) + '%';
 const ago = ts => {
-  const s = Math.floor(Date.now()/1000 - ts);
+  const s = Math.max(0, Math.floor(Date.now()/1000 - ts));
   if (s < 60) return s + 's ago';
   if (s < 3600) return Math.floor(s/60) + 'm ago';
   if (s < 86400) return Math.floor(s/3600) + 'h ago';
@@ -1558,6 +1664,7 @@ const STATUS_INFO = {
   rejected:   { tone: 'red',    icon: '✕', desc: 'Mapping rejected — platforms do not match' },
   // System
   pass:       { tone: 'green',  icon: '✓', desc: 'Gate check passed' },
+  warning:    { tone: 'amber',  icon: '!', desc: 'Non-blocking warning — system is still authorized for live trading' },
   fail:       { tone: 'red',    icon: '✕', desc: 'Gate check failed — action may be needed' },
   connected:  { tone: 'green',  icon: '●', desc: 'Exchange API connected and responsive' },
   settled:    { tone: 'green',  icon: '✓', desc: 'Position fully settled, P&L realized' },
@@ -1565,30 +1672,73 @@ const STATUS_INFO = {
 window.STATUS_INFO = STATUS_INFO;
 
 // ── Tooltip (hover on desktop, tap on mobile) ───────────────────────
+// Uses a portal + position:fixed so the popup escapes any overflow:hidden
+// ancestors (e.g. DataTable cells), which used to clip the tooltip when
+// hovering small status pills inside table rows.
 function Tooltip({ text, children, placement = 'top' }) {
   const { t } = window.useApp();
   const [show, setShow] = React.useState(false);
+  const [rect, setRect] = React.useState(null);
   const ref = React.useRef(null);
-  // Trust touch capability over viewport size — a wide tablet in landscape
-  // still has no hover, so it should still tap-to-reveal.
   const isMobile = typeof window !== 'undefined' && window.matchMedia
     ? window.matchMedia('(hover: none), (max-width: 1023px)').matches
     : false;
 
+  const updateRect = React.useCallback(() => {
+    if (ref.current) setRect(ref.current.getBoundingClientRect());
+  }, []);
+
   React.useEffect(() => {
     if (!show) return;
+    updateRect();
     const tapOut = (e) => { if (ref.current && !ref.current.contains(e.target)) setShow(false); };
     const onKey = (e) => { if (e.key === 'Escape') setShow(false); };
+    const onScroll = () => setShow(false);
     document.addEventListener('touchstart', tapOut, { passive: true });
     document.addEventListener('keydown', onKey);
+    window.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', onScroll);
     return () => {
       document.removeEventListener('touchstart', tapOut);
       document.removeEventListener('keydown', onKey);
+      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', onScroll);
     };
-  }, [show]);
+  }, [show, updateRect]);
 
   if (!text) return <>{children}</>;
   const above = placement !== 'bottom';
+
+  let popup = null;
+  if (show && rect) {
+    const centerX = rect.left + rect.width / 2;
+    const popupStyle = {
+      position: 'fixed',
+      [above ? 'bottom' : 'top']: above ? `calc(100vh - ${rect.top - 6}px)` : `${rect.bottom + 6}px`,
+      left: `${centerX}px`,
+      transform: 'translateX(-50%)',
+      background: t.bg2 || t.bgSubtle, color: t.text, border: `1px solid ${t.border}`,
+      padding: '7px 11px', borderRadius: 8, fontSize: 11.5, lineHeight: 1.45,
+      whiteSpace: 'normal', width: 'max-content', maxWidth: 260, zIndex: 9999,
+      boxShadow: '0 6px 24px rgba(0,0,0,0.45)', pointerEvents: 'none',
+      fontWeight: 400, letterSpacing: 0, textTransform: 'none', textAlign: 'left',
+    };
+    const arrowStyle = {
+      position: 'absolute',
+      [above ? 'top' : 'bottom']: '100%',
+      left: '50%', transform: 'translateX(-50%)',
+      width: 0, height: 0,
+      borderLeft: '5px solid transparent', borderRight: '5px solid transparent',
+      [above ? 'borderTop' : 'borderBottom']: `5px solid ${t.border}`,
+    };
+    popup = ReactDOM.createPortal(
+      <span role="tooltip" style={popupStyle}>
+        <span style={arrowStyle}/>
+        {text}
+      </span>,
+      document.body
+    );
+  }
 
   return (
     <span ref={ref} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}
@@ -1599,28 +1749,7 @@ function Tooltip({ text, children, placement = 'top' }) {
       onClick={isMobile ? (e) => { e.stopPropagation(); setShow(s => !s); } : undefined}
     >
       {children}
-      {show && (
-        <span role="tooltip" style={{
-          position: 'absolute',
-          [above ? 'bottom' : 'top']: 'calc(100% + 6px)',
-          left: '50%', transform: 'translateX(-50%)',
-          background: t.bg2 || t.bgSubtle, color: t.text, border: `1px solid ${t.border}`,
-          padding: '7px 11px', borderRadius: 8, fontSize: 11.5, lineHeight: 1.45,
-          whiteSpace: 'normal', width: 'max-content', maxWidth: 260, zIndex: 9999,
-          boxShadow: '0 6px 24px rgba(0,0,0,0.45)', pointerEvents: 'none',
-          fontWeight: 400, letterSpacing: 0, textTransform: 'none', textAlign: 'left',
-        }}>
-          <span style={{
-            position: 'absolute',
-            [above ? 'top' : 'bottom']: '100%',
-            left: '50%', transform: 'translateX(-50%)',
-            width: 0, height: 0,
-            borderLeft: '5px solid transparent', borderRight: '5px solid transparent',
-            [above ? 'borderTop' : 'borderBottom']: `5px solid ${t.border}`,
-          }}/>
-          {text}
-        </span>
-      )}
+      {popup}
     </span>
   );
 }
@@ -1657,12 +1786,17 @@ function StatusBadge({ status, size = 'sm', showIcon = true }) {
 }
 window.StatusBadge = StatusBadge;
 
-// ── PlatformChip — Kalshi / Polymarket ──────────────────────────────
+// ── PlatformChip — Kalshi / Polymarket / ForecastEx ──────────────────────────────
 function PlatformChip({ name, side }) {
   const { t } = window.useApp();
-  const cfg = name === 'kalshi'
-    ? { fg: t.green, bg: t.greenSoft, label: 'Kalshi' }
-    : { fg: t.purple, bg: t.purpleSoft, label: 'Polymarket' };
+  let cfg;
+  if (name === 'kalshi') {
+    cfg = { fg: t.green, bg: t.greenSoft, label: 'Kalshi' };
+  } else if (name === 'forecastex') {
+    cfg = { fg: t.amber, bg: t.amberSoft || t.bgSubtle, label: 'ForecastEx' };
+  } else {
+    cfg = { fg: t.purple, bg: t.purpleSoft, label: 'Polymarket' };
+  }
   return (
     <span style={{ display:'inline-flex', alignItems:'center', gap: 5, padding:'2px 8px', background: cfg.bg, color: cfg.fg, borderRadius: 5, fontSize: 11, fontWeight: 600, whiteSpace:'nowrap', flexShrink: 0 }}>
       <span style={{ width: 5, height: 5, borderRadius: '50%', background: cfg.fg, flexShrink: 0 }}/>
@@ -1838,7 +1972,7 @@ function AppProvider({ children, onSignOut }) {
   const [toasts, setToasts] = useS([]);
   const [confirm, setConfirm] = useS(null);
   const [userMenu, setUserMenu] = useS(false);
-  const [profile, setProfile] = useS({ name:'Sam Park', email:'sam@arbiter.app', initials:'SP' });
+  const [profile, setProfile] = useS({ name:'Operator', email:'', initials:'OP' });
   const [watchlist, setWatchlist] = useS(['BTC-150K-EOY-2026']);
   const [filters, setFilters] = useS({ trades: {}, markets: {}, audit: {} });
   const [settings, setSettings] = useS({
@@ -1871,6 +2005,30 @@ function AppProvider({ children, onSignOut }) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // Hydrate the operator profile from /api/auth/me so the account menu
+  // reflects the actual logged-in user (not a hardcoded placeholder).
+  useE(() => {
+    let cancelled = false;
+    const hydrate = async () => {
+      if (!window.__arbiterAuthMe) return;
+      const res = await window.__arbiterAuthMe();
+      if (cancelled || !res || !res.ok || !res.data) return;
+      const email = String(res.data.email || '').trim();
+      if (!email) return;
+      const local = (email.split('@')[0] || email);
+      const parts = local.split(/[._\-+]+/).filter(Boolean);
+      const name = parts.length
+        ? parts.map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(' ')
+        : email;
+      const initials = (parts.length >= 2
+        ? parts[0][0] + parts[1][0]
+        : (local[0] || '?') + (local[1] || '')).toUpperCase();
+      setProfile({ name, email, initials });
+    };
+    hydrate();
+    return () => { cancelled = true; };
   }, []);
 
   useE(() => {
@@ -1978,10 +2136,24 @@ function TopBar({ title, sub, actions }) {
   const { t, setPalette, setAlerts, toggle, name, scanner, setScanner, tradingMode, setTradingMode, setUserMenu, profile, toast } = window.useApp();
   const [narrow, setNarrow] = useS(() => typeof window !== 'undefined' && window.innerWidth < 1180);
   const [refreshing, setRefreshing] = useS(false);
+  const [alertCount, setAlertCount] = useS(0);
   useE(() => {
     const onR = () => setNarrow(window.innerWidth < 1180);
     window.addEventListener('resize', onR);
     return () => window.removeEventListener('resize', onR);
+  }, []);
+  useE(() => {
+    let cancelled = false;
+    const tick = () => fetch('/api/alerts?limit=50&hours=24')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (cancelled || !d) return;
+        setAlertCount(Array.isArray(d.alerts) ? d.alerts.length : 0);
+      })
+      .catch(() => {});
+    tick();
+    const id = setInterval(tick, 30000);
+    return () => { cancelled = true; clearInterval(id); };
   }, []);
   const onRefresh = async () => {
     if (refreshing) return;
@@ -2009,14 +2181,14 @@ function TopBar({ title, sub, actions }) {
           <IconBtn onClick={() => setPalette(true)} t={t}>⌕</IconBtn>
         ) : (
           <button onClick={() => setPalette(true)} style={{ display:'flex', alignItems:'center', gap: 8, padding: '7px 12px', background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 8, fontSize: 12, color: t.textDim, width: 240, flexShrink: 0, cursor: 'pointer' }}>
-            <span>⌕</span><span style={{ whiteSpace:'nowrap' }}>Search markets, trades…</span>
+            <span>⌕</span><span style={{ whiteSpace:'nowrap' }}>Navigate to…</span>
             <span style={{ marginLeft:'auto', fontSize: 10, color: t.textMuted, fontFamily: window.FONTS.mono, padding: '1px 5px', border:`1px solid ${t.border}`, borderRadius: 3 }}>⌘K</span>
           </button>
         )}
         <IconBtn onClick={onRefresh} t={t} aria-label="Refresh" title={refreshing ? 'Refreshing…' : 'Refresh live data'}>
           <span style={{ display:'inline-block', animation: refreshing ? 'spin 0.8s linear infinite' : 'none', fontSize: 14 }}>↻</span>
         </IconBtn>
-        <IconBtn onClick={() => setAlerts(true)} t={t} badge="3" aria-label="Alerts">
+        <IconBtn onClick={() => setAlerts(true)} t={t} badge={alertCount > 0 ? String(alertCount > 99 ? '99+' : alertCount) : null} aria-label="Alerts">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/>
             <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>
@@ -2096,7 +2268,7 @@ function CommandPalette() {
   return (
     <div onClick={() => setPalette(false)} style={{ position:'fixed', inset: 0, background: t.overlay, display:'flex', justifyContent:'center', alignItems:'flex-start', paddingTop: 100, zIndex: 100 }}>
       <div onClick={e => e.stopPropagation()} style={{ width: 560, background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, boxShadow: t.shadowLg, overflow:'hidden' }}>
-        <input autoFocus placeholder="Search pages, markets, trades…" value={q} onChange={e => setQ(e.target.value)} style={{ width: '100%', padding: '14px 18px', border:'none', background:'transparent', outline:'none', fontSize: 14, color: t.text, borderBottom: `1px solid ${t.border}` }}/>
+        <input autoFocus placeholder="Navigate to page or live opportunity…" value={q} onChange={e => setQ(e.target.value)} style={{ width: '100%', padding: '14px 18px', border:'none', background:'transparent', outline:'none', fontSize: 14, color: t.text, borderBottom: `1px solid ${t.border}` }}/>
         <div style={{ maxHeight: 360, overflow:'auto' }}>
           {filtered.slice(0, 12).map((i, idx) => (
             <div key={idx} onClick={() => { i.action(); setPalette(false); setQ(''); }} style={{ padding: '10px 18px', cursor:'pointer', display:'flex', alignItems:'center', gap: 10, fontSize: 13, color: t.text, borderBottom: idx < filtered.length - 1 ? `1px solid ${t.border}` : 'none' }} onMouseEnter={e => e.currentTarget.style.background = t.bgSubtle} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
@@ -2116,16 +2288,34 @@ function CommandPalette() {
 
 function AlertsInbox() {
   const { t, alerts, setAlerts, setModal, toast, setPage } = window.useApp();
+  const [items, setItems] = useS([]);
+  const [loading, setLoading] = useS(false);
+  const [error, setError] = useS('');
+  useE(() => {
+    if (!alerts) return;
+    let cancelled = false;
+    setLoading(true); setError('');
+    fetch('/api/alerts?limit=50&hours=24')
+      .then(r => r.json().then(d => ({ ok: r.ok, d })))
+      .then(({ ok, d }) => {
+        if (cancelled) return;
+        if (!ok) { setError((d && d.error) || 'failed to load alerts'); setItems([]); return; }
+        const raw = Array.isArray(d?.alerts) ? d.alerts : [];
+        setItems(raw.map(a => ({
+          sev: a.sev || 'info',
+          title: a.title || '',
+          body: a.body || '',
+          ts: a.ts ? window.ago(a.ts).replace(/ ago$/, '') : '',
+          icon: a.icon || '•',
+          go: a.go || null,
+          detail: a.detail || '',
+        })));
+      })
+      .catch(e => { if (!cancelled) { setError(String(e?.message || e)); setItems([]); } })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [alerts]);
   if (!alerts) return null;
-  const M = window.MOCK;
-  const items = [
-    { sev: 'info', title: 'Scanner heartbeat clean', body: `${(M.health.scanner.scan_count || 0).toLocaleString()} scans · ${M.health.scanner.scan_time_ms || 0}ms latency`, ts: 'now', icon: '⚡', go:'scanner', detail:`Live scanner heartbeat · ${(M.health.scanner.published || 0).toLocaleString()} published opportunities` },
-    { sev: 'warn', title: 'Polymarket fee rate updated', body: 'GPT-6 market — 2.0% → 2.4% on YES leg', ts: '14m', icon: '$', go:'markets', detail:'effective fee_rate_yes: 0.020 → 0.024\nimpact: net edge reduced by 0.4¢ on this market' },
-    { sev: 'info', title: 'New mapping confirmed', body: 'BTC-150K-EOY-2026 score 0.94 → confirmed', ts: '38m', icon: '⇄', go:'mappings', detail:'kalshi: BTC-150K-DEC2026\npoly: will-bitcoin-reach-150k-by-2026\nsimilarity: 0.94' },
-    { sev: 'ok',   title: 'Deposit settled', body: '+$100.00 to Polymarket · tx confirmed', ts: '2h', icon: '◐', go:'deposits', detail:'tx: 0x4a7…f2c9\nblock: 14,392,108\namount: $100.00 USDC' },
-    { sev: 'warn', title: 'Recovery on ARB-09412', body: 'YES leg filled, NO leg submitted — within tolerance', ts: '3h', icon: '↗', go:'trades', detail:'auto-recovery engaged · NO leg slippage budget within 0.5¢' },
-    { sev: 'err',  title: 'ARB-09405 failed', body: 'Polymarket NO leg rejected · refunded $32.40', ts: '6h', icon: '✕', go:'trades', detail:'reason: orderbook moved · refund_id: rf_4928f\namount: $32.40 returned to Polymarket balance' },
-  ];
   const colorFor = s => s === 'err' ? t.red : s === 'warn' ? t.amber : s === 'ok' ? t.green : t.accent;
   const bgFor = s => s === 'err' ? t.redSoft : s === 'warn' ? t.amberSoft : s === 'ok' ? t.greenSoft : t.accentSoft;
   return (
@@ -2143,13 +2333,25 @@ function AlertsInbox() {
           </div>
         </div>
         <div style={{ flex: 1, overflow:'auto', padding: 12 }}>
-          {items.map((it, i) => (
+          {loading && (
+            <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: t.textMuted }}>Loading alerts…</div>
+          )}
+          {!loading && error && (
+            <div style={{ padding: 14, borderRadius: 8, background: t.redSoft, color: t.red, fontSize: 12 }}>Failed to load alerts: {error}</div>
+          )}
+          {!loading && !error && items.length === 0 && (
+            <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: t.textMuted, lineHeight: 1.6 }}>
+              <div style={{ fontSize: 24, marginBottom: 8, opacity: 0.4 }}>○</div>
+              No recent alerts in the last 24 hours.
+            </div>
+          )}
+          {!loading && !error && items.map((it, i) => (
             <div key={i} onClick={() => { setAlerts(false); setModal({ kind:'notification', payload: it }); }} style={{ padding: 14, borderRadius: 8, marginBottom: 8, background: t.bgSubtle, display:'flex', gap: 12, cursor:'pointer' }} onMouseEnter={e => e.currentTarget.style.background = t.bgHover || t.bgSubtle} onMouseLeave={e => e.currentTarget.style.background = t.bgSubtle}>
               <div style={{ width: 30, height: 30, borderRadius: 8, background: bgFor(it.sev), color: colorFor(it.sev), display:'flex', alignItems:'center', justifyContent:'center', fontSize: 14, flexShrink: 0 }}>{it.icon}</div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap: 8 }}>
                   <div style={{ fontSize: 13, fontWeight: 500, color: t.text }}>{it.title}</div>
-                  <div style={{ fontSize: 10.5, color: t.textMuted, fontFamily: window.FONTS.mono, flexShrink: 0 }}>{it.ts} ago</div>
+                  <div style={{ fontSize: 10.5, color: t.textMuted, fontFamily: window.FONTS.mono, flexShrink: 0 }}>{it.ts ? `${it.ts} ago` : ''}</div>
                 </div>
                 <div style={{ fontSize: 11.5, color: t.textDim, marginTop: 2, lineHeight: 1.4 }}>{it.body}</div>
               </div>
@@ -2182,8 +2384,13 @@ function PageOverview() {
   const execs = Array.isArray(M.executions) ? M.executions : [];
   const equity = Array.isArray(M.equity) && M.equity.length ? M.equity : [{ t: 0, v: 0 }];
   const equityRange = window.filterTimeSeries ? window.filterTimeSeries(equity, range) : equity;
-  const totalBal = M.balances.kalshi.balance + M.balances.polymarket.balance;
-  const totalPnl = window.currentTradingPnl ? window.currentTradingPnl(M) : (M.pnl.recorded_trading_pnl.kalshi + M.pnl.recorded_trading_pnl.polymarket);
+  const _forecastexBalance = (M.balances.forecastex && M.balances.forecastex.balance) || 0;
+  const totalBal = M.balances.kalshi.balance + M.balances.polymarket.balance + _forecastexBalance;
+  const totalPnl = window.currentTradingPnl
+    ? window.currentTradingPnl(M)
+    : (M.pnl.recorded_trading_pnl.kalshi
+       + M.pnl.recorded_trading_pnl.polymarket
+       + (M.pnl.recorded_trading_pnl.forecastex || 0));
   const tradable = opps.filter(o => o.status === 'tradable');
   const completedStatuses = ['filled','closed','settled','simulated'];
   const last24Execs = window.filterRowsByRange ? window.filterRowsByRange(execs, '24h', 'timestamp') : execs;
@@ -2194,7 +2401,11 @@ function PageOverview() {
   const rangeDelta = window.seriesDelta ? window.seriesDelta(equityRange) : 0;
   const rangeBase = window.capitalBasis ? window.capitalBasis(M) : Math.abs(Number(equityRange[0]?.v) || totalBal || 1);
   const confirmedMappings = window.marketRowsFromMappings ? window.marketRowsFromMappings(M, 'confirmed') : (M.mappings || []).filter(r => r.status === 'confirmed');
-  const latestBalanceTs = Math.max(Number(M.balances.kalshi.timestamp) || 0, Number(M.balances.polymarket.timestamp) || 0);
+  const latestBalanceTs = Math.max(
+    Number(M.balances.kalshi.timestamp) || 0,
+    Number(M.balances.polymarket.timestamp) || 0,
+    Number((M.balances.forecastex && M.balances.forecastex.timestamp)) || 0,
+  );
   const scannerHist = Array.isArray(M.health.scanner.history) ? M.health.scanner.history : [];
   const scanActive = Number(M.health.scanner.active_opportunities || 0) || opps.length;
   const scanTradable = Number(M.health.scanner.tradable_opportunities || 0) || tradable.length;
@@ -2206,8 +2417,8 @@ function PageOverview() {
 
   return (
     <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto' }}>
-      <window.PageHeader kicker="Operator desk" title="Overview" sub={`Live arbitrage activity across Kalshi and Polymarket. The scanner is monitoring ${confirmedMappings.length.toLocaleString()} confirmed mapped markets.`}>
-        <window.Btn variant="secondary" size="sm" icon="↓" hint="Add funds to Kalshi or Polymarket" onClick={() => setPage('deposits')}>Deposit</window.Btn>
+      <window.PageHeader kicker="Operator desk" title="Overview" sub={`Live arbitrage activity across Kalshi, Polymarket, and ForecastEx. The scanner is monitoring ${confirmedMappings.length.toLocaleString()} confirmed mapped markets.`}>
+        <window.Btn variant="secondary" size="sm" icon="↓" hint="Add funds to Kalshi, Polymarket, or ForecastEx" onClick={() => setPage('deposits')}>Deposit</window.Btn>
         <window.Btn variant="primary" size="sm" icon="◇" hint="Browse all detected cross-platform arb edges" onClick={() => setPage('opportunities')}>View opportunities</window.Btn>
       </window.PageHeader>
 
@@ -2217,6 +2428,7 @@ function PageOverview() {
         <KpiCard label="Total balance" value={window.fmt$(totalBal)} sub={latestBalanceTs ? `Balances updated ${window.ago(latestBalanceTs)}` : 'Waiting for live balances'} sparkData={[{ v: totalBal }]} sparkColor={t.accent} platformBalances={[
           { name: 'Kalshi', value: window.fmt$(M.balances.kalshi.balance), color: t.green, title: `Kalshi balance ${window.fmt$(M.balances.kalshi.balance)}` },
           { name: 'Polymarket', value: window.fmt$(M.balances.polymarket.balance), color: t.purple, title: `Polymarket balance ${window.fmt$(M.balances.polymarket.balance)}` },
+          { name: 'ForecastEx', value: window.fmt$(_forecastexBalance), color: t.amber, title: `ForecastEx balance ${window.fmt$(_forecastexBalance)}` },
         ]} />
         <KpiCard label="Trading P&L" value={window.fmt$Sign(totalPnl)} sub="Deposit-neutral · since inception" tone={totalPnl >= 0 ? 'green' : 'red'} sparkData={equity.slice(-48)} sparkColor={totalPnl >= 0 ? t.green : t.red} />
         <KpiCard label="Live opportunities" value={scanTradable} sub={`${scanActive} active · ${scanPublished} published · best ${bestEdge ? window.fmtC(bestEdge) : '—'}`} tone="accent" sparkData={(M.health.scanner.history || []).slice(-30).map(h => ({ v: h.tradable || 0 }))} sparkColor={t.accent} fallbackValue={scanTradable}/>
@@ -2272,12 +2484,15 @@ function PageOverview() {
               <window.Donut size={110} thickness={14} slices={[
                 { value: M.balances.kalshi.balance, color: t.green },
                 { value: M.balances.polymarket.balance, color: t.purple },
+                { value: _forecastexBalance, color: t.amber },
               ]} label={window.fmt$(totalBal, 0)} sublabel="TOTAL" labelColor={t.text} dimColor={t.textMuted}/>
             </div>
             <div style={{ flex: 1 }}>
               <BalanceLegendItem dot={t.green} label="Kalshi" value={window.fmt$(M.balances.kalshi.balance)} share={`${kShare}%`} pnl={(M.pnl.balance_change_by_platform && M.pnl.balance_change_by_platform.kalshi) ?? M.pnl.recorded_trading_pnl.kalshi} updated={M.balances.kalshi.timestamp} description="CFTC-regulated cash available for Kalshi ticker orders."/>
               <div style={{ height: 12 }}/>
               <BalanceLegendItem dot={t.purple} label="Polymarket" value={window.fmt$(M.balances.polymarket.balance)} share={`${pShare}%`} pnl={(M.pnl.balance_change_by_platform && M.pnl.balance_change_by_platform.polymarket) ?? M.pnl.recorded_trading_pnl.polymarket} updated={M.balances.polymarket.timestamp} description="Crypto wallet collateral available for Polymarket US slug orders."/>
+              <div style={{ height: 12 }}/>
+              <BalanceLegendItem dot={t.amber} label="ForecastEx" value={window.fmt$(_forecastexBalance)} share={`${totalBal ? (_forecastexBalance / totalBal * 100).toFixed(1) : '0.0'}%`} pnl={(M.pnl.balance_change_by_platform && M.pnl.balance_change_by_platform.forecastex) ?? (M.pnl.recorded_trading_pnl.forecastex || 0)} updated={(M.balances.forecastex && M.balances.forecastex.timestamp) || 0} description="IBKR Client Portal cash routed to ForecastEx event contracts."/>
               <div style={{ fontSize: 10.5, color: t.textMuted, marginTop: 12, lineHeight: 1.45 }}>Rows show live balance details, source share, and deposit-neutral trading P&L.</div>
             </div>
           </div>
@@ -2315,6 +2530,46 @@ function PageOverview() {
                   <ScannerMetric label="Published" value={scanPublished.toLocaleString()} sub="queue"/>
                   <ScannerMetric label="Audit feed" value={(M.health.audit.recent_results || []).length.toLocaleString()} sub="recent"/>
                 </div>
+                {/* SIGNAL-INTEGRITY (2026-05-27 audit, ARB-000693..699):
+                    skip-reason ribbon. Surfaces WHY scans produced no
+                    opportunities. `dead_ask` = phantom mark price (no
+                    live ask on a side we'd buy — was producing fake
+                    7.35¢ edges against an empty ForecastEx book).
+                    `sub_min_size` = sizing landed below a platform's
+                    minimum (Polymarket = 5 shares). Both are now
+                    rejected at scan-time instead of placing doomed
+                    orders. Hidden when no skips have been recorded
+                    yet so the card stays clean on fresh starts. */}
+                {(() => {
+                  const sr = (M.health.scanner.skip_reasons || {});
+                  const entries = Object.entries(sr).filter(([, v]) => Number(v) > 0);
+                  if (!entries.length) return null;
+                  const labels = {
+                    dead_ask:     { name: 'Dead ask',      tone: t.amber || t.warn || t.text, hint: 'No live ASK on a side we\'d buy — refusing to trade against a phantom mark price' },
+                    sub_min_size: { name: 'Sub min size',  tone: t.amber || t.warn || t.text, hint: 'Sizing landed below a platform\'s minimum order size (Polymarket = 5 shares)' },
+                  };
+                  return (
+                    <div style={{ marginTop: 14, padding: '10px 12px', borderRadius: 8, background: t.bgSubtle, border: `1px solid ${t.border}` }}>
+                      <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', gap: 12, marginBottom: 8 }}>
+                        <div style={{ fontSize: 10, color: t.textMuted, letterSpacing: '0.08em', textTransform:'uppercase' }}>Signal filters</div>
+                        <div style={{ fontSize: 10.5, color: t.textMuted, fontFamily: window.FONTS.mono }}>since process start</div>
+                      </div>
+                      <div style={{ display:'flex', flexWrap:'wrap', gap: 8 }}>
+                        {entries.map(([reason, count]) => {
+                          const meta = labels[reason] || { name: reason, tone: t.text, hint: '' };
+                          return (
+                            <div key={reason}
+                                 title={meta.hint}
+                                 style={{ display:'flex', alignItems:'baseline', gap: 6, padding: '4px 9px', borderRadius: 6, background: t.bgCard, border: `1px solid ${t.border}` }}>
+                              <span style={{ fontSize: 11, color: t.textDim }}>{meta.name}</span>
+                              <span style={{ fontFamily: window.FONTS.mono, fontSize: 12.5, fontWeight: 650, color: meta.tone }}>{Number(count).toLocaleString()}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })()}
                 <div style={{ marginTop: 16 }}>
                   <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap: 12, marginBottom: 7 }}>
                     <div style={{ fontSize: 10, color: t.textMuted, letterSpacing: '0.08em', textTransform:'uppercase' }}>Best edge history</div>
@@ -2343,6 +2598,9 @@ function PageOverview() {
         </window.Card>
       </div>
 
+      {/* Execution health — Arb vs Naked-leg P&L, ForecastEx circuit, auto-executor skip counters */}
+      <ExecutionHealthPanel/>
+
       {/* Recent activity */}
       <window.Card title="Recent activity" action={<a onClick={() => setPage('trades')} style={{ fontSize: 11, color: t.accent, cursor:'pointer' }}>All trades →</a>} padding={0}>
         <window.DataTable columns={[
@@ -2355,6 +2613,486 @@ function PageOverview() {
         ]} rows={execs.slice(0, 5)} onRowClick={(r) => { setPage('trades'); }} emptyTitle="No trades yet" emptyHint="Pending, recovering, closed, and failed arbitrage attempts will show up here from /api/executions." emptyIcon="↗"/>
       </window.Card>
     </div>
+  );
+}
+
+function ExecutionHealthPanel() {
+  const { t } = window.useApp();
+  const M = window.MOCK;
+  const execs = Array.isArray(M.executions) ? M.executions : [];
+
+  // P&L TRUTH (FILL-01 audit 2026-05-24): classify every trade by what
+  // ACTUALLY filled on the venues, not by the engine's theoretical
+  // ``arb_pnl`` field. The historical ``arb_pnl = realized_pnl -
+  // unwind_pnl`` property reports "what the spread WOULD have made if
+  // the unwind hadn't happened" — useful for strategy attribution but
+  // misleading when summed across a corpus dominated by naked-leg
+  // outcomes. We re-bucket from leg.fill_qty so the dashboard reflects
+  // what the venues actually returned:
+  //   capturedArb  — BOTH legs filled (real cross-platform arbitrage)
+  //   nakedLeg     — exactly ONE leg filled (single-sided settlement)
+  //   failedCount  — ZERO fills (FOK kill / pre-2026-05-24 cascade)
+  let capturedArb = 0;
+  let nakedLeg = 0;
+  let failedCount = 0;
+  let capturedArbCount = 0;
+  let nakedLegCount = 0;
+  for (const e of execs) {
+    const yf = Number((e.leg_yes || {}).fill_qty || 0);
+    const nf = Number((e.leg_no || {}).fill_qty || 0);
+    const realized = Number(e.realized_pnl || 0);
+    if (yf > 0 && nf > 0) {
+      capturedArb += realized;
+      capturedArbCount += 1;
+    } else if (yf > 0 || nf > 0) {
+      nakedLeg += realized;
+      nakedLegCount += 1;
+    } else {
+      failedCount += 1;
+    }
+  }
+  // Keep arbPnl/nakedPnl variable names so existing layout below
+  // works unchanged; the numbers are now truthful.
+  const arbPnl = capturedArb;
+  const nakedPnl = nakedLeg;
+  const realizedPnl = capturedArb + nakedLeg;
+
+  // ForecastEx circuit state from the readiness collector check (which
+  // already aggregates circuit/gamma_circuit/clob_circuit per platform).
+  const readinessChecks = (M.health && M.health.readiness && Array.isArray(M.health.readiness.checks))
+    ? M.health.readiness.checks
+    : [];
+  const collectorCheck = readinessChecks.find(c => c && c.key === 'collectors');
+  const fxDetails = (collectorCheck && collectorCheck.details && collectorCheck.details.forecastex) || null;
+  const fxCircuitState = (() => {
+    if (!fxDetails) return 'unknown';
+    const states = [
+      fxDetails.circuit && fxDetails.circuit.state,
+      fxDetails.gamma_circuit && fxDetails.gamma_circuit.state,
+      fxDetails.clob_circuit && fxDetails.clob_circuit.state,
+    ].filter(Boolean);
+    if (!states.length) return 'unknown';
+    if (states.includes('open')) return 'open';
+    if (states.includes('half_open')) return 'half_open';
+    return 'closed';
+  })();
+  const fxConsecutiveErrors = (fxDetails && fxDetails.consecutive_errors) || 0;
+  const fxStateColor = fxCircuitState === 'open'
+    ? t.red
+    : (fxCircuitState === 'half_open' ? t.amber : (fxCircuitState === 'closed' ? t.green : t.textMuted));
+
+  // Auto-executor skip counters from /api/system.
+  const ae = (M.system && M.system.auto_executor) || {};
+  const aeStats = (ae && ae.stats) || {};
+  const aeEnabled = !!ae.enabled;
+
+  // Per-venue terminal-non-fill diagnostics from /api/system.
+  // Each entry: {ts, order_id, market_id, side, limit_price, qty,
+  // api_status, mapped_status, fill_qty, best_bid_yes, best_ask_yes,
+  // rejection_reason}. Surfaced here so the operator can see WHY each
+  // FOK kill happened (KILLED / UNFILLED / REJECTED / …) — a signal that
+  // was previously absent everywhere in the system.
+  const diagByVenue = (M.system && M.system.execution_diagnostics) || {};
+  const flatDiagnostics = [];
+  for (const [venue, entries] of Object.entries(diagByVenue)) {
+    if (!Array.isArray(entries)) continue;
+    for (const e of entries) {
+      flatDiagnostics.push({ ...e, venue });
+    }
+  }
+  flatDiagnostics.sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0));
+  const recentDiagnostics = flatDiagnostics.slice(0, 10);
+  // Count by api_status so the operator sees the failure shape, not just
+  // a list of one-offs. KILLED:8 / UNFILLED:1 tells a different story
+  // than REJECTED:9.
+  // Stranded-position reconciler snapshot from /api/system.
+  // Periodic venue-truth audit surfaces lots the engine doesn't know
+  // about (legacy naked legs, recovery drift, etc). Each entry:
+  // {platform, market_id, side, qty, cost_basis_usd, mtm_usd,
+  // unrealized_usd, best_bid, best_ask, title, first_seen_ts,
+  // last_seen_ts, age_seconds, auto_close_attempted, auto_close_result}.
+  const strandedSnap = (M.system && M.system.stranded_positions) || {};
+  const strandedList = Array.isArray(strandedSnap.stranded) ? strandedSnap.stranded : [];
+  const strandedCount = Number(strandedSnap.stranded_count || strandedList.length || 0);
+  const strandedAutoClose = !!strandedSnap.auto_close_enabled;
+  const strandedCycle = Number(strandedSnap.cycle_count || 0);
+  const strandedLastRun = Number(strandedSnap.timestamp || 0);
+  const strandedTotalCost = strandedList.reduce((s, p) => s + Math.abs(Number(p.cost_basis_usd || 0)), 0);
+  const strandedTotalUnrealized = strandedList.reduce((s, p) => s + Number(p.unrealized_usd || 0), 0);
+  // Aggregate mitigation_action counts so the operator can see the
+  // policy split at a glance (e.g. "23 let_settle / 2 close_market").
+  const strandedActionCounts = strandedList.reduce((acc, p) => {
+    const k = String(p.mitigation_action || 'unknown');
+    acc[k] = (acc[k] || 0) + 1;
+    return acc;
+  }, {});
+
+  // ForecastEx child-conid resolver snapshot from /api/system. Surfaces
+  // resolver-cycle state so the operator can see whether IBKR's
+  // /iserver/secdef/* endpoints are returning child contracts. The 24
+  // confirmed FX mappings currently hold parent EVENT conids that don't
+  // trade; the resolver retries periodically and attaches YES children
+  // when IBKR responds.
+  const fxResolver = (M.system && M.system.forecastex_resolver) || {};
+  const fxResolverCycle = Number(fxResolver.cycle_count || 0);
+  const fxResolverLastRun = Number(fxResolver.timestamp || 0);
+  const fxResolverCandidates = Number(fxResolver.candidates_count || 0);
+  const fxResolverResolved = Number(fxResolver.resolved_count || 0);
+  const fxResolverFailed = Number(fxResolver.failed_count || 0);
+  const fxResolverDryRun = !!fxResolver.dry_run;
+  const fxResolverAttempts = Array.isArray(fxResolver.attempts) ? fxResolver.attempts : [];
+  const fxOutcomeCounts = fxResolverAttempts.reduce((acc, a) => {
+    const k = String(a.outcome || 'unknown');
+    acc[k] = (acc[k] || 0) + 1;
+    return acc;
+  }, {});
+
+  const diagStatusCounts = flatDiagnostics.reduce((acc, e) => {
+    const key = String(e.api_status || 'UNKNOWN');
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  const diagStatusRows = Object.entries(diagStatusCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6);
+  const skipRows = [
+    ['mapping_unconfirmed', 'Mapping unconfirmed', aeStats.skipped_mapping_unconfirmed],
+    ['not_allowed',        'Not auto-allowed',   aeStats.skipped_not_allowed],
+    ['failed_cooldown',    'Failed cooldown',    aeStats.skipped_failed_cooldown],
+    ['failure_pattern',    'Failure pattern',    aeStats.skipped_failure_pattern],
+    ['edge_collapsed',     'Edge collapsed',     aeStats.skipped_edge_collapsed],
+    ['depth_low',          'Depth low',          aeStats.skipped_depth_low],
+    ['stale_quote',        'Stale quote',        aeStats.skipped_stale_quote],
+    ['over_cap',           'Over cap',           aeStats.skipped_over_cap],
+    ['duplicate',          'Duplicate',          aeStats.skipped_duplicate],
+    ['armed',              'Supervisor armed',   aeStats.skipped_armed],
+    ['requires_manual',    'Requires manual',    aeStats.skipped_requires_manual],
+    ['disabled',           'Auto-exec disabled', aeStats.skipped_disabled],
+    ['bootstrap_full',     'Bootstrap full',     aeStats.skipped_bootstrap_full],
+  ].filter(r => Number(r[2] || 0) > 0);
+
+  return (
+    <window.Card title="Execution health" padding={0} style={{ marginBottom: 18 }}>
+      <div style={{ display:'grid', gridTemplateColumns:'1.4fr 0.8fr 1.4fr', gap: 0 }}>
+        {/* P&L split */}
+        <div style={{ padding:'18px 22px', borderRight:`1px solid ${t.border}` }}>
+          <div style={{ fontSize:11, color:t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom:10 }}>P&L split</div>
+          <div title="P&L from trades where BOTH legs actually filled on the venues. This is the only bucket that represents real cross-platform arbitrage capture." style={{ marginBottom:12 }}>
+            <div style={{ fontSize:10.5, color:t.textMuted, marginBottom:3 }}>Captured arb P&L</div>
+            <div style={{ fontSize:22, fontWeight:700, color:arbPnl >= 0 ? t.green : t.red, fontFamily:window.FONTS.mono }}>{window.fmt$Sign(arbPnl)}</div>
+            <div style={{ fontSize:10.5, color:t.textDim, marginTop:2 }}>{capturedArbCount.toLocaleString()} both-leg fills</div>
+          </div>
+          <div title="P&L from trades where exactly ONE leg filled and the other never did. Settlement luck, not arbitrage — happens to net positive or negative depending on which way the unsettled outcome went.">
+            <div style={{ fontSize:10.5, color:t.textMuted, marginBottom:3 }}>Naked-leg P&L</div>
+            <div style={{ fontSize:22, fontWeight:700, color:nakedPnl >= 0 ? t.green : t.red, fontFamily:window.FONTS.mono }}>{window.fmt$Sign(nakedPnl)}</div>
+            <div style={{ fontSize:10.5, color:t.textDim, marginTop:2 }}>{nakedLegCount.toLocaleString()} single-leg fills · {failedCount.toLocaleString()} zero-fill</div>
+          </div>
+        </div>
+
+        {/* ForecastEx circuit */}
+        <div style={{ padding:'18px 22px', borderRight:`1px solid ${t.border}` }}>
+          <div style={{ fontSize:11, color:t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom:10 }}>ForecastEx circuit</div>
+          <div style={{ display:'inline-flex', alignItems:'center', gap:8, padding:'4px 10px', borderRadius:99, background:t.bgSubtle, border:`1px solid ${t.border}` }}>
+            <span style={{ width:8, height:8, borderRadius:'50%', background:fxStateColor }}/>
+            <span style={{ fontSize:12, fontWeight:700, color:fxStateColor, fontFamily:window.FONTS.mono, textTransform:'uppercase' }}>{fxCircuitState}</span>
+          </div>
+          <div style={{ fontSize:10.5, color:t.textDim, marginTop:10, lineHeight:1.45 }}>
+            {fxDetails
+              ? `${fxDetails.total_fetches || 0} fetches · ${fxDetails.total_errors || 0} errors · ${fxConsecutiveErrors} streak`
+              : 'No ForecastEx collector telemetry yet.'}
+          </div>
+        </div>
+
+        {/* Auto-executor skip counters */}
+        <div style={{ padding:'18px 22px' }}>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:8, marginBottom:10 }}>
+            <div style={{ fontSize:11, color:t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase' }}>Auto-executor</div>
+            <span style={{ fontSize:10, fontWeight:700, color: aeEnabled ? t.green : t.textMuted, fontFamily:window.FONTS.mono, padding:'2px 8px', borderRadius:99, background:t.bgSubtle, border:`1px solid ${t.border}` }}>
+              {aeEnabled ? 'ENABLED' : 'DISABLED'}
+            </span>
+          </div>
+          <div style={{ display:'flex', gap:18, marginBottom:10 }}>
+            <div>
+              <div style={{ fontSize:10.5, color:t.textMuted }}>Considered</div>
+              <div style={{ fontSize:18, fontWeight:700, color:t.text, fontFamily:window.FONTS.mono }}>{Number(aeStats.considered || 0).toLocaleString()}</div>
+            </div>
+            <div>
+              <div style={{ fontSize:10.5, color:t.textMuted }}>Executed</div>
+              <div style={{ fontSize:18, fontWeight:700, color: (aeStats.executed || 0) > 0 ? t.green : t.text, fontFamily:window.FONTS.mono }}>{Number(aeStats.executed || 0).toLocaleString()}</div>
+            </div>
+            <div>
+              <div style={{ fontSize:10.5, color:t.textMuted }}>Failures</div>
+              <div style={{ fontSize:18, fontWeight:700, color: (aeStats.failures || 0) > 0 ? t.red : t.text, fontFamily:window.FONTS.mono }}>{Number(aeStats.failures || 0).toLocaleString()}</div>
+            </div>
+          </div>
+          {skipRows.length === 0 ? (
+            <div style={{ fontSize:10.5, color:t.textMuted }}>No skips recorded.</div>
+          ) : (
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'4px 14px' }}>
+              {skipRows.slice(0, 8).map(([k, label, count]) => (
+                <div key={k} style={{ display:'flex', justifyContent:'space-between', fontSize:10.5, color:t.textDim }}>
+                  <span>{label}</span>
+                  <span style={{ fontFamily:window.FONTS.mono, color:t.text }}>{Number(count).toLocaleString()}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+      {/* Venue terminal-rejection diagnostics — visible signal of WHY
+          each FOK kill happened. Empty until the next get_order poll
+          flips a SUBMITTED order to a non-FILL terminal state. */}
+      <div style={{ borderTop:`1px solid ${t.border}`, padding:'14px 22px' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8 }}>
+          <div style={{ fontSize:11, color:t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase' }}>Venue terminal rejections</div>
+          <div style={{ fontSize:10.5, color:t.textDim }} title="Captured by the adapter when get_order polls find a SUBMITTED order has flipped to CANCELLED/FAILED. Total count over the in-memory ring buffer (last 50 per venue).">
+            {flatDiagnostics.length === 0 ? 'none captured yet' : `${flatDiagnostics.length} captured · showing latest ${recentDiagnostics.length}`}
+          </div>
+        </div>
+        {flatDiagnostics.length === 0 ? (
+          <div style={{ fontSize:10.5, color:t.textMuted, lineHeight:1.45 }}>
+            No SUBMITTED→terminal transitions observed yet. Populated by ``polymarket_us.terminal_via_poll`` events; will fill in as the next FOK orders resolve.
+          </div>
+        ) : (
+          <div style={{ display:'grid', gridTemplateColumns:'minmax(0,1fr) minmax(0,1.2fr)', gap:24 }}>
+            <div>
+              <div style={{ fontSize:10.5, color:t.textMuted, marginBottom:6 }}>By api_status</div>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr auto', gap:'4px 12px' }}>
+                {diagStatusRows.map(([status, count]) => (
+                  <React.Fragment key={status}>
+                    <span style={{ fontSize:11, color:t.text, fontFamily:window.FONTS.mono, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{status}</span>
+                    <span style={{ fontSize:11, color:t.text, fontFamily:window.FONTS.mono, textAlign:'right' }}>{count}</span>
+                  </React.Fragment>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize:10.5, color:t.textMuted, marginBottom:6 }}>Last {recentDiagnostics.length} events</div>
+              <div style={{ display:'grid', gap:4 }}>
+                {recentDiagnostics.map((e, i) => {
+                  const dt = e.ts ? new Date(Number(e.ts) * 1000) : null;
+                  const tstr = dt ? dt.toISOString().slice(11, 19) : '—';
+                  const bbo = (Number(e.best_bid_yes || 0) > 0 || Number(e.best_ask_yes || 0) > 0)
+                    ? `bbo=${Number(e.best_bid_yes).toFixed(3)}/${Number(e.best_ask_yes).toFixed(3)}`
+                    : 'bbo=—';
+                  const reason = e.rejection_reason ? ` · ${e.rejection_reason}` : '';
+                  return (
+                    <div key={e.order_id + '-' + i} style={{ fontSize:10.5, color:t.textDim, fontFamily:window.FONTS.mono, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }} title={`${e.venue} · ${e.market_id} · ${e.side} ${e.qty}@${e.limit_price} · ${e.api_status}${reason}`}>
+                      <span style={{ color:t.textMuted }}>{tstr}</span>
+                      {' '}<span style={{ color:t.text }}>{e.venue}</span>
+                      {' '}<span style={{ color:t.red }}>{e.api_status}</span>
+                      {' '}<span>{e.side} {e.qty}@{Number(e.limit_price).toFixed(3)}</span>
+                      {' '}<span style={{ color:t.textMuted }}>{bbo}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+      {/* Stranded positions — populated by the periodic
+          StrandedPositionReconciler. Lots that the engine doesn't
+          know about (legacy naked legs, recovery drift). Shows count,
+          total cost basis, total unrealized, and the lot table. */}
+      <div style={{ borderTop:`1px solid ${t.border}`, padding:'14px 22px' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8, gap:12, flexWrap:'wrap' }}>
+          <div style={{ fontSize:11, color:t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase' }}>Stranded positions</div>
+          <div style={{ display:'flex', alignItems:'center', gap:14 }}>
+            <span style={{ fontSize:10.5, color:t.textDim }} title="Reconciler cycle counter — increments each time the periodic loop fires.">
+              {strandedCycle === 0 ? 'awaiting first cycle' : `cycle #${strandedCycle.toLocaleString()}`}
+              {strandedLastRun > 0 && ` · last ${new Date(strandedLastRun * 1000).toISOString().slice(11, 19)} UTC`}
+            </span>
+            <span title="auto-close gate: when enabled, the reconciler will attempt to close small, liquid stranded positions automatically. Set STRANDED_AUTO_CLOSE=true to enable." style={{ fontSize:10, fontWeight:700, color: strandedAutoClose ? t.amber : t.textMuted, fontFamily:window.FONTS.mono, padding:'2px 8px', borderRadius:99, background:t.bgSubtle, border:`1px solid ${t.border}` }}>
+              auto-close {strandedAutoClose ? 'ON' : 'OFF'}
+            </span>
+          </div>
+        </div>
+        {strandedCount === 0 && strandedCycle === 0 ? (
+          <div style={{ fontSize:10.5, color:t.textMuted, lineHeight:1.45 }}>
+            Reconciler not yet running or no snapshot published. Fires on the auto-executor cadence (~30s) after startup.
+          </div>
+        ) : strandedCount === 0 ? (
+          <div style={{ fontSize:10.5, color:t.green, lineHeight:1.45 }}>
+            ✓ No stranded positions detected across enabled venues.
+          </div>
+        ) : (
+          <div>
+            <div style={{ display:'flex', gap:18, marginBottom:10, flexWrap:'wrap' }}>
+              <div>
+                <div style={{ fontSize:10.5, color:t.textMuted }}>Stranded lots</div>
+                <div style={{ fontSize:18, fontWeight:700, color:t.red, fontFamily:window.FONTS.mono }}>{strandedCount.toLocaleString()}</div>
+              </div>
+              <div>
+                <div style={{ fontSize:10.5, color:t.textMuted }}>Total cost basis</div>
+                <div style={{ fontSize:18, fontWeight:700, color:t.text, fontFamily:window.FONTS.mono }}>{window.fmt$Sign(-strandedTotalCost)}</div>
+              </div>
+              <div>
+                <div style={{ fontSize:10.5, color:t.textMuted }}>Net unrealized</div>
+                <div style={{ fontSize:18, fontWeight:700, color: strandedTotalUnrealized >= 0 ? t.green : t.red, fontFamily:window.FONTS.mono }}>{window.fmt$Sign(strandedTotalUnrealized)}</div>
+              </div>
+            </div>
+            {/* Action split — at-a-glance summary of what the
+                MitigationEngine recommends across the corpus. Engine
+                returns lowercase action keys (complete_arb /
+                hold_to_settle / close_now / hedge / manual_review);
+                legacy classifier keys (let_settle / close_market /
+                closed / large_notional / illiquid_no_bbo /
+                spread_too_wide / no_adapter) still appear when the
+                engine isn't wired. Pill color encodes operational
+                outcome regardless of which source produced it. */}
+            <div style={{ display:'flex', gap:14, marginBottom:8, flexWrap:'wrap', fontSize:10.5, fontFamily:window.FONTS.mono }}>
+              {Object.entries(strandedActionCounts).sort((a,b)=>b[1]-a[1]).map(([k,v]) => {
+                const color = (
+                  k === 'closed' || k === 'complete_arb' ? t.green :
+                  k === 'close_market' || k === 'close_now' || k === 'hedge' ? t.amber :
+                  k === 'let_settle' || k === 'hold_to_settle' ? t.textDim :
+                  k === 'manual_review' || k === 'large_notional' || k === 'illiquid_no_bbo' || k === 'spread_too_wide' || k === 'no_adapter' ? t.red :
+                  t.textMuted
+                );
+                return (
+                  <span key={k} title={`${v} stranded ${v === 1 ? 'position' : 'positions'} → engine action: ${k}`} style={{ color, padding:'2px 8px', borderRadius:99, background:t.bgSubtle, border:`1px solid ${t.border}` }}>
+                    {k}: <strong style={{ color:t.text }}>{v}</strong>
+                  </span>
+                );
+              })}
+            </div>
+            <div style={{ display:'grid', gap:4 }}>
+              {strandedList.slice(0, 30).map((p, i) => {
+                // Prefer the rich MitigationEngine decision when present;
+                // fall back to the legacy classifier label for older snapshots.
+                const dec = p.mitigation_decision || null;
+                const engineAction = dec ? String(dec.action || '') : '';
+                const action = engineAction || String(p.mitigation_action || 'unknown');
+                const upper = action.toUpperCase();
+                const autonomousOk = dec ? !!dec.autonomous_ok : false;
+                const confidence = dec ? String(dec.confidence || 'medium') : '';
+                const actionColor = (
+                  upper === 'COMPLETE_ARB' || upper === 'CLOSED' ? t.green :
+                  upper === 'CLOSE_NOW' ? t.amber :
+                  upper === 'HOLD_TO_SETTLE' || upper === 'LET_SETTLE' ? t.textDim :
+                  upper === 'MANUAL_REVIEW' || upper === 'LARGE_NOTIONAL' || upper === 'ILLIQUID_NO_BBO' || upper === 'SPREAD_TOO_WIDE' ? t.red :
+                  upper === 'HEDGE' ? t.amber :
+                  t.textMuted
+                );
+                const actionLabel = (
+                  upper === 'COMPLETE_ARB' ? `COMPLETE ARB → ${(dec && dec.complete_arb && dec.complete_arb.venue) || ''}` :
+                  upper === 'CLOSE_NOW' ? (strandedAutoClose ? 'CLOSE NOW (auto)' : 'CLOSE NOW (auto-close OFF)') :
+                  upper === 'HOLD_TO_SETTLE' ? 'HOLD TO SETTLE' :
+                  upper === 'LET_SETTLE' ? 'LET SETTLE (penny)' :
+                  upper === 'CLOSED' ? '✓ closed' :
+                  upper === 'MANUAL_REVIEW' ? 'MANUAL REVIEW' :
+                  upper === 'HEDGE' ? 'HEDGE (operator)' :
+                  upper === 'LARGE_NOTIONAL' ? 'MANUAL: large notional' :
+                  upper === 'ILLIQUID_NO_BBO' ? 'MANUAL: illiquid' :
+                  upper === 'SPREAD_TOO_WIDE' ? 'MANUAL: wide spread' :
+                  upper === 'NO_ADAPTER' ? 'no venue adapter' :
+                  action
+                );
+                const prof = dec && dec.profitability ? dec.profitability : {};
+                const cps = Number(p.cost_per_share || prof.cost_per_share || (Number(p.cost_basis_usd || 0) / Math.max(Math.abs(Number(p.qty || 0)), 1)));
+                const exp = (p.seconds_to_expiry != null)
+                  ? ` · ${(Number(p.seconds_to_expiry) > 0 ? Math.round(Number(p.seconds_to_expiry) / 86400) + 'd to expiry' : 'expired')}`
+                  : '';
+                const evRow = dec ? ` · implied P=${(Number(prof.implied_settle_probability || 0) * 100).toFixed(1)}% · EV $${Number(prof.expected_value_at_settle_usd || 0).toFixed(2)} vs close $${Number(prof.close_proceeds_usd || 0).toFixed(2)}` : '';
+                const rationaleTip = (dec && dec.rationale) ? `\n— ${dec.rationale}` : '';
+                const titleTip = `${p.platform} · ${p.market_id} · ${p.title || ''} · cost $${Number(p.cost_basis_usd).toFixed(2)} (${cps.toFixed(3)}/sh) · mtm $${Number(p.mtm_usd).toFixed(2)} · bbo ${Number(p.best_bid).toFixed(3)}/${Number(p.best_ask).toFixed(3)} · age ${Math.round(Number(p.age_seconds || 0))}s${exp}${evRow} · action: ${actionLabel}${rationaleTip} · result: ${p.auto_close_result || '—'}`;
+                return (
+                  <div key={(p.platform || '') + '-' + (p.market_id || '') + '-' + i} title={titleTip} style={{ fontSize:10.5, color:t.textDim, fontFamily:window.FONTS.mono, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', display:'flex', gap:10, alignItems:'center' }}>
+                    <span style={{ color:t.text, minWidth:80 }}>{p.platform}</span>
+                    <span style={{ color:t.text, flex:'1 1 auto', overflow:'hidden', textOverflow:'ellipsis' }}>{p.market_id}</span>
+                    <span style={{ color: Number(p.qty) >= 0 ? t.green : t.red }}>{Number(p.qty) >= 0 ? '+' : ''}{Number(p.qty).toFixed(0)} {p.side}</span>
+                    <span style={{ color:t.textMuted }}>cost {window.fmt$Sign(-Math.abs(Number(p.cost_basis_usd)))}</span>
+                    <span style={{ color: Number(p.unrealized_usd) >= 0 ? t.green : t.red }}>{window.fmt$Sign(Number(p.unrealized_usd))}</span>
+                    {dec && (
+                      <span title={`engine confidence=${confidence}; ${autonomousOk ? 'safe to execute autonomously' : 'requires operator review'}`} style={{ fontSize:9, padding:'1px 6px', borderRadius:99, background:t.bgSubtle, color: autonomousOk ? t.green : t.amber, border:`1px solid ${t.border}` }}>
+                        {autonomousOk ? 'auto' : 'review'}
+                      </span>
+                    )}
+                    <span style={{ color: actionColor, minWidth:240, overflow:'hidden', textOverflow:'ellipsis', fontWeight: 700 }}>{actionLabel}</span>
+                  </div>
+                );
+              })}
+              {strandedList.length > 30 && (
+                <div style={{ fontSize:10.5, color:t.textMuted, marginTop:4 }}>
+                  … and {(strandedList.length - 30).toLocaleString()} more (showing top 30)
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+      {/* ForecastEx child-conid resolver — periodic IBKR retry that
+          replaces parent EVENT conids with their YES child contracts.
+          Until this completes, the FX collector publishes 0 fresh
+          quotes (parents have no bid/ask). */}
+      <div style={{ borderTop:`1px solid ${t.border}`, padding:'14px 22px' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8, gap:12, flexWrap:'wrap' }}>
+          <div style={{ fontSize:11, color:t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase' }}>ForecastEx child-conid resolver</div>
+          <div style={{ display:'flex', alignItems:'center', gap:14 }}>
+            <span style={{ fontSize:10.5, color:t.textDim }} title="Resolver cycle counter — increments each time the periodic loop fires (default 30min).">
+              {fxResolverCycle === 0 ? 'awaiting first cycle' : `cycle #${fxResolverCycle.toLocaleString()}`}
+              {fxResolverLastRun > 0 && ` · last ${new Date(fxResolverLastRun * 1000).toISOString().slice(11, 19)} UTC`}
+            </span>
+            <span title="dry-run mode skips the DB upsert. Set FX_RESOLVER_DRY_RUN=true to observe without mutating." style={{ fontSize:10, fontWeight:700, color: fxResolverDryRun ? t.amber : t.textMuted, fontFamily:window.FONTS.mono, padding:'2px 8px', borderRadius:99, background:t.bgSubtle, border:`1px solid ${t.border}` }}>
+              {fxResolverDryRun ? 'dry-run' : 'live'}
+            </span>
+          </div>
+        </div>
+        {fxResolverCycle === 0 ? (
+          <div style={{ fontSize:10.5, color:t.textMuted, lineHeight:1.45 }}>
+            Resolver not yet running or no snapshot published. Default cadence is 30 minutes after a 60-second startup delay.
+          </div>
+        ) : fxResolverCandidates === 0 ? (
+          <div style={{ fontSize:10.5, color:t.green, lineHeight:1.45 }}>
+            ✓ No inactive ForecastEx parent conids to resolve.
+          </div>
+        ) : (
+          <div>
+            <div style={{ display:'flex', gap:18, marginBottom:10, flexWrap:'wrap' }}>
+              <div>
+                <div style={{ fontSize:10.5, color:t.textMuted }}>Candidates</div>
+                <div style={{ fontSize:18, fontWeight:700, color:t.text, fontFamily:window.FONTS.mono }}>{fxResolverCandidates.toLocaleString()}</div>
+              </div>
+              <div>
+                <div style={{ fontSize:10.5, color:t.textMuted }}>Resolved</div>
+                <div style={{ fontSize:18, fontWeight:700, color: fxResolverResolved > 0 ? t.green : t.text, fontFamily:window.FONTS.mono }}>{fxResolverResolved.toLocaleString()}</div>
+              </div>
+              <div>
+                <div style={{ fontSize:10.5, color:t.textMuted }}>Failed</div>
+                <div style={{ fontSize:18, fontWeight:700, color: fxResolverFailed > 0 ? t.amber : t.text, fontFamily:window.FONTS.mono }}>{fxResolverFailed.toLocaleString()}</div>
+              </div>
+            </div>
+            <div style={{ display:'grid', gridTemplateColumns:'minmax(0,0.6fr) minmax(0,1.4fr)', gap:24 }}>
+              <div>
+                <div style={{ fontSize:10.5, color:t.textMuted, marginBottom:6 }}>By outcome</div>
+                <div style={{ display:'grid', gridTemplateColumns:'1fr auto', gap:'4px 12px' }}>
+                  {Object.entries(fxOutcomeCounts).sort((a,b)=>b[1]-a[1]).map(([k,v]) => (
+                    <React.Fragment key={k}>
+                      <span style={{ fontSize:11, color: k==='resolved'?t.green:(k.startsWith('ibkr_')?t.amber:t.textDim), fontFamily:window.FONTS.mono }}>{k}</span>
+                      <span style={{ fontSize:11, color:t.text, fontFamily:window.FONTS.mono, textAlign:'right' }}>{v}</span>
+                    </React.Fragment>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize:10.5, color:t.textMuted, marginBottom:6 }}>Latest attempts</div>
+                <div style={{ display:'grid', gap:4 }}>
+                  {fxResolverAttempts.slice(0, 10).map((a, i) => (
+                    <div key={(a.canonical_id || '') + '-' + i} title={a.detail || ''} style={{ fontSize:10.5, color:t.textDim, fontFamily:window.FONTS.mono, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', display:'flex', gap:10 }}>
+                      <span style={{ color:t.text, flex:'0 1 240px', overflow:'hidden', textOverflow:'ellipsis' }}>{a.canonical_id}</span>
+                      <span style={{ color:t.textMuted }}>parent={a.parent_conid}</span>
+                      <span style={{ color: a.outcome === 'resolved' ? t.green : (String(a.outcome).startsWith('ibkr_') ? t.amber : t.red) }}>{a.outcome}</span>
+                      {a.child_conid && <span style={{ color:t.green }}>child={a.child_conid}</span>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </window.Card>
   );
 }
 
@@ -2534,7 +3272,7 @@ function PageOpportunities() {
 
   return (
     <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto' }}>
-      <window.PageHeader kicker="Live scan" title="Opportunities" sub="Mispriced YES/NO pairs across Kalshi and Polymarket. Click any row to inspect leg-by-leg math.">
+      <window.PageHeader kicker="Live scan" title="Opportunities" sub="Mispriced YES/NO pairs across Kalshi, Polymarket, and ForecastEx. Click any row to inspect leg-by-leg math.">
         <ThresholdControl/>
         <AutoExecToggle/>
       </window.PageHeader>
@@ -2780,7 +3518,22 @@ function PageTrades() {
     if (statusFilter === 'losses') return !isOpenTrade(e) && Number(e.realized_pnl || 0) < 0;
     return String(e.status || '').toLowerCase() === statusFilter;
   });
-  const totalPnl = rows.reduce((s, e) => s + Number(e.realized_pnl || 0), 0);
+  // P&L TRUTH (FILL-01): mirror the Execution Health panel — bucket each
+  // trade by what ACTUALLY filled on the venues. ``arb_pnl - unwind_pnl``
+  // sums to realized but isn't the captured-arb bucket: a trade where only
+  // one leg filled still carries an ``arb_pnl`` attribution. The only
+  // bucket that represents real cross-platform arbitrage is BOTH legs > 0.
+  let capturedArb = 0;
+  let nakedLeg = 0;
+  let bothFillCount = 0;
+  for (const e of rows) {
+    const yf = Number((e.leg_yes || {}).fill_qty || 0);
+    const nf = Number((e.leg_no || {}).fill_qty || 0);
+    const realized = Number(e.realized_pnl || 0);
+    if (yf > 0 && nf > 0) { capturedArb += realized; bothFillCount += 1; }
+    else if (yf > 0 || nf > 0) { nakedLeg += realized; }
+  }
+  const totalPnl = capturedArb + nakedLeg;
   const totalExpected = rows.reduce((s, e) => s + Number(e.expected_profit || 0), 0);
   const completed = rows.filter(e => e.status_group === 'completed' || ['filled','closed','settled','simulated'].includes(String(e.status || '').toLowerCase())).length;
   const open = rows.filter(e => e.status_group === 'open' || ['pending','submitted','recovering'].includes(String(e.status || '').toLowerCase())).length;
@@ -2794,8 +3547,8 @@ function PageTrades() {
 
       <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap: 14, marginBottom: 18 }}>
         <window.Card padding={18}><window.Stat label="Total trades" value={rows.length} sub={`${completed} completed · ${open} open · ${failed} failed`} mono/></window.Card>
-        <window.Card padding={18}><window.Stat label="Realized P&L" value={window.fmt$Sign(totalPnl)} tone={totalPnl >= 0 ? 'green' : 'red'} sub="Net of fees, all platforms" mono/></window.Card>
-        <window.Card padding={18}><window.Stat label="Expected profit" value={window.fmt$Sign(totalExpected)} sub={`${window.fmt$Sign(totalPnl - totalExpected)} vs expected`} tone={totalPnl - totalExpected >= 0 ? 'green' : 'red'} mono/></window.Card>
+        <window.Card padding={18}><window.Stat label="Realized P&L" value={window.fmt$Sign(totalPnl)} tone={totalPnl >= 0 ? 'green' : 'red'} sub={`Captured arb: ${window.fmt$Sign(capturedArb)} · Naked-leg: ${window.fmt$Sign(nakedLeg)}`} mono/></window.Card>
+        <window.Card padding={18}><window.Stat label="Captured arb P&L" value={window.fmt$Sign(capturedArb)} tone={capturedArb >= 0 ? 'green' : 'red'} sub={`${bothFillCount.toLocaleString()} both-leg fills — pure arbitrage`} mono/></window.Card>
         <window.Card padding={18}><window.Stat label="Completion rate" value={`${(fillRate*100).toFixed(0)}%`} sub={`${window.fmt$Sign(losses)} realized losses`} tone={losses < 0 ? 'red' : 'green'} mono/></window.Card>
       </div>
 
@@ -2854,13 +3607,32 @@ function PagePnL() {
   const { t } = window.useApp();
   const M = window.MOCK;
   const [range, setRange] = React.useState('All');
-  const totalDeposits = M.pnl.total_deposits_all_platforms ?? (M.pnl.total_deposits.kalshi + M.pnl.total_deposits.polymarket);
-  const tradingPnl = window.currentTradingPnl ? window.currentTradingPnl(M) : (M.pnl.recorded_trading_pnl.kalshi + M.pnl.recorded_trading_pnl.polymarket);
+  const totalDeposits = M.pnl.total_deposits_all_platforms
+    ?? (M.pnl.total_deposits.kalshi + M.pnl.total_deposits.polymarket + (M.pnl.total_deposits.forecastex || 0));
+  const tradingPnl = window.currentTradingPnl
+    ? window.currentTradingPnl(M)
+    : (M.pnl.recorded_trading_pnl.kalshi + M.pnl.recorded_trading_pnl.polymarket + (M.pnl.recorded_trading_pnl.forecastex || 0));
   const equity = Array.isArray(M.equity) ? M.equity : [];
   const equityRange = window.filterTimeSeries ? window.filterTimeSeries(equity, range) : equity;
   const rangeDelta = window.seriesDelta ? window.seriesDelta(equityRange) : 0;
-  const startingCapital = window.capitalBasis ? window.capitalBasis(M) : Math.max(1, Math.abs((M.pnl.starting_balances.kalshi || 0) + (M.pnl.starting_balances.polymarket || 0)));
+  const startingCapital = window.capitalBasis
+    ? window.capitalBasis(M)
+    : Math.max(1, Math.abs(
+        (M.pnl.starting_balances.kalshi || 0)
+        + (M.pnl.starting_balances.polymarket || 0)
+        + (M.pnl.starting_balances.forecastex || 0)
+      ));
   const lifetimeReturn = tradingPnl / startingCapital;
+  const executions = Array.isArray(M.executions) ? M.executions : [];
+  // FILL-01 audit (2026-05-24): aggregate by what ACTUALLY filled on the
+  // venues, not by the engine's per-trade ``arb_pnl`` attribution. The
+  // engine field is "what the spread WOULD have made if the unwind hadn't
+  // happened" — mis-leading when summed across a historical corpus
+  // dominated by naked-leg outcomes. See window.classifyArbPnl.
+  const _pnlBuckets = window.classifyArbPnl(executions);
+  const totalArbPnl = _pnlBuckets.capturedArbPnl;
+  const totalUnwindPnl = _pnlBuckets.nakedLegPnl;
+  const hasPnlSplit = executions.some(e => e.arb_pnl != null || e.unwind_pnl != null || e.fill_bucket != null);
 
   return (
     <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto' }}>
@@ -2869,7 +3641,7 @@ function PagePnL() {
       </window.PageHeader>
 
       <window.Card padding={0} style={{ marginBottom: 18 }}>
-        <div style={{ padding: '24px 28px', display:'flex', alignItems:'baseline', gap: 32, borderBottom: `1px solid ${t.border}` }}>
+        <div style={{ padding: '24px 28px', display:'flex', alignItems:'baseline', gap: 32, borderBottom: `1px solid ${t.border}`, flexWrap:'wrap', rowGap: 18 }}>
           <div>
             <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom: 6 }}>Total balance</div>
             <div style={{ fontSize: 36, fontWeight: 600, color: t.text, fontFamily: window.FONTS.mono, letterSpacing:'-0.02em' }}>{window.fmt$(M.pnl.total_balance)}</div>
@@ -2879,6 +3651,20 @@ function PagePnL() {
             <div style={{ fontSize: 24, fontWeight: 600, color: tradingPnl >= 0 ? t.green : t.red, fontFamily: window.FONTS.mono }}>{window.fmt$Sign(tradingPnl)}</div>
             <div style={{ fontSize: 11, color: t.textDim, marginTop: 2 }}>{window.fmtPct(lifetimeReturn)} since inception</div>
           </div>
+          {hasPnlSplit && (
+            <div title="Cross-platform spread captured when both legs filled — the pure arbitrage component of realized P&L.">
+              <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom: 6 }}>Arb P&L</div>
+              <div style={{ fontSize: 24, fontWeight: 600, color: totalArbPnl >= 0 ? t.green : t.red, fontFamily: window.FONTS.mono }}>{window.fmt$Sign(totalArbPnl)}</div>
+              <div style={{ fontSize: 11, color: t.textDim, marginTop: 2 }}>both legs filled</div>
+            </div>
+          )}
+          {hasPnlSplit && (
+            <div title="Directional exposure left over when one leg failed and the survivor was unwound — separated from arb edge to keep strategy P&L clean.">
+              <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom: 6 }}>Unwind P&L</div>
+              <div style={{ fontSize: 24, fontWeight: 600, color: totalUnwindPnl >= 0 ? t.green : t.red, fontFamily: window.FONTS.mono }}>{window.fmt$Sign(totalUnwindPnl)}</div>
+              <div style={{ fontSize: 11, color: t.textDim, marginTop: 2 }}>naked-leg cleanup</div>
+            </div>
+          )}
           <div>
             <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom: 6 }}>Total deposits</div>
             <div style={{ fontSize: 24, fontWeight: 600, color: t.text, fontFamily: window.FONTS.mono }}>{window.fmt$(totalDeposits)}</div>
@@ -2896,7 +3682,8 @@ function PagePnL() {
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 14 }}>
         <window.Card title="Per-platform P&L" padding={0}>
           <PlatformPnL platform="kalshi" color={t.green}/>
-          <PlatformPnL platform="polymarket" color={t.purple} last/>
+          <PlatformPnL platform="polymarket" color={t.purple}/>
+          <PlatformPnL platform="forecastex" color={t.amber} last/>
         </window.Card>
         <window.Card title="Reconciliation" padding={20}>
           <ReconRow label="Reconciliations run" value={M.health.reconciliation.reconciliation_count.toLocaleString()}/>
@@ -2928,9 +3715,9 @@ function PagePnL() {
 function PlatformPnL({ platform, color, last }) {
   const { t } = window.useApp();
   const M = window.MOCK;
-  const start = M.pnl.starting_balances[platform];
-  const cur = M.pnl.current_balances[platform];
-  const dep = M.pnl.total_deposits[platform];
+  const start = Number(M.pnl.starting_balances[platform] || 0);
+  const cur = Number(M.pnl.current_balances[platform] || 0);
+  const dep = Number(M.pnl.total_deposits[platform] || 0);
   const balancePnl = Number(M.pnl.balance_change_by_platform && M.pnl.balance_change_by_platform[platform]);
   const pnl = Number.isFinite(balancePnl) ? balancePnl : Number(M.pnl.recorded_trading_pnl[platform] || 0);
   return (
@@ -3013,6 +3800,7 @@ function marketRowsFromMappings(M, status) {
         description: r.description || r.polymarket_question || canonical,
         kalshi_market_id: mappingField(r, ['kalshi_market_id', 'kalshi_ticker', 'kalshi', 'ticker']),
         polymarket_slug: mappingField(r, ['polymarket_slug', 'poly_slug', 'polymarket']),
+        forecastex: mappingField(r, ['forecastex', 'forecastex_contract_id', 'forecastex_contract']),
         status: r.status || 'candidate',
         category: mappingCategory(r),
         tags: Array.isArray(r.tags) ? r.tags : [],
@@ -3069,9 +3857,10 @@ function PageMarkets() {
             </div>
           )},
           { label: 'Category', w: '110px', render: r => <span style={{ fontSize: 12, color: t.textDim }}>{r.category}</span> },
-          { label: 'Kalshi', w: '210px', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 11.5, color: t.text, overflowWrap:'anywhere' }}>{r.kalshi_market_id || '—'}</span> },
-          { label: 'Polymarket', w: '250px', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 11.5, color: t.textDim, overflowWrap:'anywhere' }}>{r.polymarket_slug || '—'}</span> },
-          { label: 'Criteria', w: '135px', render: r => <window.Pill tone={r.resolution_match_status === 'identical' ? 'green' : r.resolution_match_status === 'divergent' ? 'red' : 'amber'}>{r.resolution_match_status}</window.Pill> },
+          { label: 'Kalshi', w: '180px', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 11.5, color: t.text, overflowWrap:'anywhere' }}>{r.kalshi_market_id || '—'}</span> },
+          { label: 'Polymarket', w: '210px', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 11.5, color: t.textDim, overflowWrap:'anywhere' }}>{r.polymarket_slug || '—'}</span> },
+          { label: 'ForecastEx', w: '140px', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 11.5, color: r.forecastex ? t.text : t.textMuted, overflowWrap:'anywhere' }}>{r.forecastex || '—'}</span> },
+          { label: 'Criteria', w: '135px', render: r => <window.Pill tone={r.resolution_match_status === 'identical' ? 'green' : r.resolution_match_status === 'divergent' ? 'red' : 'amber'}>{String(r.resolution_match_status || '').replace(/_/g, ' ')}</window.Pill> },
           { label: 'Confidence', w: '105px', align:'right', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12.5, color: r.confidence >= 0.9 ? t.green : t.textDim, fontWeight: 600 }}>{r.confidence ? r.confidence.toFixed(2) : '—'}</span> },
           { label: 'Live edge', w: '105px', align:'right', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12.5, color: r.live ? (r.net_edge_cents >= 1 ? t.green : t.textDim) : t.textMuted, fontWeight: r.live ? 600 : 400 }}>{r.live ? window.fmtC(r.net_edge_cents) : 'No quote'}</span> },
         ]} rows={visibleRows} onRowClick={(r) => setModal({ kind: 'market', payload: r })} emptyTitle="No mapped markets" emptyHint={category === 'All' ? 'No confirmed mapping rows are loaded from /api/mappings yet.' : `No confirmed ${category} mappings are loaded.`} emptyIcon="◈"/>
@@ -3113,6 +3902,7 @@ function PageMappings() {
     score: Number(r.mapping_score ?? r.score ?? r.confidence ?? 0),
     k: r.kalshi_market_id || r.kalshi_ticker || r.kalshi || '',
     p: r.polymarket_slug || r.poly_slug || r.polymarket || '',
+    f: r.forecastex || r.forecastex_contract_id || r.forecastex_contract || '',
     s: r.status || 'candidate',
     auto: !!r.allow_auto_trade,
     match: r.resolution_match_status || 'pending_operator_review',
@@ -3165,7 +3955,7 @@ function PageMappings() {
 
   return (
     <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto' }}>
-      <window.PageHeader kicker="Cross-platform" title="Mappings" sub="Semantic matches between Kalshi and Polymarket markets, scored by description similarity, dates, and resolution criteria.">
+      <window.PageHeader kicker="Cross-platform" title="Mappings" sub="Semantic matches across Kalshi, Polymarket, and ForecastEx markets, scored by description similarity, dates, and resolution criteria.">
         <window.Btn variant="secondary" size="sm" icon="↻" hint="Pull latest mapping data from the discovery pipeline" onClick={() => setModal({ kind:'refetchMappings' })}>Re-fetch mappings</window.Btn>
         <window.Btn variant="primary" size="sm" icon="◇" hint="Run the backend batch validation/discovery job without auto-promoting new rows" onClick={() => {
           if (reviewable.length) setModal({ kind:'refetchMappings', payload:{ title:'Validate pending mappings', autoPromote:false } });
@@ -3252,7 +4042,7 @@ function PageMappings() {
                   const color = palette[key] || t.textDim;
                   return (
                     <div key={key} style={{ display:'grid', gridTemplateColumns:'160px 1fr 80px', alignItems:'center', gap: 8 }}>
-                      <span style={{ fontSize: 11.5, color: t.textDim, fontFamily: window.FONTS.mono }}>{key}</span>
+                      <span style={{ fontSize: 11.5, color: t.textDim, fontFamily: window.FONTS.mono, textTransform:'capitalize' }}>{key.replace(/_/g, ' ')}</span>
                       <div style={{ height: 8, background: t.bgSubtle, borderRadius: 4, overflow:'hidden' }}>
                         <div style={{ width: `${pct}%`, height:'100%', background: color, transition:'width 0.3s ease' }}/>
                       </div>
@@ -3338,8 +4128,9 @@ function PageMappings() {
               <div style={{ width: 32, height: 32, borderRadius:'50%', background: r.score >= 0.9 ? t.greenSoft : r.score >= 0.7 ? t.amberSoft : t.redSoft, display:'flex', alignItems:'center', justifyContent:'center', fontSize: 11, fontWeight: 700, color: r.score >= 0.9 ? t.green : r.score >= 0.7 ? t.amber : t.red, fontFamily: window.FONTS.mono }}>{r.score.toFixed(2)}</div>
             </div>
           )},
-          { label: 'Kalshi ticker', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12, color: t.text }}>{r.k}</span> },
-          { label: 'Polymarket slug', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 11.5, color: t.textDim }}>{r.p}</span> },
+          { label: 'Kalshi ticker', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 12, color: t.text }}>{r.k || '—'}</span> },
+          { label: 'Polymarket slug', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 11.5, color: t.textDim }}>{r.p || '—'}</span> },
+          { label: 'ForecastEx', w: '140px', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 11.5, color: r.f ? t.text : t.textMuted }}>{r.f || '—'}</span> },
           { label: 'Status', w: '110px', render: r => <window.StatusBadge status={r.s}/> },
           { label: 'Criteria', w: '150px', render: r => <span style={{ fontSize: 11, color: r.match === 'identical' ? t.green : r.match === 'divergent' ? t.red : t.textDim }}>{r.match}</span> },
           { label: '', w: '230px', align:'right', render: r => {
@@ -3410,7 +4201,7 @@ function PageScanner() {
   ];
   return (
     <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto' }}>
-      <window.PageHeader kicker="Real-time" title="Scanner" sub="Continuously polls Kalshi and Polymarket order books, computes net edge, and publishes opportunities crossing the threshold.">
+      <window.PageHeader kicker="Real-time" title="Scanner" sub="Continuously polls Kalshi, Polymarket, and ForecastEx order books, computes net edge across every platform pair, and publishes opportunities crossing the threshold.">
         <window.Btn variant={scanner ? 'danger' : 'accent'} size="sm" hint={scanner ? 'Stop polling order books — opportunities will not refresh until resumed' : 'Resume polling Kalshi + Polymarket for cross-platform edges'} onClick={async () => {
           const next = !scanner;
           if (window.__arbiterScannerControl) {
@@ -3443,8 +4234,17 @@ function PageScanner() {
 
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 14 }}>
         <window.Card title="Opportunity state" padding={20}>
-          <div style={{ height: 200 }}>
-            <window.BarChart data={opportunityState} color={t.bgHover} accent={t.accent} labelColor={t.textDim} emptyLabel="No scanner state reported yet."/>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 10 }}>
+            {opportunityState.map((row, i) => {
+              const isHero = row.range === 'Tradable' || row.range === 'Published';
+              const tone = row.count > 0 ? (isHero ? t.green : t.text) : t.textMuted;
+              return (
+                <div key={i} style={{ padding: '12px 14px', background: t.bgSubtle, borderRadius: 8, border: `1px solid ${t.border}`, display:'flex', flexDirection:'column', gap: 4, minWidth: 0 }}>
+                  <div style={{ fontSize: 10.5, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{row.range}</div>
+                  <div style={{ fontSize: 22, fontWeight: 600, color: tone, fontFamily: window.FONTS.mono, lineHeight: 1.1 }}>{Number(row.count || 0).toLocaleString()}</div>
+                </div>
+              );
+            })}
           </div>
         </window.Card>
         <window.Card title="Active scan engine" padding={20}>
@@ -3476,30 +4276,79 @@ function KV({ k, v }) {
 function PageAudit() {
   const { t, tradingMode, setTradingMode, setConfirm, toast } = window.useApp();
   const M = window.MOCK;
-  const gates = [
-    { name: 'Configuration valid', ok: true, detail: 'All required env vars set; API keys reachable.' },
-    { name: 'Authentication healthy', ok: true, detail: 'Kalshi token refreshed 8m ago · Polymarket signed via wallet.' },
-    { name: 'Profitability verdict', ok: true, detail: `Verdict: profitable · cumulative ${window.fmt$Sign(M.health.profitability.cumulative_pnl)}` },
-    { name: 'Reconciliation flags', ok: true, detail: '0 outstanding discrepancies · last run 12s ago.' },
-    { name: 'Scanner heartbeat', ok: true, detail: `${M.health.scanner.scan_time_ms}ms p50 · last scan 1s ago.` },
-    { name: 'Audit score', ok: true, detail: `${(M.health.audit.audit_score * 100).toFixed(2)}% above 99% threshold.` },
-    { name: 'Kill switch armed', ok: true, detail: 'Manual override available · automatic halt on flag count > 5.' },
+  const halfRecorded = (M.recovery && M.recovery.halfRecorded) || {};
+  const halfRows = Array.isArray(halfRecorded.by_canonical) ? halfRecorded.by_canonical : [];
+  const criticalOpen = (Array.isArray(M.errors) ? M.errors : []).filter((incident) =>
+    (incident.status || 'open') !== 'resolved' && String(incident.severity || '').toLowerCase() === 'critical'
+  ).length;
+  const profitVerdict = String(M.health.profitability.verdict || 'unknown');
+  const profitabilityOk = profitVerdict === 'validated_profitable' || profitVerdict === 'profitable';
+  const reconFlags = Number(M.health.reconciliation.flag_count || 0);
+  const readinessReady = !!M.health.readiness.ready;
+  const AUDIT_THRESHOLD = 0.99;
+  const auditScore = Number(M.health.audit.audit_score || 0);
+  const auditScorePct = (auditScore * 100).toFixed(2);
+  // ``audits_run == 0`` is a cold-boot signal, not a failed audit — treating
+  // it like "0% passed" lit the page red with a misleading "below 99%
+  // threshold" message before the first auditor cycle even ran. Surface a
+  // neutral "no audits run yet" warning instead.
+  const auditsRun = Number(M.health.audit.audits_run || 0);
+  const auditPending = auditsRun === 0;
+  const auditOk = !auditPending && auditScore >= AUDIT_THRESHOLD;
+  // Prefer live readiness checks from /api/health.readiness.checks. Fall
+  // back to a synthesized list derived from other health fields only when
+  // the backend hasn't shipped the checks array yet — keeps the page
+  // useful during cold boot but never hardcodes "all green".
+  const liveChecks = Array.isArray(M.health.readiness.checks) ? M.health.readiness.checks : [];
+  const formatCheckName = (key) => String(key || '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, c => c.toUpperCase());
+  // Preserve the live status (pass / warning / fail) so non-blocking
+  // warnings render in amber rather than red — matters when the top-line
+  // says "Live trading authorized" but a couple of warning gates exist.
+  const gates = liveChecks.length ? liveChecks.map(c => {
+    const status = String(c.status || '').toLowerCase();
+    const norm = status === 'pass' ? 'pass' : (status === 'warning' || status === 'warn') ? 'warning' : 'fail';
+    return {
+      name: c.name || formatCheckName(c.key),
+      ok: norm === 'pass',
+      status: norm,
+      detail: c.summary || c.detail || '',
+      blocking: c.blocking !== false,
+    };
+  }) : [
+    { name: 'Profitability verdict', ok: profitabilityOk, status: profitabilityOk ? 'pass' : 'fail', detail: `Verdict: ${profitVerdict} · cumulative ${window.fmt$Sign(M.health.profitability.cumulative_pnl)}` },
+    { name: 'Reconciliation flags', ok: reconFlags === 0, status: reconFlags === 0 ? 'pass' : 'fail', detail: `${reconFlags.toLocaleString()} outstanding discrepancies.` },
+    { name: 'Exposure recovery blockers', ok: Number(halfRecorded.count || 0) === 0 && criticalOpen === 0, status: (Number(halfRecorded.count || 0) === 0 && criticalOpen === 0) ? 'pass' : 'fail', detail: `${Number(halfRecorded.count || 0).toLocaleString()} half-recorded arbs · ${criticalOpen.toLocaleString()} open critical incidents.` },
+    { name: 'Audit score',
+      ok: auditOk,
+      status: auditOk ? 'pass' : auditPending ? 'warning' : 'fail',
+      detail: auditPending
+        ? `No audits run yet — first cycle pending. Score reports once the math auditor produces its first sample.`
+        : auditOk
+          ? `${auditScorePct}% · ≥ ${(AUDIT_THRESHOLD * 100).toFixed(0)}% threshold.`
+          : `${auditScorePct}% · below ${(AUDIT_THRESHOLD * 100).toFixed(0)}% threshold.` },
   ];
-  const readinessGates = M.health.readiness.gates || gates.length;
-  const readinessPassing = M.health.readiness.passing || (M.health.readiness.ready ? readinessGates : gates.filter(g => g.ok).length);
+  const computedPassing = gates.filter(g => g.ok).length;
+  const readinessGates = Number(M.health.readiness.gates) || gates.length;
+  const readinessPassing = Number(M.health.readiness.passing != null
+    ? M.health.readiness.passing
+    : computedPassing);
+  const readinessTone = readinessReady ? t.green : t.red;
+  const readinessToneSoft = readinessReady ? t.greenSoft : t.redSoft;
 
   return (
     <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto' }}>
       <window.PageHeader kicker="System integrity" title="Audit & Readiness" sub={`Live trading is gated behind ${readinessGates} health checks. Failure of any blocking gate forces standby mode.`}/>
 
       <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 28, marginBottom: 18, display:'flex', alignItems:'center', gap: 24 }}>
-        <div style={{ width: 96, height: 96, borderRadius: '50%', background: t.greenSoft, border: `3px solid ${t.green}`, display:'flex', alignItems:'center', justifyContent:'center', flexShrink: 0 }}>
-          <div style={{ fontSize: 36, fontWeight: 600, color: t.green, fontFamily: window.FONTS.mono }}>✓</div>
+        <div style={{ width: 96, height: 96, borderRadius: '50%', background: readinessToneSoft, border: `3px solid ${readinessTone}`, display:'flex', alignItems:'center', justifyContent:'center', flexShrink: 0 }}>
+          <div style={{ fontSize: 36, fontWeight: 600, color: readinessTone, fontFamily: window.FONTS.mono }}>{readinessReady ? '✓' : '!'}</div>
         </div>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom: 4 }}>Status</div>
-          <div style={{ fontSize: 24, fontWeight: 600, color: t.text, marginBottom: 4 }}>Live trading authorized</div>
-          <div style={{ fontSize: 13, color: t.textDim }}>{readinessPassing}/{readinessGates} readiness gates passing · audit score {(M.health.audit.audit_score * 100).toFixed(2)}% · uptime {(M.health.uptime_seconds/3600).toFixed(1)}h</div>
+          <div style={{ fontSize: 24, fontWeight: 600, color: t.text, marginBottom: 4 }}>{readinessReady ? 'Live trading authorized' : 'Live trading blocked'}</div>
+          <div style={{ fontSize: 13, color: t.textDim }}>{readinessPassing}/{readinessGates} readiness gates passing · audit score {auditPending ? 'pending (no audits run yet)' : `${auditScorePct}% ${auditOk ? '≥' : '<'} ${(AUDIT_THRESHOLD * 100).toFixed(0)}%`} · uptime {(M.health.uptime_seconds/3600).toFixed(1)}h</div>
         </div>
         <window.Btn variant="danger" size="md" hint="Emergency halt — stops scanner, cancels open orders, locks trading. Requires manual re-arm." onClick={() => setConfirm({
           title: 'Engage kill switch?',
@@ -3521,16 +4370,41 @@ function PageAudit() {
       </div>
 
       <window.Card title="Readiness gates" padding={0}>
-        {gates.map((g, i) => (
-          <div key={i} style={{ padding: '16px 22px', borderBottom: i < gates.length - 1 ? `1px solid ${t.border}` : 'none', display:'flex', alignItems:'center', gap: 16 }}>
-            <div style={{ width: 28, height: 28, borderRadius:'50%', background: g.ok ? t.greenSoft : t.redSoft, color: g.ok ? t.green : t.red, display:'flex', alignItems:'center', justifyContent:'center', fontSize: 14, fontWeight: 700, flexShrink: 0 }}>{g.ok ? '✓' : '✕'}</div>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 13, color: t.text, fontWeight: 500, marginBottom: 2 }}>{g.name}</div>
-              <div style={{ fontSize: 11.5, color: t.textDim }}>{g.detail}</div>
+        {gates.map((g, i) => {
+          const s = g.status || (g.ok ? 'pass' : 'fail');
+          const dotBg = s === 'pass' ? t.greenSoft : s === 'warning' ? (t.amberSoft || t.bgSubtle) : t.redSoft;
+          const dotFg = s === 'pass' ? t.green : s === 'warning' ? t.amber : t.red;
+          const dotIcon = s === 'pass' ? '✓' : s === 'warning' ? '!' : '✕';
+          return (
+            <div key={i} style={{ padding: '16px 22px', borderBottom: i < gates.length - 1 ? `1px solid ${t.border}` : 'none', display:'flex', alignItems:'center', gap: 16 }}>
+              <div style={{ width: 28, height: 28, borderRadius:'50%', background: dotBg, color: dotFg, display:'flex', alignItems:'center', justifyContent:'center', fontSize: 14, fontWeight: 700, flexShrink: 0 }}>{dotIcon}</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, color: t.text, fontWeight: 500, marginBottom: 2 }}>{g.name}</div>
+                <div style={{ fontSize: 11.5, color: t.textDim }}>{g.detail}</div>
+              </div>
+              <window.StatusBadge status={s}/>
             </div>
-            <window.StatusBadge status={g.ok ? 'pass' : 'fail'}/>
+          );
+        })}
+      </window.Card>
+
+      <div style={{ height: 14 }}/>
+      <window.Card title="Half-recorded exposure blockers" padding={0}>
+        {halfRows.length ? halfRows.slice(0, 6).map((row, i) => (
+          <div key={row.canonical_id || i} style={{ padding: '16px 22px', borderBottom: i < Math.min(halfRows.length, 6) - 1 ? `1px solid ${t.border}` : 'none', display:'grid', gridTemplateColumns:'minmax(180px, 1fr) 120px 160px 1.4fr', gap: 14, alignItems:'center' }}>
+            <div>
+              <div style={{ fontSize: 13, color: t.text, fontWeight: 600 }}>{row.canonical_id || 'unknown'}</div>
+              <div style={{ fontSize: 11.5, color: t.textDim }}>{(row.arb_ids || []).slice(0, 4).join(', ')}</div>
+            </div>
+            <div style={{ fontSize: 12, color: t.textDim }}>{Number(row.count || 0).toLocaleString()} arbs</div>
+            <div style={{ fontSize: 12, color: t.textDim }}>{window.fmt$(Number(row.filled_notional || 0))} filled</div>
+            <div style={{ fontSize: 12, color: t.textDim }}>Manual venue reconciliation required before auto-trade can resume.</div>
           </div>
-        ))}
+        )) : (
+          <div style={{ padding: '18px 22px', fontSize: 13, color: t.textDim }}>
+            No half-recorded exposure blockers reported by the recovery endpoint.
+          </div>
+        )}
       </window.Card>
     </div>
   );
@@ -3545,11 +4419,13 @@ function PageDeposits() {
       <window.PageHeader kicker="Capital" title="Funds" sub="Deposit history and platform balances. Deposits are excluded from trading P&L computations.">
         <window.Btn variant="secondary" size="sm" icon="↓" hint="Record a deposit to your Kalshi account" onClick={() => setModal({ kind: 'deposit', payload: 'kalshi' })}>Deposit Kalshi</window.Btn>
         <window.Btn variant="primary" size="sm" icon="↓" hint="Record a deposit to your Polymarket account" onClick={() => setModal({ kind: 'deposit', payload: 'polymarket' })}>Deposit Polymarket</window.Btn>
+        <window.Btn variant="secondary" size="sm" icon="↓" hint="Record a deposit to your ForecastEx (IBKR) account" onClick={() => setModal({ kind: 'deposit', payload: 'forecastex' })}>Deposit ForecastEx</window.Btn>
       </window.PageHeader>
 
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 14, marginBottom: 18 }}>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap: 14, marginBottom: 18 }}>
         <PlatformBalCard platform="kalshi" color={t.green}/>
         <PlatformBalCard platform="polymarket" color={t.purple}/>
+        <PlatformBalCard platform="forecastex" color={t.blue || '#3b82f6'}/>
       </div>
 
       <window.Card title="Deposit history" padding={0}>
@@ -3584,8 +4460,8 @@ function PlatformBalCard({ platform, color }) {
       <div style={{ fontSize: 36, fontWeight: 600, color: t.text, fontFamily: window.FONTS.mono, letterSpacing:'-0.02em', marginBottom: 4 }}>{window.fmt$(bal)}</div>
       <div style={{ fontSize: 12, color: pnl >= 0 ? t.green : t.red, marginBottom: 16 }}>{window.fmt$Sign(pnl)} ({window.fmtPct(pnl/basis)}) since inception · {window.fmt$(dep)} net deposits</div>
       <div style={{ display:'flex', gap: 8 }}>
-        <window.Btn variant="secondary" size="sm" hint={`Move funds INTO ${platform === 'kalshi' ? 'Kalshi' : 'Polymarket'} — increases buying power for this venue`} onClick={() => setModal({ kind: 'deposit', payload: platform })}>Deposit</window.Btn>
-        <window.Btn variant="ghost" size="sm" hint={`Pull funds OUT of ${platform === 'kalshi' ? 'Kalshi' : 'Polymarket'} — reduces buying power; settles in 1–2 business days`} onClick={() => setModal({ kind: 'withdraw', payload: platform })}>Withdraw</window.Btn>
+        <window.Btn variant="secondary" size="sm" hint={`Move funds INTO ${platform === 'kalshi' ? 'Kalshi' : (platform === 'polymarket' ? 'Polymarket' : 'ForecastEx')} — increases buying power for this venue`} onClick={() => setModal({ kind: 'deposit', payload: platform })}>Deposit</window.Btn>
+        <window.Btn variant="ghost" size="sm" hint={`Pull funds OUT of ${platform === 'kalshi' ? 'Kalshi' : (platform === 'polymarket' ? 'Polymarket' : 'ForecastEx')} — reduces buying power; settles in 1–2 business days`} onClick={() => setModal({ kind: 'withdraw', payload: platform })}>Withdraw</window.Btn>
       </div>
     </div>
   );
@@ -3595,21 +4471,35 @@ function PlatformBalCard({ platform, color }) {
 function PageSettings() {
   const { t, settings, setModal, toast } = window.useApp();
   const fmt$ = window.fmt$;
+  // Read live strategy values from the same /api/settings snapshot the
+  // Scanner page consumes so both screens always agree. Local AppCtx state
+  // is only a fallback while the API snapshot is still loading.
+  const M = window.MOCK;
+  const apiScanner = (M && M.settings && M.settings.scanner) || {};
+  const apiAuto = (M && M.settings && M.settings.auto_executor) || {};
+  const minEdge = Number(apiScanner.min_edge_cents != null ? apiScanner.min_edge_cents : settings.minEdge);
+  const minVolume = Number(apiScanner.min_liquidity != null ? apiScanner.min_liquidity : settings.minVolume);
+  const persistence = Number(apiScanner.persistence_scans != null ? apiScanner.persistence_scans : settings.persistence);
+  const maxPos = Number(apiScanner.max_position_usd != null ? apiScanner.max_position_usd : settings.maxPos);
+  const autoExecOn = (apiAuto && typeof apiAuto.enabled === 'boolean')
+    ? apiAuto.enabled
+    : settings.autoExec === 'on';
   return (
     <div style={{ padding: '28px 32px', maxWidth: 900, margin: '0 auto' }}>
       <window.PageHeader kicker="Configuration" title="Settings" sub="Strategy parameters, API connections, and operator preferences."/>
 
       <window.Card title="Strategy" padding={20} style={{ marginBottom: 14 }}>
-        <SettingRow label="Min net edge" value={`${settings.minEdge.toFixed(1)}¢`} desc="Opportunities below this threshold are not published." onEdit={() => setModal({ kind:'editSetting', payload: { key:'minEdge', label:'Min net edge', kind:'slider', min:0.5, max:5, step:0.1, unit:'¢', desc:'Net edge required after fees, slippage, and gas. Lower = more opportunities but thinner margins.' } })}/>
-        <SettingRow label="Min volume" value={`${settings.minVolume} shares`} desc="Required liquidity on both legs combined." onEdit={() => setModal({ kind:'editSetting', payload: { key:'minVolume', label:'Min volume', kind:'slider', min:100, max:5000, step:100, unit:' shares', desc:'Minimum combined orderbook depth across both legs. Protects against thin markets.' } })}/>
-        <SettingRow label="Persistence" value={`${settings.persistence} scans`} desc="Edge must hold for this many consecutive 5s scans." onEdit={() => setModal({ kind:'editSetting', payload: { key:'persistence', label:'Persistence', kind:'slider', min:1, max:10, step:1, unit:' scans', desc:'How many consecutive scans the edge must persist before publishing. Higher = fewer false positives.' } })}/>
-        <SettingRow label="Max position size" value={fmt$(settings.maxPos)} desc="Per arbitrage pair. Hard cap regardless of edge." onEdit={() => setModal({ kind:'editSetting', payload: { key:'maxPos', label:'Max position size', kind:'slider', min:50, max:1000, step:25, unit:'', desc:'Hard cap per arbitrage pair. Applied even if edge is large.' } })}/>
-        <SettingRow label="Auto-execute" value={settings.autoExec === 'on' ? 'Enabled' : 'Disabled'} pill={settings.autoExec === 'on' ? 'green' : 'gray'} desc="Automatically place trades when all gates pass." onEdit={() => setModal({ kind:'editSetting', payload: { key:'autoExec', label:'Auto-execute', kind:'toggle', desc:'Off = opportunities show in queue but require manual approve. On = trades fire when all gates pass.' } })} last/>
+        <SettingRow label="Min net edge" value={`${minEdge.toFixed(2)}¢`} desc="Opportunities below this threshold are not published." onEdit={() => setModal({ kind:'editSetting', payload: { key:'minEdge', label:'Min net edge', kind:'slider', min:0.5, max:10, step:0.1, unit:'¢', desc:'Net edge required after fees, slippage, and gas. Lower = more opportunities but thinner margins.' } })}/>
+        <SettingRow label="Min volume" value={`${minVolume.toLocaleString()} shares`} desc="Required liquidity on both legs combined." onEdit={() => setModal({ kind:'editSetting', payload: { key:'minVolume', label:'Min volume', kind:'slider', min:25, max:5000, step:25, unit:' shares', desc:'Minimum combined orderbook depth across both legs. Protects against thin markets.' } })}/>
+        <SettingRow label="Persistence" value={`${persistence} scans`} desc="Edge must hold for this many consecutive 5s scans." onEdit={() => setModal({ kind:'editSetting', payload: { key:'persistence', label:'Persistence', kind:'slider', min:1, max:10, step:1, unit:' scans', desc:'How many consecutive scans the edge must persist before publishing. Higher = fewer false positives.' } })}/>
+        <SettingRow label="Max position size" value={fmt$(maxPos)} desc="Per arbitrage pair. Hard cap regardless of edge." onEdit={() => setModal({ kind:'editSetting', payload: { key:'maxPos', label:'Max position size', kind:'slider', min:50, max:1000, step:25, unit:'', desc:'Hard cap per arbitrage pair. Applied even if edge is large.' } })}/>
+        <SettingRow label="Auto-execute" value={autoExecOn ? 'Enabled' : 'Disabled'} pill={autoExecOn ? 'green' : 'gray'} desc="Automatically place trades when all gates pass." onEdit={() => setModal({ kind:'editSetting', payload: { key:'autoExec', label:'Auto-execute', kind:'toggle', desc:'Off = opportunities show in queue but require manual approve. On = trades fire when all gates pass.' } })} last/>
       </window.Card>
 
       <window.Card title="API connections" padding={20} style={{ marginBottom: 14 }}>
         <SettingRow label="Kalshi" value="Connected" pill="green" desc="Token expires in 4h 12m · auto-refresh enabled." editLabel="Manage" onEdit={() => toast('Reauthenticating Kalshi…', { sub:'token will refresh in ~3s' })}/>
         <SettingRow label="Polymarket" value="Connected" pill="green" desc="Wallet 0x4a7…f2c9 · CLOB API authorized." editLabel="Manage" onEdit={() => toast('Polymarket connection healthy', { sub:'CLOB authorization valid' })}/>
+        <SettingRow label="ForecastEx" value="Connected" pill="green" desc="IBKR Client Portal bridge active · event-contract orders authorized." editLabel="Manage" onEdit={() => toast('ForecastEx connection healthy', { sub:'IBKR brokerage bridge initialized' })}/>
         <SettingRow label="LLM provider" value="Anthropic" desc="Used for mapping similarity scoring." onEdit={() => setModal({ kind:'editSetting', payload: { key:'llm', label:'LLM provider', kind:'options', options:['Anthropic','OpenAI','Local'], desc:'Provider used for canonical-id matching across platforms.' } })} last/>
       </window.Card>
 
@@ -4000,6 +4890,27 @@ function TradeDetailModal() {
   const r = modal.payload;
   const expectedProfit = Number(r.expected_profit || r.opportunity?.max_profit_usd || 0);
   const realizedPnl = Number(r.realized_pnl || 0);
+  // FILL-01 audit (2026-05-24): derive arb/unwind split from what ACTUALLY
+  // filled on the venues. The engine's persisted ``arb_pnl`` mis-attributes
+  // pre-migration rows where only one leg filled (it reports "what the
+  // spread WOULD have made if the unwind hadn't happened"). Prefer the
+  // server-derived ``fill_bucket`` when present; fall back to per-leg
+  // fill_qty so older payloads still classify correctly.
+  const _yfDetail = Number((r.leg_yes || {}).fill_qty || 0);
+  const _nfDetail = Number((r.leg_no  || {}).fill_qty || 0);
+  const _bucketDetail = r.fill_bucket || (
+    (_yfDetail > 0 && _nfDetail > 0) ? 'both_filled' :
+    (_yfDetail > 0 || _nfDetail > 0) ? 'naked_leg'   : 'zero_fill'
+  );
+  const arbPnl = _bucketDetail === 'both_filled' ? realizedPnl : 0;
+  const unwindPnl = _bucketDetail === 'naked_leg' ? realizedPnl : 0;
+  const hasSplit = (
+    r.fill_bucket != null
+    || r.captured_arb_pnl != null
+    || r.naked_leg_pnl != null
+    || r.arb_pnl != null
+    || r.unwind_pnl != null
+  );
   const expectedDelta = Number(r.expected_vs_realized ?? (realizedPnl - expectedProfit));
   const netEdgeCents = Number(r.opportunity?.net_edge_cents || 0);
   const persistence = Number(r.opportunity?.persistence_scans || r.opportunity?.persistence_count || 0);
@@ -4050,11 +4961,18 @@ function TradeDetailModal() {
       </div>
 
       <div style={{ padding: 24, overflow:'auto' }}>
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap: 12, marginBottom: 24 }}>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap: 12, marginBottom: 12 }}>
           <Tile label="Expected profit" value={window.fmt$Sign(expectedProfit)} tone={expectedProfit >= 0 ? 'green' : 'red'}/>
-          <Tile label="Actual P&L" value={window.fmt$Sign(realizedPnl)} tone={realizedPnl >= 0 ? 'green' : 'red'}/>
+          <Tile label="Actual P&L" value={window.fmt$Sign(realizedPnl)} tone={realizedPnl >= 0 ? 'green' : 'red'} sub={hasSplit ? 'arb + unwind' : null}/>
           <Tile label="Delta vs expected" value={window.fmt$Sign(expectedDelta)} tone={expectedDelta >= 0 ? 'green' : 'red'}/>
         </div>
+
+        {hasSplit && (
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(2, 1fr)', gap: 12, marginBottom: 24 }}>
+            <Tile label="Captured arb P&L" value={window.fmt$Sign(arbPnl)} tone={arbPnl >= 0 ? 'green' : 'red'} sub={_bucketDetail === 'both_filled' ? 'both legs filled — pure cross-platform spread capture' : 'no both-leg fill on this trade'}/>
+            <Tile label="Naked-leg P&L" value={window.fmt$Sign(unwindPnl)} tone={unwindPnl >= 0 ? 'green' : 'red'} sub={_bucketDetail === 'naked_leg' ? 'one leg filled — directional exposure from incomplete leg' : 'not a naked-leg trade'}/>
+          </div>
+        )}
 
         <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap: 12, marginBottom: 24 }}>
           <Tile label="Submitted" value={window.tsTime(r.timestamp)} sub={window.tsDate(r.timestamp)}/>
@@ -4404,7 +5322,7 @@ function MarketDetailModal() {
         <div style={{ background: t.bgSubtle, borderRadius: 10, padding: 16, fontFamily: window.FONTS.mono, fontSize: 12.5, marginBottom: 14 }}>
           {loading && <Row k="Live quote" v="Fetching fresh prices..."/>}
           {!loading && error && <Row k="Live quote" v={error}/>}
-          <Row k="Criteria match" v={criteriaStatus} bold tone={criteriaStatus === 'identical' ? 'green' : criteriaStatus === 'divergent' ? 'red' : 'amber'}/>
+          <Row k="Criteria match" v={criteriaStatus.replace(/_/g, ' ')} bold tone={criteriaStatus === 'identical' ? 'green' : criteriaStatus === 'divergent' ? 'red' : 'amber'}/>
           <Row k="Auto-trade" v={o.allow_auto_trade ? 'enabled' : 'disabled'}/>
           <Row k="Polarity" v={o.polarity_flipped ? 'flipped' : 'same'}/>
           <Row k="Confidence" v={o.confidence ? o.confidence.toFixed(4) : '—'}/>
@@ -4787,7 +5705,7 @@ function FilterModal() {
       <div style={{ padding: 22 }}>
         <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase', marginBottom: 8 }}>PLATFORM</div>
         <div style={{ display:'flex', gap: 6, marginBottom: 16 }}>
-          {['both','kalshi','polymarket'].map(p => (
+          {['both','kalshi','polymarket','forecastex'].map(p => (
             <button key={p} onClick={() => setF({...f, platform: p})} style={{ flex: 1, padding:'8px', background: f.platform === p ? t.bgSubtle : t.bgCard, border: `1px solid ${f.platform === p ? t.text : t.border}`, borderRadius: 6, fontSize: 11.5, color: t.text, cursor:'pointer', textTransform:'capitalize' }}>{p}</button>
           ))}
         </div>
@@ -5380,8 +6298,8 @@ function RefetchSession({ job = {}, onClose, onDone, mobile }) {
   const reasonEntries = Object.entries(reasons).sort((a, b) => Number(b[1]) - Number(a[1])).slice(0, 5);
 
   return (
-    <div>
-      <div style={{ padding: '20px 24px', borderBottom: `1px solid ${t.border}` }}>
+    <div style={{ display:'flex', flexDirection:'column', height:'100%', minHeight: 0 }}>
+      <div style={{ padding: '20px 24px', borderBottom: `1px solid ${t.border}`, flexShrink: 0 }}>
         <div style={{ display:'flex', alignItems:'center', gap: 8, marginBottom: 6 }}>
           <span style={{ width: 8, height: 8, borderRadius:'50%', background: failed ? t.red : completed ? t.green : t.accent, animation: completed || failed ? 'none' : 'pulse 1.4s infinite' }}/>
           <span style={{ fontSize: 11, color: failed ? t.red : t.textMuted, letterSpacing:'0.08em', textTransform:'uppercase', fontWeight: 600 }}>{statusLabel}</span>
@@ -5390,7 +6308,7 @@ function RefetchSession({ job = {}, onClose, onDone, mobile }) {
         <div style={{ fontSize: 12, color: t.textDim, marginTop: 4 }}>{latestMessage}</div>
       </div>
 
-      <div style={{ padding: 24 }}>
+      <div style={{ padding: 24, flex: 1, minHeight: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
         <div style={{ display:'flex', justifyContent:'space-between', marginBottom: 6, fontSize: 11, color: t.textDim }}>
           <span>Overall</span>
           <span style={{ fontFamily: window.FONTS.mono, color: t.text }}>{pct}%</span>
@@ -5454,7 +6372,7 @@ function RefetchSession({ job = {}, onClose, onDone, mobile }) {
         </div>
       </div>
 
-      <div style={{ padding: '14px 24px', borderTop: `1px solid ${t.border}`, background: t.bgSubtle, display:'flex', justifyContent:'space-between', alignItems:'center', gap: 8 }}>
+      <div style={{ padding: '14px 24px', borderTop: `1px solid ${t.border}`, background: t.bgSubtle, display:'flex', justifyContent:'space-between', alignItems:'center', gap: 8, flexShrink: 0 }}>
         <span style={{ fontSize: 11, color: failed ? t.red : t.textMuted, fontFamily: window.FONTS.mono }}>{completed ? `${Number(counts.candidates_written || 0).toLocaleString()} written · ${Number(counts.confirmed_total || 0).toLocaleString()} confirmed total` : failed ? latestMessage : !autoStart && run.status !== 'running' ? 'Inspecting history - run manually when ready' : 'Running in background - safe to close'}</span>
         <div style={{ display:'flex', gap: 8, alignItems:'center' }}>
           {!autoStart && run.status !== 'running' && !starting && <window.Btn variant="primary" size="sm" onClick={startDiscoveryRun}>Run now</window.Btn>}
@@ -5563,8 +6481,13 @@ function MobileDashboard() {
   const [meSub, setMeSub] = mobUseState(null); // 'funds' | 'pnl' | 'health' | 'settings' | null
   const M = window.MOCK;
   const isDark = themeName === 'dark';
-  const totalBal = M.balances.kalshi.balance + M.balances.polymarket.balance;
-  const totalPnl = window.currentTradingPnl ? window.currentTradingPnl(M) : (M.pnl.recorded_trading_pnl.kalshi + M.pnl.recorded_trading_pnl.polymarket);
+  const _forecastexBalance = (M.balances.forecastex && M.balances.forecastex.balance) || 0;
+  const totalBal = M.balances.kalshi.balance + M.balances.polymarket.balance + _forecastexBalance;
+  const totalPnl = window.currentTradingPnl
+    ? window.currentTradingPnl(M)
+    : (M.pnl.recorded_trading_pnl.kalshi
+       + M.pnl.recorded_trading_pnl.polymarket
+       + (M.pnl.recorded_trading_pnl.forecastex || 0));
 
   // When switching primary tabs, clear sub-page
   const switchTab = (k) => {
@@ -6033,9 +6956,10 @@ function MobTrades() {
 function MobMe({ onSub }) {
   const { t, name, toggle, setModal, signOut, profile } = window.useApp();
   const M = window.MOCK;
-  const totalBal = M.balances.kalshi.balance + M.balances.polymarket.balance;
-  const tradePnl = M.pnl.recorded_trading_pnl.kalshi + M.pnl.recorded_trading_pnl.polymarket;
-  const deposits = M.pnl.total_deposits_all_platforms ?? (M.pnl.total_deposits.kalshi + M.pnl.total_deposits.polymarket);
+  const _fcBal = (M.balances.forecastex && M.balances.forecastex.balance) || 0;
+  const totalBal = M.balances.kalshi.balance + M.balances.polymarket.balance + _fcBal;
+  const tradePnl = M.pnl.recorded_trading_pnl.kalshi + M.pnl.recorded_trading_pnl.polymarket + (M.pnl.recorded_trading_pnl.forecastex || 0);
+  const deposits = M.pnl.total_deposits_all_platforms ?? (M.pnl.total_deposits.kalshi + M.pnl.total_deposits.polymarket + (M.pnl.total_deposits.forecastex || 0));
   const gates = M.health.readiness.gates || 0;
   const passing = M.health.readiness.passing || 0;
   return (
@@ -6052,7 +6976,7 @@ function MobMe({ onSub }) {
       </PremiumCard>
 
       <PremiumCard padding={0} style={{ marginBottom: 12, overflow:'hidden' }}>
-        <MobRow icon="funds" label="Funds & deposits" sub={`${window.fmt$(totalBal)} across both platforms`} onClick={() => onSub('funds')}/>
+        <MobRow icon="funds" label="Funds & deposits" sub={`${window.fmt$(totalBal)} across all platforms`} onClick={() => onSub('funds')}/>
         <MobRow icon="pnl" label="P&L" sub={`${window.fmt$Sign(tradePnl)} trading · ${window.fmt$(deposits)} deposits`} onClick={() => onSub('pnl')}/>
         <MobRow icon="health" label="System health" sub={`${passing}/${gates || 7} readiness gates`} tone={M.health.readiness.ready ? 'green' : undefined} onClick={() => onSub('health')}/>
         <MobRow icon="settings" label="Settings" onClick={() => onSub('settings')} last/>
@@ -6072,13 +6996,17 @@ function MobMe({ onSub }) {
 function MobFunds() {
   const { t, setModal } = window.useApp();
   const M = window.MOCK;
-  const total = M.balances.kalshi.balance + M.balances.polymarket.balance;
   const kBal = M.balances.kalshi.balance, pBal = M.balances.polymarket.balance;
+  const fBal = (M.balances.forecastex && M.balances.forecastex.balance) || 0;
+  const total = kBal + pBal + fBal;
+  const fTs  = (M.balances.forecastex && M.balances.forecastex.timestamp) || 0;
   const kPnl = Number(M.pnl.balance_change_by_platform && M.pnl.balance_change_by_platform.kalshi);
   const pPnl = Number(M.pnl.balance_change_by_platform && M.pnl.balance_change_by_platform.polymarket);
+  const fPnl = Number(M.pnl.balance_change_by_platform && M.pnl.balance_change_by_platform.forecastex);
   const platforms = [
     { name: 'Kalshi', key: 'kalshi', dot: t.green, bal: kBal, pnl: Number.isFinite(kPnl) ? kPnl : M.pnl.recorded_trading_pnl.kalshi, ts: M.balances.kalshi.timestamp },
     { name: 'Polymarket', key: 'polymarket', dot: t.purple, bal: pBal, pnl: Number.isFinite(pPnl) ? pPnl : M.pnl.recorded_trading_pnl.polymarket, ts: M.balances.polymarket.timestamp },
+    { name: 'ForecastEx', key: 'forecastex', dot: t.amber, bal: fBal, pnl: Number.isFinite(fPnl) ? fPnl : (M.pnl.recorded_trading_pnl.forecastex || 0), ts: fTs },
   ];
   return (
     <div style={{ paddingTop: 8 }}>
@@ -6130,7 +7058,7 @@ function MobPnL() {
   const { t } = window.useApp();
   const M = window.MOCK;
   const [range, setRange] = mobUseState('30d');
-  const tradePnl = window.currentTradingPnl ? window.currentTradingPnl(M) : (M.pnl.recorded_trading_pnl.kalshi + M.pnl.recorded_trading_pnl.polymarket);
+  const tradePnl = window.currentTradingPnl ? window.currentTradingPnl(M) : (M.pnl.recorded_trading_pnl.kalshi + M.pnl.recorded_trading_pnl.polymarket + (M.pnl.recorded_trading_pnl.forecastex || 0));
   const dep = M.pnl.total_deposits_all_platforms;
   const equity = window.filterTimeSeries ? window.filterTimeSeries(M.equity, range) : M.equity;
   const deployed = M.pnl.deployed_capital || 0;
@@ -6176,6 +7104,7 @@ function MobPnL() {
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 8, marginBottom: 12 }}>
         <PnLStat label="Kalshi P&L" value={(M.pnl.balance_change_by_platform && M.pnl.balance_change_by_platform.kalshi) ?? M.pnl.recorded_trading_pnl.kalshi} t={t}/>
         <PnLStat label="Polymarket P&L" value={(M.pnl.balance_change_by_platform && M.pnl.balance_change_by_platform.polymarket) ?? M.pnl.recorded_trading_pnl.polymarket} t={t}/>
+        <PnLStat label="ForecastEx P&L" value={(M.pnl.balance_change_by_platform && M.pnl.balance_change_by_platform.forecastex) ?? (M.pnl.recorded_trading_pnl.forecastex || 0)} t={t}/>
         <PnLStat label="Deposits" value={dep} t={t} neutral/>
         <PnLStat label="Deployed" value={deployed} t={t} neutral/>
       </div>
@@ -6266,7 +7195,7 @@ function MobHealth() {
         <div style={{ fontSize: 11, color: t.red, opacity: 0.8, marginBottom: 10 }}>Halts scanner, cancels all open orders, locks trading. Requires confirmation.</div>
         <button onClick={() => setConfirm({
           title: 'Halt all trading?',
-          body: 'Pauses the scanner, cancels open orders, and locks both platforms until manually re-armed.',
+          body: 'Pauses the scanner, cancels open orders, and locks all platforms until manually re-armed.',
           tone: 'danger',
           confirmLabel: 'Halt now',
           onConfirm: async () => {
@@ -6505,7 +7434,7 @@ function MobMappings() {
       {/* Candidates list */}
       {active.length === 0 && (
         <div style={{ padding: 18, background: t.bgCard, border:`1px solid ${t.border}`, borderRadius: 12, color: t.textDim, fontSize: 12.5, lineHeight: 1.5 }}>
-          No mapping rows match this filter. Re-fetch mappings to pull the latest Kalshi and Polymarket catalogs, or choose another filter.
+          No mapping rows match this filter. Re-fetch mappings to pull the latest Kalshi, Polymarket, and ForecastEx catalogs, or choose another filter.
         </div>
       )}
       {active.map((c, i) => {
@@ -6521,24 +7450,29 @@ function MobMappings() {
           }
         };
         return (
-          <div key={c.canonical_id || `${c.k}:${c.p}:${i}`} role="button" tabIndex={0} aria-label={`Open mapping validation ${c.canonical_id || c.k || i}`} onClick={openCard} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openCard(); } }} style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 14, marginBottom: 8, cursor: 'pointer', minHeight: 118 }}>
-            <div style={{ display:'grid', gridTemplateColumns:'42px minmax(0, 1fr)', columnGap: 10, rowGap: 8, alignItems:'start' }}>
+          <div key={c.canonical_id || `${c.k}:${c.p}:${i}`} role="button" tabIndex={0} aria-label={`Open mapping validation ${c.canonical_id || c.k || i}`} onClick={openCard} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openCard(); } }} style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, marginBottom: 8, cursor: 'pointer', overflow:'hidden' }}>
+            <div style={{ padding: '14px 14px 0', display:'flex', gap: 10, alignItems:'flex-start' }}>
               <div style={{ width: 36, height: 36, borderRadius:'50%', background: c.score >= 0.9 ? t.greenSoft : c.score >= 0.7 ? t.amberSoft : t.redSoft, display:'flex', alignItems:'center', justifyContent:'center', fontSize: 11.5, fontWeight: 700, color: c.score >= 0.9 ? t.green : c.score >= 0.7 ? t.amber : t.red, fontFamily: window.FONTS.mono, flexShrink: 0 }}>{c.score.toFixed(2)}</div>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap: 8, marginBottom: 7 }}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap: 8, marginBottom: 6 }}>
                   <div style={{ fontSize: 10, color: t.textMuted, letterSpacing:'0.08em', textTransform:'uppercase', fontWeight: 700 }}>Pair</div>
                   <window.StatusBadge status={c.s} size="sm"/>
                 </div>
                 <MapLine label="K" value={kalshiLabel} tone={t.text}/>
                 <MapLine label="P" value={polyLabel} tone={t.textDim}/>
-                <div style={{ display:'flex', gap: 6, alignItems:'center', flexWrap:'wrap', marginTop: 8 }}>
-                  <span style={{ fontSize: 10.5, color: c.match === 'identical' ? t.green : c.match === 'divergent' ? t.red : t.textDim, background: t.bgSubtle, border:`1px solid ${t.border}`, borderRadius: 999, padding:'3px 7px' }}>{c.match}</span>
-                  {c.auto && <span style={{ fontSize: 10.5, color: t.green, background: t.greenSoft, borderRadius: 999, padding:'3px 7px' }}>auto-trade</span>}
-                </div>
               </div>
             </div>
+            <div style={{ display:'flex', gap: 6, alignItems:'center', flexWrap:'wrap', padding: '10px 14px 12px' }}>
+              {(() => {
+                const matchLabel = String(c.match || '').replace(/_/g, ' ');
+                const matchColor = c.match === 'identical' ? t.green : c.match === 'divergent' ? t.red : c.match === 'pending_operator_review' ? t.amber : t.textDim;
+                const matchBg = c.match === 'identical' ? t.greenSoft : c.match === 'divergent' ? t.redSoft : c.match === 'pending_operator_review' ? t.amberSoft : t.bgSubtle;
+                return <span style={{ fontSize: 10.5, color: matchColor, background: matchBg, borderRadius: 999, padding:'3px 8px', fontWeight: 600, textTransform:'capitalize' }}>{matchLabel}</span>;
+              })()}
+              {c.auto && <span style={{ fontSize: 10.5, color: t.green, background: t.greenSoft, borderRadius: 999, padding:'3px 8px', fontWeight: 600 }}>auto-trade</span>}
+            </div>
             {actionable && (
-              <div style={{ display:'flex', gap: 6, paddingTop: 8, borderTop: `1px solid ${t.border}` }}>
+              <div style={{ display:'flex', gap: 6, padding: '10px 14px', borderTop: `1px solid ${t.border}` }}>
                 <button onClick={async (e) => {
                   e.stopPropagation();
                   if (window.__arbiterMappingAction) {
@@ -6653,7 +7587,7 @@ function LoginScreen({ onSignIn }) {
         <div style={{ flex: 1, display:'flex', flexDirection:'column', justifyContent:'center', maxWidth: 360 }}>
           <div style={{ fontSize: 11, color: t.textMuted, letterSpacing:'0.08em', textTransform:'uppercase', marginBottom: 10 }}>Sign in to your desk</div>
           <div style={{ fontSize: 28, fontWeight: 600, color: t.text, letterSpacing:'-0.02em', lineHeight: 1.2, marginBottom: 12 }}>Resume operations</div>
-          <div style={{ fontSize: 13, color: t.textDim, marginBottom: 32, lineHeight: 1.55 }}>Connect your Kalshi and Polymarket accounts to begin scanning. Arbiter never custodies funds — execution happens via signed API requests on your existing accounts.</div>
+          <div style={{ fontSize: 13, color: t.textDim, marginBottom: 32, lineHeight: 1.55 }}>Connect your Kalshi, Polymarket, and ForecastEx (IBKR) accounts to begin scanning. Arbiter never custodies funds — execution happens via signed API requests on your existing accounts.</div>
 
           <div style={{ marginBottom: 14 }}>
             <div style={{ fontSize: 11, color: t.textDim, fontWeight: 500, marginBottom: 6 }}>Email</div>
@@ -6698,6 +7632,7 @@ function LoginScreen({ onSignIn }) {
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 12, marginBottom: 24 }}>
           <StatusTile ok={M.health.status === 'ok'} label="Kalshi gateway" detail={M.balances.kalshi.timestamp ? `balance updated ${window.ago(M.balances.kalshi.timestamp)}` : 'awaiting public status'}/>
           <StatusTile ok={M.health.status === 'ok'} label="Polymarket CLOB" detail={M.balances.polymarket.timestamp ? `balance updated ${window.ago(M.balances.polymarket.timestamp)}` : 'awaiting public status'}/>
+          <StatusTile ok={M.health.status === 'ok'} label="ForecastEx (IBKR)" detail={M.balances.forecastex.timestamp ? `balance updated ${window.ago(M.balances.forecastex.timestamp)}` : 'awaiting public status'}/>
           <StatusTile ok={!M.health.scanner.paused} label="Scanner cluster" detail={`${(M.health.scanner.scan_count || 0).toLocaleString()} scans · ${M.health.scanner.tradable_opportunities || 0} tradable`}/>
           <StatusTile ok={(M.health.reconciliation.flag_count || 0) === 0} label="Reconciliation" detail={`${M.health.reconciliation.flag_count || 0} outstanding flags`}/>
         </div>
@@ -7313,6 +8248,25 @@ function EdgeHistoryRow({ row, expanded, onToggle, onOpenAnalysis }) {
   const pnl = Number(row.realized_pnl || 0);
   const expected = Number(row.expected_profit || 0);
   const delta = Number(row.expected_vs_realized != null ? row.expected_vs_realized : pnl - expected);
+  // FILL-01 audit (2026-05-24): per-row arb/unwind split is derived from
+  // what ACTUALLY filled, not from the engine's persisted ``arb_pnl`` (which
+  // mis-attributes pre-migration single-leg trades).  Prefer server
+  // ``fill_bucket`` when present; fall back to per-leg fill_qty.
+  const _yfEdge = Number(ly.fill_qty || 0);
+  const _nfEdge = Number(ln.fill_qty || 0);
+  const _bucketEdge = row.fill_bucket || (
+    (_yfEdge > 0 && _nfEdge > 0) ? 'both_filled' :
+    (_yfEdge > 0 || _nfEdge > 0) ? 'naked_leg'   : 'zero_fill'
+  );
+  const arbPnl = _bucketEdge === 'both_filled' ? pnl : 0;
+  const unwindPnl = _bucketEdge === 'naked_leg' ? pnl : 0;
+  const hasPnlSplit = (
+    row.fill_bucket != null
+    || row.captured_arb_pnl != null
+    || row.naked_leg_pnl != null
+    || row.arb_pnl != null
+    || row.unwind_pnl != null
+  );
   const failureDetails = row.failure_details || null;
   const error = ly.error || ln.error || (failureDetails && failureDetails.failure_reason) || '';
   const failureRaw = failureDetails && failureDetails.failure_raw;
@@ -7342,10 +8296,24 @@ function EdgeHistoryRow({ row, expanded, onToggle, onOpenAnalysis }) {
       {expanded && (
         <tr style={{ background: t.bgSubtle, borderBottom: `1px solid ${t.border}` }}>
           <td colSpan={8} style={{ padding: '14px 22px 18px' }}>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 14, marginBottom: error ? 14 : 4 }}>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 14, marginBottom: hasPnlSplit ? 12 : (error ? 14 : 4) }}>
               <EhLeg side="YES" leg={ly} platform={o.yes_platform}/>
               <EhLeg side="NO" leg={ln} platform={o.no_platform}/>
             </div>
+            {hasPnlSplit && (
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 14, marginBottom: error ? 14 : 4 }}>
+                <div style={{ border:`1px solid ${t.border}`, borderRadius: 8, padding:'10px 12px', background: t.bgCard }}>
+                  <div style={{ fontSize: 10, color: t.textMuted, letterSpacing:'0.08em', fontWeight: 700, marginBottom: 4 }}>ARB P&L</div>
+                  <div style={{ fontSize: 13, fontFamily: window.FONTS.mono, fontWeight: 600, color: arbPnl >= 0 ? t.green : t.red }}>{window.fmt$Sign(arbPnl)}</div>
+                  <div style={{ fontSize: 10.5, color: t.textMuted, marginTop: 2 }}>both-leg cross-platform spread capture</div>
+                </div>
+                <div style={{ border:`1px solid ${t.border}`, borderRadius: 8, padding:'10px 12px', background: t.bgCard }}>
+                  <div style={{ fontSize: 10, color: t.textMuted, letterSpacing:'0.08em', fontWeight: 700, marginBottom: 4 }}>UNWIND P&L</div>
+                  <div style={{ fontSize: 13, fontFamily: window.FONTS.mono, fontWeight: 600, color: unwindPnl >= 0 ? t.green : t.red }}>{window.fmt$Sign(unwindPnl)}</div>
+                  <div style={{ fontSize: 10.5, color: t.textMuted, marginTop: 2 }}>directional exposure from naked-leg unwind</div>
+                </div>
+              </div>
+            )}
             {(error || failureRaw) && (
               <div style={{ background: t.redSoft, border:`1px solid ${t.red}40`, borderRadius: 8, padding: '10px 14px', marginBottom: 10 }}>
                 <div style={{ display:'flex', alignItems:'center', gap: 8, marginBottom: 4 }}>
@@ -7424,34 +8392,328 @@ function EhStatusBadge({ cls, status }) {
 window.EdgeHistoryView = EdgeHistoryView;
 
 // ────────────────────────────────────────────────────────────────────
-// PageOpportunities wrapper — Live / History tab toggle
+// LiveTradesView — active/open positions on Kalshi + Polymarket
+// ────────────────────────────────────────────────────────────────────
+
+function LiveTradesView() {
+  const { t, setModal } = window.useApp();
+  const M = window.MOCK;
+  const [isMob, setIsMob] = mhUseState(() => typeof window !== 'undefined' && window.innerWidth < 760);
+  mhUseEffect(() => {
+    const onR = () => setIsMob(window.innerWidth < 760);
+    window.addEventListener('resize', onR);
+    return () => window.removeEventListener('resize', onR);
+  }, []);
+  const rawExecutions = Array.isArray(M.executions) ? M.executions : [];
+  const failedTrades = Array.isArray(M.failedTrades) ? M.failedTrades : [];
+  const failureIndex = mhUseMemo(() => {
+    const idx = {};
+    failedTrades.forEach((row) => {
+      if (row && row.arb_id) idx[row.arb_id] = row.failure_details || row;
+    });
+    return idx;
+  }, [failedTrades]);
+  const executions = mhUseMemo(() => rawExecutions.map((e) => {
+    if (!e || !e.arb_id) return e;
+    if (e.failure_details) return e;
+    const extra = failureIndex[e.arb_id];
+    return extra ? Object.assign({}, e, { failure_details: extra }) : e;
+  }), [rawExecutions, failureIndex]);
+
+  // Split into live (open) vs recently archived (completed/failed in the last 60 min)
+  const now = Date.now() / 1000;
+  const ARCHIVE_WINDOW = 3600; // 60 minutes
+
+  const { liveTrades, recentArchived } = mhUseMemo(() => {
+    const live = [];
+    const archived = [];
+    executions.forEach(e => {
+      const cls = classifyExecution(e);
+      if (cls === 'partial') {
+        live.push(e);
+      } else {
+        const ts = Number(e.timestamp || 0);
+        if (ts > 0 && (now - ts) < ARCHIVE_WINDOW) {
+          archived.push(e);
+        }
+      }
+    });
+    live.sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0));
+    archived.sort((a, b) => (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0));
+    return { liveTrades: live, recentArchived: archived.slice(0, 20) };
+  }, [executions, now]);
+
+  // Stats summary
+  const liveStats = mhUseMemo(() => {
+    let totalExposure = 0;
+    let totalExpected = 0;
+    liveTrades.forEach(e => {
+      const o = e.opportunity || {};
+      const yQty = Number((e.leg_yes || {}).fill_qty || (e.leg_yes || {}).quantity || 0);
+      const yPx = Number((e.leg_yes || {}).fill_price || (e.leg_yes || {}).price || 0);
+      const nQty = Number((e.leg_no || {}).fill_qty || (e.leg_no || {}).quantity || 0);
+      const nPx = Number((e.leg_no || {}).fill_price || (e.leg_no || {}).price || 0);
+      totalExposure += (yQty * yPx) + (nQty * nPx);
+      totalExpected += Number(e.expected_profit || 0);
+    });
+    return { count: liveTrades.length, exposure: totalExposure, expected: totalExpected };
+  }, [liveTrades]);
+
+  return (
+    <div>
+      {/* Summary cards */}
+      <div style={{ display:'grid', gridTemplateColumns: isMob ? '1fr' : 'repeat(3, 1fr)', gap: isMob ? 10 : 14, marginBottom: 18 }}>
+        <window.Card padding={18}>
+          <window.Stat label="Active positions" value={liveStats.count.toString()} sub={liveStats.count === 0 ? 'No open trades' : `${liveStats.count} trade${liveStats.count > 1 ? 's' : ''} in flight`} tone={liveStats.count > 0 ? 'amber' : 'default'} mono/>
+        </window.Card>
+        <window.Card padding={18}>
+          <window.Stat label="Total exposure" value={window.fmt$(liveStats.exposure)} sub="Notional across all open legs" mono/>
+        </window.Card>
+        <window.Card padding={18}>
+          <window.Stat label="Expected P&L" value={window.fmt$Sign(liveStats.expected)} tone={liveStats.expected >= 0 ? 'green' : 'red'} sub="If all legs fill at target prices" mono/>
+        </window.Card>
+      </div>
+
+      {/* Live trades */}
+      <window.Card padding={0} title="Active trades" action={<span style={{ fontSize: 11, color: liveStats.count > 0 ? t.amber : t.textMuted, fontWeight: 600 }}>{liveStats.count > 0 ? `● ${liveStats.count} live` : '○ No active trades'}</span>}>
+        {liveTrades.length === 0 ? (
+          <div style={{ padding: 42, textAlign:'center', color: t.textDim, fontSize: 12.5 }}>
+            <div style={{ fontSize: 28, color: t.textMuted, marginBottom: 8 }}>◇</div>
+            <div>No active trades right now.</div>
+            <div style={{ fontSize: 11, color: t.textMuted, marginTop: 4 }}>When the engine executes an arbitrage opportunity, both legs will appear here in real time. Completed trades auto-archive below.</div>
+          </div>
+        ) : (
+          <div style={{ display:'flex', flexDirection:'column', gap: 0 }}>
+            {liveTrades.map((e, idx) => (
+              <LiveTradeCard key={e.arb_id || idx} trade={e} isLast={idx === liveTrades.length - 1} isMob={isMob}/>
+            ))}
+          </div>
+        )}
+      </window.Card>
+
+      {/* Recently archived */}
+      {recentArchived.length > 0 && (
+        <div style={{ marginTop: 18 }}>
+          <window.Card padding={0} title="Recently completed" action={<span style={{ fontSize: 11, color: t.textMuted }}>{recentArchived.length} in last hour</span>}>
+            <div style={{ overflowX:'auto' }}>
+              <table style={{ width:'100%', borderCollapse:'collapse', minWidth: isMob ? 500 : 700 }}>
+                <thead>
+                  <tr style={{ background: t.bgSubtle }}>
+                    <EhTh>When</EhTh>
+                    <EhTh>Market</EhTh>
+                    <EhTh align="right">Edge</EhTh>
+                    <EhTh>Kalshi</EhTh>
+                    <EhTh>Polymarket</EhTh>
+                    <EhTh align="right">P&L</EhTh>
+                    <EhTh>Result</EhTh>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recentArchived.map((e, idx) => {
+                    const o = e.opportunity || {};
+                    const ly = e.leg_yes || {};
+                    const ln = e.leg_no || {};
+                    const cls = classifyExecution(e);
+                    const pnl = Number(e.realized_pnl || 0);
+                    // Determine which leg is Kalshi and which is Polymarket
+                    const kalshiLeg = String(ly.platform || '').toLowerCase().includes('kalshi') ? ly : String(ln.platform || '').toLowerCase().includes('kalshi') ? ln : ly;
+                    const polyLeg = String(ly.platform || '').toLowerCase().includes('poly') ? ly : String(ln.platform || '').toLowerCase().includes('poly') ? ln : ln;
+                    return (
+                      <tr key={e.arb_id || idx} onClick={() => setModal({ kind: 'trade', payload: e })} style={{ cursor:'pointer', borderBottom: `1px solid ${t.border}` }}>
+                        <td style={{ padding: '10px 14px', fontSize: 11, color: t.textDim, fontFamily: window.FONTS.mono, whiteSpace:'nowrap' }}>{window.ago ? window.ago(e.timestamp) : '—'}</td>
+                        <td style={{ padding: '10px 14px', fontSize: 12, color: t.text, maxWidth: 200, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{o.description || o.canonical_id || '—'}</td>
+                        <td style={{ padding: '10px 14px', textAlign:'right', fontFamily: window.FONTS.mono, fontSize: 12, fontWeight: 600, color: Number(o.net_edge_cents || 0) >= 2 ? t.green : t.textDim }}>{window.fmtC ? window.fmtC(Number(o.net_edge_cents || 0)) : `${Number(o.net_edge_cents || 0).toFixed(1)}¢`}</td>
+                        <td style={{ padding: '10px 14px' }}><ArchiveLegChip leg={kalshiLeg} label="K"/></td>
+                        <td style={{ padding: '10px 14px' }}><ArchiveLegChip leg={polyLeg} label="P"/></td>
+                        <td style={{ padding: '10px 14px', textAlign:'right', fontFamily: window.FONTS.mono, fontSize: 12, fontWeight: 600, color: pnl > 0 ? t.green : pnl < 0 ? t.red : t.textDim }}>{window.fmt$Sign(pnl)}</td>
+                        <td style={{ padding: '10px 14px' }}><EhStatusBadge cls={cls} status={e.status}/></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </window.Card>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LiveTradeCard({ trade, isLast, isMob }) {
+  const { t, setModal } = window.useApp();
+  const o = trade.opportunity || {};
+  const ly = trade.leg_yes || {};
+  const ln = trade.leg_no || {};
+  const elapsed = Date.now() / 1000 - Number(trade.timestamp || 0);
+  const elapsedLabel = elapsed < 60 ? `${Math.floor(elapsed)}s` : elapsed < 3600 ? `${Math.floor(elapsed / 60)}m ${Math.floor(elapsed % 60)}s` : `${Math.floor(elapsed / 3600)}h ${Math.floor((elapsed % 3600) / 60)}m`;
+  const edgeCents = Number(o.net_edge_cents || 0);
+  const expectedPnl = Number(trade.expected_profit || 0);
+
+  // Determine which leg is Kalshi and which is Polymarket
+  const kalshiLeg = String(ly.platform || '').toLowerCase().includes('kalshi') ? ly : String(ln.platform || '').toLowerCase().includes('kalshi') ? ln : ly;
+  const polyLeg = String(ly.platform || '').toLowerCase().includes('poly') ? ly : String(ln.platform || '').toLowerCase().includes('poly') ? ln : ln;
+  const kalshiSide = kalshiLeg === ly ? 'YES' : 'NO';
+  const polySide = polyLeg === ly ? 'YES' : 'NO';
+
+  return (
+    <div onClick={() => setModal({ kind: 'trade', payload: trade })} style={{ padding: '16px 20px', cursor:'pointer', borderBottom: isLast ? 'none' : `1px solid ${t.border}` }}>
+      {/* Header: market name + elapsed + edge */}
+      <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap: 12, marginBottom: 12 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13.5, color: t.text, fontWeight: 600, marginBottom: 3 }}>{o.description || o.canonical_id || 'Unknown market'}</div>
+          <div style={{ fontSize: 10.5, color: t.textMuted, fontFamily: window.FONTS.mono, display:'flex', gap: 8, flexWrap:'wrap' }}>
+            <span>{trade.arb_id}</span>
+            <span>·</span>
+            <span style={{ color: t.amber }}>⏱ {elapsedLabel} ago</span>
+          </div>
+        </div>
+        <div style={{ textAlign:'right', flexShrink: 0 }}>
+          <div style={{ fontSize: 14, fontFamily: window.FONTS.mono, fontWeight: 700, color: edgeCents >= 2 ? t.green : edgeCents >= 1 ? t.amber : t.textDim }}>{window.fmtC ? window.fmtC(edgeCents) : `${edgeCents.toFixed(1)}¢`}</div>
+          <div style={{ fontSize: 10, color: t.textMuted, letterSpacing:'0.06em', textTransform:'uppercase' }}>net edge</div>
+        </div>
+      </div>
+
+      {/* Leg cards side by side */}
+      <div style={{ display:'grid', gridTemplateColumns: isMob ? '1fr' : '1fr 1fr', gap: 10, marginBottom: 10 }}>
+        <LiveLegCard label="Kalshi" side={kalshiSide} leg={kalshiLeg} platform="kalshi"/>
+        <LiveLegCard label="Polymarket" side={polySide} leg={polyLeg} platform="polymarket"/>
+      </div>
+
+      {/* Expected profit */}
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', fontSize: 11, color: t.textDim, fontFamily: window.FONTS.mono }}>
+        <span>Expected P&L: <span style={{ color: expectedPnl >= 0 ? t.green : t.red, fontWeight: 600 }}>{window.fmt$Sign(expectedPnl)}</span></span>
+        <span style={{ color: t.textMuted }}>qty {Number(o.suggested_qty || ly.quantity || ln.quantity || 0)}</span>
+      </div>
+    </div>
+  );
+}
+
+function LiveLegCard({ label, side, leg, platform }) {
+  const { t } = window.useApp();
+  const status = String(leg.status || '').toLowerCase();
+  const fillQty = Number(leg.fill_qty || 0);
+  const fillPx = Number(leg.fill_price || 0);
+  const targetQty = Number(leg.quantity || 0);
+  const targetPx = Number(leg.price || 0);
+  const filled = status === 'filled';
+  const pending = status === 'pending' || status === 'submitted';
+  const failed = status === 'failed' || status === 'rejected' || status === 'aborted' || status === 'cancelled';
+
+  const statusColor = filled ? t.green : pending ? t.amber : failed ? t.red : t.textDim;
+  const statusLabel = filled ? 'Filled' : pending ? 'Pending' : failed ? 'Failed' : status || '—';
+  const displayQty = fillQty > 0 ? fillQty : targetQty;
+  const displayPx = fillPx > 0 ? fillPx : targetPx;
+
+  return (
+    <div style={{ border: `1px solid ${statusColor}30`, borderRadius: 8, padding: '10px 12px', background: `${statusColor}08` }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom: 6 }}>
+        <div style={{ display:'flex', alignItems:'center', gap: 6 }}>
+          <span style={{ fontSize: 10, color: t.textMuted, letterSpacing:'0.08em', fontWeight: 700 }}>{label}</span>
+          <span style={{ fontSize: 10, color: t.textDim, fontFamily: window.FONTS.mono, background: t.bgSubtle, padding:'1px 5px', borderRadius: 4 }}>{side}</span>
+        </div>
+        <div style={{ display:'flex', alignItems:'center', gap: 4 }}>
+          <span style={{ width: 6, height: 6, borderRadius:'50%', background: statusColor, animation: pending ? 'pulse 1.4s infinite' : 'none' }}/>
+          <span style={{ fontSize: 10, color: statusColor, fontWeight: 600, textTransform:'uppercase' }}>{statusLabel}</span>
+        </div>
+      </div>
+      <div style={{ fontSize: 13, color: t.text, fontFamily: window.FONTS.mono, fontWeight: 600 }}>
+        {displayQty} @ ${displayPx.toFixed(2)}
+      </div>
+      {filled && fillQty > 0 && (
+        <div style={{ fontSize: 10, color: t.green, fontFamily: window.FONTS.mono, marginTop: 2 }}>
+          ✓ {fillQty} filled @ ${fillPx.toFixed(2)}
+        </div>
+      )}
+      {failed && leg.error && (
+        <div style={{ fontSize: 10, color: t.red, marginTop: 3, wordBreak:'break-word' }}>{String(leg.error).slice(0, 80)}</div>
+      )}
+    </div>
+  );
+}
+
+function ArchiveLegChip({ leg, label }) {
+  const { t } = window.useApp();
+  const status = String(leg.status || '').toLowerCase();
+  const qty = Number(leg.fill_qty || leg.quantity || 0);
+  const px = Number(leg.fill_price || leg.price || 0);
+  const filled = status === 'filled';
+  const failed = status === 'failed' || status === 'rejected' || status === 'aborted' || status === 'cancelled';
+  const tone = filled ? t.green : failed ? t.red : t.amber;
+  return (
+    <div style={{ display:'inline-flex', alignItems:'center', gap: 5, fontSize: 11, fontFamily: window.FONTS.mono }}>
+      <span style={{ fontWeight: 700, color: t.textMuted, fontSize: 10 }}>{label}</span>
+      <span style={{ width: 5, height: 5, borderRadius:'50%', background: tone }}/>
+      <span style={{ color: t.text }}>{qty}@${px.toFixed(2)}</span>
+      <span style={{ color: tone, fontSize: 10, fontWeight: 600 }}>{filled ? '✓' : failed ? '✗' : '…'}</span>
+    </div>
+  );
+}
+
+window.LiveTradesView = LiveTradesView;
+
+// ────────────────────────────────────────────────────────────────────
+// PageOpportunities wrapper — Live / Active trades / History tab toggle
 // ────────────────────────────────────────────────────────────────────
 
 const OriginalPageOpportunities = window.PageOpportunities;
 
 function PageOpportunitiesWithHistory() {
   const { t } = window.useApp();
+  const M = window.MOCK;
   const [tab, setTab] = mhUseState('live');
+  const [mob, setMob] = mhUseState(() => typeof window !== 'undefined' && window.innerWidth < 760);
+  mhUseEffect(() => {
+    const onR = () => setMob(window.innerWidth < 760);
+    window.addEventListener('resize', onR);
+    return () => window.removeEventListener('resize', onR);
+  }, []);
+
+  // Count active trades for the badge
+  const activeCount = mhUseMemo(() => {
+    const execs = Array.isArray(M.executions) ? M.executions : [];
+    return execs.filter(e => classifyExecution(e) === 'partial').length;
+  }, [M.executions]);
+
+  const px = mob ? '14px 16px 0' : '20px 32px 0';
+  const cpx = mob ? '10px 16px 20px' : '14px 32px 28px';
+
   return (
     <div>
-      <div style={{ padding: '20px 32px 0', maxWidth: 1400, margin: '0 auto', display:'flex', alignItems:'center', gap: 4 }}>
-        <div style={{ display:'inline-flex', alignItems:'center', gap: 4, padding: 4, background: t.bgCard, border:`1px solid ${t.border}`, borderRadius: 9 }}>
-          {[['live', 'Live edges'], ['history', 'Trade history']].map(([k, l]) => (
+      <div style={{ padding: px, maxWidth: 1400, margin: '0 auto', display:'flex', alignItems:'center', gap: 4, overflowX:'auto' }}>
+        <div style={{ display:'inline-flex', alignItems:'center', gap: 4, padding: 4, background: t.bgCard, border:`1px solid ${t.border}`, borderRadius: 9, flexShrink: 0 }}>
+          {[
+            ['live', 'Live edges', null],
+            ['active', 'Active trades', activeCount > 0 ? activeCount : null],
+            ['history', 'Trade history', null],
+          ].map(([k, l, badge]) => (
             <button key={k} onClick={() => setTab(k)} style={{
-              padding: '7px 14px',
+              padding: mob ? '6px 10px' : '7px 14px',
               background: tab === k ? t.bgSubtle : 'transparent',
-              border:'none', fontSize: 12.5,
+              border:'none', fontSize: mob ? 11.5 : 12.5,
               color: tab === k ? t.text : t.textDim,
               fontWeight: tab === k ? 600 : 500,
               borderRadius: 6, cursor:'pointer',
-            }}>{l}</button>
+              display:'flex', alignItems:'center', gap: 6,
+              whiteSpace:'nowrap',
+            }}>
+              {l}
+              {badge != null && (
+                <span style={{ fontSize: 10, background: t.amber, color: '#fff', borderRadius: 999, padding:'1px 6px', fontWeight: 700, fontFamily: window.FONTS.mono, minWidth: 16, textAlign:'center' }}>{badge}</span>
+              )}
+            </button>
           ))}
         </div>
       </div>
       {tab === 'live' ? (
         OriginalPageOpportunities ? <OriginalPageOpportunities/> : null
+      ) : tab === 'active' ? (
+        <div style={{ padding: cpx, maxWidth: 1400, margin: '0 auto' }}>
+          <window.PageHeader kicker="Execution monitor" title="Active trades" sub="Real-time view of open positions across Kalshi, Polymarket, and ForecastEx. Both legs shown together with edge and expected profitability. Completed trades auto-archive below."/>
+          <LiveTradesView/>
+        </div>
       ) : (
-        <div style={{ padding: '14px 32px 28px', maxWidth: 1400, margin: '0 auto' }}>
+        <div style={{ padding: cpx, maxWidth: 1400, margin: '0 auto' }}>
           <window.PageHeader kicker="Execution ledger" title="Trade history" sub="Granular log of every opportunity that fired. Click a row to inspect leg-by-leg fills, errors, and recovery state."/>
           <EdgeHistoryView/>
         </div>
@@ -7500,7 +8762,7 @@ window.PageOpportunities = PageOpportunitiesWithHistory;
       mappings: ['Mappings', 'Cross-platform · review queue'],
       scanner: ['Scanner', `Real-time · ${(window.MOCK.health.scanner.scan_count || 0).toLocaleString()} scans`],
       audit: ['Audit & Readiness', `System integrity · ${window.MOCK.health.readiness.passing || 0}/${window.MOCK.health.readiness.gates || 7} gates`],
-      deposits: ['Funds', 'Capital · 2 platforms connected'],
+      deposits: ['Funds', 'Capital · 3 platforms connected'],
       settings: ['Settings', 'Configuration'],
     };
     const Page = map[page] || window.PageOverview;
