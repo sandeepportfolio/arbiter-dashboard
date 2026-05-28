@@ -29,6 +29,8 @@ from arbiter.scanner.arbitrage import ArbitrageOpportunity
 class _FakeMapping:
     canonical_id: str = "TEST-MKT"
     allow_auto_trade: bool = True
+    forecastex_not_available: bool = False
+    forecastex_contract_id: str = "123456"
 
 
 class _FakeMappingStore:
@@ -154,6 +156,62 @@ async def test_mapping_disallowed_skips_execute():
     await ae._consider_opportunity(_make_opportunity())
     engine.execute_opportunity.assert_not_awaited()
     assert ae.stats.skipped_not_allowed == 1
+
+
+@pytest.mark.asyncio
+async def test_forecastex_unavailable_skips_fx_leg_trade():
+    # Mapping flagged forecastex_not_available=True must block any opp where
+    # a leg trades on ForecastEx — the discovery resolver may have bound the
+    # canonical to a wrong-domain parent conid (e.g. NFL Eagles ↔
+    # Philadelphia CPI) so we cannot trust prices it emits.
+    ae, engine = _make_components(
+        mapping=_FakeMapping(
+            allow_auto_trade=True,
+            forecastex_not_available=True,
+            forecastex_contract_id="831072279",
+        ),
+    )
+    opp = _make_opportunity()
+    opp.yes_platform = "forecastex"
+    await ae._consider_opportunity(opp)
+    engine.execute_opportunity.assert_not_awaited()
+    assert ae.stats.skipped_forecastex_unavailable == 1
+
+
+@pytest.mark.asyncio
+async def test_forecastex_empty_conid_skips_fx_leg_trade():
+    # Mapping that lost (or never had) a forecastex_contract_id must not
+    # try to place an order with a blank/zero contract — the IBKR adapter
+    # would either error or, worse, accidentally route to the wrong
+    # contract if a default exists.
+    ae, engine = _make_components(
+        mapping=_FakeMapping(
+            allow_auto_trade=True,
+            forecastex_contract_id="",
+        ),
+    )
+    opp = _make_opportunity()
+    opp.no_platform = "forecastex"
+    await ae._consider_opportunity(opp)
+    engine.execute_opportunity.assert_not_awaited()
+    assert ae.stats.skipped_forecastex_unavailable == 1
+
+
+@pytest.mark.asyncio
+async def test_forecastex_unavailable_does_not_block_kxp_only():
+    # The unavailability gate must only fire when ForecastEx is actually a
+    # leg of the opportunity. A K×P opportunity should still execute even
+    # when the mapping has forecastex_not_available=True (no FX leg).
+    ae, engine = _make_components(
+        mapping=_FakeMapping(
+            allow_auto_trade=True,
+            forecastex_not_available=True,
+        ),
+    )
+    # Default opp is kalshi×polymarket.
+    await ae._consider_opportunity(_make_opportunity())
+    engine.execute_opportunity.assert_awaited_once()
+    assert ae.stats.skipped_forecastex_unavailable == 0
 
 
 @pytest.mark.asyncio

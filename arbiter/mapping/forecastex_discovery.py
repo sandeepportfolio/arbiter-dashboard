@@ -327,6 +327,19 @@ _ECONOMIC_HINT_TOKENS: frozenset[str] = frozenset({
     "permits", "claims", "consumer", "sentiment", "michigan",
 })
 
+# Weather/climate FORECASTX events ("Daily Temperature High UHSFO",
+# "Hurricane Season Storm Count", etc.) frequently share a city token
+# with sports mappings (San Francisco 49ers ↔ San Francisco Temperature)
+# and got bound to NFL/MLB rows 2026-05-26. Treating weather as a
+# distinct domain — like the economic carve-out above — blocks the
+# pairing whenever the mapping is clearly sports or political and the
+# event is clearly weather.
+_WEATHER_HINT_TOKENS: frozenset[str] = frozenset({
+    "temperature", "temp", "high", "low", "rainfall", "snow", "snowfall",
+    "hurricane", "tropical", "storm", "tornado", "drought", "climate",
+    "carbon", "wind",
+})
+
 # Marker IBKR uses in companyHeader to identify ForecastEx event listings.
 FORECASTX_MARKER = "FORECASTX"
 
@@ -363,6 +376,8 @@ def _domain_compatible(event_title: str, mapping: MarketMapping) -> bool:
     mapping_is_political = bool(mapping_tokens & _POLITICAL_HINT_TOKENS)
     event_is_economic = bool(event_tokens & _ECONOMIC_HINT_TOKENS)
     mapping_is_economic = bool(mapping_tokens & _ECONOMIC_HINT_TOKENS)
+    event_is_weather = bool(event_tokens & _WEATHER_HINT_TOKENS)
+    mapping_is_weather = bool(mapping_tokens & _WEATHER_HINT_TOKENS)
 
     if mapping_is_sports and event_is_political and not event_is_sports:
         return False
@@ -381,6 +396,15 @@ def _domain_compatible(event_title: str, mapping: MarketMapping) -> bool:
     if mapping_is_political and event_is_economic and not event_is_political:
         return False
     if mapping_is_economic and event_is_political and not event_is_economic:
+        return False
+    # Weather carve-out — same shape as the economic one.
+    if mapping_is_sports and event_is_weather and not event_is_sports:
+        return False
+    if mapping_is_weather and event_is_sports and not event_is_weather:
+        return False
+    if mapping_is_political and event_is_weather and not event_is_political:
+        return False
+    if mapping_is_weather and event_is_political and not event_is_weather:
         return False
     return True
 

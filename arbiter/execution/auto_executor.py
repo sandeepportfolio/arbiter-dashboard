@@ -108,6 +108,7 @@ class AutoExecutorStats:
     skipped_depth_low: int = 0
     skipped_failed_cooldown: int = 0
     skipped_failure_pattern: int = 0
+    skipped_forecastex_unavailable: int = 0
     auto_disabled_loss_streak: int = 0
     failures: int = 0
     last_considered_ts: float = 0.0
@@ -130,6 +131,7 @@ class AutoExecutorStats:
             "skipped_depth_low": self.skipped_depth_low,
             "skipped_failed_cooldown": self.skipped_failed_cooldown,
             "skipped_failure_pattern": self.skipped_failure_pattern,
+            "skipped_forecastex_unavailable": self.skipped_forecastex_unavailable,
             "auto_disabled_loss_streak": self.auto_disabled_loss_streak,
             "failures": self.failures,
             "last_considered_ts": self.last_considered_ts,
@@ -249,6 +251,37 @@ class AutoExecutor:
                 has_mapping=mapping is not None,
             )
             return
+
+        # ForecastEx-leg safety gate: if either leg trades on ForecastEx and
+        # the mapping is negative-cached as forecastex_not_available OR has
+        # an empty/zero forecastex_contract_id, refuse the trade. The
+        # discovery resolver fingerprint matching can put unrelated markets
+        # (e.g. NFL Eagles ↔ Philadelphia CPI) on a shared parent conid; the
+        # FX collector skips those by not emitting prices, but if a stale
+        # price slips through the scanner we must not place an order on the
+        # wrong contract.
+        involves_fx = (
+            getattr(opp, "yes_platform", "") == "forecastex"
+            or getattr(opp, "no_platform", "") == "forecastex"
+        )
+        if involves_fx:
+            fx_unavailable = bool(
+                getattr(mapping, "forecastex_not_available", False)
+            )
+            fx_conid = str(
+                getattr(mapping, "forecastex_contract_id", "") or ""
+            ).strip()
+            if fx_unavailable or not fx_conid or fx_conid == "0":
+                self.stats.skipped_forecastex_unavailable += 1
+                log.warning(
+                    "auto_executor.skip.forecastex_unavailable",
+                    canonical_id=opp.canonical_id,
+                    fx_unavailable=fx_unavailable,
+                    fx_conid=fx_conid,
+                    yes_platform=getattr(opp, "yes_platform", ""),
+                    no_platform=getattr(opp, "no_platform", ""),
+                )
+                return
 
         if self._config.require_mapping_confirmed:
             # MappingStatus is a (str, Enum); str(enum) returns "MappingStatus.CONFIRMED"

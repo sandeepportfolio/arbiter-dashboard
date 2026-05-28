@@ -126,6 +126,35 @@ def test_score_event_against_mapping_blocks_sports_vs_political_false_positive()
     assert score == 0.0
 
 
+def test_score_event_against_mapping_blocks_sports_vs_weather_false_positive():
+    # 2026-05-26 prod trap: NFL 49ers championship mapping bound to
+    # "San Francisco Daily Temperature High UHSFO" — same city token,
+    # entirely different domain.
+    mapping = _make_mapping(
+        "CHAMP_KXNFLNFCCHAMP_27_SF",
+        description="Will San Francisco 49ers win the 2027 NFL NFC championship?",
+        polymarket_question="Will San Francisco 49ers win the 2027 NFL NFC championship?",
+    )
+    score = _score_event_against_mapping(
+        "San Francisco Daily Temperature High UHSFO", mapping,
+    )
+    assert score == 0.0
+
+
+def test_score_event_against_mapping_blocks_sports_vs_cpi_false_positive():
+    # 2026-05-26 prod trap: MLB Chicago Cubs mapping bound to "Chicago CPI"
+    # because both share the "chicago" token.
+    mapping = _make_mapping(
+        "GAME_MLB_20260527_CHC_b830e715",
+        description="Chicago Cubs vs. Pittsburgh Pirates",
+        polymarket_question="Chicago Cubs vs. Pittsburgh Pirates",
+    )
+    score = _score_event_against_mapping(
+        "Chicago CPI", mapping,
+    )
+    assert score == 0.0
+
+
 def test_score_event_against_mapping_allows_political_to_political():
     # Inverse — make sure the guard doesn't reject the legitimate match
     # between a political control market and the FORECASTX political event.
