@@ -4,7 +4,7 @@
 >
 > **Subscription:** Claude Max only — no API keys. All agents use the `claude_local` adapter backed by the local Claude Code CLI authenticated via Claude Max subscription OAuth.
 >
-> **Models:** Claude Opus 4.7 with 1M context (`claude-opus-4-7`) for strategic/high-reasoning agents. Claude Sonnet 4.6 (`claude-sonnet-4-6`) for fast specialist agents. Claude Haiku 4.5 (`claude-haiku-4-5`) for lightweight monitoring.
+> **Models:** Claude Opus 4.8 with 1M context (`claude-opus-4-8`) — the latest and most capable model, used for strategic/high-reasoning agents. Claude Sonnet 4.6 (`claude-sonnet-4-6`) for fast specialist agents. Claude Haiku 4.5 (`claude-haiku-4-5`) for lightweight monitoring.
 >
 > **Permission Mode:** ALL agents run with `dangerouslySkipPermissions: true` — this is a hard requirement for headless autonomous operation. Without it, agents block on interactive permission prompts that nobody can answer.
 >
@@ -148,7 +148,7 @@ Every agent in this deployment runs headless (no human at the terminal). The `cl
 6. **Kill-switch:** Arbiter's SafetySupervisor can halt all trading; CEO agent monitors it
 7. **Auditor independence:** The Auditor reports to CEO, not CTO — cannot be suppressed by engineering
 8. **Validation Gate:** 7-layer exhaustive test pipeline blocks bad code from reaching main
-9. **CTO Opus 4.7 review:** Final merge approval uses 1M-context Opus to review full diffs
+9. **CTO Opus 4.8 review:** Final merge approval uses 1M-context Opus to review full diffs
 
 **Claude Max rate limits:** Claude Max gives generous but not unlimited usage. Heartbeat intervals below are tuned to stay within typical Max subscription limits. Monitor usage in Paperclip's dashboard and throttle lower-priority agents first if limits approach.
 
@@ -180,7 +180,7 @@ In the Paperclip UI (or via API), create a company:
 Below is the complete org chart with 14 agents. Each agent has a defined role, adapter config, heartbeat schedule, and system prompt. All agents use the `claude_local` adapter with your Claude Max subscription. **ALL agents run with `dangerouslySkipPermissions: true`.**
 
 **Model assignments:**
-- **Claude Opus 4.7 (1M context)** — `claude-opus-4-7`: CEO, CTO, Trading Strategist, Auditor. Complex reasoning, strategic decisions, architecture review, financial verification. The 1M context window lets these agents digest large codebases, full audit trails, and multi-file changes in a single session.
+- **Claude Opus 4.8 (1M context)** — `claude-opus-4-8`: CEO, CTO, Trading Strategist, Auditor. The LATEST and most capable Claude model. Complex reasoning, strategic decisions, architecture review, financial verification. The 1M context window lets these agents digest large codebases, full audit trails, and multi-file changes in a single session.
 - **Claude Sonnet 4.6** — `claude-sonnet-4-6`: Market Scout, Market Mapper, ForecastEx Discovery, Data Harvester, Execution Engineer, Bug Hunter, Alert Analyst, QA Engineer, Validation Gate. Fast specialist work — pattern matching, monitoring, code fixes, triage. Sonnet is 5x faster than Opus, ideal for high-frequency heartbeats.
 - **Claude Haiku 4.5** — `claude-haiku-4-5`: DevOps. Lightweight infrastructure monitoring. Cheapest model, highest frequency.
 
@@ -190,7 +190,7 @@ Below is the complete org chart with 14 agents. Each agent has a defined role, a
 
 **Role:** Chief Executive Officer
 **Reports To:** Board (you)
-**Model:** `claude-opus-4-7` — 1M context window for full system comprehension
+**Model:** `claude-opus-4-8` — 1M context window for full system comprehension
 **Heartbeat:** Every 60 minutes
 **Budget:** $50/month (token tracking, soft cap)
 
@@ -200,7 +200,7 @@ Below is the complete org chart with 14 agents. Each agent has a defined role, a
   "adapterType": "claude_local",
   "runtimeConfig": {
     "cwd": "/home/user/arbiter-dashboard",
-    "model": "claude-opus-4-7",
+    "model": "claude-opus-4-8",
     "maxTurnsPerRun": 50,
     "dangerouslySkipPermissions": true,
     "timeoutSec": 600,
@@ -265,7 +265,7 @@ WORKING DIRECTORY: /home/user/arbiter-dashboard
 
 **Role:** Chief Technology Officer
 **Reports To:** CEO
-**Model:** `claude-opus-4-7` — 1M context for full-codebase architecture review
+**Model:** `claude-opus-4-8` — 1M context for full-codebase architecture review
 **Heartbeat:** Every 120 minutes
 **Budget:** $40/month
 
@@ -275,7 +275,7 @@ WORKING DIRECTORY: /home/user/arbiter-dashboard
   "adapterType": "claude_local",
   "runtimeConfig": {
     "cwd": "/home/user/arbiter-dashboard",
-    "model": "claude-opus-4-7",
+    "model": "claude-opus-4-8",
     "maxTurnsPerRun": 80,
     "dangerouslySkipPermissions": true,
     "timeoutSec": 900,
@@ -700,7 +700,7 @@ WORKING DIRECTORY: /home/user/arbiter-dashboard
 
 **Role:** Arbitrage Strategy & Parameter Optimization
 **Reports To:** CEO
-**Model:** `claude-opus-4-7` — 1M context for quantitative analysis across full trade history
+**Model:** `claude-opus-4-8` — 1M context for quantitative analysis across full trade history
 **Heartbeat:** Every 60 minutes
 **Budget:** $30/month
 
@@ -710,7 +710,7 @@ WORKING DIRECTORY: /home/user/arbiter-dashboard
   "adapterType": "claude_local",
   "runtimeConfig": {
     "cwd": "/home/user/arbiter-dashboard",
-    "model": "claude-opus-4-7",
+    "model": "claude-opus-4-8",
     "maxTurnsPerRun": 40,
     "dangerouslySkipPermissions": true,
     "timeoutSec": 600,
@@ -896,7 +896,7 @@ WORKING DIRECTORY: /home/user/arbiter-dashboard
 
 **Role:** Financial Verification & Compliance
 **Reports To:** CEO (INDEPENDENT of CTO chain)
-**Model:** `claude-opus-4-7` — 1M context for precise mathematical reasoning
+**Model:** `claude-opus-4-8` — 1M context for precise mathematical reasoning
 **Heartbeat:** Every 120 minutes
 **Budget:** $20/month
 
@@ -906,7 +906,7 @@ WORKING DIRECTORY: /home/user/arbiter-dashboard
   "adapterType": "claude_local",
   "runtimeConfig": {
     "cwd": "/home/user/arbiter-dashboard",
-    "model": "claude-opus-4-7",
+    "model": "claude-opus-4-8",
     "maxTurnsPerRun": 40,
     "dangerouslySkipPermissions": true,
     "timeoutSec": 600,
@@ -1233,22 +1233,22 @@ WORKING DIRECTORY: /home/user/arbiter-dashboard
                                    │
                           ┌────────▼─────────┐
                           │  CEO "Prime"      │
-                          │  Opus 4.7 · 60min │
+                          │  Opus 4.8 · 60min │
                           └────────┬─────────┘
                                    │
         ┌──────────────┬───────────┼───────────┬───────────────┐
         │              │           │           │               │
 ┌───────▼──────┐ ┌─────▼─────┐    │    ┌──────▼──────┐ ┌──────▼───────┐
 │CTO "Archon"  │ │Scout      │    │    │ Strategist  │ │Alert Analyst │
-│Opus 4.7      │ │"Pathfinder│    │    │ "Edge"      │ │"Watchtower"  │
-│120min        │ │"          │    │    │ Opus 4.7    │ │Sonnet 4.6    │
+│Opus 4.8      │ │"Pathfinder│    │    │ "Edge"      │ │"Watchtower"  │
+│120min        │ │"          │    │    │ Opus 4.8    │ │Sonnet 4.6    │
 │              │ │Sonnet 4.6 │    │    │ 60min       │ │15min         │
 └──────┬───────┘ │6hr        │    │    └─────────────┘ └──────────────┘
        │         └───────────┘    │
        │                    ┌─────▼──────┐
        │                    │Auditor     │
        │                    │"Ledger"    │
-       │                    │Opus 4.7    │
+       │                    │Opus 4.8    │
        │                    │120min      │
        │                    │(INDEPENDENT│
        │                    │ of CTO)    │
@@ -1270,7 +1270,7 @@ WORKING DIRECTORY: /home/user/arbiter-dashboard
 ```
 
 **Agent Count:** 14 total
-**Model Distribution:** 4× Opus 4.7 (1M context) · 9× Sonnet 4.6 · 1× Haiku 4.5
+**Model Distribution:** 4× Opus 4.8 (1M context) · 9× Sonnet 4.6 · 1× Haiku 4.5
 **ALL agents:** `dangerouslySkipPermissions: true` (mandatory for headless operation)
 
 ---
@@ -1307,7 +1307,7 @@ Validation Gate "Crucible" detects new branch (every 10 min)
 task → CTO      task → Developer Agent
        │         (with specific failure
        ▼          details to fix)
-CTO "Archon" (Opus 4.7, 1M context)
+CTO "Archon" (Opus 4.8, 1M context)
 reviews validation report
        │
        ▼
@@ -1544,7 +1544,7 @@ echo "  P0: ForecastEx — 0/219 mappings have FX conids (Prospector agent)"
 echo "  P1: Mapping expansion — 219 confirmed → 1000+ (Reaper agent)"
 echo ""
 echo "14 agents with dangerouslySkipPermissions: true"
-echo "  4× Opus 4.7 (1M) · 9× Sonnet 4.6 · 1× Haiku 4.5"
+echo "  4× Opus 4.8 (1M) · 9× Sonnet 4.6 · 1× Haiku 4.5"
 echo ""
 echo "Logs: /tmp/arbiter-api.log | /tmp/paperclip.log | /tmp/cloudflared.log"
 STARTUP
@@ -1555,7 +1555,7 @@ chmod +x /home/user/start-arbiter-paperclip.sh
 ### PHASE 10: Claude Max Usage Optimization
 
 **Model Assignment Strategy:**
-- **Opus 4.7 (1M)** (CEO, CTO, Strategist, Auditor): 4 × ~10 runs/day = ~40 runs/day
+- **Opus 4.8 (1M)** (CEO, CTO, Strategist, Auditor): 4 × ~10 runs/day = ~40 runs/day
 - **Sonnet 4.6** (9 agents): 9 × ~30 runs/day = ~270 runs/day
 - **Haiku 4.5** (DevOps): 1 × ~72 runs/day = ~72 runs/day
 - **Total:** ~382 runs/day across 14 agents
@@ -1566,7 +1566,7 @@ chmod +x /home/user/start-arbiter-paperclip.sh
 3. NEVER throttle: Validation Gate, Execution Engineer, DevOps
 4. NEVER throttle until targets hit: FX Discovery (P0), Data Harvester (P1)
 
-**Session Persistence:** `claude_local` persists session IDs between heartbeats. Opus 4.7's 1M context holds far more per session, reducing re-reads.
+**Session Persistence:** `claude_local` persists session IDs between heartbeats. Opus 4.8's 1M context holds far more per session, reducing re-reads.
 
 ### PHASE 11: Governance & Safety
 
@@ -1587,7 +1587,7 @@ chmod +x /home/user/start-arbiter-paperclip.sh
 4. maxTurnsPerRun caps
 5. Git branch isolation (feature branches, never main)
 6. 7-layer validation pipeline
-7. CTO Opus 4.7 review before merge
+7. CTO Opus 4.8 review before merge
 8. Auditor independence (reports to CEO, not CTO)
 9. Kill-switch (SafetySupervisor)
 10. Paperclip governance (board approval for high-risk actions)
@@ -1630,7 +1630,7 @@ claude auth status
 
 | Model ID | Name | Context | Agents | Count |
 |----------|------|---------|--------|-------|
-| `claude-opus-4-7` | Opus 4.7 | 1M tokens | CEO, CTO, Strategist, Auditor | 4 |
+| `claude-opus-4-8` | Opus 4.8 | 1M tokens | CEO, CTO, Strategist, Auditor | 4 |
 | `claude-sonnet-4-6` | Sonnet 4.6 | 200K tokens | Data Harvester, Scout, Mapper, FX Discovery, Exec Eng, Bug Hunter, Alert Analyst, Validation Gate, QA | 9 |
 | `claude-haiku-4-5` | Haiku 4.5 | 200K tokens | DevOps | 1 |
 
