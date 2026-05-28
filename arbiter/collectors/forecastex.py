@@ -758,6 +758,19 @@ class ForecastExCollector:
         # + secdef/strikes calls every cycle for a parent that will never
         # yield a NO child.
         self._no_discovery_failed: set[str] = set()
+        # First-cycle discovery throttle: when the container starts cold,
+        # every tracked YES conid hits ``_attempt_no_conid_discovery`` on
+        # the SAME fetch_markets call before negative caches build up. With
+        # ~20 conids × ~3 IBKR calls each (contract_info + a few
+        # secdef/strikes months), the fan-out exceeds IBKR's 10 rps budget
+        # and trips the circuit breaker (~30s outage) on every restart —
+        # see CV-01 diagnosis 2026-05-28. Throttle the first cycle by
+        # sleeping 200ms between discovery calls so the burst drops below
+        # the rate limit. After the first cycle completes, the negative
+        # cache covers all conids that won't yield a sibling, so subsequent
+        # cycles don't repeat the storm and the throttle is dropped.
+        self._first_discovery_cycle: bool = True
+        self._first_cycle_discovery_throttle_s: float = 0.2
         # Optional callback the supervisor wires to the child-conid
         # resolver's ``trigger()``. Invoked the instant we move a conid
         # into ``_inactive_conids`` so the resolver runs against the
@@ -1203,6 +1216,18 @@ class ForecastExCollector:
                 # then emits a YES-only quote.
                 no_conid: Optional[str] = mapped_no_conid or None
                 if not no_conid:
+                    # First-cycle throttle (see __post_init__ comment).
+                    # Only sleep when we're actually about to do
+                    # network-bound discovery (cache miss + not in
+                    # negative cache); cached lookups are free.
+                    if (
+                        self._first_discovery_cycle
+                        and yes_conid not in self._no_discovery_cache
+                        and yes_conid not in self._no_discovery_failed
+                    ):
+                        await asyncio.sleep(
+                            self._first_cycle_discovery_throttle_s
+                        )
                     no_conid = await self._attempt_no_conid_discovery(yes_conid)
 
                 no_snapshot = (
@@ -1236,6 +1261,19 @@ class ForecastExCollector:
                 self.total_errors += 1
                 self.consecutive_errors += 1
                 logger.error("ForecastEx fetch failed for %s: %s", yes_conid, exc)
+
+        # First cycle complete: every YES conid has been probed for a NO
+        # sibling exactly once (cached either positive or negative), so
+        # subsequent cycles will hit the cache and won't generate IBKR
+        # discovery traffic. Drop the throttle.
+        if self._first_discovery_cycle:
+            self._first_discovery_cycle = False
+            logger.info(
+                "ForecastEx first-cycle discovery complete "
+                "(cached=%d, failed=%d) — throttle dropped",
+                len(self._no_discovery_cache),
+                len(self._no_discovery_failed),
+            )
 
         return results
 
