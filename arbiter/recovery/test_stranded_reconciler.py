@@ -617,3 +617,202 @@ def test_strand_arb_id_fits_db_varchar_40():
     assert a != b, "same-prefix slugs collided — must use a hash, not a prefix"
     # Deterministic across calls (so dedup works).
     assert rec._strand_arb_id("polymarket", "paccc-usho-midterms-2026-11-03-dem") == long
+
+
+# ───────────────────────────────────────────────────────────────────────
+# Rate-limit, active-arb skip, Telegram notify tests
+# ───────────────────────────────────────────────────────────────────────
+
+
+async def test_close_attempt_rate_limited_within_window():
+    """Once a close has been attempted on a position, subsequent
+    reconciler cycles must NOT retry it until the cool-down window
+    elapses. Replaces the legacy one-shot ``auto_close_attempted`` gate
+    with a per-position sliding window so a single transient adapter
+    failure doesn't permanently strand the position.
+    """
+    from arbiter.execution.engine import Order, OrderStatus
+
+    engine = MagicMock()
+    engine._record_incident = AsyncMock()
+    engine._executions = []
+    adapter = MagicMock()
+    adapter.place_unwind_sell = AsyncMock(
+        return_value=Order(
+            order_id="UNWIND-RL", platform="kalshi", market_id="K-RL",
+            canonical_id="K-RL", side="yes",
+            price=0.01, quantity=3,
+            status=OrderStatus.CANCELLED, fill_qty=0, fill_price=0.0,
+            timestamp=time.time(),
+        )
+    )
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), engine=engine,
+        adapters={"kalshi": adapter}, auto_close=True,
+        max_auto_close_notional_usd=10.0,
+        max_auto_close_spread_bps=200.0,
+        close_retry_window_seconds=300.0,
+    )
+    rec._fetch_kalshi_positions = AsyncMock(return_value=[
+        _stub_pos(market_id="K-RL", qty=3, cost_basis_usd=1.5,
+                  best_bid=0.55, best_ask=0.56),
+    ])
+    rec._fetch_polymarket_us_positions = AsyncMock(return_value=[])
+    rec._fetch_forecastex_positions = AsyncMock(return_value=[])
+
+    await rec.run_once()
+    assert adapter.place_unwind_sell.await_count == 1
+    # Reset the one-shot flag — the rate-limit alone must hold the gate.
+    rec.tracked[("kalshi", "K-RL")].auto_close_attempted = False
+    await rec.run_once()
+    assert adapter.place_unwind_sell.await_count == 1, (
+        "rate-limit window failed to gate the retry"
+    )
+
+    # Manually expire the cool-down — the gate must re-open.
+    rec._last_close_attempt_ts[("kalshi", "K-RL")] = time.time() - 400.0
+    rec.tracked[("kalshi", "K-RL")].auto_close_attempted = False
+    await rec.run_once()
+    assert adapter.place_unwind_sell.await_count == 2
+
+
+async def test_skip_position_that_is_part_of_active_arb():
+    """A stranded lot whose (platform, market_id) is a leg of an in-flight
+    ArbExecution must NOT be auto-closed — closing it would crystallise
+    the arb's intended PnL and leave the other leg naked."""
+    engine = MagicMock()
+    engine._record_incident = AsyncMock()
+    # Fabricate an active execution that owns the same kalshi market.
+    leg_yes = SimpleNamespace(platform="kalshi", market_id="K-ACTIVE")
+    leg_no = SimpleNamespace(platform="polymarket", market_id="P-ACTIVE")
+    active_ex = SimpleNamespace(
+        status="pending", leg_yes=leg_yes, leg_no=leg_no,
+    )
+    engine._executions = [active_ex]
+
+    adapter = MagicMock()
+    adapter.place_unwind_sell = AsyncMock()
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), engine=engine,
+        adapters={"kalshi": adapter}, auto_close=True,
+        max_auto_close_notional_usd=10.0,
+        max_auto_close_spread_bps=200.0,
+    )
+    rec._fetch_kalshi_positions = AsyncMock(return_value=[
+        _stub_pos(market_id="K-ACTIVE", qty=3, cost_basis_usd=1.5,
+                  best_bid=0.55, best_ask=0.56),
+    ])
+    rec._fetch_polymarket_us_positions = AsyncMock(return_value=[])
+    rec._fetch_forecastex_positions = AsyncMock(return_value=[])
+
+    await rec.run_once()
+    assert adapter.place_unwind_sell.await_count == 0
+    pos = rec.tracked[("kalshi", "K-ACTIVE")]
+    assert "active arb" in (pos.auto_close_result or "").lower()
+
+
+async def test_skip_does_not_apply_to_terminal_arb_executions():
+    """An ArbExecution whose status is closed/cancelled/simulated MUST
+    NOT block the reconciler — those legs are no longer in flight."""
+    from arbiter.execution.engine import Order, OrderStatus
+
+    engine = MagicMock()
+    engine._record_incident = AsyncMock()
+    leg_yes = SimpleNamespace(platform="kalshi", market_id="K-DONE")
+    leg_no = SimpleNamespace(platform="polymarket", market_id="P-DONE")
+    closed_ex = SimpleNamespace(
+        status="closed", leg_yes=leg_yes, leg_no=leg_no,
+    )
+    engine._executions = [closed_ex]
+
+    adapter = MagicMock()
+    adapter.place_unwind_sell = AsyncMock(
+        return_value=Order(
+            order_id="UNWIND-DONE", platform="kalshi", market_id="K-DONE",
+            canonical_id="K-DONE", side="yes",
+            price=0.01, quantity=3,
+            status=OrderStatus.FILLED, fill_qty=3, fill_price=0.55,
+            timestamp=time.time(),
+        )
+    )
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), engine=engine,
+        adapters={"kalshi": adapter}, auto_close=True,
+        max_auto_close_notional_usd=10.0,
+        max_auto_close_spread_bps=200.0,
+    )
+    rec._fetch_kalshi_positions = AsyncMock(return_value=[
+        _stub_pos(market_id="K-DONE", qty=3, cost_basis_usd=1.5,
+                  best_bid=0.55, best_ask=0.56),
+    ])
+    rec._fetch_polymarket_us_positions = AsyncMock(return_value=[])
+    rec._fetch_forecastex_positions = AsyncMock(return_value=[])
+
+    await rec.run_once()
+    assert adapter.place_unwind_sell.await_count == 1
+
+
+async def test_close_action_sends_telegram_alert():
+    """A successful close must trigger a Telegram alert with the venue,
+    side, qty, fill, and PnL line. The notifier's dedup window already
+    backstops repeat alerts."""
+    from arbiter.execution.engine import Order, OrderStatus
+
+    engine = MagicMock()
+    engine._record_incident = AsyncMock()
+    engine._executions = []
+    adapter = MagicMock()
+    adapter.place_unwind_sell = AsyncMock(
+        return_value=Order(
+            order_id="UNWIND-TG", platform="polymarket",
+            market_id="P-TG", canonical_id="P-TG", side="yes",
+            price=0.01, quantity=10,
+            status=OrderStatus.FILLED, fill_qty=10, fill_price=0.55,
+            timestamp=time.time(),
+        )
+    )
+    notifier = MagicMock()
+    notifier._enabled = True
+    notifier.send = AsyncMock(return_value=True)
+
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), engine=engine,
+        adapters={"polymarket": adapter},
+        auto_close=True,
+        max_auto_close_notional_usd=30.0,
+        max_auto_close_spread_bps=1000.0,
+        penny_cost_threshold_usd=0.05,
+        notifier=notifier,
+    )
+    rec._fetch_kalshi_positions = AsyncMock(return_value=[])
+    rec._fetch_polymarket_us_positions = AsyncMock(return_value=[
+        _stub_pos(
+            platform="polymarket", market_id="P-TG",
+            qty=10, cost_basis_usd=4.5,         # 0.45/sh
+            best_bid=0.55, best_ask=0.56,
+        ),
+    ])
+    rec._fetch_forecastex_positions = AsyncMock(return_value=[])
+
+    await rec.run_once()
+    assert adapter.place_unwind_sell.await_count == 1
+    assert notifier.send.await_count == 1
+    body = notifier.send.await_args.args[0]
+    assert "P-TG" in body
+    assert "polymarket" in body.lower()
+    assert "PnL" in body
+
+
+def test_reconciler_from_env_defaults_to_30s_interval(monkeypatch):
+    """The 5-minute default was wrong — the reconciler should fire on
+    the auto_executor cadence (~30s) so stranded mitigation reacts
+    inside one trading cycle rather than five."""
+    monkeypatch.delenv("STRANDED_RECONCILE_INTERVAL_S", raising=False)
+    rec = reconciler_from_env(config=SimpleNamespace(), adapters={}, engine=None)
+    assert rec._interval_s == 30.0
+
+
+def test_reconciler_from_env_reads_close_retry_window(monkeypatch):
+    monkeypatch.setenv("STRANDED_CLOSE_RETRY_WINDOW_S", "120")
+    rec = reconciler_from_env(config=SimpleNamespace(), adapters={}, engine=None)
+    assert rec._close_retry_window_s == 120.0

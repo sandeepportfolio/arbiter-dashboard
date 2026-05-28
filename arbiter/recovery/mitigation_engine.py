@@ -330,6 +330,25 @@ class MitigationConfig:
     # this threshold the operator wants visibility because they may
     # want to babysit a manual close once a book reappears.
     unactionable_max_notional_usd: float = 10.0
+    # Age-bracketed loss-cut thresholds. The reconciler tracks
+    # ``first_seen_ts`` for every position; the bracket says how much
+    # of the original cost basis we'll absorb as realised loss on a
+    # CLOSE_NOW depending on how long the lot has been stranded.
+    # Rationale: fresh strands (<6h) are likely temporary glitches —
+    # holding gives the engine room to complete the arb instead of
+    # paying spread to exit at a loss. Mature strands (>24h) are
+    # almost certainly real one-leg risk; locking in 50% is better
+    # than holding through an adverse resolution.
+    young_age_seconds: float = 6 * 3600.0       # 0-6h bucket
+    mature_age_seconds: float = 24 * 3600.0     # 6-24h bucket
+    young_max_loss_pct: float = 0.0             # 0-6h: profitable or break-even only
+    mature_max_loss_pct: float = 0.25           # 6-24h: up to 25% loss of cost
+    aged_max_loss_pct: float = 0.50             # 24h+: up to 50% loss of cost
+    # Settlement-proximity hold window. When the market closes within
+    # this many seconds, we HOLD even if the loss-cut math says CLOSE.
+    # Paying spread to exit a position that will resolve in hours is
+    # never worth it — settlement itself zeroes or settles the lot.
+    settlement_proximity_hold_seconds: float = 24 * 3600.0
 
 
 class MitigationEngine:
@@ -480,6 +499,30 @@ class MitigationEngine:
             <= cfg.underwater_close_ratio
         )
 
+        # ─── Settlement-proximity guard ─────────────────────────────────
+        # Within ``settlement_proximity_hold_seconds`` of expiry, we
+        # ALWAYS hold — settlement itself will resolve the position one
+        # way or the other, and the spread we'd pay to exit dwarfs any
+        # marginal edge the cost-benefit math claims. Applies regardless
+        # of whether we're underwater.
+        if (
+            prof.seconds_to_expiry is not None
+            and 0 < prof.seconds_to_expiry <= cfg.settlement_proximity_hold_seconds
+        ):
+            hours_left = prof.seconds_to_expiry / 3600.0
+            return MitigationDecision(
+                action=HOLD_TO_SETTLE,
+                rationale=(
+                    f"settlement-proximity hold: market resolves in "
+                    f"{hours_left:.1f}h (≤ {cfg.settlement_proximity_hold_seconds / 3600.0:.0f}h "
+                    f"hold window). Spread cost to exit (${(prof.spread_cents / 100.0) * prof.qty:.2f}) "
+                    f"exceeds remaining holding cost; let settlement resolve."
+                ),
+                profitability=prof,
+                confidence="high",
+                autonomous_ok=True,
+            )
+
         if market_says_losing or deep_underwater:
             autonomous = (
                 notional <= cfg.max_autonomous_notional_usd
@@ -489,6 +532,43 @@ class MitigationEngine:
                 (prof.close_proceeds_usd / prof.cost_basis_usd * 100.0)
                 if prof.cost_basis_usd > 0 else 0.0
             )
+            # ─── Age-bracketed loss-cut threshold ───────────────────────
+            # Compute realised-loss ratio that closing-now would lock
+            # in, then look up the maximum loss the position's age
+            # bracket tolerates. If the close would breach the cap,
+            # downgrade to HOLD_TO_SETTLE instead — paying spread to
+            # crystallise a too-large loss is exactly the trap the
+            # operator wants the engine to avoid.
+            age_seconds = max(0.0, time.time() - float(getattr(pos, "first_seen_ts", 0.0) or 0.0))
+            if age_seconds < cfg.young_age_seconds:
+                age_bracket = "0-6h"
+                max_loss_pct = cfg.young_max_loss_pct
+            elif age_seconds < cfg.mature_age_seconds:
+                age_bracket = "6-24h"
+                max_loss_pct = cfg.mature_max_loss_pct
+            else:
+                age_bracket = "24h+"
+                max_loss_pct = cfg.aged_max_loss_pct
+            realised_loss_pct = (
+                max(0.0, (prof.cost_basis_usd - prof.close_proceeds_usd) / prof.cost_basis_usd)
+                if prof.cost_basis_usd > 0 else 0.0
+            )
+            if realised_loss_pct > max_loss_pct:
+                return MitigationDecision(
+                    action=HOLD_TO_SETTLE,
+                    rationale=(
+                        f"age-bracket loss cap: closing now would lock in "
+                        f"{realised_loss_pct:.0%} loss of ${prof.cost_basis_usd:.2f} "
+                        f"cost basis, exceeding the {max_loss_pct:.0%} cap for "
+                        f"the {age_bracket} bracket (age={age_seconds / 3600.0:.1f}h). "
+                        f"Hold and let the position mature into the next "
+                        f"bracket or settle naturally."
+                    ),
+                    profitability=prof,
+                    confidence="medium",
+                    autonomous_ok=True,
+                )
+
             return MitigationDecision(
                 action=CLOSE_NOW,
                 rationale=(
@@ -499,7 +579,9 @@ class MitigationEngine:
                     f"cost) before resolution news takes the position to "
                     f"zero. EV at settle (${prof.expected_value_at_settle_usd:.2f}) "
                     f"only marginally exceeds scrap; certainty premium of "
-                    f"the bid wins."
+                    f"the bid wins. Age={age_seconds / 3600.0:.1f}h "
+                    f"({age_bracket}); realised loss {realised_loss_pct:.0%} "
+                    f"within {max_loss_pct:.0%} bracket cap."
                 ),
                 profitability=prof,
                 confidence="high" if deep_underwater else "medium",

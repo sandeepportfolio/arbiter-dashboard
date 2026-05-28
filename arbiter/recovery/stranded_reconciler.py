@@ -167,13 +167,15 @@ class StrandedPositionReconciler:
         forecastex_client: Optional[Any] = None,
         price_store: Optional[Any] = None,
         market_map_provider: Optional[Any] = None,
-        interval_s: float = 300.0,
+        interval_s: float = 30.0,
         auto_close: bool = False,
         max_auto_close_notional_usd: float = 30.0,
         max_auto_close_spread_bps: float = 1000.0,  # 10¢ wide max
         penny_cost_threshold_usd: float = 0.05,
         let_settle_window_seconds: float = 7 * 24 * 3600.0,
         mitigation_engine: Optional[Any] = None,
+        notifier: Optional[Any] = None,
+        close_retry_window_seconds: float = 300.0,
     ) -> None:
         self._config = config
         self._adapters = adapters or {}
@@ -231,6 +233,15 @@ class StrandedPositionReconciler:
         # expiry penny positions (we don't have a date to compare to).
         self._let_settle_window_seconds = max(0.0, float(let_settle_window_seconds))
         self._cycle_count: int = 0
+        # TelegramNotifier for close-action alerts. Optional — tests omit it.
+        self._notifier = notifier
+        # Per-position close-attempt rate limit. ``auto_close_attempted``
+        # alone is a one-shot flag; this map gives us a sliding-window
+        # cooldown so a single transient adapter failure doesn't leave a
+        # position permanently un-mitigated. After ``close_retry_window_
+        # seconds`` since the last attempt, the gate re-opens.
+        self._close_retry_window_s = max(60.0, float(close_retry_window_seconds))
+        self._last_close_attempt_ts: Dict[tuple, float] = {}
         # Persistent map keyed by (platform, market_id) so dedup survives
         # across cycles — the first_seen_ts only resets when the position
         # disappears off the venue.
@@ -415,7 +426,24 @@ class StrandedPositionReconciler:
         # silently; the rest leave an incident for operator review.
         if self._auto_close:
             for pos in list(self._tracked.values()):
-                if pos.auto_close_attempted:
+                key = (pos.platform, pos.market_id)
+                # Active-arb safety gate: never touch a position whose
+                # venue + market_id matches a leg of an in-flight
+                # ArbExecution. Closing it underneath the live executor
+                # would crystallise the arb's loss AND leave the engine
+                # holding the opposite leg naked.
+                if self._is_part_of_active_arb(pos):
+                    pos.auto_close_result = (
+                        "skipped: part of active arb execution"
+                    )
+                    pos.mitigation_action = "skip_active_arb"
+                    continue
+                # Rate-limit close attempts: 1 per (platform, market_id)
+                # per ``close_retry_window_seconds``. Replaces the
+                # one-shot ``auto_close_attempted`` gate so a position
+                # that fails to close (e.g. adapter timeout) can be
+                # retried after the cool-down window expires.
+                if not self._close_attempt_allowed(key):
                     continue
                 if self._mitigation_engine is not None and pos.mitigation_decision:
                     await self._execute_decision(pos)
@@ -710,6 +738,83 @@ class StrandedPositionReconciler:
         digest = hashlib.sha1(market_id.encode("utf-8")).hexdigest()[:12]
         return f"STRAND-{venue}-{digest}"
 
+    def _is_part_of_active_arb(self, pos: StrandedPosition) -> bool:
+        """Return True when ``pos`` matches a leg of an in-flight arb.
+
+        The reconciler MUST NOT close legs the executor is still trying
+        to use — doing so would crystallise the arb's intended PnL and
+        leave the other leg naked. We check ``engine._executions`` for
+        any ArbExecution whose YES or NO leg matches our (platform,
+        market_id) and is in a non-terminal status.
+        """
+        engine = self._engine
+        if engine is None:
+            return False
+        executions = getattr(engine, "_executions", None)
+        if executions is None or not isinstance(executions, (list, tuple)):
+            return False
+        # Active = NOT in any terminal/no-op status. Inverting the set
+        # keeps us safe against new status values the engine may add.
+        terminal_statuses = {"closed", "cancelled", "simulated", "rejected", "failed"}
+        for ex in executions:
+            status = str(getattr(ex, "status", "") or "").lower()
+            if status in terminal_statuses:
+                continue
+            for leg in (getattr(ex, "leg_yes", None), getattr(ex, "leg_no", None)):
+                if leg is None:
+                    continue
+                leg_platform = str(getattr(leg, "platform", "") or "").lower()
+                leg_market = str(getattr(leg, "market_id", "") or "")
+                if leg_platform == pos.platform.lower() and leg_market == pos.market_id:
+                    return True
+        return False
+
+    def _close_attempt_allowed(self, key: tuple) -> bool:
+        """Return True when the per-position cool-down has elapsed."""
+        last = self._last_close_attempt_ts.get(key)
+        if last is None:
+            return True
+        return (time.time() - last) >= self._close_retry_window_s
+
+    def _mark_close_attempt(self, key: tuple) -> None:
+        self._last_close_attempt_ts[key] = time.time()
+
+    async def _notify_close(
+        self, pos: StrandedPosition, action: str, fill_qty: float,
+        fill_price: float, status: str, pnl_usd: float,
+    ) -> None:
+        """Send a Telegram alert for a close-action outcome.
+
+        Per-position dedup key prevents the same close (in the rare case
+        the reconciler retries mid-window) from spamming the chat. Burst
+        guard at the notifier level still backstops a multi-position
+        cascade.
+        """
+        notifier = self._notifier
+        if notifier is None or not getattr(notifier, "_enabled", False):
+            return
+        verb = "PROFITABLE CLOSE" if pnl_usd >= 0 else "LOSS-CUT CLOSE"
+        sign = "+" if pnl_usd >= 0 else ""
+        msg = (
+            f"<b>{verb}</b> ({action})\n"
+            f"venue: {pos.platform}\n"
+            f"market: {pos.market_id}\n"
+            f"side: {pos.side}  qty: {abs(int(pos.qty))}\n"
+            f"fill: {fill_qty} @ ${fill_price:.4f}  status: {status}\n"
+            f"cost basis: ${pos.cost_basis_usd:.2f}  "
+            f"PnL: {sign}${pnl_usd:.2f}"
+        )
+        try:
+            await notifier.send(
+                msg,
+                dedup_key=f"strand_close_{pos.platform}_{pos.market_id}",
+            )
+        except Exception as exc:
+            logger.debug(
+                "stranded_reconciler.notify_close_failed",
+                platform=pos.platform, market_id=pos.market_id, err=str(exc),
+            )
+
     async def _emit_stranded_incident(self, pos: StrandedPosition) -> None:
         """Surface a new stranded lot as a warning incident the engine
         already knows how to route to Telegram + the ops UI."""
@@ -845,8 +950,10 @@ class StrandedPositionReconciler:
         qty = int(info.get("qty") or 0)
         canonical_id = info.get("canonical_id") or pos.market_id
         adapter = self._adapters.get(venue) if venue else None
+        key = (pos.platform, pos.market_id)
         if adapter is None or not hasattr(adapter, "place_fok") or qty <= 0:
             pos.auto_close_attempted = True
+            self._mark_close_attempt(key)
             pos.auto_close_result = (
                 f"COMPLETE_ARB blocked: venue={venue!r} has no place_fok"
             )
@@ -862,7 +969,9 @@ class StrandedPositionReconciler:
                 qty=qty,
             )
             pos.auto_close_attempted = True
+            self._mark_close_attempt(key)
             fill = float(getattr(order, "fill_qty", 0) or 0)
+            fill_px = float(getattr(order, "fill_price", 0) or 0)
             status = getattr(getattr(order, "status", None), "value", str(getattr(order, "status", "")))
             pos.auto_close_result = (
                 f"COMPLETE_ARB: placed BUY {qty} {side.upper()} on {venue} "
@@ -875,8 +984,19 @@ class StrandedPositionReconciler:
                 arb_venue=venue, arb_market_id=market_id, arb_side=side,
                 price=price, qty=qty, status=status, fill_qty=fill,
             )
+            if fill > 0:
+                # Edge per pair captured in cents. The position itself
+                # is now part of a real arb — net PnL approximates
+                # qty * (1 - cps - fill_px), pre-fees.
+                cps = (abs(float(pos.cost_basis_usd or 0.0))
+                       / max(abs(float(pos.qty or 0.0)), 1e-9))
+                pnl = fill * (1.0 - cps - fill_px)
+                await self._notify_close(
+                    pos, "COMPLETE_ARB", fill, fill_px, str(status), pnl,
+                )
         except Exception as exc:
             pos.auto_close_attempted = True
+            self._mark_close_attempt(key)
             pos.auto_close_result = f"COMPLETE_ARB exception: {exc}"
             logger.warning(
                 "stranded_reconciler.complete_arb_failed",
@@ -889,9 +1009,11 @@ class StrandedPositionReconciler:
     ) -> None:
         """Place a market sell (IOC) on the position's own venue."""
         adapter = self._adapters.get(pos.platform)
+        key = (pos.platform, pos.market_id)
         if adapter is None or not hasattr(adapter, "place_unwind_sell"):
             pos.auto_close_attempted = True
             pos.auto_close_result = "CLOSE_NOW blocked: no place_unwind_sell"
+            self._mark_close_attempt(key)
             return
         try:
             order = await adapter.place_unwind_sell(
@@ -902,7 +1024,9 @@ class StrandedPositionReconciler:
                 qty=int(abs(pos.qty)),
             )
             pos.auto_close_attempted = True
+            self._mark_close_attempt(key)
             fill = float(getattr(order, "fill_qty", 0) or 0)
+            fill_px = float(getattr(order, "fill_price", 0) or 0)
             status = getattr(getattr(order, "status", None), "value", str(getattr(order, "status", "")))
             pos.mitigation_action = "closed" if fill > 0 else "close_now"
             pos.auto_close_result = (
@@ -913,8 +1037,17 @@ class StrandedPositionReconciler:
                 platform=pos.platform, market_id=pos.market_id,
                 qty=pos.qty, status=status, fill_qty=fill,
             )
+            if fill > 0:
+                pnl = (fill * fill_px) - (
+                    abs(float(pos.cost_basis_usd or 0.0))
+                    * (fill / max(abs(float(pos.qty or 0.0)), 1e-9))
+                )
+                await self._notify_close(
+                    pos, "CLOSE_NOW", fill, fill_px, str(status), pnl,
+                )
         except Exception as exc:
             pos.auto_close_attempted = True
+            self._mark_close_attempt(key)
             pos.auto_close_result = f"CLOSE_NOW exception: {exc}"
             logger.warning(
                 "stranded_reconciler.close_now_failed",
@@ -1022,6 +1155,7 @@ class StrandedPositionReconciler:
         # the same hash-based id as the incident so DB joins (and
         # operator-side dedup) line up.
         adapter = self._adapters[pos.platform]
+        key = (pos.platform, pos.market_id)
         try:
             order = await adapter.place_unwind_sell(
                 arb_id=self._strand_arb_id(pos.platform, pos.market_id),
@@ -1031,7 +1165,9 @@ class StrandedPositionReconciler:
                 qty=int(abs(pos.qty)),
             )
             pos.auto_close_attempted = True
+            self._mark_close_attempt(key)
             fill = float(getattr(order, "fill_qty", 0) or 0)
+            fill_px = float(getattr(order, "fill_price", 0) or 0)
             pos.mitigation_action = "closed" if fill > 0 else "close_market"
             pos.auto_close_result = (
                 f"status={order.status.value} fill_qty={fill}"
@@ -1044,8 +1180,17 @@ class StrandedPositionReconciler:
                 status=order.status.value,
                 fill_qty=fill,
             )
+            if fill > 0:
+                pnl = (fill * fill_px) - (
+                    abs(float(pos.cost_basis_usd or 0.0))
+                    * (fill / max(abs(float(pos.qty or 0.0)), 1e-9))
+                )
+                await self._notify_close(
+                    pos, "CLOSE_MARKET", fill, fill_px, str(order.status.value), pnl,
+                )
         except Exception as exc:
             pos.auto_close_attempted = True
+            self._mark_close_attempt(key)
             pos.auto_close_result = f"exception: {exc}"
             logger.warning(
                 "stranded_reconciler.auto_close_failed",
@@ -1058,21 +1203,23 @@ class StrandedPositionReconciler:
 def reconciler_from_env(
     *, config, adapters, engine,
     forecastex_client=None, price_store=None, market_map_provider=None,
+    notifier=None,
 ) -> StrandedPositionReconciler:
     """Build a reconciler with config sourced from env vars.
 
     Env vars:
-      - STRANDED_RECONCILE_INTERVAL_S      (default 300)
-      - STRANDED_AUTO_CLOSE                (default false — operator review)
-      - STRANDED_AUTO_CLOSE_MAX_USD        (default 30 — covers ~$27 poly midterms)
-      - STRANDED_AUTO_CLOSE_MAX_SPREAD_BPS (default 1000 = 10c wide)
-      - STRANDED_PENNY_COST_USD            (default 0.05 — below this, let_settle)
-      - STRANDED_LET_SETTLE_WINDOW_S       (default 604800 = 7d to expiry; informational)
+      - STRANDED_RECONCILE_INTERVAL_S       (default 30 — matches auto_executor cadence)
+      - STRANDED_AUTO_CLOSE                 (default false — operator review)
+      - STRANDED_AUTO_CLOSE_MAX_USD         (default 30 — covers ~$27 poly midterms)
+      - STRANDED_AUTO_CLOSE_MAX_SPREAD_BPS  (default 1000 = 10c wide)
+      - STRANDED_PENNY_COST_USD             (default 0.05 — below this, let_settle)
+      - STRANDED_LET_SETTLE_WINDOW_S        (default 604800 = 7d to expiry; informational)
+      - STRANDED_CLOSE_RETRY_WINDOW_S       (default 300 — 1 close attempt per position per 5 min)
     """
     try:
-        interval = float(os.getenv("STRANDED_RECONCILE_INTERVAL_S", "300") or "300")
+        interval = float(os.getenv("STRANDED_RECONCILE_INTERVAL_S", "30") or "30")
     except (TypeError, ValueError):
-        interval = 300.0
+        interval = 30.0
     auto_close = str(os.getenv("STRANDED_AUTO_CLOSE", "")).strip().lower() in (
         "1", "true", "yes", "on",
     )
@@ -1094,6 +1241,12 @@ def reconciler_from_env(
         )
     except (TypeError, ValueError):
         let_settle_window = 7 * 24 * 3600.0
+    try:
+        close_retry_window = float(
+            os.getenv("STRANDED_CLOSE_RETRY_WINDOW_S", "300") or "300"
+        )
+    except (TypeError, ValueError):
+        close_retry_window = 300.0
     return StrandedPositionReconciler(
         config=config,
         adapters=adapters,
@@ -1107,4 +1260,6 @@ def reconciler_from_env(
         max_auto_close_spread_bps=max_bps,
         penny_cost_threshold_usd=penny,
         let_settle_window_seconds=let_settle_window,
+        notifier=notifier,
+        close_retry_window_seconds=close_retry_window,
     )

@@ -2910,7 +2910,7 @@ function ExecutionHealthPanel() {
         </div>
         {strandedCount === 0 && strandedCycle === 0 ? (
           <div style={{ fontSize:10.5, color:t.textMuted, lineHeight:1.45 }}>
-            Reconciler not yet running or no snapshot published. Fires on a 5-minute interval after startup.
+            Reconciler not yet running or no snapshot published. Fires on the auto-executor cadence (~30s) after startup.
           </div>
         ) : strandedCount === 0 ? (
           <div style={{ fontSize:10.5, color:t.green, lineHeight:1.45 }}>

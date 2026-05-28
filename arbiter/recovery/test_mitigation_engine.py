@@ -109,23 +109,25 @@ async def test_decide_hold_to_settle_for_penny():
 
 @pytest.mark.asyncio
 async def test_decide_close_now_when_underwater_and_close_advantage():
-    """Position bought at 0.70/sh, market now 0.10 bid / 0.12 ask.
-    Holding has tiny EV (12%); closing recovers some cash."""
+    """Aged position bought at 0.16/sh, market now 0.10 bid / 0.12 ask.
+    Position is >24h old so the age-bracket loss cap is 50%; realised
+    loss here ≈ 37% sits within that ceiling, so the close fires."""
     eng = MitigationEngine(
         adapters={"polymarket": _adapter()},
         market_map_provider=lambda: {},
     )
     pos = _pos(
         platform="polymarket", market_id="p-x",
-        qty=50, cost_basis_usd=35.0,
+        qty=50, cost_basis_usd=8.0,
         best_bid=0.10, best_ask=0.12,
+        first_seen_ts=time.time() - 25 * 3600.0,  # 25h old → 24h+ bracket
     )
     d = await eng.decide(pos)
     assert d.action == CLOSE_NOW
     assert d.close_qty == 50
     assert d.close_price == pytest.approx(0.10)
-    # Underwater + autonomous since notional is within $30 cap? cost=$35 → above cap, so NOT autonomous
-    assert d.autonomous_ok is False
+    # Notional ($8) is within the default $30 autonomous cap.
+    assert d.autonomous_ok is True
 
 
 @pytest.mark.asyncio
@@ -316,3 +318,152 @@ async def test_decide_does_not_complete_arb_when_edge_too_thin():
     d = await eng.decide(pos)
     # Should fall through to hold/close, NOT COMPLETE_ARB.
     assert d.action != COMPLETE_ARB
+
+
+# ─── Age-bracketed loss-cut tests ─────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_decide_young_position_holds_when_close_would_lock_loss():
+    """0-6h old + underwater → HOLD (young bracket allows 0% loss).
+
+    Engine should refuse to crystallise any loss in the first six hours
+    because fresh strands are often transient bookkeeping drift the
+    engine can still resolve via COMPLETE_ARB on the next quote update.
+    """
+    eng = MitigationEngine(
+        adapters={"polymarket": _adapter()},
+        market_map_provider=lambda: {},
+    )
+    pos = _pos(
+        platform="polymarket", market_id="p-young",
+        qty=50, cost_basis_usd=8.0,
+        best_bid=0.10, best_ask=0.12,
+        first_seen_ts=time.time() - 1 * 3600.0,  # 1h old → 0-6h bracket
+    )
+    d = await eng.decide(pos)
+    assert d.action == HOLD_TO_SETTLE
+    assert "age-bracket" in d.rationale.lower()
+    assert "0-6h" in d.rationale
+
+
+@pytest.mark.asyncio
+async def test_decide_mature_position_closes_within_25pct_loss_cap():
+    """6-24h old + 20% loss → CLOSE_NOW (within the 25% cap)."""
+    eng = MitigationEngine(
+        adapters={"polymarket": _adapter()},
+        market_map_provider=lambda: {},
+    )
+    # qty=50, cost=$10 (0.20/sh), bid=$0.16 → close proceeds ~$8 →
+    # realised loss ~20% sits inside the 6-24h 25% cap.
+    pos = _pos(
+        platform="polymarket", market_id="p-mature",
+        qty=50, cost_basis_usd=10.0,
+        best_bid=0.16, best_ask=0.18,
+        first_seen_ts=time.time() - 12 * 3600.0,  # 12h → 6-24h
+    )
+    d = await eng.decide(pos)
+    assert d.action == CLOSE_NOW
+    assert d.close_qty == 50
+    assert "6-24h" in d.rationale
+
+
+@pytest.mark.asyncio
+async def test_decide_mature_position_holds_when_loss_exceeds_25pct():
+    """6-24h old + 50% loss → HOLD (exceeds bracket cap)."""
+    eng = MitigationEngine(
+        adapters={"polymarket": _adapter()},
+        market_map_provider=lambda: {},
+    )
+    # cost $10 (0.20/sh), bid $0.05 → close ~$2.5 → 75% loss > 25% cap.
+    pos = _pos(
+        platform="polymarket", market_id="p-mature-deep",
+        qty=50, cost_basis_usd=10.0,
+        best_bid=0.05, best_ask=0.07,
+        first_seen_ts=time.time() - 12 * 3600.0,
+    )
+    d = await eng.decide(pos)
+    assert d.action == HOLD_TO_SETTLE
+    assert "age-bracket" in d.rationale.lower()
+
+
+@pytest.mark.asyncio
+async def test_decide_aged_position_closes_up_to_50pct_loss():
+    """24h+ old + 40% loss → CLOSE_NOW (within the 50% cap)."""
+    eng = MitigationEngine(
+        adapters={"polymarket": _adapter()},
+        market_map_provider=lambda: {},
+    )
+    # cost $10, bid $0.12 → close ~$6 → 40% loss within 50% cap.
+    pos = _pos(
+        platform="polymarket", market_id="p-aged",
+        qty=50, cost_basis_usd=10.0,
+        best_bid=0.12, best_ask=0.14,
+        first_seen_ts=time.time() - 30 * 3600.0,  # 30h → 24h+
+    )
+    d = await eng.decide(pos)
+    assert d.action == CLOSE_NOW
+    assert "24h+" in d.rationale
+
+
+@pytest.mark.asyncio
+async def test_decide_aged_position_holds_when_loss_exceeds_50pct():
+    """24h+ old + 80% loss → HOLD (exceeds even the 50% aged cap)."""
+    eng = MitigationEngine(
+        adapters={"polymarket": _adapter()},
+        market_map_provider=lambda: {},
+    )
+    # cost $10, bid $0.04 → close ~$2 → 80% loss > 50% cap.
+    pos = _pos(
+        platform="polymarket", market_id="p-aged-deep",
+        qty=50, cost_basis_usd=10.0,
+        best_bid=0.04, best_ask=0.06,
+        first_seen_ts=time.time() - 30 * 3600.0,
+    )
+    d = await eng.decide(pos)
+    assert d.action == HOLD_TO_SETTLE
+
+
+# ─── Settlement-proximity tests ───────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_decide_settlement_proximity_overrides_close():
+    """Settlement within 24h → HOLD even if loss-bracket math would close.
+
+    Paying spread to exit a position that resolves in hours is never
+    rational; settlement itself zeroes-or-pays the lot for free.
+    """
+    eng = MitigationEngine(
+        adapters={"polymarket": _adapter()},
+        market_map_provider=lambda: {},
+    )
+    pos = _pos(
+        platform="polymarket", market_id="p-near-settle",
+        qty=50, cost_basis_usd=10.0,
+        best_bid=0.12, best_ask=0.14,
+        first_seen_ts=time.time() - 30 * 3600.0,  # 30h old
+        expiry_ts=time.time() + 6 * 3600.0,        # resolves in 6h
+    )
+    d = await eng.decide(pos)
+    assert d.action == HOLD_TO_SETTLE
+    assert "settlement-proximity" in d.rationale.lower()
+
+
+@pytest.mark.asyncio
+async def test_decide_far_from_settlement_does_not_trigger_proximity_hold():
+    """Settlement >24h away → normal cost-benefit applies."""
+    eng = MitigationEngine(
+        adapters={"polymarket": _adapter()},
+        market_map_provider=lambda: {},
+    )
+    pos = _pos(
+        platform="polymarket", market_id="p-far-settle",
+        qty=50, cost_basis_usd=10.0,
+        best_bid=0.12, best_ask=0.14,
+        first_seen_ts=time.time() - 30 * 3600.0,
+        expiry_ts=time.time() + 7 * 24 * 3600.0,   # 7 days out
+    )
+    d = await eng.decide(pos)
+    # 40% loss within 50% bracket → CLOSE_NOW fires.
+    assert d.action == CLOSE_NOW

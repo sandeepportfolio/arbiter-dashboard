@@ -1546,6 +1546,7 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
             config=config, adapters=adapters, engine=engine,
             forecastex_client=(forecastex.client if forecastex is not None else None),
             price_store=price_store,
+            notifier=monitor.notifier if monitor is not None else None,
         )
         # Stash on the API so /api/system can render the latest
         # snapshot without re-querying the venues.
