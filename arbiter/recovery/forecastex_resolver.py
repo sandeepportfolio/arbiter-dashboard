@@ -630,10 +630,38 @@ class ForecastExChildResolver:
                 ),
             )
 
-        # Persist the child conid via the mapping store. The
+        # Persist the YES + NO child conids via the mapping store. The
         # mapping_store.upsert path triggers upsert_runtime_market_mapping
         # which mutates the in-process MARKET_MAP — so the next collector
-        # cycle picks up the new conid.
+        # cycle picks up both conids.
+        # ForecastEx binary contracts have SEPARATE IBKR conids for YES
+        # (right=C) and NO (right=P) under the same parent event at the
+        # same strike. Persisting only YES was the root cause of the
+        # ARB-000695/699 phantom-trade incident (2026-05-28 postmortem).
+        no_child_conid = ""
+        yes_strike_raw = yes_child.get("strike")
+        try:
+            yes_strike_f = (
+                float(yes_strike_raw) if yes_strike_raw is not None else None
+            )
+        except (TypeError, ValueError):
+            yes_strike_f = None
+        for c in children:
+            if not isinstance(c, dict):
+                continue
+            if str(c.get("right", "")).upper() not in ("P", "PUT"):
+                continue
+            if yes_strike_f is not None:
+                try:
+                    cs = float(c.get("strike") or 0.0)
+                except (TypeError, ValueError):
+                    continue
+                if abs(cs - yes_strike_f) > 1e-6:
+                    continue
+            cand = str(c.get("conid") or "").strip()
+            if cand and cand != child_conid:
+                no_child_conid = cand
+                break
         try:
             mapping = await self._mapping_store.get(canonical_id)
             if mapping is None:
@@ -643,6 +671,8 @@ class ForecastExChildResolver:
                     detail="mapping disappeared between candidate selection and update",
                 )
             mapping.forecastex_contract_id = child_conid
+            if no_child_conid:
+                mapping.forecastex_no_contract_id = no_child_conid
             mapping.forecastex_not_available = False
             await self._mapping_store.upsert(mapping)
         except Exception as exc:
@@ -657,6 +687,8 @@ class ForecastExChildResolver:
         try:
             self._collector.reactivate_conid(parent_conid)
             self._collector.reactivate_conid(child_conid)
+            if no_child_conid:
+                self._collector.reactivate_conid(no_child_conid)
         except Exception:
             pass
 
@@ -665,6 +697,7 @@ class ForecastExChildResolver:
             canonical_id=canonical_id,
             parent_conid=parent_conid,
             child_conid=child_conid,
+            no_child_conid=no_child_conid or "(unresolved)",
             right=yes_child.get("right"),
             strike=yes_child.get("strike"),
             source=yes_child.get("source"),

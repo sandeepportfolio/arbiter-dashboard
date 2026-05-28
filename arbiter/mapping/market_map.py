@@ -57,6 +57,13 @@ class MarketMapping:
     # event has no ForecastEx listing — the scanner just skips that platform
     # leg for the mapping.
     forecastex_contract_id: str = ""
+    # ForecastEx NO-side conid. ForecastEx binary contracts have SEPARATE
+    # IBKR conids for YES (right=C, "Call") and NO (right=P, "Put") under
+    # the same parent event. Empty when discovery has not yet attached the
+    # NO sibling — the collector then runtime-discovers via secdef/info
+    # using ``forecastex_contract_id`` as the YES anchor. Stored so
+    # restarts don't have to re-discover every cycle.
+    forecastex_no_contract_id: str = ""
     # Negative-cache flag: ForecastEx attachment has been attempted and
     # confirmed unavailable. Set by forecastex_discovery after multiple
     # passes find no matching FORECASTX event; honored as a skip filter on
@@ -104,6 +111,7 @@ class MarketMapping:
             "polymarket": self.polymarket_slug,
             "polymarket_question": self.polymarket_question,
             "forecastex": self.forecastex_contract_id,
+            "forecastex_no": self.forecastex_no_contract_id,
             "forecastex_not_available": self.forecastex_not_available,
             "notes": self.notes,
             "review_note": self.review_note,
@@ -141,6 +149,7 @@ class MarketMapping:
             polymarket_slug=record.polymarket,
             polymarket_question=record.polymarket_question,
             forecastex_contract_id=getattr(record, "forecastex", "") or "",
+            forecastex_no_contract_id=getattr(record, "forecastex_no", "") or "",
             forecastex_not_available=bool(
                 getattr(record, "forecastex_not_available", False)
             ),
@@ -168,6 +177,11 @@ class MarketMapping:
             forecastex_contract_id=str(
                 payload.get("forecastex", "")
                 or payload.get("forecastex_contract_id", "")
+                or ""
+            ),
+            forecastex_no_contract_id=str(
+                payload.get("forecastex_no", "")
+                or payload.get("forecastex_no_contract_id", "")
                 or ""
             ),
             forecastex_not_available=bool(
@@ -327,6 +341,17 @@ CREATE INDEX IF NOT EXISTS idx_mappings_forecastex
 ALTER TABLE market_mappings
     ADD COLUMN IF NOT EXISTS forecastex_not_available BOOLEAN DEFAULT FALSE;
 
+-- ForecastEx NO-side conid. ForecastEx binary contracts have SEPARATE IBKR
+-- conids for YES (right=C) and NO (right=P). Storing only the YES conid
+-- caused the executor to silently buy YES when the engine asked for NO
+-- (ARB-000695/699 phantom-trade postmortem). Idempotent ADD COLUMN so
+-- existing deployments migrate cleanly without downtime.
+ALTER TABLE market_mappings
+    ADD COLUMN IF NOT EXISTS forecastex_no_contract_id VARCHAR(100) DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_mappings_forecastex_no
+    ON market_mappings(forecastex_no_contract_id)
+    WHERE forecastex_no_contract_id != '';
+
 -- Widen canonical_id to VARCHAR(200) so long slugs don't truncate (idempotent).
 ALTER TABLE market_mappings    ALTER COLUMN canonical_id TYPE VARCHAR(200);
 ALTER TABLE mapping_candidates ALTER COLUMN canonical_id TYPE VARCHAR(200);
@@ -423,11 +448,12 @@ class MarketMappingStore:
                         canonical_id, description, status, allow_auto_trade,
                         aliases, tags, kalshi_market_id, polymarket_slug,
                         polymarket_question, forecastex_contract_id,
+                        forecastex_no_contract_id,
                         notes, mapping_score, confidence, updated_at,
                         resolution_criteria, resolution_match_status
                     ) VALUES (
-                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(),
-                        $14::jsonb, $15
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW(),
+                        $15::jsonb, $16
                     ) ON CONFLICT (canonical_id) DO UPDATE SET
                         description = EXCLUDED.description,
                         status = EXCLUDED.status,
@@ -438,6 +464,7 @@ class MarketMappingStore:
                         polymarket_slug = EXCLUDED.polymarket_slug,
                         polymarket_question = EXCLUDED.polymarket_question,
                         forecastex_contract_id = EXCLUDED.forecastex_contract_id,
+                        forecastex_no_contract_id = EXCLUDED.forecastex_no_contract_id,
                         notes = EXCLUDED.notes,
                         mapping_score = EXCLUDED.mapping_score,
                         confidence = EXCLUDED.confidence,
@@ -455,6 +482,7 @@ class MarketMappingStore:
                     mapping.polymarket_slug,
                     mapping.polymarket_question,
                     mapping.forecastex_contract_id,
+                    mapping.forecastex_no_contract_id,
                     mapping.notes,
                     mapping.mapping_score,
                     mapping.confidence,
@@ -564,11 +592,12 @@ class MarketMappingStore:
                     canonical_id, description, status, allow_auto_trade,
                     aliases, tags, kalshi_market_id, polymarket_slug,
                     polymarket_question, forecastex_contract_id,
+                    forecastex_no_contract_id,
                     notes, review_note, mapping_score, confidence,
                     expires_at, last_validated_at, created_at, updated_at,
                     resolution_criteria, resolution_match_status
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18,
-                    $19::jsonb, $20
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
+                    $20::jsonb, $21
                 ) ON CONFLICT (canonical_id) DO UPDATE SET
                     description = EXCLUDED.description,
                     status = EXCLUDED.status,
@@ -579,6 +608,7 @@ class MarketMappingStore:
                     polymarket_slug = EXCLUDED.polymarket_slug,
                     polymarket_question = EXCLUDED.polymarket_question,
                     forecastex_contract_id = EXCLUDED.forecastex_contract_id,
+                    forecastex_no_contract_id = EXCLUDED.forecastex_no_contract_id,
                     notes = EXCLUDED.notes,
                     review_note = EXCLUDED.review_note,
                     mapping_score = EXCLUDED.mapping_score,
@@ -599,6 +629,7 @@ class MarketMappingStore:
                 mapping.polymarket_slug,
                 mapping.polymarket_question,
                 mapping.forecastex_contract_id,
+                mapping.forecastex_no_contract_id,
                 mapping.notes,
                 mapping.review_note,
                 mapping.mapping_score,
@@ -1569,6 +1600,7 @@ class MarketMappingStore:
             polymarket_slug=row["polymarket_slug"] or "",
             polymarket_question=row["polymarket_question"] or "",
             forecastex_contract_id=row_dict.get("forecastex_contract_id") or "",
+            forecastex_no_contract_id=row_dict.get("forecastex_no_contract_id") or "",
             forecastex_not_available=bool(
                 row_dict.get("forecastex_not_available") or False
             ),

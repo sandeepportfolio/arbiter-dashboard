@@ -612,6 +612,7 @@ async def discover(
         # enumerate children — we then fall back to the parent conid and
         # let the collector's parent-detection logic skip it gracefully.
         resolved_conid = best_event["conid"]
+        resolved_no_conid = ""
         try:
             children = await forecastex_client.resolve_event_children(
                 best_event["conid"],
@@ -631,10 +632,38 @@ async def discover(
                 children[0],
             )
             resolved_conid = yes_child["conid"]
+            # Also pick the NO sibling at the same strike (right=P/N/0/NO).
+            # ForecastEx binary contracts have SEPARATE IBKR conids for YES
+            # (Call) and NO (Put) under the same parent event; storing only
+            # YES was the root cause of the ARB-000695/699 phantom-trade
+            # incident — see arbiter/collectors/forecastex._build_price_point.
+            yes_strike = yes_child.get("strike")
+            try:
+                yes_strike_f = float(yes_strike) if yes_strike is not None else None
+            except (TypeError, ValueError):
+                yes_strike_f = None
+            for child in children:
+                if not isinstance(child, dict):
+                    continue
+                if str(child.get("right", "")).upper() not in ("P", "N", "0", "NO", "PUT"):
+                    continue
+                if yes_strike_f is not None:
+                    try:
+                        child_strike = float(child.get("strike") or 0.0)
+                    except (TypeError, ValueError):
+                        continue
+                    if abs(child_strike - yes_strike_f) > 1e-6:
+                        continue
+                no_candidate = str(child.get("conid") or "").strip()
+                if no_candidate and no_candidate != resolved_conid:
+                    resolved_no_conid = no_candidate
+                    break
             logger.info(
-                "forecastex_discovery: resolved %s parent %s -> child %s (right=%s, src=%s)",
+                "forecastex_discovery: resolved %s parent %s -> YES=%s NO=%s "
+                "(yes_right=%s, src=%s)",
                 mapping.canonical_id, best_event["conid"],
-                resolved_conid, yes_child.get("right"), yes_child.get("source"),
+                resolved_conid, resolved_no_conid or "(unresolved)",
+                yes_child.get("right"), yes_child.get("source"),
             )
 
         logger.info(
@@ -651,6 +680,8 @@ async def discover(
             continue
 
         mapping.forecastex_contract_id = resolved_conid
+        if resolved_no_conid:
+            mapping.forecastex_no_contract_id = resolved_no_conid
         try:
             await mapping_store.upsert(mapping)
             matched += 1

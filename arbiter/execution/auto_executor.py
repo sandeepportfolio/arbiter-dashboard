@@ -282,6 +282,38 @@ class AutoExecutor:
                     no_platform=getattr(opp, "no_platform", ""),
                 )
                 return
+            # NO-side conid requirement (phantom-trade postmortem 2026-05-28).
+            # ForecastEx binary contracts have SEPARATE conids for YES and NO.
+            # When ForecastEx is the NO platform for this opp, the opportunity
+            # MUST carry a NO conid distinct from the YES conid; otherwise the
+            # executor would route the NO order to the YES contract — which
+            # was the root cause of the ARB-000695/699 phantom-trade incident.
+            no_is_fx = getattr(opp, "no_platform", "") == "forecastex"
+            yes_is_fx = getattr(opp, "yes_platform", "") == "forecastex"
+            opp_no_market_id = str(getattr(opp, "no_market_id", "") or "").strip()
+            opp_yes_market_id = str(getattr(opp, "yes_market_id", "") or "").strip()
+            if no_is_fx:
+                if not opp_no_market_id or opp_no_market_id in ("0", "None"):
+                    self.stats.skipped_forecastex_unavailable += 1
+                    log.warning(
+                        "auto_executor.skip.forecastex_no_conid_missing",
+                        canonical_id=opp.canonical_id,
+                        no_market_id=opp_no_market_id,
+                        yes_market_id=opp_yes_market_id,
+                    )
+                    return
+                # When BOTH legs route through ForecastEx (3-way scanner),
+                # the YES and NO conids MUST differ. Same conid means the
+                # collector failed NO-conid discovery and synthesized
+                # against the YES conid.
+                if yes_is_fx and opp_no_market_id == opp_yes_market_id:
+                    self.stats.skipped_forecastex_unavailable += 1
+                    log.error(
+                        "auto_executor.skip.forecastex_conid_collision",
+                        canonical_id=opp.canonical_id,
+                        market_id=opp_yes_market_id,
+                    )
+                    return
 
         if self._config.require_mapping_confirmed:
             # MappingStatus is a (str, Enum); str(enum) returns "MappingStatus.CONFIRMED"

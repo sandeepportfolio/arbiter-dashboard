@@ -42,6 +42,16 @@ _DEFAULT_TICK = 0.01
 _MIN_PRICE = 0.01
 _MAX_PRICE = 0.99
 
+# Maximum acceptable drift (cents) between the engine-passed price and a
+# freshly-pulled top-of-book ask before we treat the price as stale. The
+# scanner emits the opportunity price first, then the engine pulls fresh
+# depth via best_executable_price — when the venue moves significantly
+# between those two steps, executing at the older price overpays. 5¢ is
+# wide enough to absorb normal tick-level chop on a 1¢-tick book and
+# tight enough to catch the synthetic-NO regression class (where the
+# scanner saw a fake $0.47 and the real ask was $0.55).
+_PRICE_DRIFT_CENTS_THRESHOLD = 5.0
+
 
 class ForecastExAdapter:
     """Execution adapter for ForecastEx (via IBKR Client Portal Web API).
@@ -269,6 +279,38 @@ class ForecastExAdapter:
                 f"forecastex only supports BUY orders (got side={side!r})"
             )
 
+        # ── CONID INTEGRITY GATE (phantom-trade postmortem 2026-05-28) ──
+        # ForecastEx binary contracts have SEPARATE conids for YES (right=C)
+        # and NO (right=P). An empty market_id means the collector couldn't
+        # discover the NO sibling and the scanner shouldn't have created
+        # this opportunity. Refuse to submit rather than letting IBKR
+        # interpret a malformed conid (or worse — accept "0" as a contract
+        # id and route to an arbitrary listing). The scanner-side gate is
+        # the primary defender; this is defense-in-depth.
+        normalized_market_id = str(market_id or "").strip()
+        if not normalized_market_id or normalized_market_id in ("0", "None"):
+            logger.error(
+                "forecastex.submit.empty_market_id",
+                arb_id=arb_id, canonical_id=canonical_id, side=side,
+                op=op, market_id=repr(market_id),
+            )
+            raise OrderRejected(
+                f"forecastex {op} refused: empty market_id "
+                f"(side={side!r}); collector likely failed NO-conid "
+                f"discovery — investigate before retrying"
+            )
+
+        # Explicit side ↔ conid binding log. Operators investigating a
+        # phantom-trade incident need to see exactly which contract id was
+        # bought for which side, BEFORE the venue ack — the venue ack
+        # echoes the conid but not the side semantics.
+        logger.info(
+            "forecastex.submit.routing",
+            arb_id=arb_id, canonical_id=canonical_id, side=side,
+            market_id=normalized_market_id, op=op,
+            price=price, qty=qty,
+        )
+
         # YES vs NO leg routing. ForecastEx exposes both YES and NO as their
         # own conids; the scanner-supplied market_id IS the conid for the
         # specific contract being bought, so we always pass it through as-is
@@ -453,20 +495,35 @@ class ForecastExAdapter:
         market per scan) outweighs the benefit on top-of-book ForecastEx
         liquidity. Use the snapshot's bid/ask size and treat any size at the
         touch as sufficient for the current ask.
+
+        ForecastEx YES and NO have SEPARATE conids — the caller MUST pass
+        the conid for the side it intends to BUY (NO conid for NO leg,
+        YES conid for YES leg). The function fetches that conid's own
+        ask, which is the executable price; we no longer subtract from
+        1.0 to synthesize a NO price from the YES bid (root cause of the
+        ARB-000695/699 phantom edge).
         """
+        # CONID INTEGRITY GATE (phantom-trade postmortem 2026-05-28).
+        normalized_market_id = str(market_id or "").strip()
+        if not normalized_market_id or normalized_market_id in ("0", "None"):
+            logger.warning(
+                "forecastex.check_depth.empty_market_id",
+                market_id=repr(market_id), side=side,
+                required_qty=required_qty,
+            )
+            return (False, 0.0)
         try:
-            snap = await self._client.market_snapshot(market_id)
+            snap = await self._client.market_snapshot(normalized_market_id)
         except Exception as exc:
             logger.warning(
                 "forecastex.check_depth.failed",
-                market_id=market_id, err=str(exc),
+                market_id=normalized_market_id, err=str(exc),
             )
             return (False, 0.0)
         if not isinstance(snap, dict):
             return (False, 0.0)
         bid = self._snap_dollar(snap.get("84"))
         ask = self._snap_dollar(snap.get("86"))
-        side_is_yes = str(side).lower() in ("buy", "yes", "buy_long")
         # We are always BUYing on this venue, so size we care about is the
         # ASK side regardless of whether the leg is YES or NO (the NO leg
         # buys the NO conid, but the conid's own ASK is what fills it).
@@ -489,7 +546,7 @@ class ForecastExAdapter:
         if size <= 0:
             logger.info(
                 "forecastex.check_depth.trusted_touch",
-                market_id=market_id,
+                market_id=normalized_market_id,
                 side=side,
                 required_qty=required_qty,
                 ask=best,

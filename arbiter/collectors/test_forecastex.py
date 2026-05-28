@@ -447,18 +447,40 @@ async def test_collector_tracks_only_mappings_with_forecastex_id(patched_market_
     await client.close()
 
 
-async def test_collector_normalizes_cent_prices(patched_market_map):
+async def test_collector_normalizes_cent_prices_and_emits_yes_only_when_no_unknown(
+    patched_market_map,
+):
+    """ForecastEx YES snapshot rescales 0–100 cents → [0, 1] dollars.
+
+    Mapping carries only the YES conid (forecastex_no=""), runtime NO
+    sibling discovery is not mocked here so the collector emits a
+    YES-only price point: no_market_id="" and no_ask=0 so the scanner
+    cannot fabricate a cross-side opportunity.
+
+    Regression for ARB-000695/699: the prior implementation synthesized
+    ``no_ask = 1 - yes_bid`` AND set ``no_market_id = yes_conid`` —
+    feeding a fake $0.53 NO ask against a dead NO book and silently
+    routing NO orders to the YES contract.
+    """
     store = PriceStore()
     client = ForecastExClient(gateway_url=GATEWAY, account_id=ACCOUNT)
     collector = ForecastExCollector(
         config=ForecastExConfig(), store=store, client=client,
     )
     with aioresponses() as m:
+        # Mocking BOTH snapshot calls: YES (conid 111222 from fixture) and
+        # the runtime NO-discovery contract_info call (which we leave to
+        # fail — contract_info returns {} → no NO sibling discovered).
         m.get(
             re.compile(r".*/iserver/marketdata/snapshot.*"),
-            # Cent quotes; collector must rescale to [0, 1]
+            # Cent quotes; collector must rescale to [0, 1].
             payload=[{"31": "45", "84": "42", "86": "47", "7295": "5", "7296": "7"}],
         )
+        # contract_info returns empty so _attempt_no_conid_discovery
+        # gives up and the NO side stays empty.
+        m.post(re.compile(r".*/iserver/auth/ssodh/init.*"),
+               payload={"connected": True})
+        m.get(re.compile(r".*/iserver/contract/111222/info.*"), payload={})
         results = await collector.fetch_markets()
     assert len(results) == 1
     pp = results[0]
@@ -466,10 +488,214 @@ async def test_collector_normalizes_cent_prices(patched_market_map):
     assert pp.canonical_id == "EXAMPLE_2026_OUTCOME"
     assert 0.46 < pp.yes_ask < 0.48
     assert 0.41 < pp.yes_bid < 0.43
-    # NO ask is the complement of YES bid.
-    assert abs(pp.no_ask - (1.0 - pp.yes_bid)) < 1e-9
+    # YES side IDs populated.
+    assert pp.yes_market_id == "111222"
+    # NO discovery failed → no NO snapshot → NO side is zero, NO id is empty.
+    assert pp.no_ask == 0.0
+    assert pp.no_bid == 0.0
+    assert pp.no_market_id == ""
+    # Critical regression assertion: NO market id MUST NOT equal YES conid.
+    assert pp.no_market_id != pp.yes_market_id
     # Fee rate stored so position sizer doesn't re-compute.
     assert pp.fee_rate == 0.005
+    await client.close()
+
+
+async def test_collector_uses_real_no_snapshot_when_no_conid_mapped(monkeypatch):
+    """When MARKET_MAP carries forecastex_no, the collector fetches the
+    NO snapshot directly and uses its real bid/ask — never synthesizes
+    from (1 - yes_bid).
+    """
+    fake = {
+        "BINARY_HORC": {
+            "kalshi": "KX-HORC",
+            "polymarket": "horc-poly",
+            "forecastex": "100000",       # YES conid (right=C)
+            "forecastex_no": "100001",    # NO conid (right=P)
+            "status": "confirmed",
+            "mapping_score": 0.95,
+        },
+    }
+    monkeypatch.setattr(settings_mod, "MARKET_MAP", fake)
+    import arbiter.collectors.forecastex as fcst_mod
+    monkeypatch.setattr(fcst_mod, "MARKET_MAP", fake)
+
+    store = PriceStore()
+    client = ForecastExClient(gateway_url=GATEWAY, account_id=ACCOUNT)
+    collector = ForecastExCollector(
+        config=ForecastExConfig(), store=store, client=client,
+    )
+
+    def _snapshot_payload(url, **kwargs):
+        # aioresponses doesn't easily route by query string, so use a
+        # match-by-substring approach via two endpoints in order.
+        pass
+
+    # YES snapshot returns 0.42/0.47 (cents). NO snapshot returns 0.48/0.55.
+    # If the collector synthesized NO from (1 - yes_bid), we'd see ~0.58 ask;
+    # the test asserts the REAL 0.55 ask is what lands in PricePoint.no_ask.
+    yes_payload = [{"84": "42", "86": "47", "7295": "5", "7296": "9"}]
+    no_payload = [{"84": "48", "86": "55", "7295": "11", "7296": "13"}]
+
+    with aioresponses() as m:
+        # Snapshot endpoint is queried by conids param; aioresponses
+        # matches whichever URL was registered first that matches the
+        # pattern. Register both with the specific conids param so the
+        # match is unambiguous via url-query string.
+        m.get(
+            re.compile(r".*/iserver/marketdata/snapshot\?.*conids=100000.*"),
+            payload=yes_payload,
+        )
+        m.get(
+            re.compile(r".*/iserver/marketdata/snapshot\?.*conids=100001.*"),
+            payload=no_payload,
+        )
+        results = await collector.fetch_markets()
+
+    assert len(results) == 1
+    pp = results[0]
+    assert pp.yes_market_id == "100000"
+    assert pp.no_market_id == "100001"      # NO conid populated from mapping
+    assert pp.yes_market_id != pp.no_market_id
+    # REAL NO ask is 0.55 from the NO snapshot — NOT 1 - yes_bid = 0.58.
+    assert abs(pp.no_ask - 0.55) < 1e-6
+    assert abs(pp.no_bid - 0.48) < 1e-6
+    # The synthetic-fallback would produce ~0.58; real NO ask is 0.55,
+    # so any value within 1e-6 of 0.58 is the bug regression.
+    assert abs(pp.no_ask - 0.58) > 0.02
+    await client.close()
+
+
+async def test_collector_skips_no_when_no_snapshot_empty(monkeypatch):
+    """If the mapped NO conid returns an empty/non-tradeable snapshot,
+    the collector emits a YES-only quote rather than synthesizing
+    from YES bid. no_market_id must be cleared so the scanner cannot
+    route NO orders to a dead conid.
+    """
+    fake = {
+        "PARTIAL_MARKET": {
+            "kalshi": "KX-X",
+            "polymarket": "x-poly",
+            "forecastex": "200000",
+            "forecastex_no": "200001",
+            "status": "confirmed",
+        },
+    }
+    monkeypatch.setattr(settings_mod, "MARKET_MAP", fake)
+    import arbiter.collectors.forecastex as fcst_mod
+    monkeypatch.setattr(fcst_mod, "MARKET_MAP", fake)
+
+    store = PriceStore()
+    client = ForecastExClient(gateway_url=GATEWAY, account_id=ACCOUNT)
+    collector = ForecastExCollector(
+        config=ForecastExConfig(), store=store, client=client,
+    )
+
+    yes_payload = [{"84": "40", "86": "45", "7295": "10", "7296": "10"}]
+    # NO snapshot returns only metadata — no bid/ask fields.
+    no_payload = [{"55": "FOO", "conidEx": "200001", "conid": 200001}]
+
+    with aioresponses() as m:
+        m.get(
+            re.compile(r".*/iserver/marketdata/snapshot\?.*conids=200000.*"),
+            payload=yes_payload,
+        )
+        # Both warmup and primary call need a match; register twice.
+        m.get(
+            re.compile(r".*/iserver/marketdata/snapshot\?.*conids=200001.*"),
+            payload=no_payload,
+        )
+        m.get(
+            re.compile(r".*/iserver/marketdata/snapshot\?.*conids=200001.*"),
+            payload=no_payload,
+        )
+        results = await collector.fetch_markets()
+
+    assert len(results) == 1
+    pp = results[0]
+    assert pp.yes_market_id == "200000"
+    # NO conid was MAPPED but its snapshot was empty → cleared, not faked.
+    assert pp.no_market_id == ""
+    assert pp.no_ask == 0.0
+    assert pp.no_bid == 0.0
+    await client.close()
+
+
+async def test_collector_attempts_runtime_no_discovery(monkeypatch):
+    """When mapping has only YES conid (legacy), collector runs
+    contract_info + resolve_event_children to find the NO sibling.
+    """
+    fake = {
+        "LEGACY_MAPPING": {
+            "kalshi": "KX-L",
+            "polymarket": "l-poly",
+            "forecastex": "300000",  # YES only
+            # forecastex_no missing — collector should runtime-discover.
+            "status": "confirmed",
+        },
+    }
+    monkeypatch.setattr(settings_mod, "MARKET_MAP", fake)
+    import arbiter.collectors.forecastex as fcst_mod
+    monkeypatch.setattr(fcst_mod, "MARKET_MAP", fake)
+
+    store = PriceStore()
+    client = ForecastExClient(gateway_url=GATEWAY, account_id=ACCOUNT)
+    collector = ForecastExCollector(
+        config=ForecastExConfig(), store=store, client=client,
+    )
+
+    yes_payload = [{"84": "40", "86": "45", "7295": "10", "7296": "10"}]
+    no_payload = [{"84": "52", "86": "58", "7295": "8", "7296": "8"}]
+    # contract_info reports right=C, strike=1.0, parent=999999.
+    info_payload = {
+        "right": "C", "strike": "1.0",
+        "underlying_con_id": "999999",
+        "symbol": "HORC",
+    }
+    # strikes endpoint for the parent returns call/put strikes including 1.0.
+    strikes_payload = {"call": [1.0], "put": [1.0]}
+    # secdef/info for strike 1.0 returns both Call (300000=YES) and
+    # Put (300001=NO).
+    secdef_info_payload = [
+        {"conid": "300000", "right": "C", "strike": 1.0,
+         "maturityDate": "20271101"},
+        {"conid": "300001", "right": "P", "strike": 1.0,
+         "maturityDate": "20271101"},
+    ]
+
+    with aioresponses() as m:
+        m.post(re.compile(r".*/iserver/auth/ssodh/init.*"),
+               payload={"connected": True})
+        m.get(
+            re.compile(r".*/iserver/marketdata/snapshot\?.*conids=300000.*"),
+            payload=yes_payload,
+        )
+        m.get(
+            re.compile(r".*/iserver/contract/300000/info.*"),
+            payload=info_payload,
+        )
+        m.get(
+            re.compile(r".*/iserver/secdef/strikes\?.*"),
+            payload=strikes_payload,
+        )
+        m.get(
+            re.compile(r".*/iserver/secdef/info\?.*"),
+            payload=secdef_info_payload,
+        )
+        m.get(
+            re.compile(r".*/iserver/marketdata/snapshot\?.*conids=300001.*"),
+            payload=no_payload,
+        )
+        results = await collector.fetch_markets()
+
+    assert len(results) == 1
+    pp = results[0]
+    assert pp.yes_market_id == "300000"
+    assert pp.no_market_id == "300001"  # discovered via sibling lookup
+    # Cached for future cycles.
+    assert collector._no_discovery_cache.get("300000") == "300001"
+    # Real NO ask, not synthetic.
+    assert abs(pp.no_ask - 0.58) < 1e-6
     await client.close()
 
 
@@ -939,6 +1165,7 @@ async def test_refresh_drops_inactive_for_conids_no_longer_referenced(
     assert "stale-old" not in collector._parent_probe_counts
     # 111222 also wasn't referenced after the swap → dropped too.
     assert "111222" not in collector._inactive_conids
-    # The new conid is tracked.
-    assert collector._conid_map.get("EXAMPLE_2026_OUTCOME") == "child-222"
+    # The new conid is tracked. (yes_conid, no_conid_or_empty) tuple shape.
+    tracked = collector._conid_map.get("EXAMPLE_2026_OUTCOME")
+    assert tracked is not None and tracked[0] == "child-222"
     await client.close()

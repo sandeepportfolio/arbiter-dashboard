@@ -199,6 +199,15 @@ class MarketMappingRecord:
     # Portal Web API. The mapping key is the IBKR contract id (conid) of the
     # event contract — empty when ForecastEx has no matching market.
     forecastex: str = ""
+    # ForecastEx NO-side conid. ForecastEx binary contracts have SEPARATE
+    # conids for YES (Call/right=C) and NO (Put/right=P). Without this the
+    # collector and executor silently re-use the YES conid for NO orders,
+    # which (a) bought YES instead of NO at fill time and (b) fabricated a
+    # 1-yes_bid synthetic NO ask that didn't match any real order book —
+    # see ARB-000695/699 phantom-trade postmortem. Defaults to ""; the
+    # collector falls back to runtime sibling discovery via IBKR
+    # secdef/info when this is empty so legacy mappings still work.
+    forecastex_no: str = ""
     notes: str = ""
     # SAFE-06 (plan 03-06): Optional resolution-criteria payload. Structure:
     #   {
@@ -379,6 +388,7 @@ def _load_auto_seeds() -> Tuple[MarketMappingRecord, ...]:
                     polymarket=item.get("polymarket", ""),
                     polymarket_question=item.get("polymarket_question", ""),
                     forecastex=item.get("forecastex", ""),
+                    forecastex_no=item.get("forecastex_no", ""),
                     notes=item.get("notes", ""),
                     resolution_criteria=item.get("resolution_criteria"),
                     resolution_match_status=item.get("resolution_match_status", "pending_operator_review"),

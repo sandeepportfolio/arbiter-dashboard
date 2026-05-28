@@ -168,6 +168,87 @@ async def test_adapter_rejects_when_above_max_affordable():
         )
 
 
+# ── Conid integrity gate (phantom-trade postmortem 2026-05-28) ───────────
+# These tests lock in the defensive checks that prevent the ARB-000695/699
+# class of bug — where the collector failed NO-conid discovery and the
+# scanner/engine still tried to place an order with empty/garbage market_id.
+
+
+async def test_adapter_rejects_empty_market_id():
+    adapter = ForecastExAdapter(client=_mock_client())
+    with pytest.raises(OrderRejected, match="empty market_id"):
+        await adapter.place_fok(
+            arb_id="arb-x", market_id="", canonical_id="HORC",
+            side="no", price=0.50, qty=1,
+        )
+
+
+async def test_adapter_rejects_zero_market_id():
+    adapter = ForecastExAdapter(client=_mock_client())
+    with pytest.raises(OrderRejected, match="empty market_id"):
+        await adapter.place_ioc(
+            arb_id="arb-x", market_id="0", canonical_id="HORC",
+            side="no", price=0.50, qty=1,
+        )
+
+
+async def test_adapter_rejects_none_string_market_id():
+    """Defensive: stringified None ('None') must be refused like empty."""
+    adapter = ForecastExAdapter(client=_mock_client())
+    with pytest.raises(OrderRejected, match="empty market_id"):
+        await adapter.place_fok(
+            arb_id="arb-x", market_id="None", canonical_id="HORC",
+            side="no", price=0.50, qty=1,
+        )
+
+
+async def test_check_depth_rejects_empty_market_id():
+    """check_depth must not issue an API call when market_id is empty —
+    that's the signal the collector failed NO-conid discovery and the
+    engine should treat the leg as unfillable."""
+    client = _mock_client()
+    adapter = ForecastExAdapter(client=client)
+    sufficient, price = await adapter.check_depth(
+        market_id="", side="no", required_qty=10,
+    )
+    assert sufficient is False
+    assert price == 0.0
+    # Critical: we MUST NOT have called the snapshot API with empty conid.
+    client.market_snapshot.assert_not_awaited()
+
+
+async def test_check_depth_rejects_zero_market_id():
+    client = _mock_client()
+    adapter = ForecastExAdapter(client=client)
+    sufficient, price = await adapter.check_depth(
+        market_id="0", side="no", required_qty=10,
+    )
+    assert sufficient is False
+    assert price == 0.0
+    client.market_snapshot.assert_not_awaited()
+
+
+async def test_check_depth_uses_passed_market_id_not_yes_synth():
+    """check_depth fetches the snapshot for the conid it was passed —
+    no implicit "subtract from 1" synthesis. When the caller asks for the
+    NO side with the NO conid, the returned price is the NO conid's own
+    ask, not 1 - YES bid.
+    """
+    from unittest.mock import AsyncMock as _AM
+    client = _mock_client()
+    # NO snapshot returns ask=0.55. If the adapter mistakenly synthesized
+    # from yes_bid, the returned price would NOT match this 0.55.
+    client.market_snapshot = _AM(return_value={"84": "0.48", "86": "0.55", "7295": "0", "7296": "0"})
+    adapter = ForecastExAdapter(client=client)
+    sufficient, price = await adapter.check_depth(
+        market_id="no-conid-12345", side="no", required_qty=5,
+    )
+    # Trusted touch (size=0) returns True with the real ASK.
+    assert sufficient is True
+    assert abs(price - 0.55) < 1e-9
+    client.market_snapshot.assert_awaited_once_with("no-conid-12345")
+
+
 # ── Status mapping ────────────────────────────────────────────────────────
 
 

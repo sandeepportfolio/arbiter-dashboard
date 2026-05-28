@@ -274,8 +274,10 @@ class MockConn:
         return []
 
     def _build_mapping_dict(self, args) -> dict:
-        # ForecastEx third-platform support added ``forecastex_contract_id``
-        # right after polymarket_question, shifting every column after it by 1.
+        # Argument ordering after both ForecastEx third-platform support
+        # (forecastex_contract_id at idx 9) AND the YES/NO split fix
+        # (forecastex_no_contract_id at idx 10, shifting every later
+        # column by one — phantom-trade postmortem 2026-05-28).
         payload = {
             "canonical_id": args[0],
             "description": args[1],
@@ -287,19 +289,20 @@ class MockConn:
             "polymarket_slug": args[7] or "",
             "polymarket_question": args[8] or "",
             "forecastex_contract_id": args[9] or "",
-            "notes": args[10] or "",
-            "review_note": args[11] or "",
-            "mapping_score": float(args[12]) if args[12] else 0.0,
-            "confidence": float(args[13]) if args[13] else 0.0,
-            "expires_at": args[14],
-            "last_validated_at": args[15],
-            "created_at": args[16] if len(args) > 16 else utc_now(),
+            "forecastex_no_contract_id": args[10] or "",
+            "notes": args[11] or "",
+            "review_note": args[12] or "",
+            "mapping_score": float(args[13]) if args[13] else 0.0,
+            "confidence": float(args[14]) if args[14] else 0.0,
+            "expires_at": args[15],
+            "last_validated_at": args[16],
+            "created_at": args[17] if len(args) > 17 else utc_now(),
             "updated_at": utc_now(),
         }
-        if len(args) > 18:
-            payload["resolution_criteria"] = args[18]
         if len(args) > 19:
-            payload["resolution_match_status"] = args[19]
+            payload["resolution_criteria"] = args[19]
+        if len(args) > 20:
+            payload["resolution_match_status"] = args[20]
         return payload
 
 

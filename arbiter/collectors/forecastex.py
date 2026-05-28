@@ -737,11 +737,27 @@ class ForecastExCollector:
     def __post_init__(self) -> None:
         self.circuit = self.client.circuit
         self.rate_limiter = self.client.live_rate_limiter
-        self._conid_map: dict[str, str] = {}
+        # canonical_id -> (yes_conid, no_conid_or_empty). Empty string for
+        # the NO half means the mapping hasn't supplied one explicitly; the
+        # collector then attempts runtime sibling discovery via
+        # ``_attempt_no_conid_discovery``.
+        self._conid_map: dict[str, tuple[str, str]] = {}
         self._inactive_conids: set[str] = set()
         # Track how many times each conid returned a non-tradeable snapshot
         # so we can disable untradeable parent-event conids after a few probes.
         self._parent_probe_counts: dict[str, int] = {}
+        # Runtime NO-conid discovery cache: yes_conid -> no_conid. Populated
+        # by ``_attempt_no_conid_discovery`` when the mapping carries only
+        # a YES conid (legacy rows / mappings predating forecastex_no).
+        # Persists for the collector's lifetime so we don't burn IBKR
+        # rate-limit budget re-discovering the same sibling every poll.
+        self._no_discovery_cache: dict[str, str] = {}
+        # Negative cache — YES conids whose NO sibling cannot be resolved
+        # (parent IND missing strike children, contract_info empty, etc.).
+        # Keeps the discovery path bounded so we don't issue contract_info
+        # + secdef/strikes calls every cycle for a parent that will never
+        # yield a NO child.
+        self._no_discovery_failed: set[str] = set()
         # Optional callback the supervisor wires to the child-conid
         # resolver's ``trigger()``. Invoked the instant we move a conid
         # into ``_inactive_conids`` so the resolver runs against the
@@ -777,20 +793,26 @@ class ForecastExCollector:
     def refresh_tracked_markets(self) -> None:
         """Reload tracked ForecastEx contract ids from MARKET_MAP.
 
-        Also clears the inactive-conid set of any conid that is NO LONGER
-        referenced by any mapping — when the auto-resolver (or operator
-        manual override) attaches a child conid in place of an inactive
-        parent, the old parent disappears from MARKET_MAP and the new
+        Each mapping carries TWO conids: ``forecastex`` (YES / right=C) and
+        ``forecastex_no`` (NO / right=P). The NO half is optional in the
+        mapping payload — when missing, the collector will runtime-discover
+        the sibling on the first poll via ``_attempt_no_conid_discovery``
+        and cache the result for the collector's lifetime.
+
+        Also clears the inactive-conid set and runtime NO-discovery caches
+        of any conid that is NO LONGER referenced by any mapping — when the
+        auto-resolver (or operator manual override) attaches a different
+        child conid, the old parent disappears from MARKET_MAP and the new
         child must get a clean probe budget. Without this, the collector
-        carries the inactive flag forever across restarts of the source
-        mapping.
+        carries stale state forever across restarts of the source mapping.
         """
-        new_map: dict[str, str] = {}
+        new_map: dict[str, tuple[str, str]] = {}
         for canonical_id, mapping in MARKET_MAP.items():
-            conid = str(mapping.get("forecastex", "") or "").strip()
-            if not conid:
+            yes_conid = str(mapping.get("forecastex", "") or "").strip()
+            if not yes_conid:
                 continue
-            new_map[canonical_id] = conid
+            no_conid = str(mapping.get("forecastex_no", "") or "").strip()
+            new_map[canonical_id] = (yes_conid, no_conid)
         if new_map != self._conid_map:
             logger.info(
                 "ForecastEx: tracking %d markets (was %d)",
@@ -799,11 +821,23 @@ class ForecastExCollector:
         # Drop inactivity / probe-count state for conids that have been
         # replaced or removed by upstream. Conids that are still tracked
         # keep their state (so re-promoted parents don't get re-probed).
-        referenced = set(new_map.values())
+        referenced: set[str] = set()
+        for yes, no in new_map.values():
+            referenced.add(yes)
+            if no:
+                referenced.add(no)
         stale_inactive = self._inactive_conids - referenced
         for stale in stale_inactive:
             self._inactive_conids.discard(stale)
             self._parent_probe_counts.pop(stale, None)
+        # Drop NO-discovery state for YES conids no longer tracked.
+        tracked_yes = {yes for yes, _ in new_map.values()}
+        for stale_yes in list(self._no_discovery_cache):
+            if stale_yes not in tracked_yes:
+                self._no_discovery_cache.pop(stale_yes, None)
+        for stale_yes in list(self._no_discovery_failed):
+            if stale_yes not in tracked_yes:
+                self._no_discovery_failed.discard(stale_yes)
         self._conid_map = new_map
 
     def reactivate_conid(self, conid: str) -> None:
@@ -811,45 +845,196 @@ class ForecastExCollector:
         fetch cycle re-probes it. Called by the auto-resolver after a
         child-conid attach succeeds, AND by the manual-override API
         endpoint. Idempotent.
+
+        Also drops the conid from the NO-discovery negative cache so a
+        previously-failed sibling lookup gets re-tried (in case IBKR's
+        secdef endpoints were temporarily down during the prior attempt).
         """
         conid_str = str(conid)
         self._inactive_conids.discard(conid_str)
         self._parent_probe_counts.pop(conid_str, None)
+        self._no_discovery_failed.discard(conid_str)
+
+    async def _attempt_no_conid_discovery(self, yes_conid: str) -> Optional[str]:
+        """Runtime sibling lookup: given a YES conid, find the NO conid
+        under the same parent at the same strike.
+
+        Path: ``/iserver/contract/{yes_conid}/info`` returns the YES child's
+        strike and the parent (``underlying_con_id``); ``resolve_event_children``
+        on the parent enumerates ALL siblings; we pick the one with
+        right=P and matching strike. Cached for the collector's lifetime
+        (positive: ``_no_discovery_cache``; negative: ``_no_discovery_failed``).
+
+        Returns the NO conid string on success, ``None`` when the sibling
+        cannot be resolved. Callers MUST treat ``None`` as "NO-side
+        orders disabled for this market" — never fall back to the YES
+        conid (the root cause of the ARB-000695/699 phantom trades).
+        """
+        if yes_conid in self._no_discovery_cache:
+            return self._no_discovery_cache[yes_conid]
+        if yes_conid in self._no_discovery_failed:
+            return None
+        try:
+            info = await self.client.get_contract_info(yes_conid)
+        except Exception as exc:
+            logger.debug(
+                "forecastex: no-conid discovery contract_info(%s) failed: %s",
+                yes_conid, exc,
+            )
+            return None
+        if not isinstance(info, dict) or not info:
+            self._no_discovery_failed.add(yes_conid)
+            return None
+        # IBKR Client Portal field-name variants observed across gateway
+        # versions: underlying_con_id (snake), underlyingConid (camel),
+        # undConid (legacy).
+        parent = (
+            info.get("underlying_con_id")
+            or info.get("underlyingConid")
+            or info.get("undConid")
+            or info.get("underconid")
+        )
+        strike = info.get("strike")
+        right = str(info.get("right") or "").upper()
+        if not parent or strike is None or right not in ("C", "CALL"):
+            # YES conid metadata missing the data we need to find the
+            # sibling — either it's a parent IND itself (no right field)
+            # or the IBKR field naming changed. Fail-closed so we don't
+            # paper over a malformed contract by inventing a NO conid.
+            self._no_discovery_failed.add(yes_conid)
+            logger.warning(
+                "forecastex: NO-conid discovery skipped for YES %s — "
+                "contract_info lacks parent/strike/right=C "
+                "(parent=%s strike=%s right=%s)",
+                yes_conid, parent, strike, right,
+            )
+            return None
+        try:
+            children = await self.client.resolve_event_children(str(parent))
+        except Exception as exc:
+            logger.debug(
+                "forecastex: no-conid discovery resolve_event_children(%s) "
+                "failed for YES %s: %s",
+                parent, yes_conid, exc,
+            )
+            # Transient IBKR endpoint failure — do NOT mark failed so the
+            # next cycle can retry.
+            return None
+        try:
+            strike_f = float(strike)
+        except (TypeError, ValueError):
+            strike_f = None
+        chosen_no: Optional[str] = None
+        for child in children:
+            if not isinstance(child, dict):
+                continue
+            if str(child.get("right", "")).upper() not in ("P", "PUT"):
+                continue
+            if strike_f is not None:
+                try:
+                    child_strike = float(child.get("strike") or 0.0)
+                except (TypeError, ValueError):
+                    continue
+                if abs(child_strike - strike_f) > 1e-6:
+                    continue
+            no_candidate = str(child.get("conid") or "").strip()
+            if no_candidate and no_candidate != yes_conid:
+                chosen_no = no_candidate
+                break
+        if chosen_no:
+            self._no_discovery_cache[yes_conid] = chosen_no
+            logger.info(
+                "forecastex: discovered NO conid %s for YES %s "
+                "(parent=%s strike=%s)",
+                chosen_no, yes_conid, parent, strike,
+            )
+            return chosen_no
+        self._no_discovery_failed.add(yes_conid)
+        logger.warning(
+            "forecastex: NO sibling not found for YES %s under parent %s "
+            "at strike %s — cross-side NO orders disabled for this conid",
+            yes_conid, parent, strike,
+        )
+        return None
+
+    @staticmethod
+    def _to_dollars(value: float) -> float:
+        """Normalize an IBKR-quoted price to the [0, 1] dollar range.
+
+        ForecastEx prices come over the wire in cents (0–100). Values
+        already in dollars (0–1) pass through unchanged.
+        """
+        if value <= 0:
+            return 0.0
+        if value > 1.0:
+            return max(0.0, min(value / 100.0, 1.0))
+        return max(0.0, min(value, 1.0))
 
     def _build_price_point(
-        self, canonical_id: str, conid: str, snapshot: dict,
+        self,
+        canonical_id: str,
+        yes_conid: str,
+        yes_snapshot: dict,
+        no_conid: Optional[str],
+        no_snapshot: Optional[dict],
     ) -> Optional[PricePoint]:
-        bid = _amount_value(snapshot.get("84"))
-        ask = _amount_value(snapshot.get("86"))
-        bid_size = _amount_value(snapshot.get("7295"))
-        ask_size = _amount_value(snapshot.get("7296"))
+        """Build a PricePoint from a YES/NO snapshot pair.
 
-        # ForecastEx prices are quoted in cents (0–100). Normalize to dollars
-        # so the scanner can compare apples-to-apples with the other venues.
-        def _to_dollars(value: float) -> float:
-            if value <= 0:
-                return 0.0
-            if value > 1.0:
-                return max(0.0, min(value / 100.0, 1.0))
-            return max(0.0, min(value, 1.0))
+        ForecastEx binary contracts have SEPARATE IBKR conids for YES
+        (right=C) and NO (right=P) — buying NO requires placing a BUY
+        on the NO conid at its own ask, NOT on the YES conid at
+        ``1 - yes_bid``. The historical implementation synthesized the
+        NO side from ``1 - yes_bid`` AND set ``no_market_id=yes_conid``,
+        which (a) fabricated an edge that didn't exist on the real NO
+        order book and (b) caused the executor to silently buy YES when
+        the engine asked for NO. Postmortem: ARB-000695/699 phantom
+        trades on 2026-05-27.
 
-        yes_bid = _to_dollars(bid)
-        yes_ask = _to_dollars(ask)
+        Returns ``None`` when YES has no executable ask/bid. When NO has
+        no snapshot data (sibling discovery failed, conid is dead),
+        sets ``no_market_id=""`` and ``no_ask=no_price=0`` so the
+        scanner's dead-ask gate skips any cross-side opportunity. We
+        NEVER fall back to the YES conid for the NO market id — that
+        is exactly the bug being fixed.
+        """
+        yes_bid_raw = _amount_value(yes_snapshot.get("84"))
+        yes_ask_raw = _amount_value(yes_snapshot.get("86"))
+        yes_bid_size = _amount_value(yes_snapshot.get("7295"))
+        yes_ask_size = _amount_value(yes_snapshot.get("7296"))
+
+        yes_bid = self._to_dollars(yes_bid_raw)
+        yes_ask = self._to_dollars(yes_ask_raw)
         # SIGNAL-INTEGRITY (2026-05-27): never let a last-trade print
         # synthesize an executable yes_price. ForecastEx binaries can
         # report a stale `31` (last) on a market whose live book has
-        # gone empty (both `84` bid and `86` ask = 0). Using last-trade
-        # as a mark fed a phantom $0.44 into ARB-000695/699 against an
-        # otherwise-dead order book and produced four fabricated
-        # 7.35¢ "edges" that all zero-filled on Polymarket. Matches
-        # the Kalshi fix in f92c9fc.
+        # gone empty. Using last-trade as a mark fed a phantom $0.44
+        # into ARB-000695/699 against an otherwise-dead order book.
         yes_price = yes_ask or yes_bid
         if yes_price <= 0:
             return None
 
-        no_ask = max(1.0 - yes_bid, 0.0) if yes_bid else max(1.0 - yes_price, 0.0)
-        no_bid = max(1.0 - yes_ask, 0.0) if yes_ask else 0.0
-        no_price = no_ask
+        # ── REAL NO snapshot (not synthetic) ─────────────────────────
+        # Only populate NO bid/ask when we have a SEPARATE NO snapshot
+        # from the NO conid. If no_snapshot is empty or missing, leave
+        # NO side at zero so downstream code treats this as a YES-only
+        # quote and refuses cross-side opportunities.
+        no_bid = 0.0
+        no_ask = 0.0
+        no_bid_size = 0.0
+        no_ask_size = 0.0
+        effective_no_conid = ""
+        if no_conid and no_snapshot:
+            no_bid = self._to_dollars(_amount_value(no_snapshot.get("84")))
+            no_ask = self._to_dollars(_amount_value(no_snapshot.get("86")))
+            no_bid_size = _amount_value(no_snapshot.get("7295"))
+            no_ask_size = _amount_value(no_snapshot.get("7296"))
+            # Only commit the NO market id if the snapshot actually
+            # produced a real bid OR ask. An empty NO snapshot leaves
+            # market_id="" so the scanner skips the cross-side opp
+            # rather than letting the executor route to a dead book.
+            if no_bid > 0 or no_ask > 0:
+                effective_no_conid = str(no_conid)
+        no_price = no_ask or no_bid  # executable NO price; 0 when no data
 
         mapping = MARKET_MAP.get(canonical_id, {})
         return PricePoint(
@@ -857,12 +1042,16 @@ class ForecastExCollector:
             canonical_id=canonical_id,
             yes_price=yes_price,
             no_price=no_price,
-            yes_volume=ask_size or bid_size,
-            no_volume=bid_size or ask_size,
+            yes_volume=yes_ask_size or yes_bid_size,
+            # NO volume is from the NO snapshot when present, otherwise 0.
+            no_volume=no_ask_size or no_bid_size,
             timestamp=time.time(),
-            raw_market_id=conid,
-            yes_market_id=conid,
-            no_market_id=conid,
+            # raw_market_id stays as the YES conid for backward compat
+            # with downstream consumers (audit, dashboards) that expect
+            # a single "primary" id per quote.
+            raw_market_id=yes_conid,
+            yes_market_id=yes_conid,
+            no_market_id=effective_no_conid,
             yes_bid=yes_bid,
             yes_ask=yes_ask,
             no_bid=no_bid,
@@ -873,11 +1062,19 @@ class ForecastExCollector:
             mapping_status=str(mapping.get("status", "candidate")),
             mapping_score=float(mapping.get("mapping_score", 0.0)),
             metadata={
-                "conid": conid,
-                "raw_snapshot": {
-                    k: v for k, v in snapshot.items()
+                "yes_conid": yes_conid,
+                "no_conid": effective_no_conid,
+                "yes_snapshot": {
+                    k: v for k, v in yes_snapshot.items()
                     if k in ("31", "84", "86", "7295", "7296")
                 },
+                "no_snapshot": (
+                    {
+                        k: v for k, v in (no_snapshot or {}).items()
+                        if k in ("31", "84", "86", "7295", "7296")
+                    }
+                    if no_snapshot else {}
+                ),
             },
         )
 
@@ -915,16 +1112,60 @@ class ForecastExCollector:
             snapshot = await self.client.market_snapshot(conid)
         return snapshot
 
+    async def _fetch_side_snapshot(
+        self, yes_conid: str, no_conid: str,
+    ) -> Optional[dict]:
+        """Fetch a NO-side snapshot, handling 404/410 by purging caches.
+
+        Returns the snapshot dict on success, ``None`` on any failure or
+        when the NO conid is in the inactive set. NO-side errors are
+        soft: we strip the NO snapshot rather than fail the whole
+        ``fetch_markets`` cycle, so an isolated dead NO conid degrades
+        gracefully to YES-only quotes.
+        """
+        if not no_conid or no_conid in self._inactive_conids:
+            return None
+        try:
+            no_snapshot = await self._snapshot_with_warmup(no_conid)
+        except aiohttp.ClientResponseError as exc:
+            if exc.status in (404, 410):
+                self._mark_inactive(no_conid)
+                self._no_discovery_failed.add(yes_conid)
+                self._no_discovery_cache.pop(yes_conid, None)
+                logger.warning(
+                    "ForecastEx NO conid %s for YES %s returned %s, disabling",
+                    no_conid, yes_conid, exc.status,
+                )
+                return None
+            logger.warning(
+                "ForecastEx NO conid %s fetch failed (YES %s): %s",
+                no_conid, yes_conid, exc,
+            )
+            return None
+        except Exception as exc:
+            logger.warning(
+                "ForecastEx NO conid %s fetch error (YES %s): %s",
+                no_conid, yes_conid, exc,
+            )
+            return None
+        if no_snapshot and not ForecastExClient.is_tradeable_snapshot(no_snapshot):
+            # NO snapshot returned only metadata / empty fields. Don't
+            # fail the cycle — emit a YES-only quote. The scanner's
+            # dead-ask gate will skip any cross-side opportunity, and
+            # the executor will never be handed an unfillable NO conid.
+            return None
+        return no_snapshot
+
     async def fetch_markets(self) -> list[PricePoint]:
         self.refresh_tracked_markets()
         results: list[PricePoint] = []
 
-        for canonical_id, conid in self._conid_map.items():
-            if conid in self._inactive_conids:
+        for canonical_id, (yes_conid, mapped_no_conid) in self._conid_map.items():
+            if yes_conid in self._inactive_conids:
                 continue
             self.total_fetches += 1
             try:
-                snapshot = await self._snapshot_with_warmup(conid)
+                yes_snapshot = await self._snapshot_with_warmup(yes_conid)
                 # A successful HTTP response means the IBKR bridge is healthy
                 # — reset the consecutive_errors counter now, BEFORE the
                 # tradeable check. An empty bid/ask snapshot is a market-data
@@ -938,43 +1179,63 @@ class ForecastExCollector:
                 # forever. Mark them inactive and let the operator (or the
                 # YES/NO resolver, when IBKR's FORECASTX endpoints are
                 # available) attach the child conid instead.
-                if snapshot and not ForecastExClient.is_tradeable_snapshot(snapshot):
-                    self._parent_probe_counts[conid] = (
-                        self._parent_probe_counts.get(conid, 0) + 1
+                if yes_snapshot and not ForecastExClient.is_tradeable_snapshot(yes_snapshot):
+                    self._parent_probe_counts[yes_conid] = (
+                        self._parent_probe_counts.get(yes_conid, 0) + 1
                     )
-                    if self._parent_probe_counts[conid] >= self._PROBE_DISABLE_THRESHOLD:
-                        self._mark_inactive(conid)
+                    if self._parent_probe_counts[yes_conid] >= self._PROBE_DISABLE_THRESHOLD:
+                        self._mark_inactive(yes_conid)
                         logger.warning(
-                            "ForecastEx conid %s returns no bid/ask after %d "
+                            "ForecastEx YES conid %s returns no bid/ask after %d "
                             "probes — looks like an untradeable parent event "
                             "conid. Disabling. Attach a child YES/NO conid via "
                             "ops UI to enable.",
-                            conid, self._parent_probe_counts[conid],
+                            yes_conid, self._parent_probe_counts[yes_conid],
                         )
                     continue
                 # Tradeable snapshot — clear any prior warmup probe count so
                 # a future blip doesn't accumulate toward the disable budget.
-                self._parent_probe_counts.pop(conid, None)
-                price = self._build_price_point(canonical_id, conid, snapshot or {})
+                self._parent_probe_counts.pop(yes_conid, None)
+
+                # Resolve the NO conid: explicit mapping → runtime cache
+                # → on-demand sibling discovery. Falls back to None when
+                # discovery can't find a Put sibling — _build_price_point
+                # then emits a YES-only quote.
+                no_conid: Optional[str] = mapped_no_conid or None
+                if not no_conid:
+                    no_conid = await self._attempt_no_conid_discovery(yes_conid)
+
+                no_snapshot = (
+                    await self._fetch_side_snapshot(yes_conid, no_conid)
+                    if no_conid else None
+                )
+
+                price = self._build_price_point(
+                    canonical_id,
+                    yes_conid,
+                    yes_snapshot or {},
+                    no_conid if no_snapshot else None,
+                    no_snapshot,
+                )
                 if price is None:
                     continue
                 results.append(price)
                 await self.store.put(price)
             except aiohttp.ClientResponseError as exc:
                 if exc.status in (404, 410):
-                    self._mark_inactive(conid)
+                    self._mark_inactive(yes_conid)
                     logger.warning(
-                        "ForecastEx conid %s returned %s, disabling",
-                        conid, exc.status,
+                        "ForecastEx YES conid %s returned %s, disabling",
+                        yes_conid, exc.status,
                     )
                     continue
                 self.total_errors += 1
                 self.consecutive_errors += 1
-                logger.error("ForecastEx fetch failed for %s: %s", conid, exc)
+                logger.error("ForecastEx fetch failed for %s: %s", yes_conid, exc)
             except Exception as exc:
                 self.total_errors += 1
                 self.consecutive_errors += 1
-                logger.error("ForecastEx fetch failed for %s: %s", conid, exc)
+                logger.error("ForecastEx fetch failed for %s: %s", yes_conid, exc)
 
         return results
 

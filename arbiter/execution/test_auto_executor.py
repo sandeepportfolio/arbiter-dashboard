@@ -198,6 +198,68 @@ async def test_forecastex_empty_conid_skips_fx_leg_trade():
 
 
 @pytest.mark.asyncio
+async def test_forecastex_skips_when_no_side_market_id_empty():
+    """ForecastEx NO-side opportunities with empty no_market_id must
+    NEVER reach the engine — collector failed NO-conid discovery and
+    routing to the YES conid would buy the wrong contract (the exact
+    ARB-000695/699 phantom-trade root cause).
+    """
+    ae, engine = _make_components(
+        mapping=_FakeMapping(
+            allow_auto_trade=True,
+            forecastex_contract_id="111222",
+        ),
+    )
+    opp = _make_opportunity()
+    opp.no_platform = "forecastex"
+    opp.no_market_id = ""  # collector failed to discover NO conid
+    await ae._consider_opportunity(opp)
+    engine.execute_opportunity.assert_not_awaited()
+    assert ae.stats.skipped_forecastex_unavailable == 1
+
+
+@pytest.mark.asyncio
+async def test_forecastex_skips_when_yes_and_no_conid_collide():
+    """3-way ForecastEx (both legs FX) where YES and NO share the same
+    conid is the signature of the phantom-trade bug — the collector
+    fell back to the YES conid for the NO market id. Refuse to trade.
+    """
+    ae, engine = _make_components(
+        mapping=_FakeMapping(
+            allow_auto_trade=True,
+            forecastex_contract_id="111222",
+        ),
+    )
+    opp = _make_opportunity()
+    opp.yes_platform = "forecastex"
+    opp.no_platform = "forecastex"
+    opp.yes_market_id = "111222"
+    opp.no_market_id = "111222"  # SAME conid — collision
+    await ae._consider_opportunity(opp)
+    engine.execute_opportunity.assert_not_awaited()
+    assert ae.stats.skipped_forecastex_unavailable == 1
+
+
+@pytest.mark.asyncio
+async def test_forecastex_allows_distinct_yes_no_conids():
+    """3-way FX with distinct YES and NO conids must trade normally."""
+    ae, engine = _make_components(
+        mapping=_FakeMapping(
+            allow_auto_trade=True,
+            forecastex_contract_id="111222",
+        ),
+    )
+    opp = _make_opportunity()
+    opp.yes_platform = "forecastex"
+    opp.no_platform = "forecastex"
+    opp.yes_market_id = "111222"
+    opp.no_market_id = "111223"  # distinct sibling conid
+    await ae._consider_opportunity(opp)
+    engine.execute_opportunity.assert_awaited_once()
+    assert ae.stats.skipped_forecastex_unavailable == 0
+
+
+@pytest.mark.asyncio
 async def test_forecastex_unavailable_does_not_block_kxp_only():
     # The unavailability gate must only fire when ForecastEx is actually a
     # leg of the opportunity. A K×P opportunity should still execute even
