@@ -18,7 +18,10 @@ keys/kalshi_demo_private.pem
 evidence/05/
 
 # Orchestrator / agent workspaces (not part of the app)
-.claude/
+# Ignore local/personal Claude state, but keep shareable team config tracked.
+.claude/*
+!.claude/settings.json
+!.claude/skills/
 .superpowers/
 
 # Playwright isolated profile caches (regenerated on each run)
