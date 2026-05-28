@@ -176,10 +176,22 @@ class ProfitabilityValidator:
         # kill switch restored from persisted state, etc.) and would create
         # a self-reinforcing block where gate-blocks inflate the incident
         # rate which keeps the gate closed.
+        #
+        # Also drop info-severity incidents — those are observational signals
+        # surfaced for dashboard visibility (e.g. "Order rejected: Edge too
+        # thin: 4.50¢" from RiskManager.check_trade, which is the SAFETY
+        # path correctly filtering thin opportunities). Treating them as
+        # active incidents is a category error: 2026-05-27 audit found 769
+        # such info-level "Edge too thin" rows pushed incident_rate to 61%
+        # against a 15% ceiling, blocking every new K×P trade attempt for
+        # hours after the scanner started honouring the per-venue-pair edge
+        # floors. Real problems still surface at warning+ and critical (and
+        # ``critical_incidents`` separately gates the "blocked" verdict).
         incidents = [
             incident
             for incident in all_incidents
             if str(getattr(incident, "status", "open")).lower() != "resolved"
+            and str(getattr(incident, "severity", "")).lower() != "info"
             and "Trade gate blocked execution:"
             not in str(getattr(incident, "message", ""))
         ]

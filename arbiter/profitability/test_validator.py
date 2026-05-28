@@ -234,6 +234,61 @@ def test_validator_marks_not_profitable_when_sample_is_large_but_pnl_is_weak():
     assert any("Total realized P&L" in reason for reason in snapshot.reasons)
 
 
+def test_validator_ignores_info_severity_incidents_in_incident_rate():
+    # 2026-05-27: ``RiskManager.check_trade`` emits info-severity
+    # ``Order rejected: Edge too thin`` rows for dashboard visibility on
+    # every routine pre-trade filter. Live prod saw 769 such rows push
+    # incident_rate to 61.5% against a 15% ceiling, deadlocking the
+    # trade gate. Info severity is observational and MUST NOT count.
+    executions = [
+        make_execution("ARB-1", 0.6, 5.0),
+        make_execution("ARB-2", 0.7, 5.5),
+        make_execution("ARB-3", 0.8, 6.0),
+    ]
+    scanner = StubScanner(
+        stats={
+            "scan_count": 30,
+            "published": 12,
+            "active_opportunities": 1,
+            "best_edge_cents": 6.0,
+        },
+        opportunities=[make_opportunity("LIVE-1", 6.0)],
+    )
+    # 200 info incidents would drag incident_rate to 200/3 > max if counted;
+    # the validator must drop them and yield validated_profitable.
+    engine = StubEngine(
+        stats={
+            "total_executions": 3,
+            "aborted": 0,
+            "audit": {"pass_rate": 1.0},
+        },
+        executions=executions,
+        incidents=[make_incident("info") for _ in range(200)],
+    )
+    validator = ProfitabilityValidator(
+        ProfitabilityConfig(
+            min_scan_count=10,
+            min_published_opportunities=5,
+            min_completed_executions=3,
+            min_total_realized_pnl=1.5,
+            min_average_realized_pnl=0.4,
+            min_average_edge_cents=5.0,
+            min_profitable_execution_ratio=1.0,
+            min_audit_pass_rate=0.99,
+            max_incident_rate=0.10,
+            max_critical_incidents=0,
+        ),
+        scanner,
+        engine,
+    )
+
+    snapshot = validator.get_snapshot()
+
+    assert snapshot.verdict == "validated_profitable", snapshot.reasons
+    assert snapshot.incident_count == 0
+    assert snapshot.incident_rate == 0.0
+
+
 def test_validator_blocks_when_audit_or_critical_incidents_fail():
     executions = [make_execution("ARB-1", 0.8, 6.0)]
     scanner = StubScanner(
