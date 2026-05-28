@@ -477,6 +477,24 @@ class ForecastExAdapter:
         best = ask if ask > 0 else bid
         if best <= 0:
             return (False, 0.0)
+        # IBKR Client Portal does NOT broadcast 7295/7296 (bid/ask size) for
+        # ForecastEx binary political contracts — field returns 0 even when
+        # the book has real depth (see settings.py min_liquidity_by_pair
+        # comment + 2026-05-27 audit). Scanner-side workaround set
+        # MIN_LIQUIDITY_FORECASTEX_*=0; executor-side depth check needed the
+        # symmetric treatment or every K×FX / P×FX opp gets skipped
+        # depth_low forever. Trust the touch when size is unbroadcast and
+        # let IOC primary + 50% partial-fill scaling (FILL-02) + MAX_-
+        # POSITION_USD cap absorb the depth-uncertainty risk.
+        if size <= 0:
+            logger.info(
+                "forecastex.check_depth.trusted_touch",
+                market_id=market_id,
+                side=side,
+                required_qty=required_qty,
+                ask=best,
+            )
+            return (True, best)
         return (size >= float(required_qty), best)
 
     async def best_executable_price(

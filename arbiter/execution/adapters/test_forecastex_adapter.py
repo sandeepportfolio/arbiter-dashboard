@@ -295,6 +295,20 @@ async def test_check_depth_returns_zero_when_no_quote():
     assert price == 0.0
 
 
+async def test_check_depth_trusts_touch_when_size_unbroadcast():
+    """IBKR Client Portal returns 7296=0 on ForecastEx binary political
+    contracts even when the book has real depth. We trust the ask and
+    let the IOC primary + partial-fill scaling handle thin-book risk."""
+    client = _mock_client()
+    client.market_snapshot = AsyncMock(
+        return_value={"84": "44", "86": "47", "7295": "0", "7296": "0"}
+    )
+    adapter = ForecastExAdapter(client=client)
+    sufficient, price = await adapter.check_depth("111", "BUY", 160)
+    assert sufficient is True
+    assert 0.46 < price < 0.48
+
+
 # ── cancel + list_open_orders pass-through ────────────────────────────────
 
 
