@@ -699,6 +699,208 @@ async def test_collector_attempts_runtime_no_discovery(monkeypatch):
     await client.close()
 
 
+async def test_first_cycle_flag_starts_true_and_clears_after_fetch(monkeypatch):
+    """_first_discovery_cycle starts True and is False after fetch_markets()."""
+    fake = {
+        "LEGACY_A": {
+            "kalshi": "KX-A", "polymarket": "a-poly",
+            "forecastex": "400000",  # YES only — triggers discovery path
+            "status": "confirmed",
+        },
+    }
+    monkeypatch.setattr(settings_mod, "MARKET_MAP", fake)
+    import arbiter.collectors.forecastex as fcst_mod
+    monkeypatch.setattr(fcst_mod, "MARKET_MAP", fake)
+
+    store = PriceStore()
+    client = ForecastExClient(gateway_url=GATEWAY, account_id=ACCOUNT)
+    collector = ForecastExCollector(config=ForecastExConfig(), store=store, client=client)
+
+    assert collector._first_discovery_cycle is True
+
+    yes_payload = [{"84": "40", "86": "45", "7295": "10", "7296": "10"}]
+    info_payload = {"right": "C", "strike": "1.0", "underlying_con_id": "999999", "symbol": "HORC"}
+    strikes_payload = {"call": [1.0], "put": [1.0]}
+    secdef_payload = [
+        {"conid": "400000", "right": "C", "strike": 1.0, "maturityDate": "20271101"},
+        {"conid": "400001", "right": "P", "strike": 1.0, "maturityDate": "20271101"},
+    ]
+    no_payload = [{"84": "52", "86": "58", "7295": "8", "7296": "8"}]
+
+    with aioresponses() as m:
+        m.post(re.compile(r".*/iserver/auth/ssodh/init.*"), payload={"connected": True})
+        m.get(re.compile(r".*/iserver/marketdata/snapshot\?.*conids=400000.*"), payload=yes_payload)
+        m.get(re.compile(r".*/iserver/contract/400000/info.*"), payload=info_payload)
+        m.get(re.compile(r".*/iserver/secdef/strikes\?.*"), payload=strikes_payload)
+        m.get(re.compile(r".*/iserver/secdef/info\?.*"), payload=secdef_payload)
+        m.get(re.compile(r".*/iserver/marketdata/snapshot\?.*conids=400001.*"), payload=no_payload)
+        await collector.fetch_markets()
+
+    assert collector._first_discovery_cycle is False
+    await client.close()
+
+
+async def test_first_cycle_throttle_sleeps_once_per_cache_miss(monkeypatch):
+    """During first cycle, asyncio.sleep is called once per conid with a cache miss."""
+    import asyncio
+    fake = {
+        "LEGACY_A": {
+            "kalshi": "KX-A", "polymarket": "a-poly",
+            "forecastex": "500000", "status": "confirmed",
+        },
+        "LEGACY_B": {
+            "kalshi": "KX-B", "polymarket": "b-poly",
+            "forecastex": "600000", "status": "confirmed",
+        },
+    }
+    monkeypatch.setattr(settings_mod, "MARKET_MAP", fake)
+    import arbiter.collectors.forecastex as fcst_mod
+    monkeypatch.setattr(fcst_mod, "MARKET_MAP", fake)
+
+    sleep_calls: list[float] = []
+
+    async def _fake_sleep(delay: float) -> None:
+        sleep_calls.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", _fake_sleep)
+
+    store = PriceStore()
+    client = ForecastExClient(gateway_url=GATEWAY, account_id=ACCOUNT)
+    collector = ForecastExCollector(config=ForecastExConfig(), store=store, client=client)
+    collector._first_cycle_discovery_throttle_s = 0.2
+
+    yes_a = [{"84": "40", "86": "45", "7295": "10", "7296": "10"}]
+    yes_b = [{"84": "41", "86": "46", "7295": "9", "7296": "9"}]
+    no_a = [{"84": "52", "86": "58", "7295": "8", "7296": "8"}]
+    no_b = [{"84": "53", "86": "59", "7295": "7", "7296": "7"}]
+    info_a = {"right": "C", "strike": "1.0", "underlying_con_id": "111111", "symbol": "HORA"}
+    info_b = {"right": "C", "strike": "1.0", "underlying_con_id": "222222", "symbol": "HORB"}
+    strikes = {"call": [1.0], "put": [1.0]}
+    secdef_a = [
+        {"conid": "500000", "right": "C", "strike": 1.0, "maturityDate": "20271101"},
+        {"conid": "500001", "right": "P", "strike": 1.0, "maturityDate": "20271101"},
+    ]
+    secdef_b = [
+        {"conid": "600000", "right": "C", "strike": 1.0, "maturityDate": "20271101"},
+        {"conid": "600001", "right": "P", "strike": 1.0, "maturityDate": "20271101"},
+    ]
+
+    with aioresponses() as m:
+        m.post(re.compile(r".*/iserver/auth/ssodh/init.*"), payload={"connected": True})
+        m.get(re.compile(r".*/iserver/marketdata/snapshot\?.*conids=500000.*"), payload=yes_a)
+        m.get(re.compile(r".*/iserver/marketdata/snapshot\?.*conids=600000.*"), payload=yes_b)
+        m.get(re.compile(r".*/iserver/contract/500000/info.*"), payload=info_a)
+        m.get(re.compile(r".*/iserver/contract/600000/info.*"), payload=info_b)
+        m.get(re.compile(r".*/iserver/secdef/strikes\?.*conid=111111.*"), payload=strikes)
+        m.get(re.compile(r".*/iserver/secdef/strikes\?.*conid=222222.*"), payload=strikes)
+        m.get(re.compile(r".*/iserver/secdef/info\?.*conid=111111.*"), payload=secdef_a)
+        m.get(re.compile(r".*/iserver/secdef/info\?.*conid=222222.*"), payload=secdef_b)
+        m.get(re.compile(r".*/iserver/marketdata/snapshot\?.*conids=500001.*"), payload=no_a)
+        m.get(re.compile(r".*/iserver/marketdata/snapshot\?.*conids=600001.*"), payload=no_b)
+        await collector.fetch_markets()
+
+    # One sleep per YES conid that needed discovery (both 500000 and 600000 were cache misses).
+    assert len(sleep_calls) == 2
+    assert all(d == 0.2 for d in sleep_calls)
+    # Throttle dropped after first cycle.
+    assert collector._first_discovery_cycle is False
+    await client.close()
+
+
+async def test_second_cycle_discovery_skips_sleep(monkeypatch):
+    """No asyncio.sleep on the second fetch_markets() call — cache is warm."""
+    import asyncio
+    fake = {
+        "LEGACY_A": {
+            "kalshi": "KX-A", "polymarket": "a-poly",
+            "forecastex": "700000", "status": "confirmed",
+        },
+    }
+    monkeypatch.setattr(settings_mod, "MARKET_MAP", fake)
+    import arbiter.collectors.forecastex as fcst_mod
+    monkeypatch.setattr(fcst_mod, "MARKET_MAP", fake)
+
+    sleep_calls: list[float] = []
+
+    async def _fake_sleep(delay: float) -> None:
+        sleep_calls.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", _fake_sleep)
+
+    store = PriceStore()
+    client = ForecastExClient(gateway_url=GATEWAY, account_id=ACCOUNT)
+    collector = ForecastExCollector(config=ForecastExConfig(), store=store, client=client)
+
+    yes_payload = [{"84": "40", "86": "45", "7295": "10", "7296": "10"}]
+    no_payload = [{"84": "52", "86": "58", "7295": "8", "7296": "8"}]
+    info_payload = {"right": "C", "strike": "1.0", "underlying_con_id": "888888", "symbol": "HORC"}
+    strikes_payload = {"call": [1.0], "put": [1.0]}
+    secdef_payload = [
+        {"conid": "700000", "right": "C", "strike": 1.0, "maturityDate": "20271101"},
+        {"conid": "700001", "right": "P", "strike": 1.0, "maturityDate": "20271101"},
+    ]
+
+    # First cycle — one sleep expected.
+    with aioresponses() as m:
+        m.post(re.compile(r".*/iserver/auth/ssodh/init.*"), payload={"connected": True})
+        m.get(re.compile(r".*/iserver/marketdata/snapshot\?.*conids=700000.*"), payload=yes_payload)
+        m.get(re.compile(r".*/iserver/contract/700000/info.*"), payload=info_payload)
+        m.get(re.compile(r".*/iserver/secdef/strikes\?.*"), payload=strikes_payload)
+        m.get(re.compile(r".*/iserver/secdef/info\?.*"), payload=secdef_payload)
+        m.get(re.compile(r".*/iserver/marketdata/snapshot\?.*conids=700001.*"), payload=no_payload)
+        await collector.fetch_markets()
+
+    assert len(sleep_calls) == 1
+    sleep_calls.clear()
+
+    # Second cycle — cache hit, no sleep.
+    with aioresponses() as m:
+        m.post(re.compile(r".*/iserver/auth/ssodh/init.*"), payload={"connected": True})
+        m.get(re.compile(r".*/iserver/marketdata/snapshot\?.*conids=700000.*"), payload=yes_payload)
+        m.get(re.compile(r".*/iserver/marketdata/snapshot\?.*conids=700001.*"), payload=no_payload)
+        await collector.fetch_markets()
+
+    assert sleep_calls == [], "no sleep on second cycle — cache is warm"
+    await client.close()
+
+
+async def test_first_cycle_no_sleep_when_conid_already_in_failed_set(monkeypatch):
+    """Pre-populated _no_discovery_failed suppresses the first-cycle sleep."""
+    import asyncio
+    fake = {
+        "LEGACY_A": {
+            "kalshi": "KX-A", "polymarket": "a-poly",
+            "forecastex": "800000", "status": "confirmed",
+        },
+    }
+    monkeypatch.setattr(settings_mod, "MARKET_MAP", fake)
+    import arbiter.collectors.forecastex as fcst_mod
+    monkeypatch.setattr(fcst_mod, "MARKET_MAP", fake)
+
+    sleep_calls: list[float] = []
+
+    async def _fake_sleep(delay: float) -> None:
+        sleep_calls.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", _fake_sleep)
+
+    store = PriceStore()
+    client = ForecastExClient(gateway_url=GATEWAY, account_id=ACCOUNT)
+    collector = ForecastExCollector(config=ForecastExConfig(), store=store, client=client)
+    # Simulate: a previous partial run already flagged 800000 as a discovery failure.
+    collector._no_discovery_failed.add("800000")
+
+    yes_payload = [{"84": "40", "86": "45", "7295": "10", "7296": "10"}]
+
+    with aioresponses() as m:
+        m.post(re.compile(r".*/iserver/auth/ssodh/init.*"), payload={"connected": True})
+        m.get(re.compile(r".*/iserver/marketdata/snapshot\?.*conids=800000.*"), payload=yes_payload)
+        await collector.fetch_markets()
+
+    assert sleep_calls == [], "already-failed conid must not trigger the throttle sleep"
+    await client.close()
+
+
 async def test_collector_skips_empty_snapshot(patched_market_map):
     store = PriceStore()
     client = ForecastExClient(gateway_url=GATEWAY, account_id=ACCOUNT)
