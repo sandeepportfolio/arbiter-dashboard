@@ -1200,6 +1200,107 @@ def test_risk_per_market_limit_still_fires():
     assert "Per-market" in reason
 
 
+def test_risk_check_trade_uses_pair_floor_for_fx_kalshi():
+    """PROFITABILITY-01: RiskManager.check_trade must accept a K×FX opp whose
+    net_edge_cents sits between the pair floor (4.5¢) and the global floor (7.0¢).
+
+    Before commit 4262583 the risk manager read min_edge_cents (7.0¢) directly,
+    so a 5.0¢ K×FX opp was rejected with 'Edge too thin'. After the fix it reads
+    min_edge_for_pair which returns 4.5¢ for forecastex_kalshi — and the opp passes.
+    """
+    from arbiter.execution.engine import RiskManager
+
+    config = ArbiterConfig()
+    config.scanner.min_edge_cents = 7.0            # global floor — higher than pair
+    config.scanner.min_edge_cents_by_pair = {
+        "forecastex_kalshi": 4.5,                   # pair-specific relaxation
+    }
+    config.scanner.max_position_usd = 10_000.0
+    config.scanner.confidence_threshold = 0.1
+    config.safety.max_platform_exposure_usd = 1_000_000.0
+
+    risk = RiskManager(config.scanner, safety_config=config.safety)
+    risk._max_total_exposure = 50_000.0
+
+    # 5.0¢ net edge: above the 4.5¢ pair floor but below the 7.0¢ global floor.
+    opp = _make_safety_opp(
+        yes_platform="kalshi",
+        no_platform="forecastex",
+        yes_price=0.50,
+        no_price=0.45,
+        suggested_qty=10,
+    )
+    import dataclasses
+    # Override reported edge to exactly 5.0¢ so the test is deterministic.
+    opp = dataclasses.replace(opp, net_edge_cents=5.0)
+
+    ok, reason = risk.check_trade(opp)
+    assert ok is True, (
+        f"K×FX opp at 5.0¢ should pass the 4.5¢ pair floor, got: {reason}"
+    )
+
+
+def test_risk_check_trade_global_floor_still_applies_for_kx_poly():
+    """PROFITABILITY-01 regression guard: the legacy global floor still
+    applies to K×P pairs that have no pair-specific entry."""
+    import dataclasses
+    from arbiter.execution.engine import RiskManager
+
+    config = ArbiterConfig()
+    config.scanner.min_edge_cents = 7.0
+    config.scanner.min_edge_cents_by_pair = {
+        "forecastex_kalshi": 4.5,   # only FX pairs are relaxed
+    }
+    config.scanner.max_position_usd = 10_000.0
+    config.scanner.confidence_threshold = 0.1
+    config.safety.max_platform_exposure_usd = 1_000_000.0
+
+    risk = RiskManager(config.scanner, safety_config=config.safety)
+    risk._max_total_exposure = 50_000.0
+
+    # 5.0¢ K×P opp — no pair entry, so global 7.0¢ must apply → reject.
+    opp = _make_safety_opp(
+        yes_platform="kalshi",
+        no_platform="polymarket",
+    )
+    opp = dataclasses.replace(opp, net_edge_cents=5.0)
+
+    ok, reason = risk.check_trade(opp)
+    assert ok is False
+    assert "Edge too thin" in reason
+
+
+def test_risk_check_trade_pair_floor_never_raises_above_global():
+    """min_edge_for_pair semantics: if the pair floor is HIGHER than the global,
+    the global wins (pair floors only relax, never tighten)."""
+    import dataclasses
+    from arbiter.execution.engine import RiskManager
+
+    config = ArbiterConfig()
+    config.scanner.min_edge_cents = 3.0             # low global
+    config.scanner.min_edge_cents_by_pair = {
+        "forecastex_kalshi": 10.0,                  # pair entry HIGHER than global
+    }
+    config.scanner.max_position_usd = 10_000.0
+    config.scanner.confidence_threshold = 0.1
+    config.safety.max_platform_exposure_usd = 1_000_000.0
+
+    risk = RiskManager(config.scanner, safety_config=config.safety)
+    risk._max_total_exposure = 50_000.0
+
+    # 5.0¢ K×FX — above global (3¢) so must pass even though pair entry says 10¢.
+    opp = _make_safety_opp(
+        yes_platform="kalshi",
+        no_platform="forecastex",
+    )
+    opp = dataclasses.replace(opp, net_edge_cents=5.0)
+
+    ok, reason = risk.check_trade(opp)
+    assert ok is True, (
+        f"Pair floor must never raise above the global; got rejection: {reason}"
+    )
+
+
 def test_rejected_order_emits_incident():
     """Any RiskManager rejection during execute_opportunity emits a
     structured ExecutionIncident with metadata.event_type='order_rejected'."""
