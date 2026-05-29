@@ -758,6 +758,170 @@ def _sizing_price_point(platform: str, yes_price: float, no_price: float,
     )
 
 
+def test_scanner_dead_ask_silently_drops_zero_book_opportunity():
+    """Dead-ask guard (1f46f02): when yes_ask=0 (IBKR feed reports no offer),
+    the opp is silently dropped even if yes_price (last-trade) shows a price.
+
+    Regression guard: before the fix, the builder fell back to yes_price=0.44
+    when yes_ask=0, producing a phantom 7¢ arb that triggered four zero-fill
+    executions on GOP_SENATE_2026 (ARB-000695, ARB-000699) because the order
+    book was empty and no one was actually offering at any price.
+    """
+    async def runner():
+        store = PriceStore(ttl=300)
+        scanner = ArbitrageScanner(
+            ScannerConfig(
+                min_edge_cents=1.0,
+                persistence_scans=1,
+                max_position_usd=100.0,
+                confidence_threshold=0.0,
+                min_liquidity=10.0,
+                max_bid_ask_spread_cents=0.0,
+            ),
+            store,
+        )
+        original_mapping = MARKET_MAP.get("DEAD_ASK_TEST")
+        MARKET_MAP["DEAD_ASK_TEST"] = {
+            "description": "Dead-ask drop test market",
+            "status": "confirmed",
+            "allow_auto_trade": True,
+            "mapping_score": 0.95,
+            "resolution_match_status": "identical",
+        }
+        fresh = time.time()
+        # ForecastEx YES: ask=0 (IBKR feed — no resting offer), but last-trade
+        # price still shows $0.44. The scanner must NOT treat $0.44 as a live ask.
+        await store.put(
+            PricePoint(
+                platform="forecastex", canonical_id="DEAD_ASK_TEST",
+                yes_price=0.44, no_price=0.57,
+                yes_volume=0, no_volume=0, timestamp=fresh,
+                raw_market_id="FX-DA", yes_market_id="FX-DA", no_market_id="FX-DA",
+                fee_rate=0.005,
+                mapping_status="confirmed", mapping_score=0.9,
+                yes_bid=0.0, yes_ask=0.0,     # ← dead order book
+                no_bid=0.56, no_ask=0.57,
+            )
+        )
+        await store.put(
+            PricePoint(
+                platform="kalshi", canonical_id="DEAD_ASK_TEST",
+                yes_price=0.49, no_price=0.52,
+                yes_volume=200, no_volume=200, timestamp=fresh,
+                raw_market_id="K-DA", yes_market_id="K-DA", no_market_id="K-DA",
+                fee_rate=0.07,
+                mapping_status="confirmed", mapping_score=0.9,
+                yes_bid=0.48, yes_ask=0.49,
+                no_bid=0.51, no_ask=0.52,
+            )
+        )
+        try:
+            opps = await scanner.scan_once()
+            # The K_YES × FX_NO direction: FX has a live no_ask=0.57 → can price
+            # the NO side, but we're buying FX YES at yes_ask=0 → dead ask → drop.
+            # The FX_YES × K_NO direction: FX yes_ask=0 → dead ask → drop.
+            fx_opps = [
+                o for o in opps
+                if "forecastex" in (o.yes_platform, o.no_platform)
+            ]
+            tradable = [o for o in fx_opps if o.status == "tradable"]
+            assert not tradable, (
+                f"FX dead-ask opp must never be tradable; "
+                f"got {[(o.yes_platform, o.no_platform, o.net_edge_cents, o.status) for o in tradable]}"
+            )
+            # The direction where FX is the NO side (buying FX NO at no_ask=0.57)
+            # and Kalshi is YES (buying K YES at yes_ask=0.49): K+FX cost=1.06 → negative
+            # gross edge → won't surface. All directions must be absent or non-tradable.
+            assert not any(
+                "forecastex" == o.yes_platform for o in opps
+            ), (
+                f"FX-as-YES with dead yes_ask must not surface; "
+                f"got {[(o.yes_platform, o.no_platform) for o in opps if o.yes_platform == 'forecastex']}"
+            )
+        finally:
+            if original_mapping is None:
+                MARKET_MAP.pop("DEAD_ASK_TEST", None)
+            else:
+                MARKET_MAP["DEAD_ASK_TEST"] = original_mapping
+
+    asyncio.run(runner())
+
+
+def test_scanner_sub_min_size_blocks_polymarket_below_5_shares():
+    """Sub-min-size guard (1f46f02): a K×P arb where natural sizing lands at
+    fewer than 5 contracts is silently dropped before it can reach the executor.
+
+    Polymarket US documented minimum is 5 shares. A 1-share order at $0.469
+    returned status=FILLED with cumQuantity=0 — the matching engine accepts
+    but fills zero, costing latency + arb_id with no profit. The scanner must
+    skip any opp where the computed qty < 5 when Polymarket is involved.
+    """
+    async def runner():
+        store = PriceStore(ttl=300)
+        scanner = ArbitrageScanner(
+            ScannerConfig(
+                min_edge_cents=1.0,
+                persistence_scans=1,
+                max_position_usd=2.0,     # forces qty=2 for a ~$0.93/pair cost
+                confidence_threshold=0.0,
+                min_liquidity=10.0,
+                max_bid_ask_spread_cents=0.0,
+            ),
+            store,
+        )
+        original_mapping = MARKET_MAP.get("SUBMIN_TEST")
+        MARKET_MAP["SUBMIN_TEST"] = {
+            "description": "Sub-min-size test market",
+            "status": "confirmed",
+            "allow_auto_trade": True,
+            "mapping_score": 0.95,
+            "resolution_match_status": "identical",
+        }
+        fresh = time.time()
+        # At $2 max_position, pair cost ~$0.93 → qty = floor(2/0.93) = 2.
+        # Polymarket requires ≥5 contracts → scanner must drop silently.
+        await store.put(
+            PricePoint(
+                platform="kalshi", canonical_id="SUBMIN_TEST",
+                yes_price=0.46, no_price=0.55,
+                yes_volume=200, no_volume=200, timestamp=fresh,
+                raw_market_id="K-SM", yes_market_id="K-SM", no_market_id="K-SM",
+                fee_rate=0.07,
+                mapping_status="confirmed", mapping_score=0.9,
+                yes_bid=0.455, yes_ask=0.46, no_bid=0.545, no_ask=0.55,
+            )
+        )
+        await store.put(
+            PricePoint(
+                platform="polymarket", canonical_id="SUBMIN_TEST",
+                yes_price=0.52, no_price=0.47,
+                yes_volume=200, no_volume=200, timestamp=fresh,
+                raw_market_id="P-SM", yes_market_id="P-SM", no_market_id="P-SM",
+                fee_rate=0.01,
+                mapping_status="confirmed", mapping_score=0.9,
+                yes_bid=0.515, yes_ask=0.52, no_bid=0.465, no_ask=0.47,
+            )
+        )
+        try:
+            opps = await scanner.scan_once()
+            # No K×P opportunity should surface — sizing < 5 → Polymarket rejects.
+            kp_opps = [
+                o for o in opps
+                if set([o.yes_platform, o.no_platform]) == {"kalshi", "polymarket"}
+            ]
+            assert not kp_opps, (
+                f"K×P opp with sub-5-share sizing must be silently dropped; "
+                f"got {[(o.net_edge_cents, o.status, o.suggested_qty) for o in kp_opps]}"
+            )
+        finally:
+            if original_mapping is None:
+                MARKET_MAP.pop("SUBMIN_TEST", None)
+            else:
+                MARKET_MAP["SUBMIN_TEST"] = original_mapping
+
+    asyncio.run(runner())
+
+
 def test_compute_position_size_backward_compatible_with_no_balance_provider():
     """With no balance_provider, only the MAX_POSITION_USD + liquidity caps fire."""
     scanner = ArbitrageScanner(
