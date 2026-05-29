@@ -1254,6 +1254,101 @@ async def test_resolve_event_children_uses_correct_sectype_opt(client):
     await client.close()
 
 
+async def test_resolve_event_children_political_fallback_when_strikes_empty(client):
+    """Regression for SENM 745923952 (US Senate Majority): IBKR's
+    /iserver/secdef/strikes returns {call:[], put:[]} for some political
+    FORECASTX parents even though /iserver/secdef/info returns the YES/NO
+    child contracts for strike 1.0 and 2.0 (verified live 2026-05-26).
+
+    When strikes is empty, the fix (commit 5a04a53) fetches the parent
+    secdef name and, if it contains a political-control keyword
+    (SENATE/HOUSE/CONTROL/MAJORITY/PRESIDENT/ELECTION/GOVERNOR), falls
+    back to probing /iserver/secdef/info for strikes 1.0 and 2.0 across
+    election months (NOV26/NOV27/NOV28).
+    """
+    with aioresponses() as m:
+        # strikes always returns empty — simulates the IBKR quirk for SENM
+        m.get(
+            re.compile(r".*/iserver/secdef/strikes.*"),
+            payload={"call": [], "put": []},
+            repeat=True,
+        )
+        # get_trsrv_secdef → parent name contains political keyword "SENATE"
+        m.get(
+            re.compile(r".*/trsrv/secdef.*"),
+            payload={"secdef": [{"name": "US SENATE MAJORITY 2026", "conid": 745923952}]},
+        )
+        # info fallback for strike=1.0 → DEM YES child
+        m.get(
+            re.compile(r".*/iserver/secdef/info.*strike=1\.0.*"),
+            payload={"items": [
+                {"conid": "745924267", "right": "C", "strike": 1.0,
+                 "desc2": "NOV26 1 DEM @FORECASTX", "maturityDate": "20270102"},
+            ]},
+        )
+        # info fallback for strike=2.0 → GOP YES child
+        m.get(
+            re.compile(r".*/iserver/secdef/info.*strike=2\.0.*"),
+            payload={"items": [
+                {"conid": "773659815", "right": "C", "strike": 2.0,
+                 "desc2": "NOV26 2 GOP @FORECASTX", "maturityDate": "20270102"},
+            ]},
+        )
+        children = await client.resolve_event_children(
+            "745923952", months=("NOV26",),
+        )
+    conids = {c["conid"] for c in children}
+    assert conids == {"745924267", "773659815"}, (
+        f"political fallback must return child conids from secdef/info; got {conids}"
+    )
+    # source tag must record the fallback path for incident tracing
+    sources = {c.get("source", "") for c in children}
+    assert any("info-fallback" in s for s in sources), (
+        f"source field should document fallback path; got {sources}"
+    )
+    await client.close()
+
+
+async def test_resolve_event_children_no_fallback_for_non_political_parent(client):
+    """The secdef/info fallback must be gated on political keywords in the
+    parent name. A non-political parent (e.g. a CPI regional event) with
+    empty strikes must return [] immediately without issuing any
+    /iserver/secdef/info calls. Without this gate, the 39 wrong-domain
+    CPI/GDP/PCE discovery attachments would each burn 48 IBKR rate-limit
+    calls per cycle (24 months × 2 strikes) for nothing.
+    """
+    info_called: list[str] = []
+
+    with aioresponses() as m:
+        m.get(
+            re.compile(r".*/iserver/secdef/strikes.*"),
+            payload={"call": [], "put": []},
+            repeat=True,
+        )
+        # parent name has NO political keyword — just a CPI regional event
+        m.get(
+            re.compile(r".*/trsrv/secdef.*"),
+            payload={"secdef": [{"name": "CPI REGIONAL ATLANTA 2026", "conid": 573031126}]},
+        )
+
+        def _capture_info(url, **kwargs):
+            info_called.append(str(url))
+            from aioresponses.core import CallbackResult
+            return CallbackResult(payload={"items": []})
+
+        m.get(re.compile(r".*/iserver/secdef/info.*"), callback=_capture_info, repeat=True)
+
+        children = await client.resolve_event_children(
+            "573031126", months=("NOV26",),
+        )
+
+    assert children == [], "non-political parent with empty strikes must return []"
+    assert not info_called, (
+        f"secdef/info must not fire for non-political parents; got calls: {info_called}"
+    )
+    await client.close()
+
+
 async def test_collector_fetch_balance_returns_available_funds(patched_market_map):
     store = PriceStore()
     client = ForecastExClient(gateway_url=GATEWAY, account_id=ACCOUNT)
