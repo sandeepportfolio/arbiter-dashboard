@@ -756,3 +756,102 @@ def test_trigger_is_idempotent_and_safe_before_loop_start():
     res.trigger()
     res.trigger()
     assert res._wake_event.is_set()
+
+
+async def test_no_conid_stored_when_put_sibling_discovered():
+    """When resolve_event_children returns a NO (right=P) sibling alongside
+    the YES (right=C) child, the resolver must persist forecastex_no_contract_id
+    on the mapping AND call reactivate_conid for the NO conid.
+
+    Gap from commit d157cb6: the happy-path test only asserted forecastex_contract_id
+    (YES) and forecastex_not_available — the NO contract write was untested.
+    """
+    settings_module.MARKET_MAP["DEM_HOUSE_2026"] = _confirmed(
+        "DEM_HOUSE_2026", "733131966",
+    )
+    collector = MagicMock()
+    collector._inactive_conids = {"733131966"}
+    collector.reactivate_conid = MagicMock()
+
+    client = MagicMock()
+    # Two children: YES (Call) and NO (Put) at the same strike.
+    client.resolve_event_children = AsyncMock(return_value=[
+        {"conid": "900000001", "right": "C", "strike": 1.0,
+         "source": "secdef/info:OPT:NOV26:strike=1.0", "desc": "NOV26 YES"},
+        {"conid": "900000002", "right": "P", "strike": 1.0,
+         "source": "secdef/info:OPT:NOV26:strike=1.0", "desc": "NOV26 NO"},
+    ])
+    client.market_snapshot = AsyncMock(
+        side_effect=_parent_then_tradeable_snapshot("733131966")
+    )
+
+    store = MagicMock()
+    store.get = AsyncMock(return_value=_stub_mapping("DEM_HOUSE_2026", "733131966"))
+    store.upsert = AsyncMock()
+
+    res = ForecastExChildResolver(
+        forecastex_client=client, forecastex_collector=collector, mapping_store=store,
+    )
+    snap = await res.run_once()
+
+    assert snap.resolved_count == 1
+    upserted = store.upsert.await_args.args[0]
+    # YES conid stored (existing assertion, kept for completeness).
+    assert upserted.forecastex_contract_id == "900000001"
+    # NO conid must also be stored — this was the gap.
+    assert upserted.forecastex_no_contract_id == "900000002", (
+        "forecastex_no_contract_id not written to mapping — "
+        "collector will synthesize NO prices, repeating the phantom-edge bug"
+    )
+    # reactivate_conid called for parent, YES child, AND NO child.
+    reactivated = {c.args[0] for c in collector.reactivate_conid.call_args_list}
+    assert "733131966" in reactivated, "parent must be reactivated"
+    assert "900000001" in reactivated, "YES child must be reactivated"
+    assert "900000002" in reactivated, (
+        "NO child must be reactivated — missing would leave collector "
+        "treating the NO conid as inactive"
+    )
+
+
+async def test_no_conid_not_stored_when_no_put_sibling_found():
+    """When resolve_event_children returns only the YES (right=C) child
+    (NO sibling not yet listed), forecastex_no_contract_id must NOT be
+    overwritten — leave it at its current value so the collector can
+    still use a previously discovered NO conid."""
+    settings_module.MARKET_MAP["DEM_HOUSE_2026"] = _confirmed(
+        "DEM_HOUSE_2026", "733131966",
+    )
+    collector = MagicMock()
+    collector._inactive_conids = {"733131966"}
+    collector.reactivate_conid = MagicMock()
+
+    client = MagicMock()
+    # Only the YES child — no NO sibling yet.
+    client.resolve_event_children = AsyncMock(return_value=[
+        {"conid": "900000001", "right": "C", "strike": 1.0,
+         "source": "secdef/info:OPT:NOV26:strike=1.0", "desc": "NOV26 YES"},
+    ])
+    client.market_snapshot = AsyncMock(
+        side_effect=_parent_then_tradeable_snapshot("733131966")
+    )
+
+    stub = _stub_mapping("DEM_HOUSE_2026", "733131966")
+    # Pre-existing NO conid on the mapping (discovered in a prior cycle).
+    stub.forecastex_no_contract_id = "800000099"
+    store = MagicMock()
+    store.get = AsyncMock(return_value=stub)
+    store.upsert = AsyncMock()
+
+    res = ForecastExChildResolver(
+        forecastex_client=client, forecastex_collector=collector, mapping_store=store,
+    )
+    await res.run_once()
+
+    upserted = store.upsert.await_args.args[0]
+    assert upserted.forecastex_contract_id == "900000001"
+    # Pre-existing NO conid must be left intact — resolver only writes
+    # forecastex_no_contract_id when it finds a Put sibling.
+    assert upserted.forecastex_no_contract_id == "800000099", (
+        "resolver must not clear a pre-existing NO conid when no Put sibling "
+        "is returned — it may have been discovered by the collector previously"
+    )
