@@ -426,6 +426,93 @@ def test_scanner_per_pair_liquidity_floor_unlocks_fx_arb_with_zero_size():
     asyncio.run(runner())
 
 
+def test_scanner_per_pair_liquidity_floor_still_blocks_kp_with_zero_size():
+    """PROFITABILITY-02 relax-only: a K×P pair with zero volume must
+    remain illiquid even when FX pair floors are set to 0.
+
+    The FX-pair liquidity exemption is pair-specific; the K×P 25-contract
+    floor must be unaffected. Regression guard: wrong key lookup or a
+    'min of all pairs' bug would let zero-volume K×P slip through.
+    """
+    async def runner():
+        store = PriceStore(ttl=300)
+        scanner = ArbitrageScanner(
+            ScannerConfig(
+                min_edge_cents=4.0,
+                persistence_scans=1,
+                max_position_usd=100.0,
+                confidence_threshold=0.0,
+                min_liquidity=25.0,
+                max_bid_ask_spread_cents=0.0,
+                min_liquidity_by_pair={
+                    "forecastex_kalshi": 0.0,
+                    "forecastex_polymarket": 0.0,
+                    "kalshi_polymarket": 25.0,   # K×P keeps global floor
+                },
+            ),
+            store,
+        )
+        original_mapping = MARKET_MAP.get("KP_LIQ_BLOCK_TEST")
+        MARKET_MAP["KP_LIQ_BLOCK_TEST"] = {
+            "description": "K×P zero-volume must stay illiquid",
+            "status": "confirmed",
+            "allow_auto_trade": True,
+            "mapping_score": 0.95,
+            "resolution_match_status": "identical",
+        }
+        fresh = time.time()
+        # Kalshi YES: 200 volume. Polymarket NO: 10 contracts — enough for
+        # the 5-share Polymarket minimum so the opp surfaces, but well below
+        # the 25-contract K×P liquidity floor so it stays illiquid.
+        # min_available_liquidity = min(200, 10) = 10 < 25 → illiquid.
+        await store.put(
+            PricePoint(
+                platform="kalshi", canonical_id="KP_LIQ_BLOCK_TEST",
+                yes_price=0.46, no_price=0.55,
+                yes_volume=200, no_volume=200, timestamp=fresh,
+                raw_market_id="K-KPLB", yes_market_id="K-KPLB", no_market_id="K-KPLB",
+                fee_rate=0.07,
+                mapping_status="confirmed", mapping_score=0.9,
+                yes_bid=0.455, yes_ask=0.46, no_bid=0.545, no_ask=0.55,
+            )
+        )
+        await store.put(
+            PricePoint(
+                platform="polymarket", canonical_id="KP_LIQ_BLOCK_TEST",
+                yes_price=0.52, no_price=0.47,
+                yes_volume=10, no_volume=10, timestamp=fresh,
+                raw_market_id="P-KPLB", yes_market_id="P-KPLB", no_market_id="P-KPLB",
+                fee_rate=0.01,
+                mapping_status="confirmed", mapping_score=0.9,
+                yes_bid=0.515, yes_ask=0.52, no_bid=0.465, no_ask=0.47,
+            )
+        )
+        try:
+            opps = await scanner.scan_once()
+            kp_opps = [
+                o for o in opps
+                if set([o.yes_platform, o.no_platform]) == {"kalshi", "polymarket"}
+            ]
+            tradable = [o for o in kp_opps if o.status == "tradable"]
+            assert not tradable, (
+                f"K×P with zero volume must NOT be tradable even with FX pair floor=0; "
+                f"got {[(o.net_edge_cents, o.status, o.min_available_liquidity) for o in kp_opps]}"
+            )
+            # Should be present but illiquid — confirm the arb surfaces but is gated.
+            illiquid = [o for o in kp_opps if o.status == "illiquid"]
+            assert illiquid, (
+                f"K×P zero-volume arb must appear as illiquid; "
+                f"got {[(o.net_edge_cents, o.status) for o in kp_opps]}"
+            )
+        finally:
+            if original_mapping is None:
+                MARKET_MAP.pop("KP_LIQ_BLOCK_TEST", None)
+            else:
+                MARKET_MAP["KP_LIQ_BLOCK_TEST"] = original_mapping
+
+    asyncio.run(runner())
+
+
 def test_scanner_per_pair_edge_floor_unlocks_fx_arb_below_global_floor():
     """PROFITABILITY-01: a 5¢ net edge on a Kalshi×ForecastEx pair
     must clear the FX-pair floor (4.5¢) even when the global floor
