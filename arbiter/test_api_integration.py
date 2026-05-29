@@ -185,6 +185,25 @@ def test_api_and_dashboard_contracts():
         portfolio_summary = get_json("/api/portfolio/summary")
         assert portfolio_summary["dry_run"] is True
         assert "realized_pnl" in portfolio_summary
+        # e740d2b: stranded-positions folded into portfolio headline counts —
+        # verify new split keys are present (values may be 0 in dry-run with no trades)
+        assert "stranded_count" in portfolio_summary, (
+            "portfolio/summary must include stranded_count (e740d2b)"
+        )
+        assert "stranded_exposure" in portfolio_summary
+        assert "engine_open_positions" in portfolio_summary
+        assert "open_positions" in portfolio_summary
+        assert portfolio_summary["open_positions"] == (
+            portfolio_summary["engine_open_positions"] + portfolio_summary["stranded_count"]
+        ), "open_positions must equal engine_open_positions + stranded_count"
+
+        # ef9c561: /api/forecastex/diagnostics — operator visibility endpoint
+        fx_diag = get_json("/api/forecastex/diagnostics")
+        assert "rows" in fx_diag, "diagnostics must include rows list"
+        assert "resolver_running" in fx_diag
+        assert "inactive_conid_count" in fx_diag
+        assert "total_confirmed_fx_mappings" in fx_diag
+        assert isinstance(fx_diag["rows"], list)
 
         login = post_json("/api/auth/login", {"email": "sparx.sandeep@gmail.com", "password": "letmein123"})
         assert login["status"] == "ok"
