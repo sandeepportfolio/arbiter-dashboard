@@ -138,6 +138,10 @@ async def build_opportunity_from_quotes(
     # scanner reads inside _build_cross_platform_opportunity is missing. Set
     # it to None here so the helper doesn't AttributeError on the read.
     scanner._balance_provider = None
+    # _build_cross_platform_opportunity increments skip-reason counters on
+    # dead-ask and sub-min-size paths; init to empty dict so those paths don't
+    # AttributeError (added to __init__ in commit 1f46f02).
+    scanner._skip_reasons = {}
     # ``_build_cross_platform_opportunity`` + ``_compute_confidence`` read the
     # following fields off ``self.config``; construct the minimal stub.
     scanner.config = SimpleNamespace(
@@ -153,6 +157,11 @@ async def build_opportunity_from_quotes(
         # confidence). Use permissive defaults.
         max_quote_age_seconds=60.0,
         min_liquidity=1.0,
+        # Per-pair floor helpers called by _build_cross_platform_opportunity.
+        # The stub uses the global floor (relax-only semantics: a pair entry
+        # can only lower the floor, never raise it above the global value).
+        min_edge_for_pair=lambda *_: 1.0,
+        min_liquidity_for_pair=lambda *_: 1.0,
     )
 
     platforms = list(prices.keys())

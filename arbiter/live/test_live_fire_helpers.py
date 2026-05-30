@@ -66,7 +66,11 @@ def _price_point(
     yes_volume: float = 100.0,
     no_volume: float = 100.0,
     fee_rate: float = 0.0,
+    yes_ask: float | None = None,
+    no_ask: float | None = None,
 ):
+    # yes_ask/no_ask default to yes_price/no_price so fixtures satisfy the
+    # dead_ask guard added in commit 1f46f02 (require a live ask on both legs).
     return PricePoint(
         platform=platform,
         canonical_id=canonical_id,
@@ -78,6 +82,8 @@ def _price_point(
         raw_market_id=f"{platform}-raw",
         yes_market_id=f"{platform}-yes",
         no_market_id=f"{platform}-no",
+        yes_ask=yes_ask if yes_ask is not None else yes_price,
+        no_ask=no_ask if no_ask is not None else no_price,
         fee_rate=fee_rate,
         mapping_status="confirmed",
         mapping_score=0.9,
