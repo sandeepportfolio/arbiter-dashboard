@@ -314,3 +314,169 @@ def test_scanner_skips_when_polymarket_qty_below_min_size(canonical_id):
                 )
 
     asyncio.run(run())
+
+
+# ── Per-pair liquidity floor: FX-containing pairs surfaced as illiquid ────────
+
+
+def test_scanner_fx_polymarket_zero_volume_surfaces_as_illiquid():
+    """ForecastEx×Polymarket with zero FX volume must appear as 'illiquid' when
+    the forecastex_polymarket pair floor > 0 — NOT silently dropped.
+
+    Symmetric FX-side counterpart of the K×P illiquid regression
+    (test_scanner_per_pair_liquidity_floor_still_blocks_kp_with_zero_size).
+    The early-liquidity-check path in _build_cross_platform_opportunity must
+    apply regardless of which pair is being built.
+    """
+    canonical_id = "FX_P_ILLIQUID_TEST_" + uuid.uuid4().hex[:8]
+
+    async def runner():
+        store = PriceStore(ttl=300)
+        scanner = ArbitrageScanner(
+            ScannerConfig(
+                min_edge_cents=4.0,
+                persistence_scans=1,
+                max_position_usd=100.0,
+                confidence_threshold=0.0,
+                min_liquidity=25.0,
+                max_bid_ask_spread_cents=0.0,
+                min_liquidity_by_pair={
+                    "forecastex_polymarket": 25.0,   # FX×P floor matches global
+                    "forecastex_kalshi": 0.0,
+                    "kalshi_polymarket": 25.0,
+                },
+            ),
+            store,
+        )
+        original_mapping = MARKET_MAP.get(canonical_id)
+        MARKET_MAP[canonical_id] = {
+            "description": "FX×P zero-volume illiquid test",
+            "status": "confirmed",
+            "allow_auto_trade": True,
+            "mapping_score": 0.95,
+            "resolution_match_status": "identical",
+        }
+        try:
+            fresh = time.time()
+            # Polymarket YES side reports volume; ForecastEx NO side is 0.
+            # min_available_liquidity = min(200, 0) = 0 < 25 → must be illiquid.
+            await store.put(PricePoint(
+                platform="polymarket", canonical_id=canonical_id,
+                yes_price=0.46, no_price=0.55,
+                yes_volume=200, no_volume=200, timestamp=fresh,
+                raw_market_id="P-FXP", yes_market_id="P-FXP", no_market_id="P-FXP",
+                fee_rate=0.05, mapping_status="confirmed", mapping_score=0.9,
+                yes_bid=0.455, yes_ask=0.46, no_bid=0.545, no_ask=0.55,
+            ))
+            await store.put(PricePoint(
+                platform="forecastex", canonical_id=canonical_id,
+                yes_price=0.52, no_price=0.47,
+                yes_volume=0, no_volume=0,
+                timestamp=fresh,
+                raw_market_id="FX-FXP", yes_market_id="FX-FXP", no_market_id="FX-FXP",
+                fee_rate=0.005, mapping_status="confirmed", mapping_score=0.9,
+                yes_bid=0.515, yes_ask=0.52, no_bid=0.465, no_ask=0.47,
+            ))
+            opps = await scanner.scan_once()
+            fxp_opps = [
+                o for o in opps
+                if set([o.yes_platform, o.no_platform]) == {"forecastex", "polymarket"}
+            ]
+            tradable = [o for o in fxp_opps if o.status == "tradable"]
+            assert not tradable, (
+                f"FX×P with zero FX volume must NOT be tradable; "
+                f"got {[(o.net_edge_cents, o.status) for o in fxp_opps]}"
+            )
+            illiquid = [o for o in fxp_opps if o.status == "illiquid"]
+            assert illiquid, (
+                f"FX×P zero-volume arb must appear as illiquid, not silently dropped; "
+                f"got {[o.status for o in fxp_opps]}"
+            )
+        finally:
+            if original_mapping is None:
+                MARKET_MAP.pop(canonical_id, None)
+            else:
+                MARKET_MAP[canonical_id] = original_mapping
+
+    asyncio.run(runner())
+
+
+def test_scanner_fx_kalshi_zero_volume_surfaces_as_illiquid():
+    """ForecastEx×Kalshi with zero FX volume must appear as 'illiquid' when
+    the forecastex_kalshi pair floor > 0 — NOT silently dropped.
+
+    A zero floor is the unlock signal (tested by
+    test_scanner_per_pair_liquidity_floor_unlocks_fx_arb_with_zero_size).
+    This test verifies the blocking side: an explicit non-zero floor must be
+    respected by the scanner regardless of pair direction.
+    """
+    canonical_id = "FX_K_ILLIQUID_TEST_" + uuid.uuid4().hex[:8]
+
+    async def runner():
+        store = PriceStore(ttl=300)
+        scanner = ArbitrageScanner(
+            ScannerConfig(
+                min_edge_cents=4.0,
+                persistence_scans=1,
+                max_position_usd=100.0,
+                confidence_threshold=0.0,
+                min_liquidity=25.0,
+                max_bid_ask_spread_cents=0.0,
+                min_liquidity_by_pair={
+                    "forecastex_kalshi": 25.0,    # FX×K floor matches global
+                    "forecastex_polymarket": 0.0,
+                    "kalshi_polymarket": 25.0,
+                },
+            ),
+            store,
+        )
+        original_mapping = MARKET_MAP.get(canonical_id)
+        MARKET_MAP[canonical_id] = {
+            "description": "FX×K zero-volume illiquid test",
+            "status": "confirmed",
+            "allow_auto_trade": True,
+            "mapping_score": 0.95,
+            "resolution_match_status": "identical",
+        }
+        try:
+            fresh = time.time()
+            # Kalshi YES side has volume; ForecastEx NO side is 0.
+            await store.put(PricePoint(
+                platform="kalshi", canonical_id=canonical_id,
+                yes_price=0.46, no_price=0.55,
+                yes_volume=200, no_volume=200, timestamp=fresh,
+                raw_market_id="K-FXK", yes_market_id="K-FXK", no_market_id="K-FXK",
+                fee_rate=0.07, mapping_status="confirmed", mapping_score=0.9,
+                yes_bid=0.455, yes_ask=0.46, no_bid=0.545, no_ask=0.55,
+            ))
+            await store.put(PricePoint(
+                platform="forecastex", canonical_id=canonical_id,
+                yes_price=0.52, no_price=0.47,
+                yes_volume=0, no_volume=0,
+                timestamp=fresh,
+                raw_market_id="FX-FXK", yes_market_id="FX-FXK", no_market_id="FX-FXK",
+                fee_rate=0.005, mapping_status="confirmed", mapping_score=0.9,
+                yes_bid=0.515, yes_ask=0.52, no_bid=0.465, no_ask=0.47,
+            ))
+            opps = await scanner.scan_once()
+            fxk_opps = [
+                o for o in opps
+                if set([o.yes_platform, o.no_platform]) == {"forecastex", "kalshi"}
+            ]
+            tradable = [o for o in fxk_opps if o.status == "tradable"]
+            assert not tradable, (
+                f"FX×K with zero FX volume must NOT be tradable; "
+                f"got {[(o.net_edge_cents, o.status) for o in fxk_opps]}"
+            )
+            illiquid = [o for o in fxk_opps if o.status == "illiquid"]
+            assert illiquid, (
+                f"FX×K zero-volume arb must appear as illiquid, not silently dropped; "
+                f"got {[o.status for o in fxk_opps]}"
+            )
+        finally:
+            if original_mapping is None:
+                MARKET_MAP.pop(canonical_id, None)
+            else:
+                MARKET_MAP[canonical_id] = original_mapping
+
+    asyncio.run(runner())
