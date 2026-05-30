@@ -449,14 +449,26 @@ class ArbitrageScanner:
                 )
                 return None
 
-        # Use gross_edge as the edge proxy for sizing (fees are qty-dependent, so
-        # net edge would be circular here — gross is within 1-3¢ in practice).
-        suggested_qty = self._compute_position_size(
-            yes_price_point, no_price_point, yes_price, no_price,
-            net_edge_cents=gross_edge * 100.0,
+        # Compute liquidity early so zero-volume pairs surface as "illiquid"
+        # rather than being silently dropped by the sub_min_size gate.
+        # When liquidity is already below the pair floor, bypass _compute_position_size
+        # and use qty=1 as a placeholder so the opportunity flows through to
+        # _resolve_status where it is correctly classified as "illiquid".
+        _early_liq = min(yes_price_point.yes_volume, no_price_point.no_volume)
+        _pair_liq_floor = self.config.min_liquidity_for_pair(
+            yes_price_point.platform, no_price_point.platform,
         )
-        if suggested_qty <= 0:
-            return None
+        if _early_liq < _pair_liq_floor:
+            suggested_qty = 1
+        else:
+            # Use gross_edge as the edge proxy for sizing (fees are qty-dependent, so
+            # net edge would be circular here — gross is within 1-3¢ in practice).
+            suggested_qty = self._compute_position_size(
+                yes_price_point, no_price_point, yes_price, no_price,
+                net_edge_cents=gross_edge * 100.0,
+            )
+            if suggested_qty <= 0:
+                return None
 
         yes_fee_total = compute_fee(
             yes_price_point.platform,
@@ -485,7 +497,7 @@ class ArbitrageScanner:
             return None
 
         quote_age_seconds = max(yes_price_point.age_seconds, no_price_point.age_seconds)
-        min_available_liquidity = min(yes_price_point.yes_volume, no_price_point.no_volume)
+        min_available_liquidity = _early_liq  # computed before sizing to catch illiquid early
         requires_manual = False
         confidence = self._compute_confidence(
             quote_age_seconds=quote_age_seconds,
