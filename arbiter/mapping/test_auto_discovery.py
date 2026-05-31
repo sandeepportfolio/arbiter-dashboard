@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from arbiter.mapping.auto_discovery import _synthetic_kalshi_orderbook, discover
+from arbiter.mapping.auto_discovery import _finalize_candidates, _synthetic_kalshi_orderbook, discover
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -952,3 +952,68 @@ async def test_polymarket_book_response_passes_liquidity_gate():
     assert written.get("auto_promote_reason") != "liquidity_low"
     assert written["status"] == "confirmed"
     assert written["allow_auto_trade"] is True
+
+
+# ---------------------------------------------------------------------------
+# _finalize_candidates: de-dup / score-ordering unit tests
+# ---------------------------------------------------------------------------
+
+def _cand(kalshi_ticker: str, poly_slug: str, score: float, **extra) -> dict:
+    return {"kalshi_ticker": kalshi_ticker, "poly_slug": poly_slug, "score": score, **extra}
+
+
+class TestFinalizeCandidates:
+    """
+    _finalize_candidates must preserve the highest-scoring candidate when two
+    candidates compete for the same Kalshi ticker or Polymarket slug.  Getting
+    this wrong means the scanner trades a lower-confidence pair.
+    """
+
+    def test_higher_score_wins_kalshi_collision(self):
+        # Two candidates share the same kalshi_ticker; higher score must survive.
+        low = _cand("KASH-A", "poly-slug-1", score=0.72)
+        high = _cand("KASH-A", "poly-slug-2", score=0.91)
+        result = _finalize_candidates([low, high], max_candidates=10)
+        assert len(result) == 1
+        assert result[0]["poly_slug"] == "poly-slug-2", "lower-score candidate survived dedup"
+
+    def test_higher_score_wins_polymarket_collision(self):
+        # Two candidates share the same poly_slug; higher score must survive.
+        low = _cand("KASH-B", "shared-slug", score=0.65)
+        high = _cand("KASH-C", "shared-slug", score=0.88)
+        result = _finalize_candidates([low, high], max_candidates=10)
+        assert len(result) == 1
+        assert result[0]["kalshi_ticker"] == "KASH-C", "lower-score candidate survived dedup"
+
+    def test_no_collision_keeps_both(self):
+        a = _cand("KASH-D", "poly-d", score=0.80)
+        b = _cand("KASH-E", "poly-e", score=0.75)
+        result = _finalize_candidates([a, b], max_candidates=10)
+        assert len(result) == 2
+
+    def test_max_candidates_cap(self):
+        candidates = [_cand(f"KASH-{i}", f"poly-{i}", score=float(i) / 10) for i in range(20)]
+        result = _finalize_candidates(candidates, max_candidates=5)
+        assert len(result) == 5
+
+    def test_zero_max_candidates_returns_all(self):
+        candidates = [_cand(f"KASH-{i}", f"poly-{i}", score=0.9) for i in range(7)]
+        result = _finalize_candidates(candidates, max_candidates=0)
+        assert len(result) == 7
+
+    def test_missing_kalshi_ticker_skipped(self):
+        valid = _cand("KASH-Z", "poly-z", score=0.85)
+        invalid = {"poly_slug": "poly-missing-k", "score": 0.99}  # no kalshi_ticker
+        result = _finalize_candidates([valid, invalid], max_candidates=10)
+        assert len(result) == 1
+        assert result[0]["kalshi_ticker"] == "KASH-Z"
+
+    def test_missing_poly_slug_skipped(self):
+        valid = _cand("KASH-Y", "poly-y", score=0.85)
+        invalid = {"kalshi_ticker": "KASH-NO-POLY", "score": 0.99}  # no poly_slug
+        result = _finalize_candidates([valid, invalid], max_candidates=10)
+        assert len(result) == 1
+        assert result[0]["kalshi_ticker"] == "KASH-Y"
+
+    def test_empty_input(self):
+        assert _finalize_candidates([], max_candidates=10) == []

@@ -21,8 +21,10 @@ from arbiter.config.settings import (
     kalshi_fee,
     polymarket_order_fee,
     polymarket_fee,
+    forecastex_order_fee,
     KALSHI_TAKER_FEE_RATE,
     POLYMARKET_DEFAULT_TAKER_FEE_RATE,
+    FORECASTEX_TAKER_FEE_PER_CONTRACT,
 )
 from arbiter.scanner.arbitrage import compute_fee
 
@@ -291,6 +293,73 @@ class TestPositionSizing:
                 max_qty = int(max_position / cost_per_pair)
                 total_cost = cost_per_pair * max_qty
                 assert total_cost <= max_position + cost_per_pair  # at most 1 pair over due to int rounding
+
+
+class TestComputeFeeRouter:
+    """compute_fee() is the scanner's fee router — wrong output = phantom edge = money loss."""
+
+    def test_forecastex_routes_to_flat_fee(self):
+        # FORECASTEX_TAKER_FEE_PER_CONTRACT is $0.005/contract by default.
+        # compute_fee should return quantity × fee_per_contract, NOT $0 (unknown-platform fallback).
+        fee = compute_fee("forecastex", price=0.55, quantity=10)
+        expected = forecastex_order_fee(0.55, quantity=10)
+        assert fee == pytest.approx(expected, abs=1e-9), (
+            "compute_fee('forecastex') silently returned $0 — ForecastEx fee is not being routed"
+        )
+        assert fee > 0, "ForecastEx fee must be positive for a normal trade"
+
+    def test_forecastex_custom_fee_per_contract_propagates(self):
+        # When the collector populates fee_rate with a non-default per-contract cost,
+        # compute_fee must forward it through fee_per_contract, not use the default.
+        custom_rate = 0.008
+        fee = compute_fee("forecastex", price=0.40, quantity=5, fee_rate=custom_rate)
+        expected = forecastex_order_fee(0.40, quantity=5, fee_per_contract=custom_rate)
+        assert fee == pytest.approx(expected, abs=1e-9)
+
+    def test_forecastex_zero_fee_rate_falls_back_to_default(self):
+        # fee_rate=0.0 is falsy; compute_fee treats it as "no rate provided" and
+        # uses the 0.005 default rather than charging zero.  This is the documented
+        # sentinel behaviour — if this breaks, trades appear more profitable than they are.
+        fee_zero_rate = compute_fee("forecastex", price=0.50, quantity=3, fee_rate=0.0)
+        fee_default = compute_fee("forecastex", price=0.50, quantity=3, fee_rate=0.0)
+        expected = forecastex_order_fee(0.50, quantity=3, fee_per_contract=FORECASTEX_TAKER_FEE_PER_CONTRACT)
+        assert fee_zero_rate == pytest.approx(expected, abs=1e-9), (
+            "fee_rate=0.0 for forecastex should fall back to FORECASTEX_TAKER_FEE_PER_CONTRACT"
+        )
+
+    def test_polymarket_zero_fee_rate_falls_back_to_category(self):
+        # fee_rate=0.0 is falsy in compute_fee (line: `fee_rate or None`).
+        # A genuinely zero-fee market would NOT be correctly charged $0 — it would
+        # use the politics category default instead.  This test documents that the
+        # current sentinel behaviour applies, so any intentional change is visible.
+        fee_zero = compute_fee("polymarket", price=0.50, quantity=10, fee_rate=0.0)
+        fee_category_default = polymarket_order_fee(0.50, quantity=10, category="politics")
+        assert fee_zero == pytest.approx(fee_category_default, abs=1e-9), (
+            "fee_rate=0.0 for polymarket must fall back to the politics category rate (sentinel behaviour)"
+        )
+
+    def test_polymarket_explicit_fee_rate_overrides_category(self):
+        # A non-zero fee_rate from the collector must override the category default.
+        custom_rate = 0.03  # e.g. sports
+        fee = compute_fee("polymarket", price=0.60, quantity=8, fee_rate=custom_rate)
+        expected = polymarket_order_fee(0.60, quantity=8, fee_rate=custom_rate)
+        assert fee == pytest.approx(expected, abs=1e-9)
+
+    def test_unknown_platform_returns_zero(self):
+        assert compute_fee("predictit", price=0.50, quantity=10) == 0.0
+
+    def test_kalshi_and_forecastex_cross_pair_fee_sum(self):
+        # K×FX cross: buy YES on Kalshi + buy NO on ForecastEx.
+        # The combined fee must equal kalshi_order_fee(yes) + forecastex_order_fee(no).
+        yes_price, no_price, qty = 0.48, 0.50, 20
+        kalshi_leg = compute_fee("kalshi", price=yes_price, quantity=qty)
+        fx_leg = compute_fee("forecastex", price=no_price, quantity=qty)
+        total = kalshi_leg + fx_leg
+        assert total > 0
+        # Kalshi is quadratic — at 0.48 the fee should be larger than the flat FX fee
+        assert kalshi_leg > fx_leg, (
+            "Kalshi quadratic fee at p≈0.5 should exceed ForecastEx flat fee for the same qty"
+        )
 
 
 if __name__ == "__main__":
