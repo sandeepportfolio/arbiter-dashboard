@@ -815,6 +815,65 @@ class StrandedPositionReconciler:
                 platform=pos.platform, market_id=pos.market_id, err=str(exc),
             )
 
+    async def _notify_attempt(
+        self,
+        pos: StrandedPosition,
+        action: str,
+        venue: str,
+        market_id: str,
+        side: str,
+        price: float,
+        qty: int,
+        status: str,
+        fill_qty: float,
+    ) -> None:
+        """Send a Telegram alert for EVERY mitigation attempt — including
+        zero-fill IOC rejects and exception paths — so the reconciler
+        is never silent about active mitigation work. Dedup is per-
+        position per close-retry window so repeated attempts on the
+        same stranded position only ping once per cooldown cycle.
+        """
+        notifier = self._notifier
+        if notifier is None or not getattr(notifier, "_enabled", False):
+            return
+        # Age bucket per the loss-cut policy: <6h young, 6-24h mature,
+        # 24h+ aged. Operators want to see which bucket the position
+        # is in to interpret the chosen action.
+        try:
+            age_s = max(0.0, float(time.time()) - float(pos.first_seen_ts or 0.0))
+        except (TypeError, ValueError):
+            age_s = 0.0
+        if age_s < 6 * 3600:
+            bucket = "young (<6h)"
+        elif age_s < 24 * 3600:
+            bucket = "mature (6-24h)"
+        else:
+            bucket = "aged (24h+)"
+        fill_line = (
+            f"FILLED {fill_qty}/{qty}"
+            if fill_qty > 0
+            else "NO FILL (book did not match)"
+        )
+        msg = (
+            f"<b>RECONCILER ATTEMPT</b> ({action})\n"
+            f"pos: {pos.platform}:{pos.market_id} ({bucket})\n"
+            f"qty held: {abs(int(pos.qty))} side: {pos.side}\n"
+            f"action: BUY {qty} {side.upper()} on {venue}\n"
+            f"  market: {market_id}\n"
+            f"  price: ${price:.4f}  status: {status}\n"
+            f"result: {fill_line}"
+        )
+        try:
+            await notifier.send(
+                msg,
+                dedup_key=f"strand_attempt_{pos.platform}_{pos.market_id}_{venue}_{market_id}",
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug(
+                "stranded_reconciler.notify_attempt_failed",
+                platform=pos.platform, market_id=pos.market_id, err=str(exc),
+            )
+
     async def _emit_stranded_incident(self, pos: StrandedPosition) -> None:
         """Surface a new stranded lot as a warning incident the engine
         already knows how to route to Telegram + the ops UI."""
@@ -994,6 +1053,16 @@ class StrandedPositionReconciler:
                 await self._notify_close(
                     pos, "COMPLETE_ARB", fill, fill_px, str(status), pnl,
                 )
+            else:
+                # Operator-visibility: alert on EVERY attempt — including
+                # zero-fill IOC rejects — so the reconciler is never silent
+                # about active mitigation work. Per-position dedup over the
+                # close-retry window keeps the chat clean when the same
+                # position keeps not filling.
+                await self._notify_attempt(
+                    pos, "COMPLETE_ARB", venue, market_id, side,
+                    price, qty, str(status), fill,
+                )
         except Exception as exc:
             pos.auto_close_attempted = True
             self._mark_close_attempt(key)
@@ -1002,6 +1071,10 @@ class StrandedPositionReconciler:
                 "stranded_reconciler.complete_arb_failed",
                 pos_platform=pos.platform, pos_market_id=pos.market_id,
                 venue=venue, err=str(exc),
+            )
+            await self._notify_attempt(
+                pos, "COMPLETE_ARB", venue, market_id, side,
+                price, qty, f"EXCEPTION:{type(exc).__name__}", 0.0,
             )
 
     async def _execute_close_now(

@@ -1479,6 +1479,52 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     tasks.append(asyncio.create_task(run_reconciliation_loop(reconciler, monitor, engine), name="pnl-reconciler"))
     tasks.append(asyncio.create_task(run_incident_auto_resolve_loop(engine, interval=120.0, max_age=120.0), name="incident-auto-resolve"))
 
+    # ── Telegram heartbeat ─────────────────────────────────────────
+    # Confirms the alert pipe is alive even when no trade events
+    # have fired. Reuses the BalanceMonitor-owned TelegramNotifier so
+    # token/dedup/burst-guard config is shared. Gated on
+    # AUTO_EXECUTE_ENABLED inside run_heartbeat — silent in dev.
+    if monitor is not None and getattr(monitor, "notifier", None) is not None:
+        from .notifiers.heartbeat import run_heartbeat, HeartbeatStatus
+
+        heartbeat_interval = int(os.getenv("ARBITER_HEARTBEAT_INTERVAL_S", "1800"))
+
+        def _heartbeat_status() -> HeartbeatStatus:
+            try:
+                eng_stats = engine.stats() if hasattr(engine, "stats") else {}
+                scan_stats = scanner.stats() if hasattr(scanner, "stats") else {}
+                pf_snap = profitability.get_snapshot() if profitability else None
+                ae_stats = getattr(auto_executor, "stats", None)
+                balances = {
+                    pid: round(float(snap.balance), 2)
+                    for pid, snap in (monitor._balances or {}).items()
+                    if snap is not None
+                } if hasattr(monitor, "_balances") else {}
+                extra = {
+                    "auto_execute": os.getenv("AUTO_EXECUTE_ENABLED", "false"),
+                    "scans": scan_stats.get("scan_count", 0),
+                    "active_opps": scan_stats.get("active_opportunities", 0),
+                    "published": scan_stats.get("published", 0),
+                    "best_edge_c": scan_stats.get("best_edge_cents", 0),
+                    "executed": getattr(ae_stats, "executed", 0) if ae_stats else 0,
+                    "considered": getattr(ae_stats, "considered", 0) if ae_stats else 0,
+                    "balances": ", ".join(f"{k}=${v}" for k, v in balances.items()),
+                    "verdict": pf_snap.verdict if pf_snap else "unknown",
+                    "naked_legs": eng_stats.get("naked_leg_count", 0),
+                }
+                return HeartbeatStatus(
+                    realized_pnl=float(eng_stats.get("total_pnl", 0.0) or 0.0),
+                    open_order_count=int(eng_stats.get("open_orders", 0) or 0),
+                    extra=extra,
+                )
+            except Exception:
+                return HeartbeatStatus()
+
+        tasks.append(asyncio.create_task(
+            run_heartbeat(monitor.notifier, interval_sec=heartbeat_interval, get_status=_heartbeat_status),
+            name="telegram-heartbeat",
+        ))
+
     # AutoResolver periodic loop (5-min default). Reconciles half-recorded
     # arbs whose unwind is already booked, classifies the kill-switch arm
     # reason, and expires stale incidents past their TTL. Construction was

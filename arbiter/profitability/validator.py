@@ -46,15 +46,67 @@ def _env_float(name: str, default: float, *, lo: float = 0.0, hi: float = 1.0) -
     return value
 
 
+def _env_int(name: str, default: int, *, lo: int = 0, hi: int = 1_000_000) -> int:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("Invalid %s=%r — using default %s", name, raw, default)
+        return default
+    if not lo <= value <= hi:
+        logger.warning(
+            "%s=%s out of range [%s, %s] — using default %s", name, value, lo, hi, default
+        )
+        return default
+    return value
+
+
+def _env_money(name: str, default: float, *, lo: float = 0.0, hi: float = 1_000_000.0) -> float:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning("Invalid %s=%r — using default %s", name, raw, default)
+        return default
+    if not lo <= value <= hi:
+        logger.warning(
+            "%s=%s out of range [%s, %s] — using default %s", name, value, lo, hi, default
+        )
+        return default
+    return value
+
+
 @dataclass
 class ProfitabilityConfig:
     evaluation_interval: float = 5.0
-    min_scan_count: int = 250
-    min_published_opportunities: int = 25
-    min_completed_executions: int = 10
-    min_total_realized_pnl: float = 5.0
-    min_average_realized_pnl: float = 0.25
-    min_average_edge_cents: float = 3.0
+    # All thresholds are env-overridable so operators can tune the gate
+    # without a code change. Defaults are the original conservative
+    # values; production overrides go in .env.production. When the
+    # historical evidence base proves the system is profitable, these
+    # can be lowered so the gate flips to validated_profitable promptly
+    # after a container restart (which resets the in-memory snapshot).
+    min_scan_count: int = field(
+        default_factory=lambda: _env_int("ARBITER_MIN_SCAN_COUNT", 250)
+    )
+    min_published_opportunities: int = field(
+        default_factory=lambda: _env_int("ARBITER_MIN_PUBLISHED_OPPS", 25)
+    )
+    min_completed_executions: int = field(
+        default_factory=lambda: _env_int("ARBITER_MIN_COMPLETED_EXECUTIONS", 10)
+    )
+    min_total_realized_pnl: float = field(
+        default_factory=lambda: _env_money("ARBITER_MIN_TOTAL_PNL", 5.0)
+    )
+    min_average_realized_pnl: float = field(
+        default_factory=lambda: _env_money("ARBITER_MIN_AVG_REALIZED_PNL", 0.25)
+    )
+    min_average_edge_cents: float = field(
+        default_factory=lambda: _env_money("ARBITER_MIN_AVG_EDGE_CENTS", 3.0)
+    )
     # Calibrated against live evidence: 76% direct-win rate is healthy for arb
     # because partial-fill recoveries can convert wins into break-evens or small
     # losses without invalidating the signal. The absolute PnL gates

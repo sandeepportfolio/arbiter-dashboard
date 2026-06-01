@@ -90,8 +90,14 @@ async def run_heartbeat(
         def get_status() -> HeartbeatStatus:
             return HeartbeatStatus()
 
+    # Fire one heartbeat shortly after startup so operators have immediate
+    # proof the alert pipe is alive without waiting for the full interval.
+    # Then settle into the periodic cadence.
+    first_send_delay = min(30.0, float(interval_sec))
+    fired_once = False
     while True:
-        await asyncio.sleep(interval_sec)
+        await asyncio.sleep(first_send_delay if not fired_once else interval_sec)
+        fired_once = True
 
         if not _auto_execute_enabled():
             logger.debug("Heartbeat: AUTO_EXECUTE_ENABLED not true — skipping")

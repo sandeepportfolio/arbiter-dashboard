@@ -3269,9 +3269,21 @@ class ExecutionEngine:
         # own Telegram via supervisor.trip_kill).
         event_type = (incident.metadata or {}).get("event_type", "")
         supervisor_handled = {"one_leg_exposure"}
+        # 2026-05-29: extend routing to selected warning event_types so
+        # operators see in-band activity (trade-gate blocks, mitigation
+        # attempts, circuit transitions) without staring at logs. Other
+        # warnings (depth_low, dead_ask, opp_skip) stay silent to avoid
+        # chat noise. Per-event dedup at line 3317 prevents floods.
+        warning_eligible_event_types = {
+            "trade_gate_blocked",
+            "complete_arb_attempt",
+            "circuit_breaker_open",
+            "circuit_breaker_close",
+        }
         telegram_eligible = (
             severity == "critical"
             or event_type == "stranded_position"
+            or (severity == "warning" and event_type in warning_eligible_event_types)
         ) and event_type not in supervisor_handled
         if telegram_eligible:
             try:
