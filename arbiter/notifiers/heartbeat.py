@@ -95,8 +95,13 @@ async def run_heartbeat(
     # Then settle into the periodic cadence.
     first_send_delay = min(30.0, float(interval_sec))
     fired_once = False
+    logger.info(
+        "Telegram heartbeat task started (first send in %ss, interval %ss)",
+        int(first_send_delay), int(interval_sec),
+    )
     while True:
         await asyncio.sleep(first_send_delay if not fired_once else interval_sec)
+        is_first = not fired_once
         fired_once = True
 
         if not _auto_execute_enabled():
@@ -111,9 +116,19 @@ async def run_heartbeat(
                 parse_mode="HTML",
                 dedup_key=f"arbiter.heartbeat.{int(asyncio.get_event_loop().time())}",
             )
+            # First send logs at INFO so operators see proof-of-life in the
+            # default log stream; subsequent periodic sends stay at DEBUG
+            # so the steady-state log is uncluttered.
+            success_log = logger.info if is_first else logger.debug
             if ok:
-                logger.debug("Heartbeat sent: pnl=%.2f orders=%d", status.realized_pnl, status.open_order_count)
+                success_log(
+                    "Heartbeat sent (first=%s): pnl=$%.2f orders=%d",
+                    is_first, status.realized_pnl, status.open_order_count,
+                )
             else:
-                logger.warning("Heartbeat send() returned False (notifier disabled or deduped)")
+                logger.warning(
+                    "Heartbeat send() returned False (first=%s) — notifier disabled or deduped",
+                    is_first,
+                )
         except Exception as exc:
             logger.error("Heartbeat error: %r", exc)
