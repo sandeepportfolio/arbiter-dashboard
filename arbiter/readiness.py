@@ -290,8 +290,11 @@ class OperationalReadiness:
         # can possibly flip to ``validated_profitable``, so the bootstrap window
         # MUST be at least that large or the system gets stuck in
         # ``collecting_evidence`` once the historical count reaches the
-        # original cap.  Cap raised to 50 to leave operator headroom for tuning
-        # ``min_profitable_execution_ratio`` evidence.
+        # original cap.  Cap raised to 500 on 2026-05-29: operator has 337
+        # historical executions of proven profitability and needs the bootstrap
+        # to keep bypassing across container restarts that re-seed the
+        # validator's in-memory snapshot. The hard upper bound of 500
+        # prevents an operator typo from disabling the gate forever.
         # This bootstrap only bypasses the initial collecting_evidence
         # chicken-and-egg state. A blocked/not_profitable validator verdict is
         # hard evidence of a NO and must fail closed.
@@ -301,7 +304,7 @@ class OperationalReadiness:
                 bootstrap_limit = int(bootstrap_raw)
             except ValueError:
                 bootstrap_limit = 0
-            if snapshot.verdict == "collecting_evidence" and 1 <= bootstrap_limit <= 50:
+            if snapshot.verdict == "collecting_evidence" and 1 <= bootstrap_limit <= 500:
                 completed = int(getattr(snapshot, "completed_executions", 0) or 0)
                 if completed < bootstrap_limit:
                     remaining = bootstrap_limit - completed
