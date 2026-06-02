@@ -682,7 +682,24 @@ class ForecastExAdapter:
         except (TypeError, ValueError):
             avg_px = 0.0
         fill_price = (avg_px if avg_px <= 1.0 else avg_px / 100.0) or price
-        if mapped == OrderStatus.FILLED and fill_qty == 0.0:
+        # BUG #1 (same pattern as polymarket_us): if the venue gives us an
+        # explicit zero fill quantity but a FILLED status, downgrade to
+        # CANCELLED so the engine does not fire a secondary leg on a phantom
+        # primary fill. Only triggered on an *explicit* zero key — bare
+        # legacy "FILLED" responses with no fill-qty key keep their existing
+        # backfill semantics.
+        explicit_zero_fill = (
+            mapped == OrderStatus.FILLED
+            and fill_qty == 0.0
+            and (
+                "filled_qty" in response
+                or "filledQty" in response
+                or "cumQty" in response
+            )
+        )
+        if explicit_zero_fill:
+            mapped = OrderStatus.CANCELLED
+        elif mapped == OrderStatus.FILLED and fill_qty == 0.0:
             fill_qty = float(qty)
 
         return Order(

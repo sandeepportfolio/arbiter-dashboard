@@ -6,6 +6,7 @@ Also sends alerts for profitable arbitrage opportunities.
 import asyncio
 import html
 import logging
+import os
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -29,6 +30,55 @@ logger = logging.getLogger("arbiter.monitor")
 ALERT_MIN_NET_EDGE_CENTS = 3.0  # buffer above break-even (covers slippage)
 ALERT_MAX_QUOTE_AGE_SECONDS = 30.0
 ALERT_MIN_CONFIDENCE = 0.5
+
+# BUG #5: defensive fee rates used by ``_estimated_net_edge_after_fees``
+# to double-check alert profitability at the alert-gate, independent of
+# what the scanner attached to ``opp.total_fees``. If the scanner
+# attaches a stale or under-counted fee number, this gate still rejects
+# unprofitable alerts. Operator-tunable via env so we can ratchet up
+# when a venue raises fees without a code redeploy.
+ALERT_FEE_RATE_FALLBACK = {
+    "kalshi": float(os.getenv("ALERT_FEE_RATE_KALSHI", "0.07")),     # 7%
+    "polymarket": float(os.getenv("ALERT_FEE_RATE_POLYMARKET", "0.05")),  # 5%
+    "forecastex": float(os.getenv("ALERT_FEE_RATE_FORECASTEX", "0.03")),  # 3%
+}
+
+
+def _venue_fee_rate(opp: ArbitrageOpportunity, side: str) -> float:
+    """Return the higher of (scanner-attached rate, fallback) per venue.
+
+    Defensive: we never trust the scanner-attached rate to go *below*
+    the operator-set fallback. If the scanner under-reports the rate
+    (e.g. stale fee config), the fallback floors the estimate so an
+    unprofitable trade still gets caught here.
+    """
+    attached = float(getattr(opp, f"{side}_fee_rate", 0.0) or 0.0)
+    platform = str(getattr(opp, f"{side}_platform", "") or "").lower()
+    fallback = ALERT_FEE_RATE_FALLBACK.get(platform, 0.07)
+    return max(attached, fallback)
+
+
+def _estimated_net_edge_after_fees_usd(opp: ArbitrageOpportunity) -> float:
+    """BUG #5: independent fee-aware profit estimate for the alert gate.
+
+    Recomputes the per-contract net edge using ALERT_FEE_RATE_FALLBACK
+    so the alert gate never trusts a stale ``total_fees`` value. Returns
+    the estimated USD profit on the suggested quantity.
+
+    Math (per contract):
+      gross = 1 - yes_price - no_price          # cross-platform arb payoff
+      fees  = yes_price * fee_rate_yes_venue
+            + no_price  * fee_rate_no_venue
+      net   = gross - fees
+    """
+    yes_price = float(opp.yes_price or 0.0)
+    no_price = float(opp.no_price or 0.0)
+    gross_per_contract = 1.0 - yes_price - no_price
+    yes_fee = yes_price * _venue_fee_rate(opp, "yes")
+    no_fee = no_price * _venue_fee_rate(opp, "no")
+    net_per_contract = gross_per_contract - yes_fee - no_fee
+    qty = max(int(opp.suggested_qty or 0), 0)
+    return net_per_contract * qty
 # Below this, a "price" is almost certainly a stale last_price or phantom
 # quote (real bids/asks on tradeable political markets sit well above 5¢
 # until the very last moments of resolution). Reject before notifying so
@@ -125,6 +175,22 @@ def _alert_is_safe_to_send(opp: ArbitrageOpportunity) -> bool:
         logger.warning(
             "Alert suppressed [%s] expected_profit=$%.4f (not profitable after fees/size)",
             opp.canonical_id, opp.max_profit_usd,
+        )
+        return False
+    # BUG #5: defense-in-depth fee gate. Recompute net edge with
+    # ALERT_FEE_RATE_FALLBACK so a stale scanner fee number cannot push
+    # an unprofitable alert. Floors at fallback so the gate is at least
+    # as strict as the operator-set venue fee rates.
+    estimated_net = _estimated_net_edge_after_fees_usd(opp)
+    if estimated_net <= 0:
+        logger.warning(
+            "Alert suppressed [%s] estimated_net_after_fees=$%.4f "
+            "(yes=%s@%.3f no=%s@%.3f qty=%d) — not profitable at "
+            "fallback fee rates",
+            opp.canonical_id, estimated_net,
+            opp.yes_platform, opp.yes_price,
+            opp.no_platform, opp.no_price,
+            int(opp.suggested_qty or 0),
         )
         return False
     if not _alert_outcome_is_specific(opp):

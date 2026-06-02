@@ -1554,6 +1554,27 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     # revalidate pass walks status='review' rows and promotes any that now
     # clear the 9-gate auto-promote stack.
     if mapping_store is not None:
+        # BUG #4: one-shot startup pass to promote candidates that pass
+        # the structural fast-path (score>=0.95, both venues present,
+        # resolution=identical). After the sports-season expiry wipe,
+        # this is what re-floods the tradable universe so the scanner
+        # has more than ~50 confirmed pairs to work with. Fire it before
+        # the periodic loops so the first scanner cycle sees the
+        # promoted mappings.
+        try:
+            from .mapping.auto_promote import structural_fast_promote
+            promoted = await structural_fast_promote(mapping_store)
+            if promoted:
+                await mapping_store.refresh_runtime_cache()
+                logger.info(
+                    "structural_fast_promote: promoted %d mapping(s) at startup",
+                    promoted,
+                )
+        except Exception as exc:
+            logger.warning(
+                "structural_fast_promote startup pass failed: %s", exc,
+            )
+
         expire_interval_s = float(os.getenv("EXPIRE_SETTLED_INTERVAL_S", "3600"))
         tasks.append(asyncio.create_task(
             run_expire_settled_mappings_loop(mapping_store, interval_s=expire_interval_s),

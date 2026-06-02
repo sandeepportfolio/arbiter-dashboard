@@ -34,24 +34,33 @@ from arbiter.utils.price_store import PricePoint
 
 def _make_safe_opp(**overrides) -> ArbitrageOpportunity:
     """An opportunity that passes every gate by default. Tests override
-    one field at a time to exercise individual rejection paths."""
+    one field at a time to exercise individual rejection paths.
+
+    BUG #5: prices chosen so the defensive ALERT_FEE_RATE_FALLBACK gate
+    passes — 0.45/0.45 = 10¢ gross, fees ≈ 5.4¢ → ~4.6¢ net × 15 ≈
+    $0.69 profit. The old fixture (0.52/0.45 → 3¢ gross with ~6¢
+    fallback fees) was unprofitable at real venue fees and exactly
+    replicated the production bug.
+    """
     base = dict(
         canonical_id="DEM_SENATE_2026",
         description="U.S Senate Midterm Winner",
         yes_platform="kalshi",
-        yes_price=0.52,
+        yes_price=0.45,
         yes_fee=0.005,
+        yes_fee_rate=0.07,
         yes_market_id="KXSENATE-2026-D",
         no_platform="polymarket",
         no_price=0.45,
         no_fee=0.005,
+        no_fee_rate=0.05,
         no_market_id="0xabcdef0123456789",
-        gross_edge=0.03,
-        total_fees=0.012,
-        net_edge=0.018,
-        net_edge_cents=3.0,
+        gross_edge=0.10,
+        total_fees=0.054,
+        net_edge=0.046,
+        net_edge_cents=4.6,
         suggested_qty=15,
-        max_profit_usd=1.80,
+        max_profit_usd=0.69,
         timestamp=time.time(),
         confidence=0.86,
         status="tradable",
@@ -64,8 +73,8 @@ def _make_safe_opp(**overrides) -> ArbitrageOpportunity:
         no_outcome_name="Will Democrats win Senate Majority in 2026?",
         yes_question="Will Democrats win Senate Majority in 2026?",
         no_question="Will Democrats win Senate Majority in 2026?",
-        yes_bid=0.50,
-        yes_ask=0.52,
+        yes_bid=0.43,
+        yes_ask=0.45,
         no_bid=0.43,
         no_ask=0.45,
         yes_quote_age_seconds=3.0,
@@ -477,3 +486,46 @@ def test_alert_opportunity_drops_when_quote_too_old():
         return monitor.notifier.sent
 
     assert asyncio.run(runner()) == []
+
+
+# ── BUG #5: defensive net-edge-after-fees gate ─────────────────────────
+
+
+def test_gate_rejects_when_estimated_net_after_fallback_fees_is_negative():
+    """BUG #5: even if the scanner reports max_profit_usd > 0, the alert
+    gate must recompute net edge using ALERT_FEE_RATE_FALLBACK and reject
+    the alert when that defensive estimate is non-positive.
+
+    Construction: 0.50 + 0.47 prices → 3¢ gross. With kalshi 7% on yes
+    leg (3.5¢) and polymarket 5% on no leg (2.35¢), fees alone are 5.85¢
+    per contract — strictly larger than the 3¢ gross. Net per contract
+    is negative, so the gate must reject regardless of what the scanner
+    attached.
+    """
+    opp = _make_safe_opp(
+        yes_price=0.50, no_price=0.47,
+        # Scanner under-reports fees here (the bug we're guarding against):
+        yes_fee_rate=0.0, no_fee_rate=0.0,
+        total_fees=0.0,
+        max_profit_usd=0.45,  # scanner thought 3¢ × 15 ≈ $0.45 profit
+        net_edge_cents=3.0,
+    )
+    assert _alert_is_safe_to_send(opp) is False
+
+
+def test_gate_passes_when_estimated_net_after_fallback_fees_is_positive():
+    """A genuinely profitable opportunity (large gross edge) must still
+    pass the defensive gate so we don't over-block real arbs."""
+    # 8¢ gross, fees ≈ 5.85¢, net ≈ 2.15¢ × 15 = $0.32 — positive.
+    opp = _make_safe_opp(
+        yes_price=0.50, no_price=0.42,
+        yes_fee_rate=0.07, no_fee_rate=0.05,
+        total_fees=0.0585,
+        net_edge_cents=2.15,
+        max_profit_usd=0.32,
+        gross_edge=0.08,
+    )
+    # Some other gates require net_edge_cents >= 3, so we relax that one
+    # to isolate the BUG #5 check:
+    opp.net_edge_cents = 3.0
+    assert _alert_is_safe_to_send(opp) is True

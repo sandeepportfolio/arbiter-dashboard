@@ -158,6 +158,25 @@ class OperationalReadiness:
             "Polymarket",
         )
 
+    @staticmethod
+    def _incident_touches_opportunity(incident, involved_platforms: set) -> bool:
+        """True if ``incident`` is scoped to a venue in ``involved_platforms``
+        (or has no platform tag at all → treat as global and assume it
+        touches every opportunity).
+
+        Used to narrow the global incidents gate so a runtime failure on a
+        venue the opportunity does not touch doesn't block it.
+        """
+        metadata = getattr(incident, "metadata", {}) or {}
+        if not isinstance(metadata, dict):
+            return True
+        platform = str(metadata.get("platform") or "").lower()
+        if not platform:
+            # Untagged incidents are treated as global and keep the
+            # legacy fail-closed semantics.
+            return True
+        return platform in {str(p).lower() for p in involved_platforms}
+
     def allow_execution(self, opportunity) -> Tuple[bool, str, Dict[str, Any]]:
         if self.config.scanner.dry_run:
             return True, "dry-run mode collecting evidence", self.refresh().to_dict()
@@ -192,6 +211,25 @@ class OperationalReadiness:
                     scoped_snapshot = dict(snapshot.to_dict())
                     scoped_snapshot["scoped_profitability"] = scoped_context
                     return False, scoped_reason, scoped_snapshot
+            if check.key == "incidents":
+                # BUG #3: a critical incident scoped to a venue that this
+                # opportunity does NOT touch must not block the trade.
+                # (e.g. ForecastEx auth flake should not stop K×P.)
+                # Re-evaluate the critical-incident set against the
+                # involved venues only; if every critical incident is
+                # tagged with a platform we don't touch, treat the gate
+                # as passing for this opportunity.
+                incidents = list(getattr(self.engine, "incidents", []) or [])
+                open_critical = [
+                    inc for inc in incidents
+                    if getattr(inc, "status", "open") != "resolved"
+                    and str(getattr(inc, "severity", "")).lower() == "critical"
+                ]
+                if open_critical and not any(
+                    self._incident_touches_opportunity(inc, involved_platforms)
+                    for inc in open_critical
+                ):
+                    continue
             relevant_blocking.append(check.summary)
 
         if relevant_blocking:

@@ -406,3 +406,130 @@ async def maybe_promote(
     match_type = "structural" if is_structural else "semantic"
     logger.info("auto_promote PROMOTED candidate=%s score=%.3f match=%s", ticker, score, match_type)
     return PromotionResult(promoted=True, reason="promoted", match_type=match_type)
+
+
+# ─── BUG #4 fast-path: structural-only auto-promotion ─────────────────────────
+
+# Reason codes returned by structural_fast_promote for each mapping.
+FAST_PROMOTE_PROMOTED = "promoted"
+FAST_PROMOTE_SKIP_STATUS = "skip_status_terminal"
+FAST_PROMOTE_SKIP_ALREADY_TRADABLE = "skip_already_tradable"
+FAST_PROMOTE_SKIP_MISSING_LEG = "skip_missing_leg"
+FAST_PROMOTE_SKIP_SCORE = "skip_score_below_threshold"
+FAST_PROMOTE_SKIP_RESOLUTION = "skip_resolution_not_identical"
+
+
+def evaluate_structural_promotion(
+    mapping,
+    *,
+    min_score: float = 0.95,
+) -> str:
+    """Pure-function predicate for the BUG #4 structural fast-path.
+
+    Returns one of the FAST_PROMOTE_* constants describing whether
+    ``mapping`` should be promoted right now.
+
+    Promotion criteria (all required):
+      * status is CANDIDATE or REVIEW (terminal statuses are skipped).
+      * Mapping is not already a tradable confirmed row.
+      * Both kalshi_market_id AND polymarket_slug are non-empty
+        (structural pairing across the two venues we trade against).
+      * mapping_score >= ``min_score`` (default 0.95 — conservative
+        because this path bypasses the LLM, liquidity, and cooling-off
+        gates that maybe_promote applies).
+      * resolution_match_status == "identical" — the same gate
+        ``_enforce_auto_trade_safety`` enforces; we refuse to promote
+        without proven structured-resolution equivalence so a wrong
+        match cannot trade.
+
+    Sports markets stay in the slow path because their per-side
+    polarity / settlement-date safety check lives in
+    _enforce_auto_trade_safety, not here — we explicitly do not
+    fast-promote anything tagged 'sports' to avoid wiring around
+    that defence.
+    """
+    status_value = getattr(mapping.status, "value", str(mapping.status))
+    if status_value not in ("candidate", "review"):
+        return FAST_PROMOTE_SKIP_STATUS
+    if status_value == "confirmed" and mapping.allow_auto_trade:
+        return FAST_PROMOTE_SKIP_ALREADY_TRADABLE
+    kalshi_id = str(getattr(mapping, "kalshi_market_id", "") or "").strip()
+    poly_slug = str(getattr(mapping, "polymarket_slug", "") or "").strip()
+    if not kalshi_id or not poly_slug:
+        return FAST_PROMOTE_SKIP_MISSING_LEG
+    score = float(getattr(mapping, "mapping_score", 0.0) or 0.0)
+    if score < float(min_score):
+        return FAST_PROMOTE_SKIP_SCORE
+    res_status = str(getattr(mapping, "resolution_match_status", "") or "").lower()
+    if res_status != "identical":
+        return FAST_PROMOTE_SKIP_RESOLUTION
+    tags = {str(t).lower() for t in (getattr(mapping, "tags", ()) or ())}
+    if "sports" in tags:
+        return FAST_PROMOTE_SKIP_RESOLUTION  # defer to slow-path safety
+    return FAST_PROMOTE_PROMOTED
+
+
+async def structural_fast_promote(
+    mapping_store,
+    *,
+    min_score: float = 0.95,
+    limit: int = 1000,
+) -> int:
+    """One-shot pass over the mapping store that promotes every candidate
+    or review-status mapping that clears the structural fast-path gate.
+
+    Returns the number of mappings actually promoted. Skipped mappings
+    are logged at debug level with their reason so an operator can audit
+    why a borderline candidate was not promoted.
+
+    BUG #4 context: after the sports-season wipe (39,410 expired) the
+    confirmed/auto-trade set collapsed to ~50. Hundreds of high-quality
+    candidates were stuck in review/candidate because they failed gates
+    that don't apply to a structural pairing (cooling-off, LLM MAYBE,
+    liquidity at the time of discovery). This pass walks them on every
+    startup and surfaces a healthy tradable set.
+    """
+    from arbiter.mapping.market_map import MappingStatus
+
+    promoted = 0
+    skipped: dict[str, int] = {}
+    for status in ("candidate", "review"):
+        try:
+            rows = await mapping_store.all(status=status, limit=limit)
+        except Exception as exc:
+            logger.warning(
+                "structural_fast_promote: mapping_store.all(%s) failed: %s",
+                status, exc,
+            )
+            continue
+        for mapping in rows:
+            verdict = evaluate_structural_promotion(mapping, min_score=min_score)
+            if verdict != FAST_PROMOTE_PROMOTED:
+                skipped[verdict] = skipped.get(verdict, 0) + 1
+                continue
+            try:
+                await mapping_store.update_status(
+                    canonical_id=mapping.canonical_id,
+                    status=MappingStatus.CONFIRMED,
+                    review_note=(
+                        f"structural_fast_promote: score={mapping.mapping_score:.3f}, "
+                        f"resolution=identical, both venues present"
+                    ),
+                    allow_auto_trade=True,
+                )
+                promoted += 1
+                logger.info(
+                    "structural_fast_promote: promoted %s (score=%.3f)",
+                    mapping.canonical_id, mapping.mapping_score,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "structural_fast_promote: promote %s failed: %s",
+                    mapping.canonical_id, exc,
+                )
+    if promoted or skipped:
+        logger.info(
+            "structural_fast_promote pass complete: promoted=%d skipped=%s",
+            promoted, dict(sorted(skipped.items())),
+        )
+    return promoted

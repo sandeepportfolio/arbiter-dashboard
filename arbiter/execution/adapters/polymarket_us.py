@@ -1028,8 +1028,28 @@ class PolymarketUSAdapter:
 
         avg_px_payload = execution_order.get("avgPx") or {}
         fill_price = _amount_value(avg_px_payload) or price
-        if mapped_status == OrderStatus.FILLED and fill_qty == 0.0:
-            fill_qty = float(qty)
+        # BUG #1: Polymarket has been observed returning FILLED with an
+        # explicit executions[].order.cumQuantity=0 (or filledQty=0). The
+        # old code backfilled fill_qty = qty, lying to the engine about a
+        # phantom primary fill — the engine then fired the Kalshi secondary
+        # and left a naked Kalshi position (post-2026-05-23 salvage cascade).
+        #
+        # If the venue gave us an explicit zero fill quantity, trust it and
+        # downgrade FILLED → CANCELLED so the secondary leg is suppressed.
+        # We only flip on an *explicit* zero so legacy bare-FILLED responses
+        # (no executions block, no filledQty key) keep their existing
+        # interpretation — the bug requires the venue to confess the zero.
+        explicit_zero_fill = (
+            mapped_status == OrderStatus.FILLED
+            and fill_qty == 0.0
+            and (
+                "cumQuantity" in execution_order
+                or "filledQty" in response
+                or "size_matched" in response
+            )
+        )
+        if explicit_zero_fill:
+            mapped_status = OrderStatus.CANCELLED
 
         return Order(
             order_id=order_id,

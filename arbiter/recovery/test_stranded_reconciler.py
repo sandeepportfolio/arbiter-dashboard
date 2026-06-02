@@ -803,6 +803,61 @@ async def test_close_action_sends_telegram_alert():
     assert "PnL" in body
 
 
+async def test_notify_attempt_suppressed_after_repeated_zero_fill():
+    """BUG #2: After 3 zero-fill close attempts at the same price for the
+    same position, suppress the Telegram alert (log only).
+
+    Without this, a stuck GOP_SENATE_2026-style position pegs the
+    reconciler against a price that never clears and spams a Telegram
+    alert every cycle. Operators need to see the first 2-3 failures (so
+    they can act) and then quiet down so the chat doesn't burn out.
+    """
+    notifier = MagicMock()
+    notifier._enabled = True
+    notifier.send = AsyncMock(return_value=True)
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), engine=None, adapters={},
+        notifier=notifier,
+    )
+    pos = _stub_pos(market_id="GOP_SENATE_2026")
+    # Three zero-fill attempts at the same price should produce only
+    # the first <suppress_after> alerts.
+    for _ in range(5):
+        await rec._notify_attempt(
+            pos, "COMPLETE_ARB", "polymarket", "P-GOP-2026", "yes",
+            price=0.48, qty=10, status="CANCELLED", fill_qty=0.0,
+        )
+    assert notifier.send.await_count == 3, (
+        f"expected 3 alerts before suppression, got {notifier.send.await_count}"
+    )
+
+
+async def test_notify_attempt_resets_when_price_changes():
+    """A price change is a new situation worth alerting on — the suppression
+    counter must reset so the operator sees the new attempt.
+    """
+    notifier = MagicMock()
+    notifier._enabled = True
+    notifier.send = AsyncMock(return_value=True)
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), engine=None, adapters={}, notifier=notifier,
+    )
+    pos = _stub_pos(market_id="K-PRICE-MOVE")
+    # First 3 attempts at 0.48 → 3 alerts.
+    for _ in range(4):
+        await rec._notify_attempt(
+            pos, "COMPLETE_ARB", "polymarket", "P-X", "yes",
+            price=0.48, qty=10, status="CANCELLED", fill_qty=0.0,
+        )
+    assert notifier.send.await_count == 3
+    # Price moved → reset → fresh alert allowed.
+    await rec._notify_attempt(
+        pos, "COMPLETE_ARB", "polymarket", "P-X", "yes",
+        price=0.55, qty=10, status="CANCELLED", fill_qty=0.0,
+    )
+    assert notifier.send.await_count == 4
+
+
 def test_reconciler_from_env_defaults_to_30s_interval(monkeypatch):
     """The 5-minute default was wrong — the reconciler should fire on
     the auto_executor cadence (~30s) so stranded mitigation reacts

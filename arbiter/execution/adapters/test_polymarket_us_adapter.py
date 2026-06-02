@@ -244,6 +244,41 @@ async def test_unknown_status_defaults_to_failed(monkeypatch):
     assert order.status == OrderStatus.FAILED
 
 
+async def test_filled_with_zero_cumquantity_treated_as_cancelled(monkeypatch):
+    """BUG #1: Polymarket sometimes returns FILLED with cumQuantity=0.
+
+    Previously, the adapter "backfilled" fill_qty = qty in that case, lying
+    to the engine that the primary leg had filled. The engine then fired
+    the Kalshi secondary, leaving a naked Kalshi position when in reality
+    nothing had executed on Polymarket. This produced the post-2026-05-23
+    K×P naked-leg salvage cascade.
+
+    The fix: treat FILLED+cumQuantity=0 as CANCELLED with fill_qty=0, so
+    the engine never fires the secondary on a phantom primary fill.
+    """
+    client = _make_client()
+    client.place_order = AsyncMock(
+        return_value={
+            "orderId": "ord-phantom",
+            "state": "ORDER_STATE_FILLED",
+            "executions": [{
+                "order": {
+                    "cumQuantity": "0",
+                    "avgPx": {"value": "0.50", "currency": "USD"},
+                }
+            }],
+        }
+    )
+    adapter = _make_adapter(client=client)
+    order = await adapter.place_fok("ARB-PHANTOM", "mkt", "CAN", "yes", 0.50, 10)
+    assert order.status == OrderStatus.CANCELLED, (
+        f"FILLED with cumQuantity=0 must not be treated as filled; got {order.status}"
+    )
+    assert order.fill_qty == 0.0, (
+        f"fill_qty must not be backfilled from requested qty; got {order.fill_qty}"
+    )
+
+
 async def test_partially_filled_status_maps_to_partial(monkeypatch):
     """PARTIAL with executions[].order.cumQuantity carries the fill qty
     so the engine can compute the unhedged excess to unwind."""

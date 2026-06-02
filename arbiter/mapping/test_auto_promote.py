@@ -849,3 +849,117 @@ async def test_known_bad_same_event_different_market_type_caged():
     candidate["poly_question"] = "Will the Dallas Cowboys make the 2026 NFL playoffs?"
     candidate, _ = await _cage_check(candidate)
     assert candidate["status"] != "confirmed"
+
+
+# ─── BUG #4 fast-path tests ─────────────────────────────────────────────────
+
+
+def _make_fast_mapping(**overrides):
+    """Build a MarketMapping for evaluate_structural_promotion tests.
+
+    Defaults satisfy every fast-path criterion so each test only has to
+    override the field it wants to flunk.
+    """
+    from arbiter.mapping.market_map import MappingStatus, MarketMapping
+
+    base = dict(
+        canonical_id="FED-MAY26",
+        description="Fed May 2026",
+        status=MappingStatus.CANDIDATE,
+        allow_auto_trade=False,
+        kalshi_market_id="KXFEDDECISION-26MAY",
+        polymarket_slug="fed-rate-cut-may-2026",
+        mapping_score=0.96,
+        resolution_match_status="identical",
+        tags=(),
+    )
+    base.update(overrides)
+    return MarketMapping(**base)
+
+
+def test_fast_promote_evaluates_high_score_structural_match():
+    from arbiter.mapping.auto_promote import (
+        FAST_PROMOTE_PROMOTED, evaluate_structural_promotion,
+    )
+
+    m = _make_fast_mapping()
+    assert evaluate_structural_promotion(m) == FAST_PROMOTE_PROMOTED
+
+
+def test_fast_promote_skips_when_score_below_threshold():
+    from arbiter.mapping.auto_promote import (
+        FAST_PROMOTE_SKIP_SCORE, evaluate_structural_promotion,
+    )
+
+    m = _make_fast_mapping(mapping_score=0.90)
+    assert evaluate_structural_promotion(m) == FAST_PROMOTE_SKIP_SCORE
+
+
+def test_fast_promote_skips_when_resolution_not_identical():
+    from arbiter.mapping.auto_promote import (
+        FAST_PROMOTE_SKIP_RESOLUTION, evaluate_structural_promotion,
+    )
+
+    m = _make_fast_mapping(resolution_match_status="pending_operator_review")
+    assert evaluate_structural_promotion(m) == FAST_PROMOTE_SKIP_RESOLUTION
+
+
+def test_fast_promote_skips_when_kalshi_leg_missing():
+    from arbiter.mapping.auto_promote import (
+        FAST_PROMOTE_SKIP_MISSING_LEG, evaluate_structural_promotion,
+    )
+
+    m = _make_fast_mapping(kalshi_market_id="")
+    assert evaluate_structural_promotion(m) == FAST_PROMOTE_SKIP_MISSING_LEG
+
+
+def test_fast_promote_skips_when_polymarket_leg_missing():
+    from arbiter.mapping.auto_promote import (
+        FAST_PROMOTE_SKIP_MISSING_LEG, evaluate_structural_promotion,
+    )
+
+    m = _make_fast_mapping(polymarket_slug="")
+    assert evaluate_structural_promotion(m) == FAST_PROMOTE_SKIP_MISSING_LEG
+
+
+def test_fast_promote_defers_sports_to_slow_path():
+    """Sports markets must go through the slow-path safety stack so
+    polarity + settlement-date checks fire. The fast-path is too lenient
+    for them."""
+    from arbiter.mapping.auto_promote import (
+        FAST_PROMOTE_SKIP_RESOLUTION, evaluate_structural_promotion,
+    )
+
+    m = _make_fast_mapping(tags=("sports",))
+    assert evaluate_structural_promotion(m) == FAST_PROMOTE_SKIP_RESOLUTION
+
+
+@pytest.mark.asyncio
+async def test_structural_fast_promote_calls_update_status_for_each_passing_row():
+    from arbiter.mapping.auto_promote import structural_fast_promote
+    from arbiter.mapping.market_map import MappingStatus
+
+    pass_a = _make_fast_mapping(canonical_id="FED-A", mapping_score=0.97)
+    pass_b = _make_fast_mapping(canonical_id="FED-B", mapping_score=0.96)
+    fail_score = _make_fast_mapping(canonical_id="FED-C", mapping_score=0.80)
+    store = MagicMock()
+    # store.all(status="candidate") returns the three rows;
+    # store.all(status="review") returns nothing.
+    async def _all(*, status, limit):
+        if status == "candidate":
+            return [pass_a, pass_b, fail_score]
+        return []
+    store.all = AsyncMock(side_effect=_all)
+    store.update_status = AsyncMock(return_value=None)
+
+    n = await structural_fast_promote(store, min_score=0.95)
+
+    assert n == 2
+    assert store.update_status.await_count == 2
+    promoted_ids = sorted(
+        call.kwargs.get("canonical_id") for call in store.update_status.await_args_list
+    )
+    assert promoted_ids == ["FED-A", "FED-B"]
+    for call in store.update_status.await_args_list:
+        assert call.kwargs.get("status") == MappingStatus.CONFIRMED
+        assert call.kwargs.get("allow_auto_trade") is True

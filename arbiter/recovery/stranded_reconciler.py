@@ -247,6 +247,15 @@ class StrandedPositionReconciler:
         # seconds`` since the last attempt, the gate re-opens.
         self._close_retry_window_s = max(60.0, float(close_retry_window_seconds))
         self._last_close_attempt_ts: Dict[tuple, float] = {}
+        # BUG #2: attempt-count tracker for alert suppression. Keyed by
+        # (platform, market_id, rounded_price). After
+        # ``_alert_suppress_after`` zero-fill attempts at the same price
+        # for the same position, _notify_attempt logs only — Telegram
+        # falls silent until the price moves (or the position resolves).
+        # Stops the GOP_SENATE-style every-cycle spam without losing the
+        # initial visibility burst the operator needs to act.
+        self._failed_attempt_count: Dict[tuple, int] = {}
+        self._alert_suppress_after: int = 3
         # Persistent map keyed by (platform, market_id) so dedup survives
         # across cycles — the first_seen_ts only resets when the position
         # disappears off the venue.
@@ -859,6 +868,31 @@ class StrandedPositionReconciler:
             if fill_qty > 0
             else "NO FILL (book did not match)"
         )
+        # BUG #2: suppress repeat alerts once we've sent
+        # ``_alert_suppress_after`` zero-fill attempts at the same price
+        # for the same position. The first few alerts let the operator
+        # see the issue; quieting after N stops the cycle-per-cycle spam.
+        # Price-keyed: a price change is a new situation, so the counter
+        # resets implicitly (new key, count=0).
+        if fill_qty <= 0:
+            rounded_price = round(float(price or 0.0), 4)
+            count_key = (pos.platform, pos.market_id, rounded_price)
+            count = self._failed_attempt_count.get(count_key, 0) + 1
+            self._failed_attempt_count[count_key] = count
+            if count > self._alert_suppress_after:
+                logger.info(
+                    "stranded_reconciler.alert_suppressed",
+                    platform=pos.platform, market_id=pos.market_id,
+                    price=rounded_price, attempts=count,
+                    action=action, status=status,
+                )
+                return
+        else:
+            # Real fill — clear any prior suppression counter for this
+            # position so future failures alert fresh.
+            for k in [k for k in self._failed_attempt_count
+                      if k[0] == pos.platform and k[1] == pos.market_id]:
+                self._failed_attempt_count.pop(k, None)
         msg = (
             f"<b>RECONCILER ATTEMPT</b> ({_html(action)})\n"
             f"pos: {_html(pos.platform)}:{_html(pos.market_id)} ({bucket})\n"

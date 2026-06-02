@@ -312,6 +312,121 @@ def test_collectors_check_reports_per_platform_warming_only_for_warming_platform
     assert "kalshi" not in check.summary
 
 
+def test_allow_execution_ignores_incidents_on_uninvolved_venues():
+    """BUG #3: A ForecastEx-only critical incident must NOT block a
+    Kalshi×Polymarket trade. The legacy ``incidents`` gate counted
+    every open critical incident regardless of which venue produced it,
+    so a single FX runtime failure paused the entire system. Narrow the
+    check to the venues actually involved in the opportunity.
+    """
+    original = MARKET_MAP.get("TEST_READY")
+    MARKET_MAP["TEST_READY"] = {
+        "description": "Readiness gate market",
+        "status": "confirmed",
+        "allow_auto_trade": True,
+        "mapping_score": 0.95,
+    }
+    try:
+        config = ArbiterConfig()
+        config.scanner.dry_run = False
+        config.alerts.telegram_bot_token = "token"
+        config.alerts.telegram_chat_id = "chat"
+        config.polymarket.private_key = "poly"
+        config.kalshi.api_key_id = "kalshi"
+        config.kalshi.private_key_path = "/tmp/key.pem"
+        balances = {
+            "kalshi": SimpleNamespace(balance=100.0, is_low=False, timestamp=1.0),
+            "polymarket": SimpleNamespace(balance=100.0, is_low=False, timestamp=1.0),
+        }
+        # Critical incident tagged with platform=forecastex — must not
+        # block a kalshi×polymarket opportunity.
+        fx_only_incident = ExecutionIncident(
+            incident_id="INC-FX-ONLY",
+            arb_id="ARB-FX-1",
+            canonical_id="FX_SOMETHING",
+            severity="critical",
+            message="ForecastEx auth failed mid-cycle",
+            timestamp=1.0,
+            metadata={"platform": "forecastex"},
+        )
+        engine = SimpleNamespace(incidents=[fx_only_incident])
+        readiness = OperationalReadiness(
+            config,
+            engine=engine,
+            monitor=StubMonitor(balances),
+            profitability=ScopedProfitability(
+                "validated_profitable", True, "ok",
+            ),
+            collectors={
+                "kalshi": StubCollector(authenticated=True),
+                "polymarket": StubCollector(authenticated=True),
+                "forecastex": StubCollector(authenticated=True),
+            },
+        )
+
+        allowed, reason, _ = readiness.allow_execution(make_opportunity())
+
+        assert allowed is True, f"FX-only incident should not block K×P: {reason}"
+    finally:
+        if original is None:
+            MARKET_MAP.pop("TEST_READY", None)
+        else:
+            MARKET_MAP["TEST_READY"] = original
+
+
+def test_allow_execution_still_blocks_for_incidents_on_involved_venue():
+    """BUG #3 (counterpart): an incident on a venue the opportunity DOES
+    touch must still block the trade. Narrowing must not become a free
+    pass for the trade venue itself.
+    """
+    original = MARKET_MAP.get("TEST_READY")
+    MARKET_MAP["TEST_READY"] = {
+        "description": "Readiness gate market",
+        "status": "confirmed",
+        "allow_auto_trade": True,
+        "mapping_score": 0.95,
+    }
+    try:
+        config = ArbiterConfig()
+        config.scanner.dry_run = False
+        config.alerts.telegram_bot_token = "token"
+        config.alerts.telegram_chat_id = "chat"
+        config.polymarket.private_key = "poly"
+        config.kalshi.api_key_id = "kalshi"
+        config.kalshi.private_key_path = "/tmp/key.pem"
+        balances = {
+            "kalshi": SimpleNamespace(balance=100.0, is_low=False, timestamp=1.0),
+            "polymarket": SimpleNamespace(balance=100.0, is_low=False, timestamp=1.0),
+        }
+        kalshi_incident = ExecutionIncident(
+            incident_id="INC-K-1", arb_id="ARB-K-1",
+            canonical_id="K_BAD", severity="critical",
+            message="Kalshi naked leg",
+            timestamp=1.0, metadata={"platform": "kalshi"},
+        )
+        engine = SimpleNamespace(incidents=[kalshi_incident])
+        readiness = OperationalReadiness(
+            config, engine=engine, monitor=StubMonitor(balances),
+            profitability=ScopedProfitability(
+                "validated_profitable", True, "ok",
+            ),
+            collectors={
+                "kalshi": StubCollector(authenticated=True),
+                "polymarket": StubCollector(authenticated=True),
+            },
+        )
+
+        allowed, reason, _ = readiness.allow_execution(make_opportunity())
+
+        assert allowed is False, "Kalshi incident must block K×P trade"
+        assert "critical" in reason.lower() or "incident" in reason.lower()
+    finally:
+        if original is None:
+            MARKET_MAP.pop("TEST_READY", None)
+        else:
+            MARKET_MAP["TEST_READY"] = original
+
+
 def test_incident_check_counts_half_recorded_summary_arb_count():
     incident = ExecutionIncident(
         incident_id="INC-HALF-RECORDED-SUMMARY",
