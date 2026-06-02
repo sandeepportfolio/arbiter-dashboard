@@ -119,6 +119,20 @@ def test_format_message_includes_extra_fields():
     assert "uptime_h" in msg
 
 
+def test_component_stats_accepts_property_and_method():
+    from arbiter.main import _component_stats
+
+    class PropertyStats:
+        stats = {"total_pnl": 136.82}
+
+    class MethodStats:
+        def stats(self):
+            return {"scan_count": 9}
+
+    assert _component_stats(PropertyStats())["total_pnl"] == 136.82
+    assert _component_stats(MethodStats())["scan_count"] == 9
+
+
 # ─── Metrics endpoint test ────────────────────────────────────────────────────
 
 

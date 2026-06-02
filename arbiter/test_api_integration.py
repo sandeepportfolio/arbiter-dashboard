@@ -693,6 +693,42 @@ def test_pnl_summary_does_not_double_subtract_deposit_adjusted_baseline():
     asyncio.run(_run())
 
 
+def test_pnl_summary_keeps_disabled_platforms_in_all_platform_basis():
+    async def _run():
+        from types import SimpleNamespace
+
+        from arbiter.audit.pnl_reconciler import PnLReconciler
+
+        api = await _make_rate_limit_api()
+        reconciler = PnLReconciler(log_to_disk=False)
+        reconciler.set_starting_balance("kalshi", 100.0)
+        reconciler.set_starting_balance("forecastex", 300.0)
+        reconciler.record_deposit(
+            "forecastex",
+            300.0,
+            balance_before=0.0,
+            balance_after=300.0,
+        )
+        reconciler.record_execution_pnl("kalshi", 12.0)
+
+        api.reconciler = reconciler
+        api.monitor.current_balances = {
+            "kalshi": SimpleNamespace(balance=112.0),
+        }
+
+        response = await api.handle_pnl_summary(None)
+        payload = json.loads(response.text)
+
+        assert payload["net_trading_pnl"] == 12.0
+        assert payload["current_balances"]["forecastex"] == 600.0
+        assert payload["estimated_balance_platforms"]["forecastex"] == 600.0
+        assert payload["total_deposits_all_platforms"] == 300.0
+        assert payload["capital_basis"] == 700.0
+        assert "forecastex" in payload["all_pnl_platforms"]
+
+    asyncio.run(_run())
+
+
 def test_reconciliation_snapshot_reports_drift_when_latest_report_has_flags():
     """The reconciliation API summary must not say healthy when flags exist."""
     from types import SimpleNamespace

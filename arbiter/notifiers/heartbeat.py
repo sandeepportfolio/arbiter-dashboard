@@ -31,7 +31,7 @@ class HeartbeatStatus:
     Attributes
     ----------
     realized_pnl:
-        Cumulative realized P&L in USD since startup.
+        Cumulative realized P&L in USD from the reconciled execution ledger.
     open_order_count:
         Number of currently open orders.
     extra:

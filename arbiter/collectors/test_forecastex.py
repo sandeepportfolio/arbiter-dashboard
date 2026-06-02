@@ -447,6 +447,87 @@ async def test_collector_tracks_only_mappings_with_forecastex_id(patched_market_
     await client.close()
 
 
+async def test_collector_skips_duplicate_and_unavailable_forecastex_ids(monkeypatch):
+    fake = {
+        "NFL_NYJ": {
+            "kalshi": "KX-NYJ",
+            "forecastex": "882351367",
+            "status": "confirmed",
+        },
+        "NFL_NYG": {
+            "kalshi": "KX-NYG",
+            "forecastex": "882351367",
+            "status": "confirmed",
+        },
+        "FX_UNAVAILABLE": {
+            "kalshi": "KX-OFF",
+            "forecastex": "111222",
+            "forecastex_not_available": True,
+            "status": "confirmed",
+        },
+        "FX_GOOD": {
+            "kalshi": "KX-GOOD",
+            "forecastex": "333444",
+            "status": "confirmed",
+        },
+    }
+    monkeypatch.setattr(settings_mod, "MARKET_MAP", fake)
+    import arbiter.collectors.forecastex as fcst_mod
+
+    monkeypatch.setattr(fcst_mod, "MARKET_MAP", fake)
+
+    store = PriceStore()
+    client = ForecastExClient(gateway_url=GATEWAY, account_id=ACCOUNT)
+    collector = ForecastExCollector(
+        config=ForecastExConfig(), store=store, client=client,
+    )
+
+    assert collector._duplicate_conids == {"882351367": ["NFL_NYG", "NFL_NYJ"]}
+    assert "NFL_NYJ" not in collector._conid_map
+    assert "NFL_NYG" not in collector._conid_map
+    assert "FX_UNAVAILABLE" not in collector._conid_map
+    assert collector._conid_map["FX_GOOD"] == ("333444", "")
+    await client.close()
+
+
+async def test_collector_quarantines_yes_snapshot_500_without_opening_circuit(monkeypatch):
+    fake = {
+        "FX_BAD_CONID": {
+            "kalshi": "KX-BAD",
+            "forecastex": "762089343",
+            "status": "confirmed",
+        },
+    }
+    monkeypatch.setattr(settings_mod, "MARKET_MAP", fake)
+    import arbiter.collectors.forecastex as fcst_mod
+
+    monkeypatch.setattr(fcst_mod, "MARKET_MAP", fake)
+
+    store = PriceStore()
+    client = ForecastExClient(gateway_url=GATEWAY, account_id=ACCOUNT)
+    collector = ForecastExCollector(
+        config=ForecastExConfig(), store=store, client=client,
+    )
+
+    with aioresponses() as m:
+        m.post(re.compile(r".*/iserver/auth/ssodh/init.*"),
+               payload={"connected": True})
+        m.get(
+            re.compile(r".*/iserver/marketdata/snapshot\?.*conids=762089343.*"),
+            status=500,
+            payload={"error": "Internal Server Error"},
+        )
+        results = await collector.fetch_markets()
+
+    assert results == []
+    assert "762089343" in collector._inactive_conids
+    assert collector.total_errors == 0
+    assert collector.consecutive_errors == 0
+    assert collector.circuit.stats["state"] == "closed"
+    assert collector.circuit.stats["failures"] == 0
+    await client.close()
+
+
 async def test_collector_normalizes_cent_prices_and_emits_yes_only_when_no_unknown(
     patched_market_map,
 ):

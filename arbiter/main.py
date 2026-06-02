@@ -446,6 +446,14 @@ async def rehydrate_open_incidents(
     return rehydrated
 
 
+def _component_stats(component) -> dict:
+    """Return a component stats snapshot whether exposed as property or method."""
+    raw = getattr(component, "stats", {}) if component is not None else {}
+    if callable(raw):
+        raw = raw()
+    return raw if isinstance(raw, dict) else {}
+
+
 async def run_reconciliation_loop(
     reconciler: PnLReconciler,
     monitor: BalanceMonitor,
@@ -1491,10 +1499,15 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
 
         def _heartbeat_status() -> HeartbeatStatus:
             try:
-                eng_stats = engine.stats() if hasattr(engine, "stats") else {}
-                scan_stats = scanner.stats() if hasattr(scanner, "stats") else {}
+                eng_stats = _component_stats(engine)
+                scan_stats = _component_stats(scanner)
                 pf_snap = profitability.get_snapshot() if profitability else None
                 ae_stats = getattr(auto_executor, "stats", None)
+                realized_pnl = float(eng_stats.get("total_pnl", 0.0) or 0.0)
+                if reconciler is not None:
+                    recon_pnl = (getattr(reconciler, "stats", {}) or {}).get("recorded_pnl", {})
+                    if recon_pnl:
+                        realized_pnl = float(sum(float(v or 0.0) for v in recon_pnl.values()))
                 balances = {
                     pid: round(float(snap.balance), 2)
                     for pid, snap in (monitor._balances or {}).items()
@@ -1513,7 +1526,7 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
                     "naked_legs": eng_stats.get("naked_leg_count", 0),
                 }
                 return HeartbeatStatus(
-                    realized_pnl=float(eng_stats.get("total_pnl", 0.0) or 0.0),
+                    realized_pnl=realized_pnl,
                     open_order_count=int(eng_stats.get("open_orders", 0) or 0),
                     extra=extra,
                 )

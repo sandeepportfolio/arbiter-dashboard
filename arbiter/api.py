@@ -2072,28 +2072,42 @@ class ArbiterAPI:
         )
         # Collector inactive-set lookup (best-effort across attribute names).
         inactive: set = set()
+        duplicate_conids: dict[str, list[str]] = {}
         for attr in ("forecastex_collector", "collectors"):
             holder = getattr(self, attr, None)
             fx = holder.get("forecastex") if isinstance(holder, dict) else holder
             if fx is not None and hasattr(fx, "_inactive_conids"):
                 try:
                     inactive = set(fx._inactive_conids or set())
+                    duplicate_conids = dict(getattr(fx, "_duplicate_conids", {}) or {})
                     break
                 except Exception:
                     pass
+        conid_counts: dict[str, int] = {}
+        for mapping in MARKET_MAP.values():
+            conid = str(mapping.get("forecastex") or "").strip()
+            if conid:
+                conid_counts[conid] = conid_counts.get(conid, 0) + 1
         rows = []
         for canonical_id, mapping in MARKET_MAP.items():
             if mapping.get("status") != "confirmed":
                 continue
             conid = str(mapping.get("forecastex") or "").strip()
-            if not conid:
+            unavailable = bool(mapping.get("forecastex_not_available"))
+            if not conid and not unavailable:
                 continue
             attempt = last_attempts.get(canonical_id)
             row = {
                 "canonical_id": canonical_id,
                 "conid": conid,
-                "forecastex_not_available": bool(mapping.get("forecastex_not_available")),
+                "no_conid": str(mapping.get("forecastex_no") or "").strip(),
+                "forecastex_not_available": unavailable,
                 "in_inactive_set": conid in inactive,
+                "duplicate_conid": (
+                    bool(duplicate_conids.get(conid))
+                    or (bool(conid) and conid_counts.get(conid, 0) > 1)
+                ),
+                "duplicate_owners": duplicate_conids.get(conid, []),
                 "description": mapping.get("description") or canonical_id,
                 "last_attempt": attempt.to_dict() if attempt is not None and hasattr(attempt, "to_dict") else None,
             }
@@ -2417,7 +2431,7 @@ class ArbiterAPI:
         cent — the past bug was that the dashboard showed (current −
         original) and reported deposits as profit.
         """
-        balances = {
+        live_balances = {
             platform: snapshot.balance
             for platform, snapshot in self.monitor.current_balances.items()
         }
@@ -2425,18 +2439,38 @@ class ArbiterAPI:
         recorded_pnl = recon_stats.get("recorded_pnl", {})
         total_deposits = recon_stats.get("total_deposits", {})
         starting_balances = recon_stats.get("starting_balances", {})
+        all_platforms = sorted(
+            set(live_balances)
+            | set(starting_balances)
+            | set(total_deposits)
+            | set(recorded_pnl)
+        )
+        estimated_balance_platforms = {}
+        balances = dict(live_balances)
+        for platform in all_platforms:
+            if platform in balances:
+                continue
+            if platform in starting_balances or platform in recorded_pnl:
+                # A disabled collector should not erase a platform from
+                # all-platform P&L. Use reconciler state as the best-known
+                # balance estimate and surface which venues are estimated.
+                balances[platform] = (
+                    float(starting_balances.get(platform, 0.0) or 0.0)
+                    + float(recorded_pnl.get(platform, 0.0) or 0.0)
+                )
+                estimated_balance_platforms[platform] = round(balances[platform], 2)
 
         # PnLReconciler shifts starting balances whenever it records a
         # deposit/withdrawal, so starting_balances is already the
         # capital-flow-adjusted basis. Do not subtract deposits again here.
         adjusted_starting_balances = {
             platform: starting_balances.get(platform, 0.0)
-            for platform in balances
+            for platform in all_platforms
         }
         original_starting_balances = {
             platform: adjusted_starting_balances.get(platform, 0.0)
             - total_deposits.get(platform, 0.0)
-            for platform in balances
+            for platform in all_platforms
         }
         # Balance-method trading P&L per platform = current − adjusted_starting.
         # adjusted_starting already includes deposits, so subtracting it
@@ -2523,6 +2557,9 @@ class ArbiterAPI:
 
         return web.json_response({
             "current_balances": {k: round(v, 2) for k, v in balances.items()},
+            "live_balance_platforms": sorted(live_balances.keys()),
+            "estimated_balance_platforms": estimated_balance_platforms,
+            "all_pnl_platforms": all_platforms,
             "starting_balances": {k: round(v, 2) for k, v in adjusted_starting_balances.items()},
             "adjusted_starting_balances": {
                 k: round(v, 2) for k, v in adjusted_starting_balances.items()

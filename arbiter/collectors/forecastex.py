@@ -150,6 +150,7 @@ class ForecastExClient:
         *,
         json_body: Optional[dict] = None,
         params: Optional[dict] = None,
+        use_circuit: bool = True,
     ) -> dict:
         session = await self._ensure_session()
         url = self._url(path)
@@ -162,7 +163,7 @@ class ForecastExClient:
             await self._ensure_iserver_bridge()
 
         for attempt in range(3):
-            if not self.circuit.can_execute():
+            if use_circuit and not self.circuit.can_execute():
                 raise RuntimeError(
                     f"Circuit [{self.circuit.name}] is OPEN — request rejected"
                 )
@@ -240,7 +241,8 @@ class ForecastExClient:
                             continue
 
                     resp.raise_for_status()
-                    self.circuit.record_success()
+                    if use_circuit:
+                        self.circuit.record_success()
                     if resp.status == 204:
                         return {}
                     text = await resp.text()
@@ -253,13 +255,14 @@ class ForecastExClient:
                         return {"items": parsed}
                     return parsed
             except aiohttp.ClientResponseError as exc:
-                if exc.status >= 500:
+                if use_circuit and exc.status >= 500:
                     self.circuit.record_failure()
                 raise
             except RuntimeError:
                 raise
             except Exception as exc:
-                self.circuit.record_failure()
+                if use_circuit:
+                    self.circuit.record_failure()
                 raise RuntimeError(
                     f"forecastex request failed ({method} {path}): {exc}"
                 ) from exc
@@ -323,6 +326,7 @@ class ForecastExClient:
         params = {"conids": str(conid), "fields": "31,84,86,7295,7296"}
         payload = await self._request(
             "GET", "/iserver/marketdata/snapshot", params=params,
+            use_circuit=False,
         )
         items = payload.get("items") if isinstance(payload, dict) else None
         if isinstance(items, list) and items:
@@ -344,6 +348,7 @@ class ForecastExClient:
         try:
             return await self._request(
                 "GET", f"/iserver/contract/{conid}/info",
+                use_circuit=False,
             )
         except Exception:
             return {}
@@ -353,6 +358,7 @@ class ForecastExClient:
         try:
             payload = await self._request(
                 "GET", "/trsrv/secdef", params={"conids": str(conid)},
+                use_circuit=False,
             )
             entries = payload.get("secdef") if isinstance(payload, dict) else None
             if isinstance(entries, list) and entries:
@@ -423,6 +429,7 @@ class ForecastExClient:
                         "sectype": "OPT",
                         "month": month,
                     },
+                    use_circuit=False,
                 )
             except Exception:
                 # 503 / circuit-open / timeout — try next month rather
@@ -486,6 +493,7 @@ class ForecastExClient:
                                     "month": month,
                                     "strike": str(fallback_strike),
                                 },
+                                use_circuit=False,
                             )
                         except Exception:
                             continue
@@ -532,6 +540,7 @@ class ForecastExClient:
                         "month": hit_month,
                         "strike": str(strike),
                     },
+                    use_circuit=False,
                 )
             except Exception:
                 continue
@@ -758,6 +767,10 @@ class ForecastExCollector:
         # + secdef/strikes calls every cycle for a parent that will never
         # yield a NO child.
         self._no_discovery_failed: set[str] = set()
+        # YES conids attached to multiple canonical markets are ambiguous and
+        # unsafe. Skip them entirely until discovery/operator mapping assigns
+        # unique ForecastX child conids.
+        self._duplicate_conids: dict[str, list[str]] = {}
         # First-cycle discovery throttle: when the container starts cold,
         # every tracked YES conid hits ``_attempt_no_conid_discovery`` on
         # the SAME fetch_markets call before negative caches build up. With
@@ -819,12 +832,35 @@ class ForecastExCollector:
         child must get a clean probe budget. Without this, the collector
         carries stale state forever across restarts of the source mapping.
         """
-        new_map: dict[str, tuple[str, str]] = {}
+        old_duplicate_conids = dict(self._duplicate_conids)
+        candidates: list[tuple[str, str, str]] = []
+        owners_by_yes_conid: dict[str, list[str]] = {}
         for canonical_id, mapping in MARKET_MAP.items():
+            if bool(mapping.get("forecastex_not_available")):
+                continue
             yes_conid = str(mapping.get("forecastex", "") or "").strip()
             if not yes_conid:
                 continue
             no_conid = str(mapping.get("forecastex_no", "") or "").strip()
+            candidates.append((canonical_id, yes_conid, no_conid))
+            owners_by_yes_conid.setdefault(yes_conid, []).append(canonical_id)
+        self._duplicate_conids = {
+            conid: sorted(owners)
+            for conid, owners in owners_by_yes_conid.items()
+            if len(owners) > 1
+        }
+        should_log_duplicates = self._duplicate_conids != old_duplicate_conids
+        new_map: dict[str, tuple[str, str]] = {}
+        for canonical_id, yes_conid, no_conid in candidates:
+            owners = self._duplicate_conids.get(yes_conid)
+            if owners:
+                if should_log_duplicates:
+                    logger.warning(
+                        "ForecastEx: skipping duplicate YES conid %s mapped to %s",
+                        yes_conid,
+                        ",".join(owners),
+                    )
+                continue
             new_map[canonical_id] = (yes_conid, no_conid)
         if new_map != self._conid_map:
             logger.info(
@@ -1247,7 +1283,7 @@ class ForecastExCollector:
                 results.append(price)
                 await self.store.put(price)
             except aiohttp.ClientResponseError as exc:
-                if exc.status in (404, 410):
+                if exc.status in (404, 410, 500):
                     self._mark_inactive(yes_conid)
                     logger.warning(
                         "ForecastEx YES conid %s returned %s, disabling",
