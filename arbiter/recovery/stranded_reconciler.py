@@ -840,13 +840,29 @@ class StrandedPositionReconciler:
         qty: int,
         status: str,
         fill_qty: float,
+        net_edge_after_fees_cents: Optional[float] = None,
     ) -> None:
-        """Send a Telegram alert for EVERY mitigation attempt — including
-        zero-fill IOC rejects and exception paths — so the reconciler
-        is never silent about active mitigation work. Dedup is per-
-        position per close-retry window so repeated attempts on the
-        same stranded position only ping once per cooldown cycle.
+        """Send a Telegram alert for a mitigation attempt.
+
+        HARD BLOCK: when ``net_edge_after_fees_cents`` is provided and < 0
+        we suppress the Telegram entirely — by definition the decision
+        was not profitable, so notifying the operator about a guaranteed
+        loss attempt is pure noise. The internal log line still fires.
         """
+        if (
+            net_edge_after_fees_cents is not None
+            and float(net_edge_after_fees_cents) < 0.0
+        ):
+            logger.info(
+                "stranded_reconciler.alert_blocked_unprofitable",
+                pos_platform=pos.platform, pos_market_id=pos.market_id,
+                venue=venue, market_id=market_id, side=side,
+                price=price, qty=qty, status=status, fill_qty=fill_qty,
+                net_edge_after_fees_cents=round(
+                    float(net_edge_after_fees_cents), 2,
+                ),
+            )
+            return
         notifier = self._notifier
         if notifier is None or not getattr(notifier, "_enabled", False):
             return
@@ -1165,6 +1181,10 @@ class StrandedPositionReconciler:
         price = float(info.get("price") or 0.0)
         qty = int(info.get("qty") or 0)
         canonical_id = info.get("canonical_id") or pos.market_id
+        try:
+            net_edge_cents = float(info.get("net_edge_cents") or 0.0)
+        except (TypeError, ValueError):
+            net_edge_cents = 0.0
         adapter = self._adapters.get(venue) if venue else None
         key = (pos.platform, pos.market_id)
         if adapter is None or not hasattr(adapter, "place_fok") or qty <= 0:
@@ -1230,6 +1250,7 @@ class StrandedPositionReconciler:
                 await self._notify_attempt(
                     pos, "COMPLETE_ARB", venue, market_id, side,
                     price, qty, str(status), fill,
+                    net_edge_after_fees_cents=net_edge_cents,
                 )
         except Exception as exc:
             pos.auto_close_attempted = True
@@ -1243,6 +1264,7 @@ class StrandedPositionReconciler:
             await self._notify_attempt(
                 pos, "COMPLETE_ARB", venue, market_id, side,
                 price, qty, f"EXCEPTION:{type(exc).__name__}", 0.0,
+                net_edge_after_fees_cents=net_edge_cents,
             )
 
     async def _execute_close_now(

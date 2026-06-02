@@ -124,6 +124,11 @@ _FX_SYMBOL_SEEDS: tuple[str, ...] = (
     "cpi", "cpic", "cpiy", "cpcey", "pcey", "ppiy", "rgdp", "gdp",
     "unr", "rsm", "hs", "nhs", "inflm", "jolt", "ff", "ffdec", "fedrc",
     "fedlg", "fedro", "dissa", "dissn", "uscci",
+    # 2026-06-02 expansion — FX symbols confirmed live but absent from seeds:
+    # IJC (US Initial Jobless Claims, conid 626425574),
+    # ND (US National Debt, conid 712856715),
+    # GT (Global Temperature, conid 712856720 + monthly variants).
+    "ijc", "nd", "gt",
     # Retail sales sub-categories
     "ur443", "ur444", "ur451", "ur453", "uspsr", "usip",
     # International economics
