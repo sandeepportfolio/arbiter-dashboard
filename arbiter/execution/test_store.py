@@ -631,6 +631,9 @@ async def test_mark_naked_leg_reconciled_writes_sentinel(mock_pool):
     assert method == "execute"
     assert "UPDATE execution_arbs" in sql
     assert "unwind_pnl = $2" in sql
+    assert "THEN 'closed'" in sql
+    assert "closed_at = CASE" in sql
+    assert "status IN ('pending', 'submitted', 'partial')" in sql
     # Sentinel must be a query parameter, not interpolated, so we don't
     # rot the string if the constant is renamed in the future.
     assert NAKED_LEG_RECONCILED_SENTINEL in args

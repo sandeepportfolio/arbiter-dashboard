@@ -362,6 +362,26 @@ class ExecutionStore:
                 """
                 UPDATE execution_arbs
                    SET unwind_pnl = $2,
+                       status = CASE
+                           WHEN NOT EXISTS (
+                               SELECT 1
+                                 FROM execution_orders
+                                WHERE arb_id = $1
+                                  AND status IN ('pending', 'submitted', 'partial')
+                           )
+                           THEN 'closed'
+                           ELSE status
+                       END,
+                       closed_at = CASE
+                           WHEN NOT EXISTS (
+                               SELECT 1
+                                 FROM execution_orders
+                                WHERE arb_id = $1
+                                  AND status IN ('pending', 'submitted', 'partial')
+                           )
+                           THEN COALESCE(closed_at, NOW())
+                           ELSE closed_at
+                       END,
                        updated_at = NOW(),
                        recovery_notes = CASE
                            WHEN COALESCE(recovery_notes, '') = ''
