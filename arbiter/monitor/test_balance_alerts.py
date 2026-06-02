@@ -395,6 +395,31 @@ def test_alert_opportunity_sends_when_safe():
     assert "U.S Senate Midterm Winner" not in msg.split("\n", 1)[0]
 
 
+def test_alert_opportunity_enqueues_only_after_successful_auto_alert():
+    async def runner():
+        monitor = _make_monitor()
+        opp = _make_safe_opp()
+        await monitor.alert_opportunity(opp)
+        queued = monitor.approved_opportunity_queue.get_nowait()
+        return queued
+
+    queued = asyncio.run(runner())
+    assert queued.canonical_id == "DEM_SENATE_2026"
+
+
+def test_manual_alert_does_not_enqueue_for_auto_executor():
+    async def runner():
+        monitor = _make_monitor()
+        opp = _make_safe_opp(status="manual", requires_manual=True)
+        await monitor.alert_opportunity(opp)
+        return monitor.opportunity_alerts, monitor.approved_opportunity_queue.empty()
+
+    alerts, empty = asyncio.run(runner())
+    assert alerts[0]["state"] == "manual_workflow"
+    assert alerts[0]["execution_queue"] == "manual"
+    assert empty is True
+
+
 def test_alert_opportunity_drops_phantom_low_price_arb():
     """Reproduces the original bug: stale Kalshi $0.04 + Polymarket $0.47.
     Gate must reject before any Telegram send happens."""
@@ -422,12 +447,13 @@ def test_alert_opportunity_records_suppressed_state():
         monitor = _make_monitor()
         opp = _make_safe_opp(max_profit_usd=0.0)
         await monitor.alert_opportunity(opp)
-        return monitor.notifier.sent, monitor.opportunity_alerts
+        return monitor.notifier.sent, monitor.opportunity_alerts, monitor.approved_opportunity_queue.empty()
 
-    sent, alerts = asyncio.run(runner())
+    sent, alerts, empty = asyncio.run(runner())
     assert sent == []
     assert alerts[0]["state"] == "suppressed"
     assert alerts[0]["reason"] == "alert_gate_rejected"
+    assert empty is True
 
 
 def test_alert_opportunity_drops_when_outcome_is_only_canonical():

@@ -108,6 +108,33 @@ async def test_4xx_fails_fast_no_retry():
 
 
 @pytest.mark.asyncio
+async def test_html_parse_error_retries_without_parse_mode():
+    n = TelegramNotifier(bot_token="t", chat_id="c", max_retries=3)
+    responses = [
+        _FakeResponse(
+            400,
+            '{"ok":false,"description":"Bad Request: can\'t parse entities: Unsupported start tag"}',
+        ),
+        _FakeResponse(200, "ok"),
+    ]
+    calls = []
+    it = iter(responses)
+
+    def _post(*args, **kwargs):
+        calls.append(kwargs["json"])
+        return next(it)
+
+    with patch("aiohttp.ClientSession.post", side_effect=_post):
+        ok = await n.send("<b>RECONCILER ATTEMPT</b> young (<6h)")
+
+    assert ok is True
+    assert calls[0]["parse_mode"] == "HTML"
+    assert "parse_mode" not in calls[1]
+    assert calls[1]["text"] == "<b>RECONCILER ATTEMPT</b> young (<6h)"
+    await n.close()
+
+
+@pytest.mark.asyncio
 async def test_429_triggers_retry():
     n = TelegramNotifier(bot_token="t", chat_id="c", max_retries=3)
     responses = [_FakeResponse(429, "too many"), _FakeResponse(200, "ok")]

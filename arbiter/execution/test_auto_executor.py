@@ -49,6 +49,15 @@ class _FakeScanner:
         return self._queue
 
 
+async def _wait_for(predicate, timeout: float = 1.0):
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        if predicate():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("condition was not met before timeout")
+
+
 def _make_opportunity(
     *,
     canonical_id: str = "TEST-MKT",
@@ -132,6 +141,46 @@ async def test_disabled_skips_execute():
     engine.execute_opportunity.assert_not_awaited()
     assert ae.stats.skipped_disabled == 1
     assert ae.stats.executed == 0
+
+
+@pytest.mark.asyncio
+async def test_run_loop_consumes_approved_queue_not_raw_scanner_queue():
+    scanner = _FakeScanner()
+    approved_queue: asyncio.Queue = asyncio.Queue()
+    engine = SimpleNamespace(
+        execute_opportunity=AsyncMock(
+            return_value=SimpleNamespace(
+                arb_id="ARB-1", realized_pnl=0.05, status="filled",
+            ),
+        ),
+    )
+    ae = AutoExecutor(
+        scanner=scanner,
+        engine=engine,
+        supervisor=SimpleNamespace(is_armed=False, armed_by=None),
+        mapping_store=_FakeMappingStore(_FakeMapping()),
+        config=AutoExecutorConfig(
+            enabled=True,
+            max_position_usd=10.0,
+            dedup_window_seconds=5,
+            min_edge_cents_preflight=3.0,
+            require_mapping_confirmed=False,
+        ),
+        opportunity_queue=approved_queue,
+    )
+
+    await ae.start()
+    try:
+        await scanner._queue.put(_make_opportunity(canonical_id="RAW-SCANNER"))
+        await asyncio.sleep(0.05)
+        engine.execute_opportunity.assert_not_awaited()
+
+        await approved_queue.put(_make_opportunity(canonical_id="APPROVED-ALERT"))
+        await asyncio.wait_for(_wait_for(lambda: engine.execute_opportunity.await_count == 1), timeout=1.0)
+        submitted = engine.execute_opportunity.await_args.args[0]
+        assert submitted.canonical_id == "APPROVED-ALERT"
+    finally:
+        await ae.stop()
 
 
 @pytest.mark.asyncio

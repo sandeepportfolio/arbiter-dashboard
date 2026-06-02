@@ -153,6 +153,7 @@ class AutoExecutor:
         price_store=None,
         adapters_provider: Optional[Callable[[], Dict[str, object]]] = None,
         failure_tracker=None,
+        opportunity_queue: Optional[asyncio.Queue] = None,
     ):
         self._scanner = scanner
         self._engine = engine
@@ -164,7 +165,7 @@ class AutoExecutor:
         self._price_store = price_store
         self._adapters_provider = adapters_provider
         self._failure_tracker = failure_tracker
-        self._queue: asyncio.Queue = scanner.subscribe()
+        self._queue: asyncio.Queue = opportunity_queue if opportunity_queue is not None else scanner.subscribe()
         self._task: Optional[asyncio.Task] = None
         self._running = False
         self._seen_dedup_keys: dict[str, float] = {}
@@ -924,6 +925,7 @@ def make_auto_executor_from_env(
     price_store=None,
     adapters_provider: Optional[Callable[[], Dict[str, object]]] = None,
     failure_tracker=None,
+    opportunity_queue: Optional[asyncio.Queue] = None,
 ) -> AutoExecutor:
     """Factory that reads env-style overrides without pulling in Pydantic."""
     def _bool(value: Optional[str], default: bool = False) -> bool:
@@ -1007,4 +1009,5 @@ def make_auto_executor_from_env(
         price_store=price_store,
         adapters_provider=adapters_provider,
         failure_tracker=failure_tracker,
+        opportunity_queue=opportunity_queue,
     )

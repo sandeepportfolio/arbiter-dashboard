@@ -993,8 +993,7 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
         }
 
     scanner = ArbitrageScanner(config.scanner, price_store, balance_provider=_balance_provider)
-    arb_queue = scanner.subscribe()  # execution engine subscribes
-    alert_queue = scanner.subscribe()  # balance monitor subscribes
+    alert_queue = scanner.subscribe()  # balance monitor approves before execution
 
     # ── Persistence (EXEC-02) ──────────────────────────────────
     database_url = os.getenv("DATABASE_URL")
@@ -1365,6 +1364,7 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
         price_store=price_store,
         adapters_provider=lambda: dict(getattr(engine, "adapters", {}) or {}),
         failure_tracker=failure_tracker,
+        opportunity_queue=monitor.approved_opportunity_queue,
     )
     # Expose to the api server so /api/metrics can surface auto_executor stats
     # and so persisted operator settings can hydrate the runtime knobs.
@@ -1447,7 +1447,6 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
         tasks.extend([
             asyncio.create_task(scanner.run(), name="arb-scanner"),
             asyncio.create_task(monitor.run(alert_queue), name="balance-monitor"),
-            asyncio.create_task(engine.run(arb_queue), name="execution-engine"),
             asyncio.create_task(portfolio.run(), name="portfolio-monitor"),
         ])
         if isinstance(poly_adapter, PolymarketAdapter):

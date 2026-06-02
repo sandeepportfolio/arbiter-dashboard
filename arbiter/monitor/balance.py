@@ -4,6 +4,7 @@ Tracks balances across all platforms, sends alerts when low.
 Also sends alerts for profitable arbitrage opportunities.
 """
 import asyncio
+import html
 import logging
 import time
 from collections import deque
@@ -142,6 +143,10 @@ def _truncate(text: str, limit: int) -> str:
     return text[: limit - 1].rstrip() + "…"
 
 
+def _html(text: object) -> str:
+    return html.escape(str(text or ""), quote=False)
+
+
 def _short_market_id(value: str, head: int = 8, tail: int = 4) -> str:
     """Shorten long Polymarket token IDs for display, keep Kalshi tickers intact."""
     value = (value or "").strip()
@@ -188,31 +193,31 @@ def _format_arb_alert(opp: ArbitrageOpportunity) -> str:
     )
 
     yes_question_line = (
-        f"\n  ❓ <i>{_truncate(opp.yes_question, 140)}</i>" if opp.yes_question else ""
+        f"\n  ❓ <i>{_html(_truncate(opp.yes_question, 140))}</i>" if opp.yes_question else ""
     )
     no_question_line = (
-        f"\n  ❓ <i>{_truncate(opp.no_question, 140)}</i>" if opp.no_question else ""
+        f"\n  ❓ <i>{_html(_truncate(opp.no_question, 140))}</i>" if opp.no_question else ""
     )
 
     return (
-        f"💰 <b>ARBITRAGE: {_truncate(outcome_header, 80)}</b>\n"
-        f"<code>{opp.canonical_id}</code>\n"
+        f"💰 <b>ARBITRAGE: {_html(_truncate(outcome_header, 80))}</b>\n"
+        f"<code>{_html(opp.canonical_id)}</code>\n"
         f"\n"
         f"<b>{opp.yes_platform.upper()}</b>: BUY <b>YES</b> @ ${opp.yes_price:.3f} "
         f"(ask, {yes_age:.0f}s old)\n"
-        f"  ├ Market: <code>{yes_id}</code>\n"
+        f"  ├ Market: <code>{_html(yes_id)}</code>\n"
         f"  └ Bid/Ask: {yes_bid_ask}"
         f"{yes_question_line}\n"
         f"<b>{opp.no_platform.upper()}</b>: BUY <b>NO</b> @ ${opp.no_price:.3f} "
         f"(ask, {no_age:.0f}s old)\n"
-        f"  ├ Market: <code>{no_id}</code>\n"
+        f"  ├ Market: <code>{_html(no_id)}</code>\n"
         f"  └ Bid/Ask: {no_bid_ask}"
         f"{no_question_line}\n"
         f"\n"
         f"Edge: {opp.gross_edge*100:.1f}¢ gross → "
         f"<b>{opp.net_edge_cents:.1f}¢ net</b> (after {opp.total_fees*100:.1f}¢ fees)\n"
         f"Qty: <b>{opp.suggested_qty}</b> | Max profit: <b>${opp.max_profit_usd:.2f}</b>\n"
-        f"Confidence: {opp.confidence*100:.0f}% | Mapping: {opp.mapping_status} "
+        f"Confidence: {opp.confidence*100:.0f}% | Mapping: {_html(opp.mapping_status)} "
         f"(score {opp.mapping_score:.2f})\n"
         f"\n"
         f"⚠️ <i>Verify both legs target the SAME outcome on the apps before trading.</i>"
@@ -379,6 +384,26 @@ class TelegramNotifier:
                     logger.warning(
                         f"Telegram API error {resp.status} (attempt {attempt}/{self._max_retries}): {text[:200]}"
                     )
+                    if (
+                        resp.status == 400
+                        and parse_mode
+                        and "can't parse entities" in text.lower()
+                    ):
+                        fallback_payload = {
+                            "chat_id": self.chat_id,
+                            "text": message,
+                        }
+                        logger.warning("Telegram HTML parse failed; retrying without parse_mode")
+                        async with session.post(url, json=fallback_payload) as fallback_resp:
+                            if fallback_resp.status == 200:
+                                logger.debug("Telegram plain-text fallback sent")
+                                return True
+                            fallback_text = await fallback_resp.text()
+                            logger.warning(
+                                "Telegram plain-text fallback failed %s: %s",
+                                fallback_resp.status, fallback_text[:200],
+                            )
+                            return False
                     # 5xx → retry; 4xx (bad token, missing chat, rate-limit 429) → give up
                     if resp.status < 500 and resp.status != 429:
                         return False
@@ -444,6 +469,10 @@ class BalanceMonitor:
         # Recent opportunity alert state. This gives the API a visible
         # alert-to-execution breadcrumb instead of "Telegram sent and vanished".
         self._opportunity_alerts: "deque[OpportunityAlertRecord]" = deque(maxlen=500)
+        # Auto-execution must be downstream of approved alerts, not a sibling
+        # subscriber of raw scanner output. Only alert_opportunity() writes here,
+        # after the safety gate passes and Telegram send succeeds.
+        self._approved_opportunities: asyncio.Queue = asyncio.Queue()
 
     def set_manual_balance(self, platform: str, balance: float):
         """Set balance manually for platforms without API."""
@@ -559,6 +588,8 @@ class BalanceMonitor:
         state = "manual_workflow" if opp.requires_manual or opp.status == "manual" else "queued_for_execution"
         queue = "manual" if state == "manual_workflow" else "auto_executor"
         self._record_opportunity_alert(opp, state=state, reason="profitable_alert_sent", execution_queue=queue)
+        if state == "queued_for_execution":
+            self._approved_opportunities.put_nowait(opp)
 
     def _record_opportunity_alert(
         self,
@@ -621,23 +652,23 @@ class BalanceMonitor:
 
         msg = (
             f"{emoji} <b>{header}</b>\n"
-            f"<code>{arb_id}</code> — {opp.description[:80]}\n"
+            f"<code>{_html(arb_id)}</code> — {_html(opp.description[:80])}\n"
             f"\n"
             f"<b>{opp.yes_platform.upper()}</b> YES: "
             f"limit ${leg_yes.price:.3f} → fill ${leg_yes.fill_price:.3f} "
-            f"x{leg_yes.fill_qty} [{yes_status}]\n"
+            f"x{leg_yes.fill_qty} [{_html(yes_status)}]\n"
             f"<b>{opp.no_platform.upper()}</b> NO: "
             f"limit ${leg_no.price:.3f} → fill ${leg_no.fill_price:.3f} "
-            f"x{leg_no.fill_qty} [{no_status}]\n"
+            f"x{leg_no.fill_qty} [{_html(no_status)}]\n"
             f"\n"
             f"Edge: {opp.net_edge_cents:.1f}¢ net | Qty: {opp.suggested_qty}\n"
             f"{pnl_emoji} Realized P&L: <b>${realized_pnl:+.2f}</b>"
         )
 
         if leg_yes.error:
-            msg += f"\n⚠️ YES error: {leg_yes.error[:100]}"
+            msg += f"\n⚠️ YES error: {_html(leg_yes.error[:100])}"
         if leg_no.error:
-            msg += f"\n⚠️ NO error: {leg_no.error[:100]}"
+            msg += f"\n⚠️ NO error: {_html(leg_no.error[:100])}"
 
         # Burst guard: drop alerts when more than _exec_alert_max_burst
         # fired in the last _exec_alert_window_s seconds. Critical alerts
@@ -689,6 +720,10 @@ class BalanceMonitor:
         return [record.to_dict() for record in self._opportunity_alerts]
 
     @property
+    def approved_opportunity_queue(self) -> asyncio.Queue:
+        return self._approved_opportunities
+
+    @property
     def total_balance(self) -> float:
         return sum(s.balance for s in self._balances.values())
 
@@ -734,8 +769,7 @@ class BalanceMonitor:
         while self._running:
             try:
                 opp = await asyncio.wait_for(queue.get(), timeout=5.0)
-                if _alert_is_safe_to_send(opp):
-                    await self.alert_opportunity(opp)
+                await self.alert_opportunity(opp)
             except asyncio.TimeoutError:
                 continue
             except asyncio.CancelledError:

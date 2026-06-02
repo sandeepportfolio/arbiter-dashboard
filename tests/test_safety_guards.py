@@ -11,6 +11,7 @@ import asyncio
 import math
 import sys
 import os
+from datetime import date, timedelta
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -78,7 +79,7 @@ def _make_candidate(**overrides):
         "poly_question": "Will event X happen?",
         "score": 0.92,
         "status": "candidate",
-        "resolution_date": "2026-06-01",
+        "resolution_date": (date.today() + timedelta(days=30)).isoformat(),
         "category": "politics",
         "structural_match": True,
     }

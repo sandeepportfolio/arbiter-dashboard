@@ -45,6 +45,7 @@ References: arbitrage best-practice research 2026-05-24
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import os
 import time
@@ -56,6 +57,10 @@ import aiohttp
 import structlog
 
 logger = structlog.get_logger("arbiter.recovery.stranded_reconciler")
+
+
+def _html(text: object) -> str:
+    return html.escape(str(text or ""), quote=False)
 
 
 @dataclass
@@ -796,11 +801,11 @@ class StrandedPositionReconciler:
         verb = "PROFITABLE CLOSE" if pnl_usd >= 0 else "LOSS-CUT CLOSE"
         sign = "+" if pnl_usd >= 0 else ""
         msg = (
-            f"<b>{verb}</b> ({action})\n"
-            f"venue: {pos.platform}\n"
-            f"market: {pos.market_id}\n"
-            f"side: {pos.side}  qty: {abs(int(pos.qty))}\n"
-            f"fill: {fill_qty} @ ${fill_price:.4f}  status: {status}\n"
+            f"<b>{_html(verb)}</b> ({_html(action)})\n"
+            f"venue: {_html(pos.platform)}\n"
+            f"market: {_html(pos.market_id)}\n"
+            f"side: {_html(pos.side)}  qty: {abs(int(pos.qty))}\n"
+            f"fill: {fill_qty} @ ${fill_price:.4f}  status: {_html(status)}\n"
             f"cost basis: ${pos.cost_basis_usd:.2f}  "
             f"PnL: {sign}${pnl_usd:.2f}"
         )
@@ -844,7 +849,7 @@ class StrandedPositionReconciler:
         except (TypeError, ValueError):
             age_s = 0.0
         if age_s < 6 * 3600:
-            bucket = "young (<6h)"
+            bucket = "young (&lt;6h)"
         elif age_s < 24 * 3600:
             bucket = "mature (6-24h)"
         else:
@@ -855,13 +860,13 @@ class StrandedPositionReconciler:
             else "NO FILL (book did not match)"
         )
         msg = (
-            f"<b>RECONCILER ATTEMPT</b> ({action})\n"
-            f"pos: {pos.platform}:{pos.market_id} ({bucket})\n"
-            f"qty held: {abs(int(pos.qty))} side: {pos.side}\n"
-            f"action: BUY {qty} {side.upper()} on {venue}\n"
-            f"  market: {market_id}\n"
-            f"  price: ${price:.4f}  status: {status}\n"
-            f"result: {fill_line}"
+            f"<b>RECONCILER ATTEMPT</b> ({_html(action)})\n"
+            f"pos: {_html(pos.platform)}:{_html(pos.market_id)} ({bucket})\n"
+            f"qty held: {abs(int(pos.qty))} side: {_html(pos.side)}\n"
+            f"action: BUY {qty} {_html(side.upper())} on {_html(venue)}\n"
+            f"  market: {_html(market_id)}\n"
+            f"  price: ${price:.4f}  status: {_html(status)}\n"
+            f"result: {_html(fill_line)}"
         )
         try:
             await notifier.send(
