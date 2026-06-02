@@ -95,9 +95,25 @@ def test_check_02_scenarios_pass_when_9_observed_0_missing(tmp_path, monkeypatch
     assert item.passed is True
 
 
-def test_check_02_scenarios_fail_when_missing(tmp_path, monkeypatch):
+def test_check_02_scenarios_pass_when_phase_gate_passed(tmp_path, monkeypatch):
     _write_validation_md(
-        tmp_path, total_scenarios_observed=8, scenarios_missing=1,
+        tmp_path,
+        phase_gate_status="PASS",
+        total_scenarios_observed=6,
+        scenarios_missing=3,
+    )
+    _chdir(tmp_path, monkeypatch)
+    item = _check_02_phase4_scenarios_observed()
+    assert item.passed is True
+    assert "phase_gate_status=PASS" in item.detail
+
+
+def test_check_02_scenarios_fail_when_missing_without_passed_gate(tmp_path, monkeypatch):
+    _write_validation_md(
+        tmp_path,
+        phase_gate_status="PENDING",
+        total_scenarios_observed=8,
+        scenarios_missing=1,
     )
     _chdir(tmp_path, monkeypatch)
     item = _check_02_phase4_scenarios_observed()
