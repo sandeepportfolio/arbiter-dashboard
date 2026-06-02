@@ -1,5 +1,7 @@
 import time
 
+import pytest
+
 from arbiter.execution.engine import ArbExecution, ExecutionIncident, Order, OrderStatus
 from arbiter.profitability.validator import ProfitabilityConfig, ProfitabilityValidator
 from arbiter.scanner.arbitrage import ArbitrageOpportunity
@@ -38,17 +40,23 @@ class StubEngine:
         return list(self._incidents)
 
 
-def make_opportunity(canonical_id: str, edge_cents: float) -> ArbitrageOpportunity:
+def make_opportunity(
+    canonical_id: str,
+    edge_cents: float,
+    *,
+    yes_platform: str = "kalshi",
+    no_platform: str = "polymarket",
+) -> ArbitrageOpportunity:
     now = time.time()
     edge = edge_cents / 100.0
     return ArbitrageOpportunity(
         canonical_id=canonical_id,
         description=f"Opportunity {canonical_id}",
-        yes_platform="kalshi",
+        yes_platform=yes_platform,
         yes_price=0.40,
         yes_fee=0.01,
         yes_market_id=f"{canonical_id}-YES",
-        no_platform="polymarket",
+        no_platform=no_platform,
         no_price=0.45,
         no_fee=0.01,
         no_market_id=f"{canonical_id}-NO",
@@ -72,12 +80,25 @@ def make_opportunity(canonical_id: str, edge_cents: float) -> ArbitrageOpportuni
     )
 
 
-def make_execution(arb_id: str, pnl: float, edge_cents: float) -> ArbExecution:
+def make_execution(
+    arb_id: str,
+    pnl: float,
+    edge_cents: float,
+    *,
+    yes_platform: str = "kalshi",
+    no_platform: str = "polymarket",
+    unwind_pnl: float = 0.0,
+) -> ArbExecution:
     now = time.time()
-    opportunity = make_opportunity(arb_id, edge_cents)
+    opportunity = make_opportunity(
+        arb_id,
+        edge_cents,
+        yes_platform=yes_platform,
+        no_platform=no_platform,
+    )
     leg_yes = Order(
         order_id=f"{arb_id}-YES",
-        platform="kalshi",
+        platform=yes_platform,
         market_id=opportunity.yes_market_id,
         canonical_id=opportunity.canonical_id,
         side="yes",
@@ -90,7 +111,7 @@ def make_execution(arb_id: str, pnl: float, edge_cents: float) -> ArbExecution:
     )
     leg_no = Order(
         order_id=f"{arb_id}-NO",
-        platform="polymarket",
+        platform=no_platform,
         market_id=opportunity.no_market_id,
         canonical_id=opportunity.canonical_id,
         side="no",
@@ -108,6 +129,7 @@ def make_execution(arb_id: str, pnl: float, edge_cents: float) -> ArbExecution:
         leg_no=leg_no,
         status="simulated",
         realized_pnl=pnl,
+        unwind_pnl=unwind_pnl,
         timestamp=now,
     )
 
@@ -183,7 +205,7 @@ def test_validator_marks_profitable_after_strict_thresholds_are_met():
     assert snapshot.verdict == "validated_profitable"
     assert snapshot.is_profitable is True
     assert snapshot.is_determined is True
-    assert snapshot.total_realized_pnl == 2.1
+    assert snapshot.total_realized_pnl == pytest.approx(2.1)
 
 
 def test_validator_marks_not_profitable_when_sample_is_large_but_pnl_is_weak():
@@ -388,3 +410,95 @@ def test_min_profitable_ratio_env_override(monkeypatch):
 
     monkeypatch.delenv("ARBITER_MIN_PROFITABLE_RATIO", raising=False)
     assert ProfitabilityConfig().min_profitable_execution_ratio == 0.65
+
+
+def test_validator_reports_platform_and_pair_profitability():
+    executions = [
+        make_execution("ARB-1", 0.6, 5.0),
+        make_execution("ARB-2", 0.7, 5.5),
+        make_execution("ARB-3", 0.8, 6.0),
+        make_execution(
+            "ARB-FX-LOSS",
+            -0.4,
+            5.0,
+            yes_platform="forecastex",
+            no_platform="kalshi",
+        ),
+    ]
+    scanner = StubScanner(
+        stats={"scan_count": 30, "published": 12, "active_opportunities": 1},
+        opportunities=[make_opportunity("LIVE-1", 6.0)],
+    )
+    engine = StubEngine(
+        stats={"total_executions": 4, "audit": {"pass_rate": 1.0}},
+        executions=executions,
+        incidents=[],
+    )
+    validator = ProfitabilityValidator(
+        ProfitabilityConfig(
+            min_scan_count=10,
+            min_published_opportunities=5,
+            min_completed_executions=1,
+            min_total_realized_pnl=0.1,
+            min_average_realized_pnl=0.1,
+            min_average_edge_cents=1.0,
+            min_profitable_execution_ratio=0.5,
+            min_audit_pass_rate=0.99,
+            max_incident_rate=0.10,
+            max_critical_incidents=0,
+        ),
+        scanner,
+        engine,
+    )
+
+    snapshot = validator.get_snapshot()
+
+    assert snapshot.platform_profitability["polymarket"]["verdict"] == "validated_profitable"
+    assert snapshot.pair_profitability["kalshi_polymarket"]["verdict"] == "validated_profitable"
+    assert snapshot.platform_profitability["forecastex"]["verdict"] == "not_profitable"
+    assert snapshot.pair_profitability["forecastex_kalshi"]["verdict"] == "not_profitable"
+
+    allowed, reason, _ = validator.validate_opportunity_scope(make_opportunity("KP", 5.0))
+    assert allowed is True
+    assert reason == "platform and pair profitability validated"
+
+    fx_opp = make_opportunity("FX", 5.0, yes_platform="forecastex", no_platform="kalshi")
+    allowed, reason, _ = validator.validate_opportunity_scope(fx_opp)
+    assert allowed is False
+    assert "forecastex" in reason
+
+
+def test_validator_uses_arb_pnl_not_unwind_luck_for_profitability():
+    execution = make_execution("ARB-UNWIND", 10.0, 5.0, unwind_pnl=10.0)
+    scanner = StubScanner(
+        stats={"scan_count": 30, "published": 12, "active_opportunities": 0},
+        opportunities=[],
+    )
+    engine = StubEngine(
+        stats={"total_executions": 1, "audit": {"pass_rate": 1.0}},
+        executions=[execution],
+        incidents=[],
+    )
+    validator = ProfitabilityValidator(
+        ProfitabilityConfig(
+            min_scan_count=10,
+            min_published_opportunities=5,
+            min_completed_executions=1,
+            min_total_realized_pnl=0.1,
+            min_average_realized_pnl=0.1,
+            min_average_edge_cents=1.0,
+            min_profitable_execution_ratio=0.5,
+            min_audit_pass_rate=0.99,
+            max_incident_rate=0.10,
+            max_critical_incidents=0,
+        ),
+        scanner,
+        engine,
+    )
+
+    snapshot = validator.get_snapshot()
+
+    assert snapshot.total_realized_pnl == 0.0
+    assert snapshot.profitable_executions == 0
+    assert snapshot.breakeven_executions == 1
+    assert snapshot.verdict == "not_profitable"

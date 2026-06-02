@@ -2281,6 +2281,30 @@ class ArbiterAPI:
                 "go": "trades",
             })
 
+        for record in getattr(self.monitor, "opportunity_alerts", []) or []:
+            ts = float(record.get("timestamp") or 0.0)
+            if ts < cutoff:
+                continue
+            state = str(record.get("state") or "")
+            is_executable = state in {"queued_for_execution", "manual_workflow"}
+            sev = "ok" if is_executable else "warn"
+            title = "Executable alert queued" if is_executable else "Alert suppressed"
+            body = (
+                f"{record.get('canonical_id')} · {record.get('yes_platform')}"
+                f"->{record.get('no_platform')} · {record.get('reason')}"
+            )
+            alerts.append({
+                "id": f"opp-alert:{record.get('alert_id')}",
+                "sev": sev,
+                "kind": "opportunity_alert",
+                "title": title,
+                "body": body,
+                "ts": ts,
+                "icon": "✓" if is_executable else "!",
+                "go": "trades" if is_executable else "errors",
+                "detail": json.dumps(record, indent=2, default=str),
+            })
+
         if self.mapping_store is not None:
             try:
                 mappings = await self.mapping_store.all(status="confirmed", limit=100)
@@ -3506,6 +3530,16 @@ class ArbiterAPI:
                 lines.append(
                     f'arbiter_auto_executor_skipped{{reason="{reason}"}} {count}'
                 )
+
+        alert_counts: Dict[str, int] = {}
+        for record in getattr(self.monitor, "opportunity_alerts", []) or []:
+            state = str(record.get("state") or "unknown")
+            alert_counts[state] = alert_counts.get(state, 0) + 1
+        if alert_counts:
+            lines.append("# HELP arbiter_opportunity_alerts_recent Recent opportunity alerts by state")
+            lines.append("# TYPE arbiter_opportunity_alerts_recent gauge")
+            for state, count in sorted(alert_counts.items()):
+                lines.append(f'arbiter_opportunity_alerts_recent{{state="{state}"}} {count}')
 
         # ── Task 18: 9 new Polymarket US / ops metrics ─────────────────────────
         # These are registered here (even at zero) so Prometheus scrape configs

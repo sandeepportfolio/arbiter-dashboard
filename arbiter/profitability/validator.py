@@ -17,7 +17,7 @@ import time
 from collections import deque
 from dataclasses import dataclass, field, fields
 from statistics import mean
-from typing import Deque, Dict, List, Optional
+from typing import Any, Deque, Dict, List, Optional
 
 from ..execution.engine import ArbExecution, ExecutionEngine, ExecutionIncident
 from ..execution.incidents import effective_critical_incident_count
@@ -161,6 +161,8 @@ class ProfitabilitySnapshot:
     incident_rate: float = 0.0
     audit_pass_rate: float = 1.0
     targets: Dict[str, float] = field(default_factory=dict)
+    platform_profitability: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    pair_profitability: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -187,6 +189,8 @@ class ProfitabilitySnapshot:
             "incident_rate": round(self.incident_rate, 4),
             "audit_pass_rate": round(self.audit_pass_rate, 6),
             "targets": dict(self.targets),
+            "platform_profitability": self.platform_profitability,
+            "pair_profitability": self.pair_profitability,
         }
 
 
@@ -302,6 +306,8 @@ class ProfitabilityValidator:
             if completed
             else 0.0
         )
+        platform_profitability = self._build_scope_profitability(completed, scope="platform")
+        pair_profitability = self._build_scope_profitability(completed, scope="pair")
 
         reasons = self._build_reasons(
             scan_count=scanner_stats.get("scan_count", 0),
@@ -364,6 +370,8 @@ class ProfitabilityValidator:
             incident_rate=incident_rate,
             audit_pass_rate=audit_pass_rate,
             targets=self.config.to_dict(),
+            platform_profitability=platform_profitability,
+            pair_profitability=pair_profitability,
         )
 
         previous_verdict = self._last_snapshot.verdict if self._last_snapshot else None
@@ -435,6 +443,131 @@ class ProfitabilityValidator:
     @property
     def history(self) -> List[dict]:
         return list(self._history)
+
+    def validate_opportunity_scope(self, opportunity: ArbitrageOpportunity) -> tuple[bool, str, Dict[str, Any]]:
+        """Return whether the opportunity's venues have proven profitable.
+
+        The aggregate profitability verdict can hide a bleeding venue behind
+        profitable trades elsewhere. Live order submission needs the stricter
+        invariant: both involved platforms and their venue pair must have their
+        own validated-profitable sample.
+        """
+        snapshot = self.get_snapshot()
+        payload = snapshot.to_dict()
+        platforms = sorted({
+            str(getattr(opportunity, "yes_platform", "") or "").lower(),
+            str(getattr(opportunity, "no_platform", "") or "").lower(),
+        } - {""})
+        for platform in platforms:
+            scoped = snapshot.platform_profitability.get(platform)
+            if not scoped:
+                return False, f"No profitability evidence for platform {platform}", payload
+            if scoped.get("verdict") != "validated_profitable":
+                return False, (
+                    f"Platform profitability for {platform} is {scoped.get('verdict')}"
+                ), payload
+
+        pair_key = self._pair_key(platforms)
+        scoped_pair = snapshot.pair_profitability.get(pair_key)
+        if not scoped_pair:
+            return False, f"No profitability evidence for venue pair {pair_key}", payload
+        if scoped_pair.get("verdict") != "validated_profitable":
+            return False, (
+                f"Venue-pair profitability for {pair_key} is {scoped_pair.get('verdict')}"
+            ), payload
+        return True, "platform and pair profitability validated", payload
+
+    def _build_scope_profitability(
+        self,
+        executions: List[ArbExecution],
+        *,
+        scope: str,
+    ) -> Dict[str, Dict[str, Any]]:
+        grouped: Dict[str, List[ArbExecution]] = {}
+        for execution in executions:
+            opportunity = getattr(execution, "opportunity", None)
+            if opportunity is None:
+                continue
+            yes = str(getattr(opportunity, "yes_platform", "") or "").lower()
+            no = str(getattr(opportunity, "no_platform", "") or "").lower()
+            if scope == "platform":
+                keys = [key for key in {yes, no} if key]
+            elif scope == "pair":
+                keys = [self._pair_key([yes, no])] if yes and no else []
+            else:
+                keys = []
+            for key in keys:
+                grouped.setdefault(key, []).append(execution)
+
+        return {
+            key: self._score_execution_scope(key, values)
+            for key, values in sorted(grouped.items())
+        }
+
+    def _score_execution_scope(
+        self,
+        key: str,
+        executions: List[ArbExecution],
+    ) -> Dict[str, Any]:
+        def _arb_pnl(execution):
+            return float(getattr(execution, "arb_pnl", execution.realized_pnl))
+
+        total = len(executions)
+        profitable = [execution for execution in executions if _arb_pnl(execution) > 0]
+        losing = [execution for execution in executions if _arb_pnl(execution) < 0]
+        breakeven = [execution for execution in executions if _arb_pnl(execution) == 0]
+        total_pnl = sum(_arb_pnl(execution) for execution in executions)
+        average_pnl = total_pnl / total if total else 0.0
+        edge_samples = [
+            float(getattr(execution.opportunity, "net_edge_cents", 0.0) or 0.0)
+            for execution in executions
+            if getattr(execution, "opportunity", None) is not None
+        ]
+        average_edge_cents = mean(edge_samples) if edge_samples else 0.0
+        profitable_ratio = len(profitable) / total if total else 0.0
+
+        verdict = self._resolve_verdict(
+            scan_count=self.config.min_scan_count,
+            published_opportunities=self.config.min_published_opportunities,
+            completed_executions=total,
+            total_realized_pnl=total_pnl,
+            average_realized_pnl=average_pnl,
+            average_edge_cents=average_edge_cents,
+            profitable_ratio=profitable_ratio,
+            audit_pass_rate=1.0,
+            incident_rate=0.0,
+            critical_incidents=0,
+        )
+        reasons = self._build_reasons(
+            scan_count=self.config.min_scan_count,
+            published_opportunities=self.config.min_published_opportunities,
+            completed_executions=total,
+            total_realized_pnl=total_pnl,
+            average_realized_pnl=average_pnl,
+            average_edge_cents=average_edge_cents,
+            profitable_ratio=profitable_ratio,
+            audit_pass_rate=1.0,
+            incident_rate=0.0,
+            critical_incidents=0,
+        )
+        return {
+            "key": key,
+            "verdict": verdict,
+            "reasons": reasons,
+            "completed_executions": total,
+            "profitable_executions": len(profitable),
+            "losing_executions": len(losing),
+            "breakeven_executions": len(breakeven),
+            "total_arb_pnl": round(total_pnl, 4),
+            "average_arb_pnl": round(average_pnl, 4),
+            "average_edge_cents": round(average_edge_cents, 4),
+            "profitable_ratio": round(profitable_ratio, 4),
+        }
+
+    @staticmethod
+    def _pair_key(platforms: List[str]) -> str:
+        clean = sorted({str(platform or "").lower() for platform in platforms if platform})
+        return "_".join(clean)
 
     def _resolve_verdict(
         self,

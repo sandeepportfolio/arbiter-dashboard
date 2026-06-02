@@ -254,6 +254,11 @@ def test_gate_rejects_low_net_edge():
     assert _alert_is_safe_to_send(opp) is False
 
 
+def test_gate_rejects_non_positive_expected_profit():
+    opp = _make_safe_opp(max_profit_usd=0.0)
+    assert _alert_is_safe_to_send(opp) is False
+
+
 def test_gate_rejects_low_confidence():
     opp = _make_safe_opp(confidence=0.49)
     assert _alert_is_safe_to_send(opp) is False
@@ -378,10 +383,13 @@ def test_alert_opportunity_sends_when_safe():
         monitor = _make_monitor()
         opp = _make_safe_opp()
         await monitor.alert_opportunity(opp)
-        return monitor.notifier.sent
+        return monitor.notifier.sent, monitor.opportunity_alerts
 
-    sent = asyncio.run(runner())
+    sent, alerts = asyncio.run(runner())
     assert len(sent) == 1
+    assert alerts[0]["state"] == "queued_for_execution"
+    assert alerts[0]["execution_queue"] == "auto_executor"
+    assert alerts[0]["expected_profit_usd"] > 0
     msg = sent[0]
     assert "Democrats" in msg
     assert "U.S Senate Midterm Winner" not in msg.split("\n", 1)[0]
@@ -407,6 +415,19 @@ def test_alert_opportunity_drops_phantom_low_price_arb():
 
     sent = asyncio.run(runner())
     assert sent == [], "Phantom-edge alert must be suppressed by the gate"
+
+
+def test_alert_opportunity_records_suppressed_state():
+    async def runner():
+        monitor = _make_monitor()
+        opp = _make_safe_opp(max_profit_usd=0.0)
+        await monitor.alert_opportunity(opp)
+        return monitor.notifier.sent, monitor.opportunity_alerts
+
+    sent, alerts = asyncio.run(runner())
+    assert sent == []
+    assert alerts[0]["state"] == "suppressed"
+    assert alerts[0]["reason"] == "alert_gate_rejected"
 
 
 def test_alert_opportunity_drops_when_outcome_is_only_canonical():

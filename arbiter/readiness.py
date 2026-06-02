@@ -183,10 +183,27 @@ class OperationalReadiness:
                 }
                 if summary_platforms and not (summary_platforms & involved_platforms):
                     continue
+            if check.key == "profitability":
+                scoped_validator = getattr(self.profitability, "validate_opportunity_scope", None)
+                if callable(scoped_validator):
+                    scoped_allowed, scoped_reason, scoped_context = scoped_validator(opportunity)
+                    if scoped_allowed:
+                        continue
+                    scoped_snapshot = dict(snapshot.to_dict())
+                    scoped_snapshot["scoped_profitability"] = scoped_context
+                    return False, scoped_reason, scoped_snapshot
             relevant_blocking.append(check.summary)
 
         if relevant_blocking:
             return False, relevant_blocking[0], snapshot.to_dict()
+
+        scoped_validator = getattr(self.profitability, "validate_opportunity_scope", None)
+        if callable(scoped_validator) and not self.config.scanner.dry_run:
+            scoped_allowed, scoped_reason, scoped_context = scoped_validator(opportunity)
+            if not scoped_allowed:
+                scoped_snapshot = dict(snapshot.to_dict())
+                scoped_snapshot["scoped_profitability"] = scoped_context
+                return False, scoped_reason, scoped_snapshot
 
         balances = getattr(self.monitor, "current_balances", {}) or {}
         low_platforms = [

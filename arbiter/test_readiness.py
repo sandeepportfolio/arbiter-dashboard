@@ -28,6 +28,16 @@ class StubProfitability:
         return self._snapshot
 
 
+class ScopedProfitability(StubProfitability):
+    def __init__(self, verdict: str, scoped_allowed: bool, scoped_reason: str):
+        super().__init__(verdict)
+        self.scoped_allowed = scoped_allowed
+        self.scoped_reason = scoped_reason
+
+    def validate_opportunity_scope(self, opportunity):
+        return self.scoped_allowed, self.scoped_reason, {"scope": "test"}
+
+
 class StubMonitor:
     def __init__(self, balances):
         self.current_balances = balances
@@ -148,6 +158,102 @@ def test_allow_execution_stays_closed_until_profitability_validates():
         assert allowed is False
         assert "Profitability is still collecting evidence" in reason
         assert context["ready_for_live_trading"] is False
+    finally:
+        if original is None:
+            MARKET_MAP.pop("TEST_READY", None)
+        else:
+            MARKET_MAP["TEST_READY"] = original
+
+
+def test_allow_execution_uses_scoped_profitability_for_specific_pair():
+    original = MARKET_MAP.get("TEST_READY")
+    MARKET_MAP["TEST_READY"] = {
+        "description": "Readiness gate market",
+        "status": "confirmed",
+        "allow_auto_trade": True,
+        "mapping_score": 0.95,
+    }
+    try:
+        config = ArbiterConfig()
+        config.scanner.dry_run = False
+        config.alerts.telegram_bot_token = "token"
+        config.alerts.telegram_chat_id = "chat"
+        config.polymarket.private_key = "poly"
+        config.kalshi.api_key_id = "kalshi"
+        config.kalshi.private_key_path = "/tmp/key.pem"
+
+        balances = {
+            "kalshi": SimpleNamespace(balance=100.0, is_low=False, timestamp=1.0),
+            "polymarket": SimpleNamespace(balance=100.0, is_low=False, timestamp=1.0),
+        }
+        collectors = {
+            "kalshi": StubCollector(authenticated=True),
+            "polymarket": StubCollector(authenticated=True),
+            "forecastex": StubCollector(circuit_state="open"),
+        }
+        readiness = OperationalReadiness(
+            config,
+            engine=StubEngine(),
+            monitor=StubMonitor(balances),
+            profitability=ScopedProfitability(
+                "collecting_evidence",
+                True,
+                "platform and pair profitability validated",
+            ),
+            collectors=collectors,
+        )
+
+        allowed, reason, _ = readiness.allow_execution(make_opportunity())
+
+        assert allowed is True
+        assert reason == "ready for live execution"
+    finally:
+        if original is None:
+            MARKET_MAP.pop("TEST_READY", None)
+        else:
+            MARKET_MAP["TEST_READY"] = original
+
+
+def test_allow_execution_blocks_unprofitable_scoped_pair():
+    original = MARKET_MAP.get("TEST_READY")
+    MARKET_MAP["TEST_READY"] = {
+        "description": "Readiness gate market",
+        "status": "confirmed",
+        "allow_auto_trade": True,
+        "mapping_score": 0.95,
+    }
+    try:
+        config = ArbiterConfig()
+        config.scanner.dry_run = False
+        config.alerts.telegram_bot_token = "token"
+        config.alerts.telegram_chat_id = "chat"
+        config.polymarket.private_key = "poly"
+        config.kalshi.api_key_id = "kalshi"
+        config.kalshi.private_key_path = "/tmp/key.pem"
+        balances = {
+            "kalshi": SimpleNamespace(balance=100.0, is_low=False, timestamp=1.0),
+            "polymarket": SimpleNamespace(balance=100.0, is_low=False, timestamp=1.0),
+        }
+        readiness = OperationalReadiness(
+            config,
+            engine=StubEngine(),
+            monitor=StubMonitor(balances),
+            profitability=ScopedProfitability(
+                "validated_profitable",
+                False,
+                "Venue-pair profitability for kalshi_polymarket is not_profitable",
+            ),
+            collectors={
+                "kalshi": StubCollector(authenticated=True),
+                "polymarket": StubCollector(authenticated=True),
+            },
+        )
+
+        allowed, reason, context = readiness.allow_execution(make_opportunity())
+
+        assert allowed is False
+        assert "kalshi_polymarket" in reason
+        assert "scoped_profitability" in context
     finally:
         if original is None:
             MARKET_MAP.pop("TEST_READY", None)

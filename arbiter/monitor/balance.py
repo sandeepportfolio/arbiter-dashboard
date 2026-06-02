@@ -6,8 +6,9 @@ Also sends alerts for profitable arbitrage opportunities.
 import asyncio
 import logging
 import time
+from collections import deque
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import aiohttp
 
@@ -119,6 +120,12 @@ def _alert_is_safe_to_send(opp: ArbitrageOpportunity) -> bool:
             opp.canonical_id, opp.suggested_qty,
         )
         return False
+    if opp.max_profit_usd <= 0:
+        logger.warning(
+            "Alert suppressed [%s] expected_profit=$%.4f (not profitable after fees/size)",
+            opp.canonical_id, opp.max_profit_usd,
+        )
+        return False
     if not _alert_outcome_is_specific(opp):
         logger.warning(
             "Alert suppressed [%s] outcome name not specific (yes=%r no=%r matches canonical %r)",
@@ -222,6 +229,36 @@ class BalanceSnapshot:
     # "polymarket:funder-erc20" — so the dashboard can tell which surface the
     # number actually came from. Stays "" for legacy callers.
     source: str = ""
+
+
+@dataclass
+class OpportunityAlertRecord:
+    alert_id: str
+    canonical_id: str
+    state: str
+    reason: str
+    yes_platform: str
+    no_platform: str
+    net_edge_cents: float
+    expected_profit_usd: float
+    quantity: int
+    timestamp: float
+    execution_queue: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "alert_id": self.alert_id,
+            "canonical_id": self.canonical_id,
+            "state": self.state,
+            "reason": self.reason,
+            "yes_platform": self.yes_platform,
+            "no_platform": self.no_platform,
+            "net_edge_cents": round(self.net_edge_cents, 4),
+            "expected_profit_usd": round(self.expected_profit_usd, 4),
+            "quantity": self.quantity,
+            "timestamp": self.timestamp,
+            "execution_queue": self.execution_queue,
+        }
 
 
 class TelegramNotifier:
@@ -404,6 +441,9 @@ class BalanceMonitor:
         self._exec_alert_history: "list[float]" = []
         self._exec_alert_lock = asyncio.Lock()
         self._exec_alert_dropped: int = 0
+        # Recent opportunity alert state. This gives the API a visible
+        # alert-to-execution breadcrumb instead of "Telegram sent and vanished".
+        self._opportunity_alerts: "deque[OpportunityAlertRecord]" = deque(maxlen=500)
 
     def set_manual_balance(self, platform: str, balance: float):
         """Set balance manually for platforms without API."""
@@ -500,17 +540,53 @@ class BalanceMonitor:
         path logs at WARNING so operators can see why an alert was skipped.
         """
         if not _alert_is_safe_to_send(opp):
+            self._record_opportunity_alert(opp, state="suppressed", reason="alert_gate_rejected")
             return
 
         now = time.time()
         key = f"arb_{opp.canonical_id}_{opp.yes_platform}_{opp.no_platform}"
         last = self._last_alert_time.get(key, 0)
         if now - last < self.config.cooldown:
+            self._record_opportunity_alert(opp, state="suppressed", reason="cooldown")
             return
 
         self._last_alert_time[key] = now
         msg = _format_arb_alert(opp)
-        await self.notifier.send(msg, dedup_key=key)
+        sent = await self.notifier.send(msg, dedup_key=key)
+        if not sent:
+            self._record_opportunity_alert(opp, state="send_failed", reason="telegram_send_failed_or_deduped")
+            return
+        state = "manual_workflow" if opp.requires_manual or opp.status == "manual" else "queued_for_execution"
+        queue = "manual" if state == "manual_workflow" else "auto_executor"
+        self._record_opportunity_alert(opp, state=state, reason="profitable_alert_sent", execution_queue=queue)
+
+    def _record_opportunity_alert(
+        self,
+        opp: ArbitrageOpportunity,
+        *,
+        state: str,
+        reason: str,
+        execution_queue: str = "",
+    ) -> None:
+        alert_id = (
+            f"{opp.canonical_id}:{opp.yes_platform}:{opp.no_platform}:"
+            f"{int(getattr(opp, 'timestamp', 0) or time.time())}"
+        )
+        self._opportunity_alerts.appendleft(
+            OpportunityAlertRecord(
+                alert_id=alert_id,
+                canonical_id=opp.canonical_id,
+                state=state,
+                reason=reason,
+                yes_platform=opp.yes_platform,
+                no_platform=opp.no_platform,
+                net_edge_cents=float(opp.net_edge_cents or 0.0),
+                expected_profit_usd=float(opp.max_profit_usd or 0.0),
+                quantity=int(opp.suggested_qty or 0),
+                timestamp=time.time(),
+                execution_queue=execution_queue,
+            )
+        )
 
     async def alert_execution_result(
         self,
@@ -607,6 +683,10 @@ class BalanceMonitor:
     @property
     def current_balances(self) -> Dict[str, BalanceSnapshot]:
         return dict(self._balances)
+
+    @property
+    def opportunity_alerts(self) -> List[dict]:
+        return [record.to_dict() for record in self._opportunity_alerts]
 
     @property
     def total_balance(self) -> float:
