@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import ssl
 import time
 from dataclasses import dataclass, field
@@ -84,10 +85,23 @@ class ForecastExClient:
     _bridge_ready: bool = field(default=False, init=False, repr=False)
 
     def __post_init__(self) -> None:
+        # Env-tunable circuit breaker (2026-06-02). Previously hardcoded
+        # 5/30 caused per-cycle flapping: IBKR's strikes/info endpoints
+        # 503 in bursts during overnight reconnects, the breaker tripped
+        # in ~50s, and the 30s cooldown was shorter than the average
+        # backlog. Raising to 10/120 (default) lets a transient outage
+        # heal without taking down every other FX call in the same
+        # cycle. Operators can still tighten via env if needed.
+        cb_threshold = max(
+            1, int(os.getenv("FORECASTEX_CB_FAILURE_THRESHOLD", "10"))
+        )
+        cb_timeout = max(
+            1, int(os.getenv("FORECASTEX_CB_RECOVERY_TIMEOUT_S", "120"))
+        )
         self.circuit = CircuitBreaker(
             "forecastex-rest",
-            failure_threshold=5,
-            recovery_timeout=30,
+            failure_threshold=cb_threshold,
+            recovery_timeout=cb_timeout,
         )
         # IBKR documents 10rps as the comfortable steady-state rate.
         self.live_rate_limiter = RateLimiter(

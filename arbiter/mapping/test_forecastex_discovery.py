@@ -391,3 +391,187 @@ def test_seed_keywords_are_deduplicated():
         f"duplicate seeds: "
         f"{sorted(k for k in set(DEFAULT_SEED_KEYWORDS) if DEFAULT_SEED_KEYWORDS.count(k) > 1)}"
     )
+
+
+# ── 2026-06-02 wrong-domain quarantine + NO backfill regression tests ─────
+
+
+class _ClientWithChildren:
+    """FakeClient that also implements resolve_event_children — needed for
+    the NO-conid backfill path added 2026-06-02."""
+
+    def __init__(
+        self,
+        search_results: dict[str, list[dict[str, Any]]],
+        children: dict[str, list[dict[str, Any]]],
+    ):
+        self._search_results = search_results
+        self._children = children
+
+    async def _request(self, method, path, *, json_body=None, params=None):
+        return {"items": list(self._search_results.get((json_body or {}).get("symbol", ""), []))}
+
+    async def resolve_event_children(self, parent_conid):
+        return list(self._children.get(str(parent_conid), []))
+
+
+def test_blocklist_contains_known_bad_conids():
+    from .forecastex_discovery import (
+        _BLOCKLISTED_FORECASTEX_CONIDS,
+        is_blocklisted_forecastex_conid,
+    )
+    # Conids observed live 2026-06-02 attached to multiple unrelated sports
+    # mappings — keep them on the blocklist as a regression tripwire.
+    for bad in ("860934996", "882351367", "831072372"):
+        assert bad in _BLOCKLISTED_FORECASTEX_CONIDS
+        assert is_blocklisted_forecastex_conid(bad) is True
+    # Sanity — random conids must not match.
+    assert is_blocklisted_forecastex_conid("000") is False
+    assert is_blocklisted_forecastex_conid("") is False
+
+
+def test_sports_hint_tokens_include_kalshi_channel_slugs():
+    """The 2026-06-02 audit found CHAMP_KX*/GAME_MLB_* canonical_ids
+    bypassing the domain guard because their tokens (champ/kxncaaf/etc.)
+    weren't in the sports set."""
+    from .forecastex_discovery import _SPORTS_HINT_TOKENS
+    for slug in ("champ", "kxncaaf", "kxnflafcchamp", "kxnflnfcchamp", "kxmlb", "ncaaf"):
+        assert slug in _SPORTS_HINT_TOKENS
+
+
+def test_score_blocks_kxnflnfcchamp_vs_political_event():
+    """Regression for the actual prod canonical_ids that mis-bound
+    2026-06-02: CHAMP_KXNFLNFCCHAMP_27_SF, GAME_MLB_20260516_TEX_*."""
+    sf_mapping = _make_mapping(
+        "CHAMP_KXNFLNFCCHAMP_27_SF",
+        description="San Francisco 49ers — 2027 NFL NFC Championship",
+        polymarket_question="Will the SF 49ers win the 2027 NFC Championship?",
+    )
+    score = _score_event_against_mapping(
+        "San Francisco Daily Temperature High UHSFO", sf_mapping,
+    )
+    assert score == 0.0, f"weather event must not match NFL mapping; got {score}"
+
+    tex_mapping = _make_mapping(
+        "GAME_MLB_20260516_TEX_5b62f9ee",
+        description="Texas Rangers vs. Houston Astros",
+        polymarket_question="Texas Rangers vs. Houston Astros",
+    )
+    # Political and CPI events that share Texas/Houston geography must
+    # not bind to MLB mappings.
+    assert _score_event_against_mapping("Texas Governor Republican Primary", tex_mapping) == 0.0
+    assert _score_event_against_mapping("Houston CPI", tex_mapping) == 0.0
+
+
+@pytest.mark.asyncio
+async def test_discover_refuses_blocklisted_conid():
+    """If the best-scoring event's conid is on the blocklist, the mapping
+    must be marked forecastex_not_available rather than bound."""
+    client = _ClientWithChildren(
+        search_results={
+            "house": [
+                # 860934996 is on the blocklist (sports cross-bind)
+                {"conid": "860934996", "companyHeader": "US House Control (FORECASTX)", "symbol": "HCTRL"},
+            ],
+        },
+        children={},
+    )
+    mapping = _make_mapping("GOP_HOUSE_2026", "U.S House of Representatives Midterm Winner")
+    store = _FakeStore([mapping])
+    matched = await discover(client, store, keywords=("house",), min_score=0.3)
+    assert matched == 0
+    assert any(canon == "GOP_HOUSE_2026" and flag is True for canon, flag in store.unavailable_marks)
+    assert mapping.forecastex_contract_id == ""
+
+
+@pytest.mark.asyncio
+async def test_discover_backfills_no_conid_when_yes_already_bound():
+    """When a mapping has YES bound but no NO, discover() must call
+    resolve_event_children on the YES conid and persist the NO sibling."""
+    # YES=111 → siblings include itself (right=C strike=1) + the NO sibling
+    # (right=P strike=1).
+    client = _ClientWithChildren(
+        search_results={},  # no new events — only backfill path runs
+        children={
+            "111": [
+                {"conid": "111", "right": "C", "strike": 1.0},
+                {"conid": "222", "right": "P", "strike": 1.0},
+            ],
+        },
+    )
+    mapping = _make_mapping("GOP_HOUSE_2026", "US House Control", forecastex="111")
+    store = _FakeStore([mapping])
+    matched = await discover(client, store, keywords=("house",), min_score=0.3)
+    # matched counts NEW attachments, NO-backfill is a separate counter
+    # but does emit an upsert.
+    assert any(u.canonical_id == "GOP_HOUSE_2026" and u.forecastex_no_contract_id == "222" for u in store.upserts)
+
+
+@pytest.mark.asyncio
+async def test_discover_backfill_skips_blocklisted_no_sibling():
+    """NO sibling that matches a blocklisted conid must be skipped."""
+    client = _ClientWithChildren(
+        search_results={},
+        children={
+            "111": [
+                {"conid": "111", "right": "C", "strike": 1.0},
+                # 860934996 is blocklisted
+                {"conid": "860934996", "right": "P", "strike": 1.0},
+            ],
+        },
+    )
+    mapping = _make_mapping("GOP_HOUSE_2026", "US House Control", forecastex="111")
+    store = _FakeStore([mapping])
+    await discover(client, store, keywords=("house",), min_score=0.3)
+    assert not any(
+        u.canonical_id == "GOP_HOUSE_2026" and u.forecastex_no_contract_id
+        for u in store.upserts
+    ), "blocklisted NO conid must not be persisted"
+
+
+@pytest.mark.asyncio
+async def test_discover_backfill_dry_run_does_not_upsert():
+    client = _ClientWithChildren(
+        search_results={},
+        children={
+            "111": [
+                {"conid": "111", "right": "C", "strike": 1.0},
+                {"conid": "222", "right": "P", "strike": 1.0},
+            ],
+        },
+    )
+    mapping = _make_mapping("GOP_HOUSE_2026", "US House Control", forecastex="111")
+    store = _FakeStore([mapping])
+    await discover(client, store, keywords=("house",), min_score=0.3, dry_run=True)
+    assert store.upserts == []
+
+
+@pytest.mark.asyncio
+async def test_discover_falls_back_to_next_best_when_top_score_is_blocklisted():
+    """Adversarial regression: if the highest-scoring candidate is
+    blocklisted, the loop must try the next-best instead of skipping the
+    whole mapping. Previously the greedy one-shot selection lost the
+    legitimate runner-up."""
+    client = _ClientWithChildren(
+        search_results={
+            "house": [
+                # Top score (highest token overlap) — blocklisted.
+                {"conid": "860934996",
+                 "companyHeader": "US House of Representatives Control (FORECASTX)",
+                 "symbol": "HCTRL"},
+                # Runner-up — clean conid that should be picked instead.
+                {"conid": "733131966",
+                 "companyHeader": "US House Control (FORECASTX)",
+                 "symbol": "HCTRL2"},
+            ],
+        },
+        children={},
+    )
+    mapping = _make_mapping(
+        "GOP_HOUSE_2026", "U.S House of Representatives Midterm Winner",
+    )
+    store = _FakeStore([mapping])
+    matched = await discover(client, store, keywords=("house",), min_score=0.3)
+    assert matched == 1
+    assert len(store.upserts) == 1
+    assert store.upserts[0].forecastex_contract_id == "733131966"

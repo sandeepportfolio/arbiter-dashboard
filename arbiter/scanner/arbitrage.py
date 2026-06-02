@@ -379,6 +379,31 @@ class ArbitrageScanner:
         # is an information artifact, not a tradeable quote. Matches the
         # Kalshi precedent in f92c9fc (drop last_price fallbacks from
         # yes_price/yes_ask paths).
+        # ── ForecastEx price-freshness guard (2026-06-02) ───────────────
+        # IBKR snapshots can lag during gateway reconnects; an FX leg older
+        # than FORECASTEX_MAX_QUOTE_AGE_S is unsafe to trade against because
+        # the touch may have moved. Drop the FX-containing pair while still
+        # allowing K×P and other non-FX combinations to publish (the outer
+        # platform-pair loop will retry the same canonical_id with other
+        # platforms).
+        import os as _os  # local import — keep module-level imports tidy
+        max_fx_age = float(_os.getenv("FORECASTEX_MAX_QUOTE_AGE_S", "60") or 60.0)
+        if max_fx_age > 0:
+            if yes_price_point.platform == "forecastex" and yes_price_point.age_seconds > max_fx_age:
+                self._skip_reasons["fx_stale_yes"] = self._skip_reasons.get("fx_stale_yes", 0) + 1
+                logger.debug(
+                    "scanner.skip canonical=%s reason=fx_stale_yes age=%.1fs > %.1fs",
+                    canonical_id, yes_price_point.age_seconds, max_fx_age,
+                )
+                return None
+            if no_price_point.platform == "forecastex" and no_price_point.age_seconds > max_fx_age:
+                self._skip_reasons["fx_stale_no"] = self._skip_reasons.get("fx_stale_no", 0) + 1
+                logger.debug(
+                    "scanner.skip canonical=%s reason=fx_stale_no age=%.1fs > %.1fs",
+                    canonical_id, no_price_point.age_seconds, max_fx_age,
+                )
+                return None
+
         yes_ask = float(yes_price_point.yes_ask or 0.0)
         no_ask = float(no_price_point.no_ask or 0.0)
         if yes_ask <= 0 or no_ask <= 0:

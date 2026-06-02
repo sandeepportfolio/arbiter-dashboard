@@ -480,3 +480,99 @@ def test_scanner_fx_kalshi_zero_volume_surfaces_as_illiquid():
                 MARKET_MAP[canonical_id] = original_mapping
 
     asyncio.run(runner())
+
+
+# ── 2026-06-02 FX price-freshness guard ────────────────────────────────────
+
+
+def test_scanner_drops_fx_pair_when_fx_yes_quote_stale(canonical_id, monkeypatch):
+    """FX YES leg older than FORECASTEX_MAX_QUOTE_AGE_S — pair must skip
+    but K×P pairs on the same canonical_id should still publish."""
+    monkeypatch.setenv("FORECASTEX_MAX_QUOTE_AGE_S", "30")
+
+    async def run():
+        store = PriceStore(ttl=600)
+        scanner = ArbitrageScanner(_scanner_config(min_edge_cents=0.5), store)
+
+        stale_ts = time.time() - 120  # 2 minutes old
+        fresh_ts = time.time()
+        # FX YES is stale; FX shouldn't be picked up as YES side.
+        await store.put(_mk_price("forecastex", canonical_id, yes=0.35, no=0.55, fee_rate=0.005, ts=stale_ts))
+        await store.put(_mk_price("kalshi", canonical_id, yes=0.40, no=0.55, fee_rate=0.07, ts=fresh_ts))
+        await store.put(_mk_price("polymarket", canonical_id, yes=0.55, no=0.40, fee_rate=0.02, ts=fresh_ts))
+
+        ops = await scanner.scan_once()
+        # No FX-as-YES pair allowed.
+        assert not any(o.yes_platform == "forecastex" for o in ops), (
+            f"stale FX YES leaked into opportunities: "
+            f"{[(o.yes_platform, o.no_platform) for o in ops]}"
+        )
+        # K×P pair should still publish.
+        assert any(
+            (o.yes_platform, o.no_platform) in {("kalshi", "polymarket"), ("polymarket", "kalshi")}
+            for o in ops
+        ), "K×P pair must keep publishing when FX is stale"
+
+    asyncio.run(run())
+
+
+def test_scanner_drops_fx_pair_when_fx_no_quote_stale(canonical_id, monkeypatch):
+    """FX NO leg older than threshold — pair must skip."""
+    monkeypatch.setenv("FORECASTEX_MAX_QUOTE_AGE_S", "30")
+
+    async def run():
+        store = PriceStore(ttl=600)
+        scanner = ArbitrageScanner(_scanner_config(min_edge_cents=0.5), store)
+
+        stale_ts = time.time() - 120
+        fresh_ts = time.time()
+        await store.put(_mk_price("forecastex", canonical_id, yes=0.35, no=0.55, fee_rate=0.005, ts=stale_ts))
+        await store.put(_mk_price("kalshi", canonical_id, yes=0.40, no=0.55, fee_rate=0.07, ts=fresh_ts))
+
+        ops = await scanner.scan_once()
+        assert not any(o.no_platform == "forecastex" for o in ops), (
+            f"stale FX NO leaked: {[(o.yes_platform, o.no_platform) for o in ops]}"
+        )
+
+    asyncio.run(run())
+
+
+def test_scanner_allows_fresh_fx_quotes(canonical_id, monkeypatch):
+    """Sanity: FX with fresh timestamps under the threshold must NOT be
+    excluded."""
+    monkeypatch.setenv("FORECASTEX_MAX_QUOTE_AGE_S", "60")
+
+    async def run():
+        store = PriceStore(ttl=60)
+        scanner = ArbitrageScanner(_scanner_config(min_edge_cents=0.5), store)
+
+        await store.put(_mk_price("forecastex", canonical_id, yes=0.35, no=0.55, fee_rate=0.005))
+        await store.put(_mk_price("kalshi", canonical_id, yes=0.40, no=0.55, fee_rate=0.07))
+
+        ops = await scanner.scan_once()
+        fx_pairs = [(o.yes_platform, o.no_platform) for o in ops
+                    if "forecastex" in (o.yes_platform, o.no_platform)]
+        assert fx_pairs, "fresh FX quotes must produce at least one opportunity"
+
+    asyncio.run(run())
+
+
+def test_scanner_freshness_guard_disabled_when_env_zero(canonical_id, monkeypatch):
+    """FORECASTEX_MAX_QUOTE_AGE_S=0 disables the FX freshness guard so
+    the fx_stale_* skip counters never increment."""
+    monkeypatch.setenv("FORECASTEX_MAX_QUOTE_AGE_S", "0")
+
+    async def run():
+        store = PriceStore(ttl=600)
+        scanner = ArbitrageScanner(_scanner_config(min_edge_cents=0.5), store)
+        stale_ts = time.time() - 90  # past 60s default, still inside store TTL
+        fresh_ts = time.time()
+        await store.put(_mk_price("forecastex", canonical_id, yes=0.35, no=0.55, fee_rate=0.005, ts=stale_ts))
+        await store.put(_mk_price("kalshi", canonical_id, yes=0.40, no=0.55, fee_rate=0.07, ts=fresh_ts))
+
+        await scanner.scan_once()
+        # Guard disabled → fx_stale_* counters never fire.
+        assert scanner._skip_reasons.get("fx_stale_yes", 0) == 0
+        assert scanner._skip_reasons.get("fx_stale_no", 0) == 0
+
+    asyncio.run(run())

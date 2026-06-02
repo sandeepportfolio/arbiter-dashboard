@@ -578,6 +578,22 @@ class ForecastExChildResolver:
                 reason="no Call (YES) child returned",
             )
 
+        # 2026-06-02 wrong-domain blocklist gate. The discovery and
+        # resolver paths both attach conids; the blocklist guarantees no
+        # historically-bad conid re-binds even if a future scoring change
+        # would let it slip through.
+        from arbiter.mapping.forecastex_discovery import (
+            is_blocklisted_forecastex_conid as _is_blk,
+        )
+        if _is_blk(child_conid) or _is_blk(parent_conid):
+            return await self._mark_unavailable(
+                canonical_id, parent_conid,
+                reason=(
+                    f"blocklisted conid (parent={parent_conid}, "
+                    f"child={child_conid}) — known wrong-domain bind"
+                ),
+            )
+
         if self._dry_run:
             return ResolveAttempt(
                 canonical_id=canonical_id, parent_conid=parent_conid,

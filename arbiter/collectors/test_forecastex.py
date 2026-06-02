@@ -1452,3 +1452,39 @@ async def test_refresh_drops_inactive_for_conids_no_longer_referenced(
     tracked = collector._conid_map.get("EXAMPLE_2026_OUTCOME")
     assert tracked is not None and tracked[0] == "child-222"
     await client.close()
+
+
+# ── 2026-06-02 env-tunable circuit breaker ─────────────────────────────────
+
+
+def test_circuit_breaker_uses_env_threshold(monkeypatch):
+    """FORECASTEX_CB_FAILURE_THRESHOLD env overrides the default 10."""
+    monkeypatch.setenv("FORECASTEX_CB_FAILURE_THRESHOLD", "25")
+    monkeypatch.setenv("FORECASTEX_CB_RECOVERY_TIMEOUT_S", "180")
+    c = ForecastExClient(
+        gateway_url=GATEWAY, account_id=ACCOUNT, verify_ssl=False, paper_trading=True,
+    )
+    assert c.circuit.failure_threshold == 25
+    assert c.circuit.recovery_timeout == 180
+
+
+def test_circuit_breaker_defaults_when_env_unset(monkeypatch):
+    """Defaults are 10/120 (looser than the historic 5/30 which flapped)."""
+    monkeypatch.delenv("FORECASTEX_CB_FAILURE_THRESHOLD", raising=False)
+    monkeypatch.delenv("FORECASTEX_CB_RECOVERY_TIMEOUT_S", raising=False)
+    c = ForecastExClient(
+        gateway_url=GATEWAY, account_id=ACCOUNT, verify_ssl=False, paper_trading=True,
+    )
+    assert c.circuit.failure_threshold == 10
+    assert c.circuit.recovery_timeout == 120
+
+
+def test_circuit_breaker_invalid_env_falls_back_to_min_one(monkeypatch):
+    """Negative / zero env values clamp to 1 to keep the breaker functional."""
+    monkeypatch.setenv("FORECASTEX_CB_FAILURE_THRESHOLD", "-3")
+    monkeypatch.setenv("FORECASTEX_CB_RECOVERY_TIMEOUT_S", "0")
+    c = ForecastExClient(
+        gateway_url=GATEWAY, account_id=ACCOUNT, verify_ssl=False, paper_trading=True,
+    )
+    assert c.circuit.failure_threshold >= 1
+    assert c.circuit.recovery_timeout >= 1

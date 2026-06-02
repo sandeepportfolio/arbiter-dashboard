@@ -293,12 +293,28 @@ DEFAULT_MIN_SCORE = 0.30
 # carries any of these and the FORECASTX event title does not, we refuse to
 # match — geographic overlap alone ("New York Yankees" vs "New York Governor")
 # is a false-positive trap.
+#
+# 2026-06-02 expansion: Kalshi-channel canonical_ids ("CHAMP_KXNCAAF_27_OKLA",
+# "GAME_MLB_20260516_TEX_..." etc.) tokenize to fragments that did not match
+# the original set, so 22 sports mappings got wrong-domain conids bound.
+# Adding the prefix tokens and Kalshi-channel slugs catches them.
 _SPORTS_HINT_TOKENS: frozenset[str] = frozenset({
     "mlb", "nfl", "nba", "nhl", "mls", "epl", "uefa", "fifa", "wnba",
     "game", "vs", "yankees", "mets", "dodgers", "celtics", "lakers",
     "sox", "cubs", "padres", "rangers", "phillies", "athletic",
     "fc", "soccer", "football", "basketball", "baseball", "hockey",
     "tournament", "playoff", "championship", "match", "tie",
+    # Kalshi-channel slugs (CHAMP_/GAME_ canonical_id family)
+    "champ", "afcchamp", "nfcchamp", "kxncaaf", "kxnfl", "kxnflafcchamp",
+    "kxnflnfcchamp", "kxmlb", "kxnba", "kxnhl", "kxmls", "kxepl", "kxwc",
+    "kxnflweek", "kxnflsb", "afc", "nfc", "ncaaf", "ncaab", "fbs", "fcs",
+    "ncaa", "draft", "super", "bowl", "series", "finals", "trophy",
+    # Team mascots + locations frequent in canonical_ids
+    "okla", "osu", "lsu", "fla", "mich", "ind", "ore", "uga", "usc",
+    "bal", "buf", "cin", "cle", "den", "hou", "jac", "kc", "lac", "lv",
+    "mia", "ne", "nyj", "nyg", "pit", "ten", "ari", "atl", "car", "chi",
+    "dal", "det", "gb", "lar", "min", "no", "phi", "sea", "sf", "tb",
+    "was", "wsh", "tex", "phl", "col",
 })
 
 # Tokens that mark a mapping (or event) as political.
@@ -342,6 +358,37 @@ _WEATHER_HINT_TOKENS: frozenset[str] = frozenset({
 
 # Marker IBKR uses in companyHeader to identify ForecastEx event listings.
 FORECASTX_MARKER = "FORECASTX"
+
+
+# Conid-level blocklist — these IBKR conids were observed live (2026-06-02)
+# being attached to multiple unrelated sports mappings (sign of a parent
+# event that fuzzy-matches sports geography). They are permanently barred
+# from auto-binding regardless of what discovery scores them against.
+# Operators can clear the blocklist manually if a conid is later confirmed
+# to be a legitimate match.
+_BLOCKLISTED_FORECASTEX_CONIDS: frozenset[str] = frozenset({
+    # 2026-06-02 sports-mis-bind cleanup: each conid below was attached to
+    # ≥2 sports mappings (NFL/NCAAF/MLB) at the same time, which is a
+    # structural impossibility for a binary FORECASTX contract.
+    "860934996",   # bound to KXNCAAF_27_OKLA + KXNFLAFCCHAMP_27_KC + MLB games
+    "882351367",   # bound to NYJ + NO + NYG simultaneously
+    "831072023",   # bound to OSU
+    "831072372",   # bound to 5 different MLB TEX/HOU games
+    "831077453",   # bound to ATL
+    "831078727",   # bound to NE
+    "841511353",   # bound to WAS
+    "853400777",   # bound to MLB PHI
+    "853400816",   # bound to MLB SF
+    "866500896",   # bound to MLB MIA
+    "881980037",   # bound to MLB MIA late
+    "881980047",   # bound to MLB KC late
+    "882350597",   # bound to CHI
+})
+
+
+def is_blocklisted_forecastex_conid(conid: str) -> bool:
+    """Return True if the conid is on the permanent wrong-domain blocklist."""
+    return str(conid or "").strip() in _BLOCKLISTED_FORECASTEX_CONIDS
 
 
 def _strip_marker(title: str) -> str:
@@ -521,8 +568,9 @@ async def discover(
     logger.info(
         "forecastex_discovery: enumerated %d unique FORECASTX events", len(events),
     )
-    if not events:
-        return 0
+    # Even when events is empty we still want to run the NO-conid backfill
+    # pass below — gateway flakes shouldn't block backfilling a mapping
+    # whose YES was attached on a healthy cycle.
 
     # Gather confirmed mappings that haven't been bound to a ForecastEx
     # contract yet. iter_confirmed is an async generator returning
@@ -531,10 +579,21 @@ async def discover(
     # pass and confirmed to have no FORECASTX equivalent, so re-querying
     # IBKR every cycle is wasted rate budget on the long tail of
     # localised sports/cultural markets.
+    #
+    # Also collect a separate `no_backfill_targets` list: mappings that
+    # already have YES bound but are missing NO. Without this pass, the
+    # NO conid never gets attached (the resolver and discovery loops both
+    # skipped any mapping with YES already set, leaving 0/N populated NO
+    # conids live 2026-06-02).
     targets: list[MarketMapping] = []
+    no_backfill_targets: list[MarketMapping] = []
     skipped_negative_cache = 0
     async for _canonical_id, mapping in mapping_store.iter_confirmed():
-        if (mapping.forecastex_contract_id or "").strip():
+        has_yes = bool((mapping.forecastex_contract_id or "").strip())
+        has_no = bool((getattr(mapping, "forecastex_no_contract_id", "") or "").strip())
+        if has_yes:
+            if not has_no:
+                no_backfill_targets.append(mapping)
             continue
         if getattr(mapping, "forecastex_not_available", False):
             skipped_negative_cache += 1
@@ -543,48 +602,59 @@ async def discover(
 
     logger.info(
         "forecastex_discovery: %d confirmed mapping(s) missing forecastex_contract_id "
-        "(skipped %d previously-negative-cached)",
+        "(skipped %d previously-negative-cached), %d need NO-backfill",
         len(targets),
         skipped_negative_cache,
+        len(no_backfill_targets),
     )
-    if not targets:
-        return 0
 
     matched = 0
     unavailable_marked = 0
-    for mapping in targets:
-        best_score = 0.0
-        best_token_count = 10**9  # tiebreaker: prefer fewer tokens = more specific
-        best_event: Optional[dict[str, Any]] = None
+    # Skip the main matching loop when no events came back — but DO still
+    # run the NO-backfill pass for mappings already bound to YES.
+    targets_to_iterate = targets if events else []
+    for mapping in targets_to_iterate:
+        # Build a SORTED list of all candidates above zero so blocklist
+        # rejection can fall back to the next-best instead of skipping
+        # the mapping entirely. The previous one-shot selection allowed a
+        # blocklisted top-scorer to bury a legitimate runner-up.
+        scored: list[tuple[float, int, dict[str, Any]]] = []
         any_event_scored = False
         for event in events:
             score = _score_event_against_mapping(event["title"], mapping)
             if score <= 0:
                 continue
             any_event_scored = True
-            # Tiebreaker — when two FORECASTX events score the same against a
-            # mapping (both share only "house" with "US House Midterm Winner",
-            # say), prefer the event with fewer tokens overall. The shorter
-            # title is almost always the umbrella event ("US House Control")
-            # rather than a specific sub-race ("Kentucky 4th District...").
             event_token_count = len(_tokenize(event["title"]))
-            if (
-                score > best_score
-                or (score == best_score and event_token_count < best_token_count)
-            ):
-                best_score = score
-                best_token_count = event_token_count
-                best_event = event
+            scored.append((score, event_token_count, event))
+        # Sort by score desc, then by token_count asc (tiebreaker — shorter
+        # titles are typically the umbrella event).
+        scored.sort(key=lambda t: (-t[0], t[1]))
+        best_event: Optional[dict[str, Any]] = None
+        best_score = 0.0
+        # Walk candidates in rank order; first non-blocklisted wins.
+        for score, _tok, event in scored:
+            if is_blocklisted_forecastex_conid(event["conid"]):
+                logger.debug(
+                    "forecastex_discovery: skip blocklisted candidate "
+                    "%s (conid=%s) for %s; trying next-best",
+                    event["title"], event["conid"], mapping.canonical_id,
+                )
+                continue
+            best_event = event
+            best_score = score
+            break
 
         if best_event is None:
-            # No FORECASTX event scored above zero against this mapping
-            # (typically: localised MLS/NCAA games whose city names share
-            # tokens with no political event in the FORECASTX inventory).
-            # Negative-cache so we don't keep scanning every 5 min — the
-            # FORECASTX inventory is small and turns over slowly, so a
-            # missed match here is acceptable; the operator can re-trigger
-            # discovery if FORECASTX expands its catalog.
-            if not dry_run and not any_event_scored:
+            # Two cases:
+            #   (a) no event scored above zero (any_event_scored=False) —
+            #       the genuine negative-cache case for sports/cultural
+            #       mappings with no FORECASTX equivalent.
+            #   (b) all positive-scoring candidates were blocklisted
+            #       (any_event_scored=True) — we should still mark
+            #       unavailable so discovery doesn't burn rate budget on
+            #       this mapping every cycle.
+            if not dry_run:
                 try:
                     await mapping_store.mark_forecastex_unavailable(
                         mapping.canonical_id
@@ -632,6 +702,23 @@ async def discover(
                 children[0],
             )
             resolved_conid = yes_child["conid"]
+            # Blocklist check on the resolved YES child conid too, in case
+            # the parent passed but the actual child option is flagged.
+            if is_blocklisted_forecastex_conid(resolved_conid):
+                logger.warning(
+                    "forecastex_discovery: REFUSE blocklisted YES child %s "
+                    "for %s (parent=%s)",
+                    resolved_conid, mapping.canonical_id, best_event["conid"],
+                )
+                if not dry_run:
+                    try:
+                        await mapping_store.mark_forecastex_unavailable(
+                            mapping.canonical_id
+                        )
+                        unavailable_marked += 1
+                    except Exception:
+                        pass
+                continue
             # Also pick the NO sibling at the same strike (right=P/N/0/NO).
             # ForecastEx binary contracts have SEPARATE IBKR conids for YES
             # (Call) and NO (Put) under the same parent event; storing only
@@ -696,6 +783,91 @@ async def discover(
         "(negative-cached %d with no FORECASTX overlap)",
         matched, len(targets), unavailable_marked,
     )
+
+    # ── NO-conid backfill ─────────────────────────────────────────────
+    # Mappings already bound to a YES conid but missing the NO conid get
+    # processed here. The previous code path bailed out before this loop
+    # because both `discover()` and the resolver candidate filter required
+    # YES to be missing — leaving NO conids permanently unpopulated. The
+    # phantom-trade postmortem (ARB-000695/699, commit d157cb6) made NO
+    # conids a hard requirement for FX-on-the-NO-side execution; without
+    # them, FX never trades on the NO leg.
+    backfilled = 0
+    for mapping in no_backfill_targets:
+        yes_conid = (mapping.forecastex_contract_id or "").strip()
+        if not yes_conid:
+            continue
+        if is_blocklisted_forecastex_conid(yes_conid):
+            # Don't try to resolve a NO sibling under a blocklisted YES.
+            continue
+        # Try resolving siblings under the YES child conid itself (if YES
+        # was already a child OPT). When YES is the parent EC, the
+        # collector layer has the parent_id; we can't rebuild that here
+        # so we just probe YES — if it returns no siblings the resolver
+        # background loop will eventually handle it.
+        try:
+            siblings = await forecastex_client.resolve_event_children(yes_conid)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "forecastex_discovery: NO-backfill resolve_event_children(%s) "
+                "failed for %s: %s",
+                yes_conid, mapping.canonical_id, exc,
+            )
+            continue
+        if not siblings:
+            continue
+        # Find the YES child in siblings to read its strike, then pick the
+        # matching Put sibling at the same strike.
+        yes_strike_f = None
+        for s in siblings:
+            if not isinstance(s, dict):
+                continue
+            if str(s.get("conid") or "").strip() == yes_conid:
+                try:
+                    yes_strike_f = float(s.get("strike") or 0.0)
+                except (TypeError, ValueError):
+                    yes_strike_f = None
+                break
+        no_candidate = ""
+        for s in siblings:
+            if not isinstance(s, dict):
+                continue
+            if str(s.get("right", "")).upper() not in ("P", "N", "0", "NO", "PUT"):
+                continue
+            if yes_strike_f is not None:
+                try:
+                    cs = float(s.get("strike") or 0.0)
+                except (TypeError, ValueError):
+                    continue
+                if abs(cs - yes_strike_f) > 1e-6:
+                    continue
+            cand = str(s.get("conid") or "").strip()
+            if cand and cand != yes_conid and not is_blocklisted_forecastex_conid(cand):
+                no_candidate = cand
+                break
+        if not no_candidate:
+            continue
+        if dry_run:
+            backfilled += 1
+            continue
+        mapping.forecastex_no_contract_id = no_candidate
+        try:
+            await mapping_store.upsert(mapping)
+            backfilled += 1
+            logger.info(
+                "forecastex_discovery: NO-backfilled %s YES=%s NO=%s",
+                mapping.canonical_id, yes_conid, no_candidate,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "forecastex_discovery: NO-backfill upsert failed for %s: %s",
+                mapping.canonical_id, exc,
+            )
+    if no_backfill_targets:
+        logger.info(
+            "forecastex_discovery: NO-backfilled %d/%d mappings with YES-only conid",
+            backfilled, len(no_backfill_targets),
+        )
     return matched
 
 
