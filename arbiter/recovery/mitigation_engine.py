@@ -349,6 +349,20 @@ class MitigationConfig:
     # Paying spread to exit a position that will resolve in hours is
     # never worth it — settlement itself zeroes or settles the lot.
     settlement_proximity_hold_seconds: float = 24 * 3600.0
+    # Max age (seconds) for a PriceStore quote to be considered "live"
+    # for a COMPLETE_ARB / CLOSE_NOW decision. Older than this and the
+    # engine refuses to act — the GOP_SENATE_2026 incident kept
+    # submitting $0.48 against a $0.55 live book because the stored
+    # quote was minutes stale. 60s lines up with the scanner cadence,
+    # so any healthy collector keeps the gate open.
+    max_quote_age_seconds: float = 60.0
+    # Cross-leg cost gap (fraction of $1 settlement) above which we
+    # mark the position HOLD_TO_SETTLE permanently — even if a future
+    # quote dips below the math threshold, repeated FOK rejects at a
+    # gap this large mean the venue book never agrees on a clearing
+    # price. 0.15 = combined cost (paid + ask) ≥ $1.15, which means
+    # there's no entry price that turns a profit even before fees.
+    hopeless_cost_gap: float = 0.15
 
 
 class MitigationEngine:
@@ -666,6 +680,22 @@ class MitigationEngine:
             adapter = self._adapters.get(venue)
             if adapter is None or not hasattr(adapter, "place_fok"):
                 continue
+            # Staleness gate: refuse to act on a stale quote. The
+            # GOP_SENATE_2026 loop was driven by a $0.48 cached quote
+            # against a live $0.55 book — every FOK rejected because
+            # the book had moved while the price_store hadn't caught
+            # up. ``age_seconds`` is computed against time.time() so
+            # this is a hard wall-clock check, not a TTL.
+            quote_age = float(getattr(pp, "age_seconds", 0.0) or 0.0)
+            if quote_age > self._config.max_quote_age_seconds:
+                logger.info(
+                    "mitigation_engine.stale_quote_skip",
+                    canonical_id=canonical_id, venue=venue,
+                    quote_age_s=round(quote_age, 1),
+                    max_age_s=self._config.max_quote_age_seconds,
+                    pos_platform=pos.platform, pos_market_id=pos.market_id,
+                )
+                continue
             # The price we'd PAY to enter the missing side.
             if need_side == "NO":
                 buy_price = float(pp.no_ask or pp.no_price or 0.0)
@@ -683,7 +713,36 @@ class MitigationEngine:
             # $1 is the settled payout because exactly one side wins).
             net_edge = 1.0 - cps - buy_price - entry_fees_per_share
             net_edge_cents = net_edge * 100.0
+            # Permanently-unprofitable gate. When combined cost (paid
+            # for the stranded leg + ask for the missing leg) exceeds
+            # $1 by more than ``hopeless_cost_gap``, even a future
+            # quote at the bid won't clear — the venue books simply
+            # don't agree on a profitable pairing. Log loud so the
+            # operator sees the explicit max-affordable.
+            max_affordable = 1.0 - cps - entry_fees_per_share
+            combined_cost = cps + buy_price
+            if combined_cost - 1.0 >= self._config.hopeless_cost_gap:
+                logger.info(
+                    "mitigation_engine.hopeless_skip",
+                    canonical_id=canonical_id, venue=venue,
+                    current_ask=round(buy_price, 4),
+                    max_affordable=round(max_affordable, 4),
+                    cost_per_share=round(cps, 4),
+                    combined_cost=round(combined_cost, 4),
+                    hopeless_threshold=self._config.hopeless_cost_gap,
+                    pos_platform=pos.platform, pos_market_id=pos.market_id,
+                )
+                continue
             if net_edge_cents < self._config.complete_arb_min_edge_cents:
+                logger.info(
+                    "mitigation_engine.unprofitable_skip",
+                    canonical_id=canonical_id, venue=venue,
+                    current_ask=round(buy_price, 4),
+                    max_affordable=round(max_affordable, 4),
+                    net_edge_cents=round(net_edge_cents, 2),
+                    min_edge_cents=self._config.complete_arb_min_edge_cents,
+                    pos_platform=pos.platform, pos_market_id=pos.market_id,
+                )
                 continue
             cand = MitigationDecision(
                 action=COMPLETE_ARB,

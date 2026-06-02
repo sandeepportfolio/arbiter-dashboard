@@ -1031,6 +1031,124 @@ class StrandedPositionReconciler:
         pos.auto_close_attempted = True
         pos.auto_close_result = f"unknown action {action!r}"
 
+    async def _missing_leg_price_still_valid(
+        self,
+        canonical_id: str,
+        venue: str,
+        side: str,
+        decision_price: float,
+        pos: StrandedPosition,
+        key: tuple,
+        *,
+        tolerance: float = 0.02,
+        max_age_s: float = 60.0,
+    ) -> bool:
+        """Reprice the missing-leg ask from the current PriceStore quote.
+
+        Returns True when:
+          - we can fetch a quote no older than ``max_age_s``, AND
+          - the live ask is within ``tolerance`` of ``decision_price``.
+
+        Returns False when the quote is missing/stale or the live ask has
+        moved beyond tolerance — in both cases the close attempt is
+        suppressed (no FOK is submitted) and the result/log line carries
+        the actionable detail. When the gap exceeds the hopeless
+        threshold we also flip the position to HOLD_TO_SETTLE so future
+        cycles don't reattempt until the operator intervenes.
+        """
+        store = self._price_store
+        if store is None:
+            # Nothing to reprice against; keep legacy behavior so the
+            # close attempt can still proceed (unit tests / dev paths).
+            return True
+        try:
+            quotes = await store.get_all_for_market(canonical_id)
+        except Exception as exc:
+            logger.warning(
+                "stranded_reconciler.reprice_fetch_failed",
+                canonical_id=canonical_id, venue=venue, err=str(exc),
+            )
+            pos.auto_close_result = f"reprice fetch failed: {exc}"
+            self._mark_close_attempt(key)
+            return False
+        pp = (quotes or {}).get(venue)
+        if pp is None:
+            logger.info(
+                "stranded_reconciler.reprice_no_quote",
+                canonical_id=canonical_id, venue=venue,
+                pos_platform=pos.platform, pos_market_id=pos.market_id,
+            )
+            pos.auto_close_result = (
+                f"reprice: no live quote for {venue} on {canonical_id}, skipping"
+            )
+            self._mark_close_attempt(key)
+            return False
+        quote_age = float(getattr(pp, "age_seconds", 0.0) or 0.0)
+        if quote_age > max_age_s:
+            logger.info(
+                "stranded_reconciler.reprice_stale",
+                canonical_id=canonical_id, venue=venue,
+                quote_age_s=round(quote_age, 1), max_age_s=max_age_s,
+                pos_platform=pos.platform, pos_market_id=pos.market_id,
+            )
+            pos.auto_close_result = (
+                f"stale price data ({quote_age:.0f}s > {max_age_s:.0f}s), "
+                f"skipping close attempt"
+            )
+            self._mark_close_attempt(key)
+            return False
+        if str(side).lower() == "no":
+            live_ask = float(getattr(pp, "no_ask", 0.0) or pp.no_price or 0.0)
+        else:
+            live_ask = float(getattr(pp, "yes_ask", 0.0) or pp.yes_price or 0.0)
+        if live_ask <= 0:
+            logger.info(
+                "stranded_reconciler.reprice_no_ask",
+                canonical_id=canonical_id, venue=venue, side=side,
+                pos_platform=pos.platform, pos_market_id=pos.market_id,
+            )
+            pos.auto_close_result = (
+                f"reprice: live ask=0 on {venue} {side.upper()}, skipping"
+            )
+            self._mark_close_attempt(key)
+            return False
+        gap = abs(live_ask - decision_price)
+        if gap > tolerance:
+            # Compute what we could afford to pay: $1 settle - cost we
+            # already sunk - tolerable fee. Display so the operator can
+            # see *why* the close cannot work at the current ask.
+            cps = (abs(float(pos.cost_basis_usd or 0.0))
+                   / max(abs(float(pos.qty or 0.0)), 1e-9))
+            max_affordable = max(0.0, 1.0 - cps - 0.02)  # 2¢ fee assumption
+            logger.info(
+                "stranded_reconciler.reprice_moved",
+                canonical_id=canonical_id, venue=venue, side=side,
+                decision_price=round(decision_price, 4),
+                current_ask=round(live_ask, 4),
+                max_affordable=round(max_affordable, 4),
+                gap=round(gap, 4), tolerance=tolerance,
+                pos_platform=pos.platform, pos_market_id=pos.market_id,
+            )
+            pos.auto_close_result = (
+                f"close unprofitable: current_ask=${live_ask:.4f} "
+                f"> max_affordable=${max_affordable:.4f} "
+                f"(decision was ${decision_price:.4f}, gap={gap*100:.1f}¢), skipping"
+            )
+            self._mark_close_attempt(key)
+            # Permanently unprofitable → flip to HOLD_TO_SETTLE so we
+            # stop reattempting. 15% gap of the $1 settlement value.
+            if (cps + live_ask) - 1.0 >= 0.15:
+                pos.mitigation_action = "hold_to_settle"
+                pos.auto_close_attempted = True
+                logger.info(
+                    "stranded_reconciler.flipped_to_hold",
+                    canonical_id=canonical_id, venue=venue,
+                    combined_cost=round(cps + live_ask, 4),
+                    pos_platform=pos.platform, pos_market_id=pos.market_id,
+                )
+            return False
+        return True
+
     async def _execute_complete_arb(
         self, pos: StrandedPosition, decision: Dict[str, Any],
     ) -> None:
@@ -1055,6 +1173,17 @@ class StrandedPositionReconciler:
             pos.auto_close_result = (
                 f"COMPLETE_ARB blocked: venue={venue!r} has no place_fok"
             )
+            return
+        # BUG #2 follow-up: re-validate the missing-leg price against the
+        # CURRENT price_store at the moment we're about to send the order
+        # — the decision was computed earlier in the cycle and the book
+        # may have already moved. If the live ask doesn't match what the
+        # decision promised within a small tolerance, skip the attempt
+        # and log why. Prevents the GOP_SENATE_2026 loop where a
+        # decision-time $0.48 was submitted against a $0.55 live book.
+        if not await self._missing_leg_price_still_valid(
+            canonical_id, venue, side, price, pos, key,
+        ):
             return
         try:
             arb_id = self._strand_arb_id(pos.platform, pos.market_id)

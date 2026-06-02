@@ -871,3 +871,158 @@ def test_reconciler_from_env_reads_close_retry_window(monkeypatch):
     monkeypatch.setenv("STRANDED_CLOSE_RETRY_WINDOW_S", "120")
     rec = reconciler_from_env(config=SimpleNamespace(), adapters={}, engine=None)
     assert rec._close_retry_window_s == 120.0
+
+
+# ─── BUG #2 follow-up: order-time reprice gate ─────────────────────────
+
+
+class _FakePriceStore:
+    def __init__(self, quotes_by_canonical):
+        self._quotes = quotes_by_canonical
+
+    async def get_all_for_market(self, canonical_id):
+        return self._quotes.get(canonical_id, {})
+
+
+def _pp_ns(*, yes_ask=0.0, no_ask=0.0, yes_price=0.0, no_price=0.0,
+           age_seconds=2.0):
+    return SimpleNamespace(
+        yes_ask=yes_ask, no_ask=no_ask,
+        yes_price=yes_price, no_price=no_price,
+        age_seconds=age_seconds,
+    )
+
+
+async def test_execute_complete_arb_skips_when_price_moved_beyond_tolerance():
+    """The decision said BUY NO @ $0.48 but the live book now shows
+    $0.55 ask. The reconciler MUST NOT submit the FOK — the GOP_SENATE
+    loop is exactly this case."""
+    from arbiter.execution.engine import Order, OrderStatus
+    pos = _stub_pos(
+        platform="polymarket", market_id="POLY-GOP-Y",
+        qty=10, cost_basis_usd=4.8,   # 0.48/sh
+        best_bid=0.47, best_ask=0.49,
+    )
+    adapter = MagicMock()
+    adapter.place_fok = AsyncMock(return_value=Order(
+        order_id="X", platform="kalshi", market_id="KX-GOP-N",
+        canonical_id="GOP", side="no", price=0.48, quantity=10,
+        status=OrderStatus.CANCELLED, timestamp=time.time(),
+    ))
+    quotes = {
+        "GOP": {
+            "kalshi": _pp_ns(no_ask=0.55, age_seconds=2.0),
+        },
+    }
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), engine=None,
+        adapters={"kalshi": adapter, "polymarket": MagicMock()},
+        price_store=_FakePriceStore(quotes),
+        auto_close=True,
+    )
+    decision = {
+        "complete_arb": {
+            "venue": "kalshi", "market_id": "KX-GOP-N",
+            "side": "no", "price": 0.48, "qty": 10,
+            "canonical_id": "GOP",
+        },
+    }
+    await rec._execute_complete_arb(pos, decision)
+    assert adapter.place_fok.await_count == 0, (
+        "FOK must not be submitted when live ask has moved past tolerance"
+    )
+    assert pos.auto_close_result and "close unprofitable" in pos.auto_close_result
+
+
+async def test_execute_complete_arb_skips_when_price_data_is_stale():
+    """No price update in >60s → skip entirely with a stale-data log line."""
+    from arbiter.execution.engine import Order, OrderStatus
+    pos = _stub_pos(
+        platform="polymarket", market_id="POLY-S-Y",
+        qty=10, cost_basis_usd=4.8,
+        best_bid=0.47, best_ask=0.49,
+    )
+    adapter = MagicMock()
+    adapter.place_fok = AsyncMock()
+    quotes = {
+        "S": {
+            "kalshi": _pp_ns(no_ask=0.48, age_seconds=180.0),
+        },
+    }
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), engine=None,
+        adapters={"kalshi": adapter, "polymarket": MagicMock()},
+        price_store=_FakePriceStore(quotes), auto_close=True,
+    )
+    decision = {
+        "complete_arb": {
+            "venue": "kalshi", "market_id": "KX-S-N",
+            "side": "no", "price": 0.48, "qty": 10, "canonical_id": "S",
+        },
+    }
+    await rec._execute_complete_arb(pos, decision)
+    assert adapter.place_fok.await_count == 0
+    assert "stale price data" in (pos.auto_close_result or "")
+
+
+async def test_execute_complete_arb_proceeds_when_price_still_valid():
+    """Live ask within tolerance of the decision price — FOK is submitted."""
+    from arbiter.execution.engine import Order, OrderStatus
+    pos = _stub_pos(
+        platform="polymarket", market_id="POLY-OK-Y",
+        qty=10, cost_basis_usd=4.0,
+        best_bid=0.39, best_ask=0.41,
+    )
+    adapter = MagicMock()
+    adapter.place_fok = AsyncMock(return_value=Order(
+        order_id="X", platform="kalshi", market_id="KX-OK-N",
+        canonical_id="OK", side="no", price=0.49, quantity=10,
+        status=OrderStatus.FILLED, fill_qty=10, fill_price=0.49,
+        timestamp=time.time(),
+    ))
+    quotes = {
+        "OK": {
+            "kalshi": _pp_ns(no_ask=0.495, age_seconds=2.0),
+        },
+    }
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), engine=None,
+        adapters={"kalshi": adapter, "polymarket": MagicMock()},
+        price_store=_FakePriceStore(quotes), auto_close=True,
+    )
+    decision = {
+        "complete_arb": {
+            "venue": "kalshi", "market_id": "KX-OK-N",
+            "side": "no", "price": 0.49, "qty": 10, "canonical_id": "OK",
+        },
+    }
+    await rec._execute_complete_arb(pos, decision)
+    assert adapter.place_fok.await_count == 1
+
+
+async def test_execute_complete_arb_flips_to_hold_when_gap_is_hopeless():
+    """When combined cost (paid + live ask) exceeds $1 by >=15%, mark the
+    position HOLD_TO_SETTLE so we stop reattempting."""
+    pos = _stub_pos(
+        platform="polymarket", market_id="POLY-HOP-Y",
+        qty=10, cost_basis_usd=5.0,   # 0.50/sh
+        best_bid=0.49, best_ask=0.51,
+    )
+    adapter = MagicMock()
+    adapter.place_fok = AsyncMock()
+    # 0.50 cost + 0.70 ask = 1.20 → 20¢ over $1 → hopeless
+    quotes = {"H": {"kalshi": _pp_ns(no_ask=0.70, age_seconds=2.0)}}
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), engine=None,
+        adapters={"kalshi": adapter, "polymarket": MagicMock()},
+        price_store=_FakePriceStore(quotes), auto_close=True,
+    )
+    decision = {
+        "complete_arb": {
+            "venue": "kalshi", "market_id": "KX-HOP-N",
+            "side": "no", "price": 0.48, "qty": 10, "canonical_id": "H",
+        },
+    }
+    await rec._execute_complete_arb(pos, decision)
+    assert adapter.place_fok.await_count == 0
+    assert pos.mitigation_action == "hold_to_settle"

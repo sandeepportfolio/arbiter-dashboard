@@ -467,3 +467,125 @@ async def test_decide_far_from_settlement_does_not_trigger_proximity_hold():
     d = await eng.decide(pos)
     # 40% loss within 50% bracket → CLOSE_NOW fires.
     assert d.action == CLOSE_NOW
+
+
+# ─── BUG #2 follow-up: staleness + hopeless-cost gates ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_complete_arb_skips_when_quote_is_stale():
+    """Decision-grade quote older than max_quote_age_seconds must be
+    refused, even if its price would otherwise clear the edge floor.
+    The GOP_SENATE_2026 loop was driven by exactly this — a cached
+    $0.48 quote against a live $0.55 book."""
+    market_map = {
+        "STALE_QUOTE": {
+            "status": "confirmed",
+            "polymarket": "POLY-STALE-Y", "kalshi": "KX-STALE-Y",
+        },
+    }
+    quotes = {
+        "STALE_QUOTE": {
+            "kalshi": _pp(
+                "kalshi", yes_price=0.40, no_price=0.50,
+                yes_ask=0.40, no_ask=0.50,
+                yes_market_id="KX-STALE-Y", no_market_id="KX-STALE-N",
+                age_seconds=180.0,  # 3 min stale
+            ),
+        },
+    }
+    eng = MitigationEngine(
+        price_store=_FakePriceStore(quotes),
+        market_map_provider=lambda: market_map,
+        adapters={"polymarket": _adapter(), "kalshi": _adapter()},
+        config=MitigationConfig(
+            complete_arb_min_edge_cents=3.0, max_quote_age_seconds=60.0,
+        ),
+    )
+    pos = _pos(
+        platform="polymarket", market_id="POLY-STALE-Y", side="YES",
+        qty=20, cost_basis_usd=8.0, best_bid=0.39, best_ask=0.41,
+    )
+    d = await eng.decide(pos)
+    assert d.action != COMPLETE_ARB, (
+        f"stale quote should not produce COMPLETE_ARB; got {d.action}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_complete_arb_skips_when_combined_cost_exceeds_hopeless_gap():
+    """When cost_per_share + missing-leg ask exceeds $1 by more than the
+    hopeless threshold, we cannot profit even after fee changes — the
+    engine must NOT recommend COMPLETE_ARB so the reconciler does not
+    submit a guaranteed-reject FOK over and over."""
+    market_map = {
+        "HOPELESS": {
+            "status": "confirmed",
+            "polymarket": "POLY-HOP-Y", "kalshi": "KX-HOP-Y",
+        },
+    }
+    # cps = 0.50; kalshi NO ask = 0.70 → combined 1.20 → gap 0.20 > 0.15
+    quotes = {
+        "HOPELESS": {
+            "kalshi": _pp(
+                "kalshi", yes_price=0.30, no_price=0.70,
+                yes_ask=0.30, no_ask=0.70,
+                yes_market_id="KX-HOP-Y", no_market_id="KX-HOP-N",
+                age_seconds=2.0,
+            ),
+        },
+    }
+    eng = MitigationEngine(
+        price_store=_FakePriceStore(quotes),
+        market_map_provider=lambda: market_map,
+        adapters={"polymarket": _adapter(), "kalshi": _adapter()},
+        config=MitigationConfig(
+            complete_arb_min_edge_cents=3.0, hopeless_cost_gap=0.15,
+        ),
+    )
+    pos = _pos(
+        platform="polymarket", market_id="POLY-HOP-Y", side="YES",
+        qty=10, cost_basis_usd=5.0,   # 0.50/sh
+        best_bid=0.48, best_ask=0.50,
+    )
+    d = await eng.decide(pos)
+    assert d.action != COMPLETE_ARB
+
+
+@pytest.mark.asyncio
+async def test_complete_arb_still_fires_with_fresh_quote_and_normal_gap():
+    """Sanity-check: the original happy path still passes after the
+    staleness + hopeless gates land — fresh quote with combined cost
+    well under $1 still produces COMPLETE_ARB."""
+    market_map = {
+        "FRESH_OK": {
+            "status": "confirmed",
+            "polymarket": "POLY-OK-Y", "kalshi": "KX-OK-Y",
+        },
+    }
+    quotes = {
+        "FRESH_OK": {
+            "kalshi": _pp(
+                "kalshi", yes_price=0.46, no_price=0.50,
+                yes_ask=0.46, no_ask=0.50,
+                yes_market_id="KX-OK-Y", no_market_id="KX-OK-N",
+                age_seconds=2.0,
+            ),
+        },
+    }
+    eng = MitigationEngine(
+        price_store=_FakePriceStore(quotes),
+        market_map_provider=lambda: market_map,
+        adapters={"polymarket": _adapter(), "kalshi": _adapter()},
+        config=MitigationConfig(
+            complete_arb_min_edge_cents=3.0, max_quote_age_seconds=60.0,
+            hopeless_cost_gap=0.15,
+        ),
+    )
+    pos = _pos(
+        platform="polymarket", market_id="POLY-OK-Y", side="YES",
+        qty=20, cost_basis_usd=8.0,   # 0.40/sh; +0.50 NO ask = 0.90 combined
+        best_bid=0.39, best_ask=0.41,
+    )
+    d = await eng.decide(pos)
+    assert d.action == COMPLETE_ARB
