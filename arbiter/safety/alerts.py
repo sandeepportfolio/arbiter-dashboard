@@ -10,6 +10,8 @@ from __future__ import annotations
 import logging
 from typing import Dict
 
+from ..notifiers.fmt import DIVIDER, h, usd
+
 logger = logging.getLogger("arbiter.safety.alerts")
 
 
@@ -20,24 +22,32 @@ class SafetyAlertTemplates:
     def kill_armed(
         by: str, reason: str, cancelled_counts: Dict[str, int]
     ) -> str:
-        counts = (
-            " | ".join(f"{p}:{n}" for p, n in cancelled_counts.items())
-            or "none"
-        )
+        cancel_lines = []
+        for plat, n in (cancelled_counts or {}).items():
+            cancel_lines.append(f"  {h(plat.title())}: <code>{n}</code> orders")
+        cancel_section = "\n".join(cancel_lines) if cancel_lines else "  <i>none</i>"
+
         return (
-            "🛑 <b>KILL SWITCH ARMED</b>\n"
-            f"By: {by}\n"
-            f"Reason: {reason}\n"
-            f"Cancelled: {counts}\n"
-            "Manual reset required."
+            f"\U0001f6d1 <b>KILL SWITCH ARMED</b>\n"
+            f"{DIVIDER}\n"
+            f"\U0001f464 By: <code>{h(by)}</code>\n"
+            f"\U0001f4dd Reason: {h(reason)}\n"
+            f"\n"
+            f"\U0001f6ab <b>Cancelled Orders</b>\n"
+            f"{cancel_section}\n"
+            f"{DIVIDER}\n"
+            f"⚠️ <i>Manual reset required via dashboard.</i>"
         )
 
     @staticmethod
     def kill_reset(by: str, note: str) -> str:
         return (
-            "🟢 <b>Kill switch RESET</b>\n"
-            f"By: {by}\n"
-            f"Note: {note}"
+            f"\U0001f7e2 <b>KILL SWITCH RESET</b>\n"
+            f"{DIVIDER}\n"
+            f"\U0001f464 By: <code>{h(by)}</code>\n"
+            f"\U0001f4dd Note: {h(note or 'operator reset')}\n"
+            f"{DIVIDER}\n"
+            f"✅ <i>Execution gate re-opened. Trading may resume.</i>"
         )
 
     @staticmethod
@@ -49,10 +59,12 @@ class SafetyAlertTemplates:
         engine muted until an operator notices. See 2026-05-22 audit notes.
         """
         return (
-            "🛑 <b>KILL SWITCH RESTORED ON STARTUP</b>\n"
-            "Previous instance left the switch armed in Redis.\n"
-            f"Prior reason (best-effort): {prior_reason or 'unknown'}\n"
-            "Engine refuses trades until an operator resets via the dashboard."
+            f"\U0001f6d1 <b>KILL SWITCH RESTORED ON STARTUP</b>\n"
+            f"{DIVIDER}\n"
+            f"\U0001f504 Previous instance left the switch armed in Redis.\n"
+            f"\U0001f4cb Prior reason: <code>{h(prior_reason or 'unknown')}</code>\n"
+            f"{DIVIDER}\n"
+            f"\U0001f6ab <i>Engine refuses trades until operator resets via dashboard.</i>"
         )
 
     @staticmethod
@@ -64,11 +76,13 @@ class SafetyAlertTemplates:
         exposure_usd: float,
         unwind_instruction: str,
     ) -> str:
-        # Placeholder — plan 03-03 wires this into the incident pipeline.
         return (
-            "🚨 <b>NAKED POSITION</b>\n"
-            f"Market: {canonical_id}\n"
-            f"Filled: {fill_qty} {filled_side.upper()} on {filled_platform.upper()}\n"
-            f"Exposure: ${exposure_usd:.2f}\n"
-            f"Unwind: {unwind_instruction}"
+            f"\U0001f6a8 <b>NAKED POSITION</b>\n"
+            f"{DIVIDER}\n"
+            f"\U0001f4cd Market: <code>{h(canonical_id)}</code>\n"
+            f"⚡ Filled: <b>{fill_qty} {h(filled_side.upper())}</b> on <b>{h(filled_platform.upper())}</b>\n"
+            f"\U0001f4b8 Exposure: <code>{usd(exposure_usd)}</code>\n"
+            f"{DIVIDER}\n"
+            f"\U0001f527 <b>Unwind:</b> {h(unwind_instruction)}\n"
+            f"⚠️ <i>Check position on venue and close manually if needed.</i>"
         )

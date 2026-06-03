@@ -773,8 +773,13 @@ class ExecutionEngine:
         )
         self._manual_positions.appendleft(manual_position)
         self._manual_count += 1
+        from ..notifiers.fmt import DIVIDER as _DIV, h as _h
         await self.balance_monitor.notifier.send(
-            f"<b>ARBITER manual trade</b>\n\n{instructions}",
+            f"\U0001f4cb <b>MANUAL TRADE REQUIRED</b>\n"
+            f"{_DIV}\n"
+            f"{_h(instructions)}\n"
+            f"{_DIV}\n"
+            f"⚠️ <i>Execute both legs manually on the venues.</i>",
         )
 
         leg_yes = Order(
@@ -3287,13 +3292,29 @@ class ExecutionEngine:
         ) and event_type not in supervisor_handled
         if telegram_eligible:
             try:
-                emoji = "🛑" if severity == "critical" else "⚠️"
-                header = (
-                    "STRANDED POSITION"
-                    if event_type == "stranded_position"
-                    else f"CRITICAL INCIDENT ({severity.upper()})"
-                )
+                from ..notifiers.fmt import DIVIDER as _DIV, h as _h, usd as _usd
                 meta = incident.metadata or {}
+
+                # Choose icon + header based on event type
+                if event_type == "stranded_position":
+                    emoji = "\U0001f6a8"
+                    header = "STRANDED POSITION"
+                elif event_type == "circuit_breaker_open":
+                    emoji = "\U0001f534"
+                    header = "CIRCUIT BREAKER OPEN"
+                elif event_type == "circuit_breaker_close":
+                    emoji = "\U0001f7e2"
+                    header = "CIRCUIT BREAKER CLOSED"
+                elif event_type == "trade_gate_blocked":
+                    emoji = "\U0001f6ab"
+                    header = "TRADE GATE BLOCKED"
+                elif severity == "critical":
+                    emoji = "\U0001f6d1"
+                    header = "CRITICAL INCIDENT"
+                else:
+                    emoji = "\U0001f7e1"
+                    header = f"WARNING ({_h(event_type)})"
+
                 extra_lines: list[str] = []
                 if event_type == "stranded_position":
                     side = str(meta.get("side", "")).upper() or "?"
@@ -3304,21 +3325,28 @@ class ExecutionEngine:
                         qty_abs = 0
                     platform = str(meta.get("platform", "")).upper() or "?"
                     title = meta.get("title") or canonical_id
-                    extra_lines.append(f"Market: {title}")
+                    extra_lines.append(f"\U0001f4cd Market: <code>{_h(title)}</code>")
                     extra_lines.append(
-                        f"{qty_abs} {side} on {platform}"
+                        f"  <code>{qty_abs}</code> {side} on <b>{platform}</b>"
                     )
                     mtm = meta.get("mtm_usd")
                     unreal = meta.get("unrealized_usd")
                     if isinstance(mtm, (int, float)):
-                        extra_lines.append(f"MTM: ${float(mtm):+.2f}")
+                        extra_lines.append(f"  MTM: <code>{_usd(float(mtm), signed=True)}</code>")
                     if isinstance(unreal, (int, float)):
-                        extra_lines.append(f"Unrealized: ${float(unreal):+.2f}")
+                        extra_lines.append(f"  Unrealized: <code>{_usd(float(unreal), signed=True)}</code>")
+                elif event_type in ("circuit_breaker_open", "circuit_breaker_close"):
+                    venue = str(meta.get("venue", meta.get("platform", ""))).upper()
+                    if venue:
+                        extra_lines.append(f"\U0001f3e6 Venue: <b>{_h(venue)}</b>")
+
                 msg = (
                     f"{emoji} <b>{header}</b>\n"
-                    f"<code>{incident.incident_id}</code>\n"
+                    f"{_DIV}\n"
+                    f"<code>{_h(incident.incident_id)}</code>\n"
                     + ("\n".join(extra_lines) + "\n" if extra_lines else "")
-                    + f"{message}"
+                    + f"{_DIV}\n"
+                    + f"{_h(message)}"
                 )
                 notifier = getattr(
                     getattr(self, "balance_monitor", None), "notifier", None

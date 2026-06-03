@@ -415,12 +415,16 @@ class AutoResolver:
         if self.notifier is None:
             return
         try:
+            from ..notifiers.fmt import DIVIDER, h, usd as fmt_usd
+            pnl_val = float(result.unwind_pnl or 0.0)
+            pnl_icon = "\U0001f4c8" if pnl_val >= 0 else "\U0001f4c9"
             msg = (
-                "♻️ <b>AutoResolver: reconciled half-recorded arb</b>\n"
-                f"Arb: {result.arb_id}\n"
-                f"unwind_pnl: {result.unwind_pnl}\n"
-                "Sourced from auto_unwind incident metadata; "
-                "[naked-leg-reconciled] sentinel applied."
+                f"♻️ <b>RECONCILED ARB</b>\n"
+                f"{DIVIDER}\n"
+                f"\U0001f4cb Arb: <code>{h(result.arb_id)}</code>\n"
+                f"{pnl_icon} Unwind P&amp;L: <code>{fmt_usd(pnl_val, signed=True)}</code>\n"
+                f"{DIVIDER}\n"
+                f"<i>Half-recorded arb resolved via auto_unwind metadata.</i>"
             )
             await self.notifier.send(
                 msg, dedup_key=f"auto_resolver_reconcile:{result.arb_id}"
@@ -511,13 +515,15 @@ class AutoResolver:
         # Telegram first — best-effort; never propagate failures.
         if self.notifier is not None:
             try:
+                from ..notifiers.fmt import DIVIDER, h
                 await self.notifier.send(
-                    "🟡 <b>AutoResolver: benign kill-switch arm</b>\n"
-                    f"Armed by: {armed_by or 'unknown'}\n"
-                    f"Reason: {armed_reason or 'unknown'}\n"
-                    "Pre-checks passed. Recommend manual reset via dashboard."
-                    "\n(AutoResolver does NOT auto-disarm — operator action "
-                    "required.)",
+                    f"\U0001f7e1 <b>RECOMMEND RESET</b>\n"
+                    f"{DIVIDER}\n"
+                    f"\U0001f464 Armed by: <code>{h(armed_by or 'unknown')}</code>\n"
+                    f"\U0001f4dd Reason: {h(armed_reason or 'unknown')}\n"
+                    f"{DIVIDER}\n"
+                    f"✅ Pre-checks passed. Safe to reset.\n"
+                    f"⚠️ <i>Operator action required — AutoResolver does NOT auto-disarm.</i>",
                     dedup_key=f"auto_resolver_disarm_propose:{armed_by}",
                 )
             except Exception as exc:

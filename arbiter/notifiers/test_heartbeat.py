@@ -103,7 +103,7 @@ def test_format_message_contains_pnl_and_orders():
     msg = _format_message(status)
     assert "55.50" in msg
     assert "2" in msg
-    assert "Heartbeat" in msg
+    assert "HEARTBEAT" in msg
 
 
 def test_format_message_includes_extra_fields():
@@ -111,12 +111,25 @@ def test_format_message_includes_extra_fields():
     status = HeartbeatStatus(
         realized_pnl=0.0,
         open_order_count=0,
-        extra={"scan_count": 42, "uptime_h": 1.5},
+        extra={
+            "auto_execute": "true",
+            "scans": 42,
+            "active_opps": 3,
+            "published": 1,
+            "best_edge_c": 5.2,
+            "executed": 2,
+            "considered": 10,
+            "balances": "kalshi=$100.00, polymarket=$200.00",
+            "verdict": "profitable",
+            "naked_legs": 0,
+        },
     )
     msg = _format_message(status)
-    assert "scan_count" in msg
-    assert "42" in msg
-    assert "uptime_h" in msg
+    assert "42" in msg          # scans
+    assert "Kalshi" in msg      # balance platform
+    assert "$100.00" in msg     # balance value
+    assert "ON" in msg          # auto_execute=true
+    assert "profitable" in msg  # verdict
 
 
 def test_component_stats_accepts_property_and_method():

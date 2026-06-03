@@ -800,7 +800,7 @@ async def test_close_action_sends_telegram_alert():
     body = notifier.send.await_args.args[0]
     assert "P-TG" in body
     assert "polymarket" in body.lower()
-    assert "PnL" in body
+    assert "P&amp;L" in body or "P&L" in body
 
 
 async def test_notify_attempt_suppressed_after_repeated_zero_fill():

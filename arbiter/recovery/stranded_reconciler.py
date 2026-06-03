@@ -807,16 +807,19 @@ class StrandedPositionReconciler:
         notifier = self._notifier
         if notifier is None or not getattr(notifier, "_enabled", False):
             return
+        from ..notifiers.fmt import DIVIDER as _DIV, usd as _usd
+        icon = "\U0001f4c8" if pnl_usd >= 0 else "\U0001f4c9"
         verb = "PROFITABLE CLOSE" if pnl_usd >= 0 else "LOSS-CUT CLOSE"
-        sign = "+" if pnl_usd >= 0 else ""
         msg = (
-            f"<b>{_html(verb)}</b> ({_html(action)})\n"
-            f"venue: {_html(pos.platform)}\n"
-            f"market: {_html(pos.market_id)}\n"
-            f"side: {_html(pos.side)}  qty: {abs(int(pos.qty))}\n"
-            f"fill: {fill_qty} @ ${fill_price:.4f}  status: {_html(status)}\n"
-            f"cost basis: ${pos.cost_basis_usd:.2f}  "
-            f"PnL: {sign}${pnl_usd:.2f}"
+            f"{icon} <b>{_html(verb)}</b>\n"
+            f"{_DIV}\n"
+            f"\U0001f3e6 Venue: <b>{_html(pos.platform.upper())}</b>\n"
+            f"\U0001f4cd Market: <code>{_html(pos.market_id)}</code>\n"
+            f"  Side: <code>{_html(pos.side)}</code>  |  Qty: <code>{abs(int(pos.qty))}</code>\n"
+            f"  Fill: <code>{fill_qty}</code> @ <code>${fill_price:.2f}</code>  |  Status: <code>{_html(status)}</code>\n"
+            f"{_DIV}\n"
+            f"\U0001f4b0 Cost basis: <code>{_usd(pos.cost_basis_usd)}</code>\n"
+            f"{icon} <b>P&amp;L: <code>{_usd(pnl_usd, signed=True)}</code></b>"
         )
         try:
             await notifier.send(
@@ -909,14 +912,19 @@ class StrandedPositionReconciler:
             for k in [k for k in self._failed_attempt_count
                       if k[0] == pos.platform and k[1] == pos.market_id]:
                 self._failed_attempt_count.pop(k, None)
+        from ..notifiers.fmt import DIVIDER as _DIV
+        status_icon = "\U0001f7e2" if "fill" in status.lower() else "\U0001f7e1"
         msg = (
-            f"<b>RECONCILER ATTEMPT</b> ({_html(action)})\n"
-            f"pos: {_html(pos.platform)}:{_html(pos.market_id)} ({bucket})\n"
-            f"qty held: {abs(int(pos.qty))} side: {_html(pos.side)}\n"
-            f"action: BUY {qty} {_html(side.upper())} on {_html(venue)}\n"
-            f"  market: {_html(market_id)}\n"
-            f"  price: ${price:.4f}  status: {_html(status)}\n"
-            f"result: {_html(fill_line)}"
+            f"\U0001f504 <b>RECONCILER ATTEMPT</b>\n"
+            f"{_DIV}\n"
+            f"\U0001f4cd Position: <code>{_html(pos.platform)}:{_html(pos.market_id)}</code>\n"
+            f"  Held: <code>{abs(int(pos.qty))}</code> {_html(pos.side.upper())}  |  Bucket: <code>{_html(bucket)}</code>\n"
+            f"\n"
+            f"⚡ Action: BUY <code>{qty}</code> {_html(side.upper())} on <b>{_html(venue.upper())}</b>\n"
+            f"  Market: <code>{_html(market_id)}</code>\n"
+            f"  Price: <code>${price:.2f}</code>  |  Status: <code>{_html(status)}</code>\n"
+            f"{_DIV}\n"
+            f"{status_icon} Result: {_html(fill_line)}"
         )
         try:
             await notifier.send(

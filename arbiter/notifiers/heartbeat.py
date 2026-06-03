@@ -54,13 +54,72 @@ def _auto_execute_enabled() -> bool:
 
 def _format_message(status: HeartbeatStatus) -> str:
     """Format a Telegram HTML heartbeat message from the status snapshot."""
+    from .fmt import DIVIDER, usd, h
+
+    extra = status.extra or {}
+
+    # ── Balances section ──
+    balances_str = str(extra.get("balances", ""))
+    balance_lines = []
+    if balances_str:
+        for pair in balances_str.split(", "):
+            pair = pair.strip()
+            if "=" in pair:
+                plat, val = pair.split("=", 1)
+                balance_lines.append(f"  {h(plat.strip().title())}: <code>{h(val.strip())}</code>")
+
+    # ── Auto-exec status ──
+    auto_exec = str(extra.get("auto_execute", "false")).lower()
+    ae_icon = "\U0001f7e2" if auto_exec == "true" else "\U0001f534"  # green/red circle
+    ae_label = "ON" if auto_exec == "true" else "OFF"
+
+    # ── Kill switch / verdict ──
+    verdict = str(extra.get("verdict", "unknown"))
+    verdict_icon = "\U0001f7e2" if verdict == "profitable" else "\U0001f7e1"  # green/yellow circle
+
+    # ── Scanner stats ──
+    scans = extra.get("scans", 0)
+    active_opps = extra.get("active_opps", 0)
+    published = extra.get("published", 0)
+    best_edge = extra.get("best_edge_c", 0)
+
+    # ── Executor stats ──
+    executed = extra.get("executed", 0)
+    considered = extra.get("considered", 0)
+
+    # ── Naked legs ──
+    naked = int(extra.get("naked_legs", 0) or 0)
+    naked_icon = "\U0001f7e2" if naked == 0 else "\U0001f534"  # green/red circle
+
     lines = [
-        "<b>Arbiter Heartbeat</b>",
-        f"realized_pnl: <code>${status.realized_pnl:.2f}</code>",
-        f"open_orders:  <code>{status.open_order_count}</code>",
+        f"\U0001f4ca <b>ARBITER HEARTBEAT</b>",
+        DIVIDER,
+        f"\U0001f4b0 <b>P&L / Orders</b>",
+        f"  Realized: <code>{usd(status.realized_pnl, signed=True)}</code>",
+        f"  Open orders: <code>{status.open_order_count}</code>",
     ]
-    for key, value in status.extra.items():
-        lines.append(f"{key}: <code>{value}</code>")
+
+    if balance_lines:
+        lines.append("")
+        lines.append(f"\U0001f3e6 <b>Balances</b>")
+        lines.extend(balance_lines)
+
+    lines.append("")
+    lines.append(f"\U0001f50d <b>Scanner</b>")
+    lines.append(f"  Scans: <code>{scans}</code>  |  Opps: <code>{active_opps}</code>  |  Published: <code>{published}</code>")
+    if best_edge:
+        lines.append(f"  Best edge: <code>{float(best_edge):.1f}c</code>")
+
+    lines.append("")
+    lines.append(f"{ae_icon} <b>Auto-Exec:</b> <code>{ae_label}</code>")
+    if auto_exec == "true":
+        lines.append(f"  Executed: <code>{executed}</code>  |  Considered: <code>{considered}</code>")
+
+    lines.append(f"{verdict_icon} <b>Verdict:</b> <code>{h(verdict)}</code>")
+    lines.append(f"{naked_icon} <b>Naked legs:</b> <code>{naked}</code>")
+
+    lines.append(DIVIDER)
+
     return "\n".join(lines)
 
 

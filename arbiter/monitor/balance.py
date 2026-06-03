@@ -241,52 +241,59 @@ def _format_arb_alert(opp: ArbitrageOpportunity) -> str:
     Output is HTML (Telegram parse_mode=HTML). Includes per-side outcome,
     market id, executable bid/ask, quote age, and the math summary so the
     operator can verify the trade on each platform before submitting."""
+    from ..notifiers.fmt import DIVIDER, h, price3, usd, age as fmt_age, truncate, short_id
+
     outcome_header = _pick_alert_outcome(opp)
     yes_age = opp.yes_quote_age_seconds or opp.quote_age_seconds
     no_age = opp.no_quote_age_seconds or opp.quote_age_seconds
-    yes_id = _short_market_id(opp.yes_market_id) if opp.yes_platform == "polymarket" else opp.yes_market_id
-    no_id = _short_market_id(opp.no_market_id) if opp.no_platform == "polymarket" else opp.no_market_id
+    yes_id = short_id(opp.yes_market_id) if opp.yes_platform == "polymarket" else opp.yes_market_id
+    no_id = short_id(opp.no_market_id) if opp.no_platform == "polymarket" else opp.no_market_id
 
     yes_bid_ask = (
-        f"${opp.yes_bid:.3f}/${opp.yes_ask:.3f}"
+        f"{price3(opp.yes_bid)}/{price3(opp.yes_ask)}"
         if (opp.yes_bid or opp.yes_ask)
         else "n/a"
     )
     no_bid_ask = (
-        f"${opp.no_bid:.3f}/${opp.no_ask:.3f}"
+        f"{price3(opp.no_bid)}/{price3(opp.no_ask)}"
         if (opp.no_bid or opp.no_ask)
         else "n/a"
     )
 
     yes_question_line = (
-        f"\n  ❓ <i>{_html(_truncate(opp.yes_question, 140))}</i>" if opp.yes_question else ""
+        f"\n  ❓ <i>{h(truncate(opp.yes_question, 120))}</i>" if opp.yes_question else ""
     )
     no_question_line = (
-        f"\n  ❓ <i>{_html(_truncate(opp.no_question, 140))}</i>" if opp.no_question else ""
+        f"\n  ❓ <i>{h(truncate(opp.no_question, 120))}</i>" if opp.no_question else ""
     )
 
+    gross_cents = round(float(opp.gross_edge or 0) * 100, 1)
+    fee_cents = round(float(opp.total_fees or 0) * 100, 1)
+    net_cents = round(float(opp.net_edge_cents or 0), 1)
+
     return (
-        f"💰 <b>ARBITRAGE: {_html(_truncate(outcome_header, 80))}</b>\n"
-        f"<code>{_html(opp.canonical_id)}</code>\n"
+        f"\U0001f4b0 <b>ARBITRAGE FOUND</b>\n"
+        f"{DIVIDER}\n"
+        f"\U0001f3af {h(truncate(outcome_header, 80))}\n"
+        f"<code>{h(opp.canonical_id)}</code>\n"
         f"\n"
-        f"<b>{opp.yes_platform.upper()}</b>: BUY <b>YES</b> @ ${opp.yes_price:.3f} "
-        f"(ask, {yes_age:.0f}s old)\n"
-        f"  ├ Market: <code>{_html(yes_id)}</code>\n"
+        f"\U0001f7e2 <b>{opp.yes_platform.upper()}</b>: BUY <b>YES</b> @ <code>{price3(opp.yes_price)}</code> ({fmt_age(yes_age)} old)\n"
+        f"  ├ Market: <code>{h(yes_id)}</code>\n"
         f"  └ Bid/Ask: {yes_bid_ask}"
         f"{yes_question_line}\n"
-        f"<b>{opp.no_platform.upper()}</b>: BUY <b>NO</b> @ ${opp.no_price:.3f} "
-        f"(ask, {no_age:.0f}s old)\n"
-        f"  ├ Market: <code>{_html(no_id)}</code>\n"
+        f"\n"
+        f"\U0001f535 <b>{opp.no_platform.upper()}</b>: BUY <b>NO</b> @ <code>{price3(opp.no_price)}</code> ({fmt_age(no_age)} old)\n"
+        f"  ├ Market: <code>{h(no_id)}</code>\n"
         f"  └ Bid/Ask: {no_bid_ask}"
         f"{no_question_line}\n"
         f"\n"
-        f"Edge: {opp.gross_edge*100:.1f}¢ gross → "
-        f"<b>{opp.net_edge_cents:.1f}¢ net</b> (after {opp.total_fees*100:.1f}¢ fees)\n"
-        f"Qty: <b>{opp.suggested_qty}</b> | Max profit: <b>${opp.max_profit_usd:.2f}</b>\n"
-        f"Confidence: {opp.confidence*100:.0f}% | Mapping: {_html(opp.mapping_status)} "
-        f"(score {opp.mapping_score:.2f})\n"
-        f"\n"
-        f"⚠️ <i>Verify both legs target the SAME outcome on the apps before trading.</i>"
+        f"{DIVIDER}\n"
+        f"\U0001f4c8 <b>Edge:</b> {gross_cents:.1f}¢ gross → <b>{net_cents:.1f}¢ net</b> (fees: {fee_cents:.1f}¢)\n"
+        f"\U0001f4e6 <b>Qty:</b> <code>{opp.suggested_qty}</code>  |  \U0001f4b5 <b>Profit:</b> <code>{usd(opp.max_profit_usd)}</code>\n"
+        f"\U0001f3af Confidence: <code>{round(float(opp.confidence or 0) * 100):.0f}%</code>  |  "
+        f"Score: <code>{round(float(opp.mapping_score or 0), 2):.2f}</code>\n"
+        f"{DIVIDER}\n"
+        f"⚠️ <i>Verify both legs target the SAME outcome before trading.</i>"
     )
 
 
@@ -611,6 +618,8 @@ class BalanceMonitor:
 
     async def _maybe_alert_low_balance(self, platform: str, balance: float, threshold: float):
         """Send low balance alert if cooldown has elapsed."""
+        from ..notifiers.fmt import DIVIDER, usd as fmt_usd
+
         now = time.time()
         last = self._last_alert_time.get(f"balance_{platform}", 0)
         if now - last < self.config.cooldown:
@@ -618,10 +627,13 @@ class BalanceMonitor:
 
         self._last_alert_time[f"balance_{platform}"] = now
         msg = (
-            f"🔴 <b>LOW BALANCE ALERT</b>\n\n"
-            f"<b>{platform.upper()}</b>: ${balance:.2f}\n"
-            f"Threshold: ${threshold:.2f}\n"
-            f"⚠️ Fund this account to continue arbitrage operations."
+            f"\U0001f534 <b>LOW BALANCE</b>\n"
+            f"{DIVIDER}\n"
+            f"\U0001f3e6 <b>{platform.upper()}</b>\n"
+            f"  Balance: <code>{fmt_usd(balance)}</code>\n"
+            f"  Threshold: <code>{fmt_usd(threshold)}</code>\n"
+            f"{DIVIDER}\n"
+            f"⚠️ <i>Fund this account to continue arbitrage operations.</i>"
         )
         await self.notifier.send(msg)
         logger.warning(f"Low balance alert sent: {platform} ${balance:.2f} < ${threshold:.2f}")
@@ -695,46 +707,50 @@ class BalanceMonitor:
         realized_pnl: float = 0.0,
     ):
         """Send Telegram alert with trade execution result."""
-        if status == "filled":
-            emoji = "✅"
-            header = "TRADE FILLED"
-        elif status == "partial":
-            emoji = "⚠️"
-            header = "PARTIAL FILL"
-        elif status in ("failed", "aborted"):
-            emoji = "❌"
-            header = f"TRADE {status.upper()}"
-        elif status == "unwound":
-            emoji = "🔄"
-            header = "TRADE UNWOUND"
-        else:
-            emoji = "📋"
-            header = f"TRADE {status.upper()}"
+        from ..notifiers.fmt import DIVIDER, h, price3, usd as fmt_usd
 
-        pnl_emoji = "📈" if realized_pnl >= 0 else "📉"
+        status_config = {
+            "filled":  ("\U0001f7e2", "TRADE FILLED"),
+            "partial": ("\U0001f7e1", "PARTIAL FILL"),
+            "failed":  ("\U0001f534", "TRADE FAILED"),
+            "aborted": ("\U0001f534", "TRADE ABORTED"),
+            "unwound": ("\U0001f504", "TRADE UNWOUND"),
+        }
+        emoji, header = status_config.get(status, ("\U0001f4cb", f"TRADE {status.upper()}"))
+
+        pnl_emoji = "\U0001f4c8" if realized_pnl >= 0 else "\U0001f4c9"  # chart up/down
 
         yes_status = leg_yes.status.value if hasattr(leg_yes.status, "value") else str(leg_yes.status)
         no_status = leg_no.status.value if hasattr(leg_no.status, "value") else str(leg_no.status)
 
+        desc = h((opp.description or "")[:80])
+        net_cents = round(float(opp.net_edge_cents or 0), 1)
+
         msg = (
             f"{emoji} <b>{header}</b>\n"
-            f"<code>{_html(arb_id)}</code> — {_html(opp.description[:80])}\n"
+            f"{DIVIDER}\n"
+            f"\U0001f3af {desc}\n"
+            f"<code>{h(arb_id)}</code>\n"
             f"\n"
-            f"<b>{opp.yes_platform.upper()}</b> YES: "
-            f"limit ${leg_yes.price:.3f} → fill ${leg_yes.fill_price:.3f} "
-            f"x{leg_yes.fill_qty} [{_html(yes_status)}]\n"
-            f"<b>{opp.no_platform.upper()}</b> NO: "
-            f"limit ${leg_no.price:.3f} → fill ${leg_no.fill_price:.3f} "
-            f"x{leg_no.fill_qty} [{_html(no_status)}]\n"
+            f"\U0001f7e2 <b>{opp.yes_platform.upper()} YES</b>\n"
+            f"  Limit: <code>{price3(leg_yes.price)}</code> → "
+            f"Fill: <code>{price3(leg_yes.fill_price)}</code> x{leg_yes.fill_qty}\n"
+            f"  Status: <code>{h(yes_status)}</code>\n"
             f"\n"
-            f"Edge: {opp.net_edge_cents:.1f}¢ net | Qty: {opp.suggested_qty}\n"
-            f"{pnl_emoji} Realized P&L: <b>${realized_pnl:+.2f}</b>"
+            f"\U0001f535 <b>{opp.no_platform.upper()} NO</b>\n"
+            f"  Limit: <code>{price3(leg_no.price)}</code> → "
+            f"Fill: <code>{price3(leg_no.fill_price)}</code> x{leg_no.fill_qty}\n"
+            f"  Status: <code>{h(no_status)}</code>\n"
+            f"\n"
+            f"{DIVIDER}\n"
+            f"\U0001f4c8 Edge: <code>{net_cents:.1f}c</code> net  |  Qty: <code>{opp.suggested_qty}</code>\n"
+            f"{pnl_emoji} <b>P&amp;L: <code>{fmt_usd(realized_pnl, signed=True)}</code></b>"
         )
 
         if leg_yes.error:
-            msg += f"\n⚠️ YES error: {_html(leg_yes.error[:100])}"
+            msg += f"\n⚠️ YES error: <i>{h(str(leg_yes.error)[:100])}</i>"
         if leg_no.error:
-            msg += f"\n⚠️ NO error: {_html(leg_no.error[:100])}"
+            msg += f"\n⚠️ NO error: <i>{h(str(leg_no.error)[:100])}</i>"
 
         # Burst guard: drop alerts when more than _exec_alert_max_burst
         # fired in the last _exec_alert_window_s seconds. Critical alerts
@@ -766,15 +782,22 @@ class BalanceMonitor:
 
     async def send_daily_summary(self):
         """Send daily summary of balances and activity."""
-        lines = ["📊 <b>ARBITER DAILY SUMMARY</b>\n"]
+        from ..notifiers.fmt import DIVIDER, usd as fmt_usd
+
+        lines = [
+            f"\U0001f4ca <b>ARBITER DAILY SUMMARY</b>",
+            DIVIDER,
+            f"\U0001f3e6 <b>Balances</b>",
+        ]
 
         total = 0.0
-        for platform, snap in self._balances.items():
-            emoji = "🔴" if snap.is_low else "🟢"
-            lines.append(f"{emoji} {platform.upper()}: ${snap.balance:.2f}")
+        for plat, snap in self._balances.items():
+            icon = "\U0001f534" if snap.is_low else "\U0001f7e2"
+            lines.append(f"  {icon} {plat.upper()}: <code>{fmt_usd(snap.balance)}</code>")
             total += snap.balance
 
-        lines.append(f"\n💰 Total across platforms: ${total:.2f}")
+        lines.append(f"\n\U0001f4b0 <b>Total:</b> <code>{fmt_usd(total)}</code>")
+        lines.append(DIVIDER)
         await self.notifier.send("\n".join(lines))
 
     @property
