@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="theme-color" content="#11100e" />
+<title>Lúmen Stays · Boutique Stays in Las Colinas & Richardson</title>
+<meta name="description" content="A boutique collection of five designer stays across Las Colinas and Richardson — lake views, DART access, chef kitchens, resort pools, game rooms and effortless self check-in." />
+<link rel="stylesheet" href="styles.css" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2311100e'/%3E%3Ctext x='16' y='22' font-family='Georgia' font-size='18' fill='%23c79a52' text-anchor='middle'%3EL%3C/text%3E%3C/svg%3E" />
+</head>
+<body>
+
+<!-- Preloader -->
+<div class="preloader" id="preloader" aria-hidden="true">
+  <div class="preloader__inner">
+    <span class="preloader__mark">L</span>
+    <span class="preloader__word">LÚMEN</span>
+    <span class="preloader__bar"><i></i></span>
+  </div>
+</div>
+
+<!-- Cursor glow (desktop) -->
+<div class="cursor-glow" id="cursorGlow" aria-hidden="true"></div>
+
+<!-- Navigation -->
+<header class="nav" id="nav">
+  <a class="nav__brand" href="#top" data-scroll>
+    <span class="nav__mark">L</span>
+    <span class="nav__name">Lúmen<small>STAYS</small></span>
+  </a>
+  <nav class="nav__links" aria-label="Primary">
+    <a href="#collection" data-scroll>Collection</a>
+    <a href="#experience" data-scroll>Experience</a>
+    <a href="#comforts" data-scroll>Comforts</a>
+    <a href="#contact" data-scroll>Contact</a>
+  </nav>
+  <button class="btn btn--ghost nav__cta" data-scroll data-target="#collection">Reserve a stay</button>
+  <button class="nav__burger" id="burger" aria-label="Open menu" aria-expanded="false"><span></span><span></span></button>
+</header>
+
+<!-- Mobile menu -->
+<div class="mobilemenu" id="mobilemenu" aria-hidden="true">
+  <a href="#collection" data-scroll>Collection</a>
+  <a href="#experience" data-scroll>Experience</a>
+  <a href="#comforts" data-scroll>Comforts</a>
+  <a href="#contact" data-scroll>Contact</a>
+  <a class="mobilemenu__cta" href="#collection" data-scroll>Reserve a stay</a>
+</div>
+
+<main id="top">
+
+  <!-- HERO -->
+  <section class="hero" id="hero">
+    <div class="hero__media" id="heroMedia"></div>
+    <div class="hero__scrim"></div>
+    <div class="hero__inner">
+      <p class="hero__eyebrow reveal">Las Colinas · Richardson · Lake Carolyn</p>
+      <h1 class="hero__title">
+        <span class="reveal" style="--d:.05s">Stay somewhere</span>
+        <span class="reveal hero__title--em" style="--d:.16s">unforgettable.</span>
+      </h1>
+      <p class="hero__lede reveal" style="--d:.28s">A boutique collection of five designer residences — lake views, chef kitchens, resort pools and game-night nights, all with effortless self check-in.</p>
+      <div class="hero__actions reveal" style="--d:.4s">
+        <button class="btn btn--solid" data-scroll data-target="#collection">Explore the collection</button>
+        <button class="btn btn--line" data-scroll data-target="#experience">The experience</button>
+      </div>
+      <div class="hero__stats reveal" style="--d:.52s">
+        <div><strong data-count="5">5</strong><span>Designer stays</span></div>
+        <div><strong data-count="24">24</strong><span>/7 resort gyms</span></div>
+        <div><strong>DART</strong><span>Rail at the door</span></div>
+      </div>
+    </div>
+    <button class="hero__scroll" data-scroll data-target="#collection" aria-label="Scroll to collection">
+      <span></span>Scroll
+    </button>
+  </section>
+
+  <!-- MARQUEE -->
+  <div class="marquee" aria-hidden="true">
+    <div class="marquee__track" id="marqueeTrack"></div>
+  </div>
+
+  <!-- COLLECTION -->
+  <section class="section collection" id="collection">
+    <div class="section__head">
+      <p class="kicker reveal">The Collection</p>
+      <h2 class="display reveal" style="--d:.08s">Five stays, each with its own soul</h2>
+      <p class="section__sub reveal" style="--d:.16s">One boutique standard of comfort — distinct personalities, thoughtful details, and a working booking flow for every door.</p>
+    </div>
+    <div class="cards" id="cards"></div>
+  </section>
+
+  <!-- EXPERIENCE -->
+  <section class="section experience" id="experience">
+    <div class="section__head">
+      <p class="kicker reveal">The Experience</p>
+      <h2 class="display reveal" style="--d:.08s">Designed for the way you actually stay</h2>
+    </div>
+    <div class="story" id="story"></div>
+  </section>
+
+  <!-- COMFORTS -->
+  <section class="section comforts" id="comforts">
+    <div class="section__head">
+      <p class="kicker reveal">Thoughtful by default</p>
+      <h2 class="display reveal" style="--d:.08s">The small comforts, never an afterthought</h2>
+      <p class="section__sub reveal" style="--d:.16s">Across every residence, the details that make a stay feel effortless are simply there.</p>
+    </div>
+    <div class="comfortgrid" id="comfortGrid"></div>
+  </section>
+
+  <!-- CTA BAND -->
+  <section class="ctaband" id="contact">
+    <div class="ctaband__inner">
+      <p class="kicker reveal">Ready when you are</p>
+      <h2 class="display reveal" style="--d:.08s">Find your stay</h2>
+      <p class="ctaband__sub reveal" style="--d:.16s">Pick a residence, choose your dates, and reserve in a few taps. Questions first? We answer fast.</p>
+      <div class="ctaband__actions reveal" style="--d:.24s">
+        <button class="btn btn--solid" data-scroll data-target="#collection">Browse the collection</button>
+        <a class="btn btn--line" href="mailto:stays@lumen.house?subject=Stay%20inquiry">Email the host</a>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <div class="footer__top">
+    <div class="footer__brand">
+      <span class="nav__mark">L</span>
+      <span class="nav__name">Lúmen<small>STAYS</small></span>
+      <p>Boutique designer stays across Las Colinas &amp; Richardson, Texas.</p>
+    </div>
+    <nav class="footer__nav" aria-label="Footer">
+      <a href="#collection" data-scroll>Collection</a>
+      <a href="#experience" data-scroll>Experience</a>
+      <a href="#comforts" data-scroll>Comforts</a>
+      <a href="mailto:stays@lumen.house">Contact</a>
+    </nav>
+  </div>
+  <div class="footer__bottom">
+    <span>© <span id="year"></span> Lúmen Stays</span>
+    <span>Self check-in · Pet-friendly · Long-term stays welcome</span>
+  </div>
+</footer>
+
+<!-- LISTING DETAIL OVERLAY -->
+<div class="detail" id="detail" aria-hidden="true" role="dialog" aria-modal="true" aria-label="Listing details"></div>
+
+<!-- LIGHTBOX -->
+<div class="lightbox" id="lightbox" aria-hidden="true" role="dialog" aria-modal="true" aria-label="Photo gallery">
+  <button class="lightbox__close" id="lbClose" aria-label="Close gallery">&times;</button>
+  <button class="lightbox__nav lightbox__nav--prev" id="lbPrev" aria-label="Previous photo">&#8249;</button>
+  <figure class="lightbox__stage">
+    <img id="lbImg" alt="" />
+    <figcaption id="lbCap"></figcaption>
+  </figure>
+  <button class="lightbox__nav lightbox__nav--next" id="lbNext" aria-label="Next photo">&#8250;</button>
+  <div class="lightbox__count" id="lbCount"></div>
+</div>
+
+<!-- RESERVATION MODAL -->
+<div class="resv" id="resv" aria-hidden="true" role="dialog" aria-modal="true" aria-label="Reserve your stay"></div>
+
+<!-- Toast -->
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
