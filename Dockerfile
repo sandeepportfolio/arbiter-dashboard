@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements-docker.txt .
 RUN pip install --no-cache-dir -r requirements-docker.txt
 
-# Copy source
+# Copy source (bust cache: Phase 6 auto-validator pipeline)
 COPY . .
 
 # API port
