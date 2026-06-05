@@ -109,6 +109,7 @@ class AutoExecutorStats:
     skipped_failed_cooldown: int = 0
     skipped_failure_pattern: int = 0
     skipped_forecastex_unavailable: int = 0
+    skipped_gate_structural: int = 0
     auto_disabled_loss_streak: int = 0
     failures: int = 0
     last_considered_ts: float = 0.0
@@ -132,6 +133,7 @@ class AutoExecutorStats:
             "skipped_failed_cooldown": self.skipped_failed_cooldown,
             "skipped_failure_pattern": self.skipped_failure_pattern,
             "skipped_forecastex_unavailable": self.skipped_forecastex_unavailable,
+            "skipped_gate_structural": self.skipped_gate_structural,
             "auto_disabled_loss_streak": self.auto_disabled_loss_streak,
             "failures": self.failures,
             "last_considered_ts": self.last_considered_ts,
@@ -172,6 +174,16 @@ class AutoExecutor:
         self._failed_cooldown: dict[str, float] = {}  # canonical_id -> cooldown_until
         self._failed_count: dict[str, int] = {}  # canonical_id -> consecutive failure count
         self._loss_streak: dict[str, int] = {}  # canonical_id -> consecutive losing trades
+        # Structural-deny cooldown (CV-03, 2026-06-05): trade-gate denials
+        # for reasons like "Platform profitability for X is not_profitable"
+        # are NOT execution failures — they're operator-controlled veto
+        # decisions that won't change until the operator acts. Track these
+        # separately so we don't burn the exponential failure cooldown
+        # (which grew to 60 min after 20 attempts on DEM_SENATE_2026)
+        # and instead apply a flat suppression window per pair-and-reason.
+        # Keyed by (canonical_id, reason) to a Unix expiry timestamp.
+        self._gate_structural_cooldown: dict[tuple[str, str], float] = {}
+        self._gate_structural_cooldown_s: float = 1800.0  # 30 minutes
         self.stats = AutoExecutorStats()
 
     async def start(self) -> None:
@@ -469,6 +481,49 @@ class AutoExecutor:
                 canonical_id=opp.canonical_id,
                 budget=self._config.bootstrap_trades,
                 executed=self.stats.executed,
+            )
+            return
+
+        # Trade-gate pre-check (CV-03, 2026-06-05): the engine will
+        # silently return None if its trade-gate denies, which the
+        # post-call handler can't distinguish from a real execution
+        # failure (resulting in 20-attempt exponential backoff against a
+        # deterministic operator-controlled veto). Probe the gate here
+        # so structural denies — "Platform profitability for X is
+        # not_profitable", kill-switch armed, low balance — become
+        # flat-cooldown skips with their own stat, while only true
+        # transient/execution failures grow the exponential failure
+        # counter downstream.
+        try:
+            gate_check = getattr(self._engine, "check_trade_gate", None)
+            if callable(gate_check):
+                gate_allowed, gate_reason, _gate_context = await gate_check(opp)
+            else:
+                gate_allowed, gate_reason = True, ""
+        except Exception as exc:  # noqa: BLE001 — must not block trading on probe error
+            log.warning(
+                "auto_executor.gate_precheck_error",
+                canonical_id=opp.canonical_id,
+                err=str(exc),
+            )
+            gate_allowed, gate_reason = True, ""
+        if not gate_allowed:
+            cooldown_key = (opp.canonical_id, gate_reason)
+            cooldown_until = self._gate_structural_cooldown.get(cooldown_key, 0.0)
+            now_ts = time.time()
+            if now_ts < cooldown_until:
+                self.stats.skipped_gate_structural += 1
+                # Suppressed — no log spam; covered by the original entry.
+                return
+            self._gate_structural_cooldown[cooldown_key] = (
+                now_ts + self._gate_structural_cooldown_s
+            )
+            self.stats.skipped_gate_structural += 1
+            log.info(
+                "auto_executor.skip.gate_structural",
+                canonical_id=opp.canonical_id,
+                reason=gate_reason,
+                cooldown_minutes=round(self._gate_structural_cooldown_s / 60, 1),
             )
             return
 

@@ -780,6 +780,84 @@ async def test_collector_attempts_runtime_no_discovery(monkeypatch):
     await client.close()
 
 
+async def test_no_conid_discovery_soft_blocks_transient_failures(monkeypatch):
+    """Regression (CV-02, 2026-06-05): when ``resolve_event_children``
+    raises (429 storm / circuit-open / timeout), the next poll cycle must
+    NOT replay the contract_info + secdef/strikes lookup against the same
+    YES conid — otherwise the 5s/15s/45s retry ladder repeats every poll
+    and floods the IBKR gateway with 429s. The TTL soft-block stops that.
+    """
+    import time as time_mod
+
+    fake = {
+        "TRANSIENT_FAILING": {
+            "kalshi": "KX-T",
+            "polymarket": "t-poly",
+            "forecastex": "700000",  # YES only — triggers discovery path
+            "status": "confirmed",
+        },
+    }
+    monkeypatch.setattr(settings_mod, "MARKET_MAP", fake)
+    import arbiter.collectors.forecastex as fcst_mod
+    monkeypatch.setattr(fcst_mod, "MARKET_MAP", fake)
+
+    store = PriceStore()
+    client = ForecastExClient(gateway_url=GATEWAY, account_id=ACCOUNT)
+    collector = ForecastExCollector(
+        config=ForecastExConfig(), store=store, client=client,
+    )
+    collector._first_cycle_discovery_throttle_s = 0.0
+
+    # Count how many times resolve_event_children is invoked across calls.
+    call_count = {"resolve": 0, "info": 0}
+    original_resolve = client.resolve_event_children
+    original_info = client.get_contract_info
+
+    async def _failing_resolve(parent_conid, **kwargs):
+        call_count["resolve"] += 1
+        raise RuntimeError("transient 429/timeout/circuit-open")
+
+    async def _fake_contract_info(yes_conid):
+        call_count["info"] += 1
+        return {
+            "right": "C",
+            "strike": "1.0",
+            "underlying_con_id": "888888",
+            "symbol": "TRANS",
+        }
+
+    monkeypatch.setattr(client, "resolve_event_children", _failing_resolve)
+    monkeypatch.setattr(client, "get_contract_info", _fake_contract_info)
+
+    # First call: resolve_event_children raises, soft-block set.
+    result1 = await collector._attempt_no_conid_discovery("700000")
+    assert result1 is None
+    assert call_count["resolve"] == 1
+    assert call_count["info"] == 1
+    assert "700000" in collector._no_discovery_soft_block
+
+    # Second call (next poll cycle): should be suppressed entirely. No
+    # additional contract_info or resolve_event_children invocations.
+    result2 = await collector._attempt_no_conid_discovery("700000")
+    assert result2 is None
+    assert call_count["resolve"] == 1, "soft-block must suppress retry"
+    assert call_count["info"] == 1, "soft-block must short-circuit before info"
+
+    # Permanent _no_discovery_failed must NOT be set — this is a soft TTL.
+    assert "700000" not in collector._no_discovery_failed
+
+    # Expire the TTL by rewinding the expiry timestamp into the past.
+    collector._no_discovery_soft_block["700000"] = time_mod.time() - 1.0
+    result3 = await collector._attempt_no_conid_discovery("700000")
+    assert result3 is None  # still fails
+    assert call_count["resolve"] == 2, "expired TTL must allow retry"
+    assert call_count["info"] == 2
+
+    monkeypatch.setattr(client, "resolve_event_children", original_resolve)
+    monkeypatch.setattr(client, "get_contract_info", original_info)
+    await client.close()
+
+
 async def test_first_cycle_flag_starts_true_and_clears_after_fetch(monkeypatch):
     """_first_discovery_cycle starts True and is False after fetch_markets()."""
     fake = {

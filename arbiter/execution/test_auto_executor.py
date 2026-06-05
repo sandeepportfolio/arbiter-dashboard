@@ -392,6 +392,44 @@ async def test_duplicate_within_dedup_window_skips_second():
 
 
 @pytest.mark.asyncio
+async def test_gate_structural_deny_skips_execute_with_flat_cooldown():
+    """Regression (CV-03, 2026-06-05): when the engine trade-gate denies
+    structurally (e.g. ``Platform profitability for forecastex is
+    not_profitable``), AutoExecutor must NOT count it as a failure and
+    grow the exponential failure cooldown — it's an operator-controlled
+    veto, not a flaky execution. The probe runs BEFORE execute_opportunity,
+    bumps ``skipped_gate_structural``, and a flat cooldown stops
+    subsequent log-spam from the same (canonical_id, reason) for the
+    cooldown window.
+    """
+    ae, engine = _make_components()
+    engine.check_trade_gate = AsyncMock(return_value=(
+        False, "Platform profitability for forecastex is not_profitable", {},
+    ))
+    opp = _make_opportunity()
+
+    await ae._consider_opportunity(opp)
+    engine.execute_opportunity.assert_not_awaited()
+    engine.check_trade_gate.assert_awaited_once()
+    assert ae.stats.skipped_gate_structural == 1
+    # NOT counted as a transient failure; exponential backoff must NOT engage.
+    assert opp.canonical_id not in ae._failed_count
+    assert opp.canonical_id not in ae._failed_cooldown
+    # Flat cooldown registered for this (canonical_id, reason) pair.
+    assert any(
+        key[0] == opp.canonical_id for key in ae._gate_structural_cooldown
+    )
+
+    # Second consideration within cooldown: still skipped, NO additional
+    # log spam (skipped_gate_structural increments but no new cooldown).
+    # Drop the dedup record so the second consideration reaches the gate.
+    ae._seen_dedup_keys.clear()
+    await ae._consider_opportunity(opp)
+    assert ae.stats.skipped_gate_structural == 2
+    engine.execute_opportunity.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_clean_opportunity_executes():
     ae, engine = _make_components()
     await ae._consider_opportunity(_make_opportunity())

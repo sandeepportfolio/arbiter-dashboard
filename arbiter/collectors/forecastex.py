@@ -781,6 +781,19 @@ class ForecastExCollector:
         # + secdef/strikes calls every cycle for a parent that will never
         # yield a NO child.
         self._no_discovery_failed: set[str] = set()
+        # Soft-fail TTL cache — yes_conid -> Unix expiry. Populated when a
+        # TRANSIENT failure (429 storm, timeout, circuit-open) prevents the
+        # ``resolve_event_children`` lookup from succeeding. The permanent
+        # ``_no_discovery_failed`` set is reserved for proven dead ends
+        # (parent has no Put sibling); this soft cache prevents the same
+        # YES conid from being retried every poll cycle while IBKR is
+        # rate-limiting us, which would otherwise create a back-to-back
+        # 5s/15s/45s = ~65s 429 chain every ~50s poll (CV-02 diagnosis
+        # 2026-06-05 — saw 30+ identical 429 chains/hr against the same
+        # endpoint). TTL is short enough that the next IBKR window can
+        # still pick up the conid once rate-limiting clears.
+        self._no_discovery_soft_block: dict[str, float] = {}
+        self._no_discovery_soft_block_ttl_s: float = 300.0
         # YES conids attached to multiple canonical markets are ambiguous and
         # unsafe. Skip them entirely until discovery/operator mapping assigns
         # unique ForecastX child conids.
@@ -937,6 +950,12 @@ class ForecastExCollector:
             return self._no_discovery_cache[yes_conid]
         if yes_conid in self._no_discovery_failed:
             return None
+        soft_expiry = self._no_discovery_soft_block.get(yes_conid)
+        if soft_expiry is not None:
+            if time.time() < soft_expiry:
+                return None
+            # TTL elapsed — drop it so the lookup runs again.
+            self._no_discovery_soft_block.pop(yes_conid, None)
         try:
             info = await self.client.get_contract_info(yes_conid)
         except Exception as exc:
@@ -980,8 +999,13 @@ class ForecastExCollector:
                 "failed for YES %s: %s",
                 parent, yes_conid, exc,
             )
-            # Transient IBKR endpoint failure — do NOT mark failed so the
-            # next cycle can retry.
+            # Transient IBKR endpoint failure (429/timeout/circuit-open).
+            # Don't mark permanently failed — but DO suppress retries for
+            # the soft-block TTL so we don't replay the 5s/15s/45s retry
+            # ladder on every poll cycle while IBKR is rate-limiting us.
+            self._no_discovery_soft_block[yes_conid] = (
+                time.time() + self._no_discovery_soft_block_ttl_s
+            )
             return None
         try:
             strike_f = float(strike)

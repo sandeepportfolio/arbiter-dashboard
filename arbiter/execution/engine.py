@@ -3707,6 +3707,15 @@ class ExecutionEngine:
         if self._own_session and not self._own_session.closed:
             await self._own_session.close()
 
+    async def check_trade_gate(self, opp: ArbitrageOpportunity) -> Tuple[bool, str, Dict[str, Any]]:
+        """Public wrapper around ``_check_trade_gate`` so upstream callers
+        (e.g. AutoExecutor) can probe the gate's verdict WITHOUT going
+        through the full ``execute_opportunity`` path. Used to distinguish
+        structural denies (profitability, kill-switch) from transient
+        execution failures so retry/cooldown logic can react differently.
+        """
+        return await self._check_trade_gate(opp)
+
     async def _check_trade_gate(self, opp: ArbitrageOpportunity) -> Tuple[bool, str, Dict[str, Any]]:
         if self._trade_gate is None:
             return True, "no trade gate configured", {}
