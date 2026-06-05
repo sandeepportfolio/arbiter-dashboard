@@ -919,6 +919,38 @@ class ExecutionEngine:
             )
             return None
 
+        # CV-04 (2026-06-05): tighter FX-specific freshness ceiling. The
+        # 5/28 K×FX abort cascade (16 trades, all aborted at the
+        # secondary-leg adverse-move guard) traced back to an FX leg
+        # whose snapshot was several seconds old by the time the
+        # primary filled — IBKR's Client Portal feed for FORECASTX
+        # binaries can stretch quiet for 5-10s on low-volume markets.
+        # Refuse to cross the primary when the FX-side price is stale
+        # relative to its venue's update cadence, even though the
+        # global 15s ceiling allows it.
+        fx_age_max = float(getattr(
+            self.scanner_config, "max_quote_age_seconds_forecastex",
+            self.scanner_config.max_quote_age_seconds,
+        ))
+        if opp.yes_platform == "forecastex" and current_yes.age_seconds > fx_age_max:
+            await self._record_incident(
+                arb_id,
+                opp,
+                "warning",
+                f"ForecastEx YES quote stale ({current_yes.age_seconds:.2f}s > {fx_age_max:.1f}s)",
+                metadata={"event_type": "fx_quote_stale", "side": "yes"},
+            )
+            return None
+        if opp.no_platform == "forecastex" and current_no.age_seconds > fx_age_max:
+            await self._record_incident(
+                arb_id,
+                opp,
+                "warning",
+                f"ForecastEx NO quote stale ({current_no.age_seconds:.2f}s > {fx_age_max:.1f}s)",
+                metadata={"event_type": "fx_quote_stale", "side": "no"},
+            )
+            return None
+
         yes_price = current_yes.yes_price
         no_price = current_no.no_price
 

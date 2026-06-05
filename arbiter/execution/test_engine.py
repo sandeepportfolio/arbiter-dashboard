@@ -29,6 +29,8 @@ def confirmed_synthetic_mappings():
 
     for canonical_id in {
         "C",
+        "FX_FRESH_TEST",
+        "FX_STALE_TEST",
         "MKT1",
         "MKT_BURST",
         "MKT_BURST_2",
@@ -189,6 +191,186 @@ def test_pretrade_requote_aborts_on_slippage():
         assert execution is None
         assert len(engine.incidents) == 1
         assert "Slippage exceeded tolerance" in engine.incidents[0].message
+
+    asyncio.run(runner())
+
+
+def test_pretrade_requote_aborts_when_forecastex_quote_is_stale():
+    """CV-04 (2026-06-05): ForecastEx legs use a tighter freshness
+    ceiling than the global ``max_quote_age_seconds=15`` because IBKR's
+    Client Portal feed for FORECASTX binaries can stretch quiet for
+    5-10s on low-volume markets. Stale FX quote drove the 5/28 K×FX
+    abort cascade. Ceiling configured via
+    ``max_quote_age_seconds_forecastex`` / env
+    ``MAX_QUOTE_AGE_FX_SECONDARY_S``.
+    """
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        engine.scanner_config.max_quote_age_seconds = 30.0
+        engine.scanner_config.max_quote_age_seconds_forecastex = 5.0
+        now = time.time()
+
+        # Kalshi quote is fresh — but the FX leg's snapshot is 8s old,
+        # under the 30s global ceiling but OVER the 5s FX-specific one.
+        await store.put(
+            PricePoint(
+                platform="kalshi",
+                canonical_id="FX_STALE_TEST",
+                yes_price=0.46,
+                no_price=0.54,
+                yes_volume=100,
+                no_volume=100,
+                timestamp=now,
+                raw_market_id="K-FX-STALE",
+                yes_market_id="K-FX-STALE",
+                no_market_id="K-FX-STALE",
+                fee_rate=0.07,
+                mapping_status="confirmed",
+                mapping_score=0.95,
+            )
+        )
+        await store.put(
+            PricePoint(
+                platform="forecastex",
+                canonical_id="FX_STALE_TEST",
+                yes_price=0.53,
+                no_price=0.47,
+                yes_volume=100,
+                no_volume=100,
+                timestamp=now - 8.0,  # 8s stale, > 5s FX ceiling
+                raw_market_id="745924267",
+                yes_market_id="745924267",
+                no_market_id="745924270",
+                fee_rate=0.005,
+                mapping_status="confirmed",
+                mapping_score=0.95,
+            )
+        )
+
+        opportunity = ArbitrageOpportunity(
+            canonical_id="FX_STALE_TEST",
+            description="K×FX stale fx test",
+            yes_platform="kalshi",
+            yes_price=0.46,
+            yes_fee=0.005,
+            yes_market_id="K-FX-STALE",
+            no_platform="forecastex",
+            no_price=0.47,
+            no_fee=0.005,
+            no_market_id="745924270",
+            gross_edge=0.07,
+            total_fees=0.010,
+            net_edge=0.060,
+            net_edge_cents=6.0,
+            suggested_qty=1,
+            max_profit_usd=0.06,
+            timestamp=now,
+            confidence=0.9,
+            status="tradable",
+            persistence_count=5,
+            quote_age_seconds=8.0,
+            min_available_liquidity=100.0,
+            mapping_status="confirmed",
+            mapping_score=0.95,
+            requires_manual=False,
+            yes_fee_rate=0.07,
+            no_fee_rate=0.005,
+        )
+
+        execution = await engine.execute_opportunity(opportunity)
+        assert execution is None
+        assert any(
+            "ForecastEx" in inc.message and "stale" in inc.message
+            for inc in engine.incidents
+        ), [inc.message for inc in engine.incidents]
+
+    asyncio.run(runner())
+
+
+def test_pretrade_requote_passes_when_forecastex_quote_is_fresh():
+    """CV-04: control case — FX quote inside the 5s ceiling passes
+    the new gate and the rest of pre-trade requote runs normally."""
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        engine.scanner_config.max_quote_age_seconds = 30.0
+        engine.scanner_config.max_quote_age_seconds_forecastex = 5.0
+        engine.scanner_config.slippage_tolerance = 0.02  # tolerate the test prices
+        now = time.time()
+
+        await store.put(
+            PricePoint(
+                platform="kalshi",
+                canonical_id="FX_FRESH_TEST",
+                yes_price=0.46,
+                no_price=0.54,
+                yes_volume=100,
+                no_volume=100,
+                timestamp=now,
+                raw_market_id="K-FX-FRESH",
+                yes_market_id="K-FX-FRESH",
+                no_market_id="K-FX-FRESH",
+                fee_rate=0.07,
+                mapping_status="confirmed",
+                mapping_score=0.95,
+            )
+        )
+        await store.put(
+            PricePoint(
+                platform="forecastex",
+                canonical_id="FX_FRESH_TEST",
+                yes_price=0.53,
+                no_price=0.47,
+                yes_volume=100,
+                no_volume=100,
+                timestamp=now - 2.0,  # 2s — within the 5s FX ceiling
+                raw_market_id="745924267",
+                yes_market_id="745924267",
+                no_market_id="745924270",
+                fee_rate=0.005,
+                mapping_status="confirmed",
+                mapping_score=0.95,
+            )
+        )
+
+        opportunity = ArbitrageOpportunity(
+            canonical_id="FX_FRESH_TEST",
+            description="K×FX fresh fx test",
+            yes_platform="kalshi",
+            yes_price=0.46,
+            yes_fee=0.005,
+            yes_market_id="K-FX-FRESH",
+            no_platform="forecastex",
+            no_price=0.47,
+            no_fee=0.005,
+            no_market_id="745924270",
+            gross_edge=0.07,
+            total_fees=0.010,
+            net_edge=0.060,
+            net_edge_cents=6.0,
+            suggested_qty=1,
+            max_profit_usd=0.06,
+            timestamp=now,
+            confidence=0.9,
+            status="tradable",
+            persistence_count=5,
+            quote_age_seconds=2.0,
+            min_available_liquidity=100.0,
+            mapping_status="confirmed",
+            mapping_score=0.95,
+            requires_manual=False,
+            yes_fee_rate=0.07,
+            no_fee_rate=0.005,
+        )
+
+        # Engine is in dry_run; just confirm no stale-quote abort fires.
+        execution = await engine.execute_opportunity(opportunity)
+        stale_incidents = [
+            inc for inc in engine.incidents
+            if "ForecastEx" in inc.message and "stale" in inc.message
+        ]
+        assert not stale_incidents, [inc.message for inc in stale_incidents]
 
     asyncio.run(runner())
 

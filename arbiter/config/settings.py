@@ -731,6 +731,25 @@ class ScannerConfig:
     confidence_threshold: float = 0.5
     persistence_scans: int = 5
     max_quote_age_seconds: float = 15.0
+    # CV-04 (2026-06-05): tighter freshness ceiling for ForecastEx legs.
+    # The 5/28 K×FX abort cascade (16 trades, ALL aborted at the
+    # secondary-leg adverse-move guard with FX ask 8¢ above the scanner
+    # snapshot) was driven by a stale FX quote — the global 15s
+    # window let the scanner publish an opportunity whose FX leg
+    # quote was already several seconds old, and the IBKR Client
+    # Portal feed for FORECASTX binaries can lag noticeably under
+    # load. The K×P pair tolerated 15s freshness because Polymarket
+    # and Kalshi both publish dense quote streams; FX has long-stretch
+    # quiet periods on binary political contracts. A 5s ceiling
+    # forces the executor to abort BEFORE crossing the primary if
+    # the FX side is stale, preserving the K×P 15s default elsewhere.
+    # Env override: MAX_QUOTE_AGE_FX_SECONDARY_S=<seconds>. Applies
+    # to either leg when that leg is on ForecastEx — yes or no,
+    # primary or secondary — because the operator-relevant invariant
+    # is "the FX-side price we computed edge against is still current."
+    max_quote_age_seconds_forecastex: float = field(
+        default_factory=lambda: _env_float("MAX_QUOTE_AGE_FX_SECONDARY_S", 5.0)
+    )
     min_liquidity: float = 25.0
     # PROFITABILITY-02 (2026-05-27): per-venue-pair liquidity floors so
     # IBKR's ForecastEx Client Portal API not broadcasting size on

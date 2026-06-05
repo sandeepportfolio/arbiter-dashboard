@@ -80,6 +80,57 @@ def _env_money(name: str, default: float, *, lo: float = 0.0, hi: float = 1_000_
     return value
 
 
+def _env_scope_overrides(
+    env_prefix: str,
+    *,
+    lo: float = 0.0,
+    hi: float = 1_000_000.0,
+) -> Dict[str, float]:
+    """Scan ``os.environ`` for ``ARBITER_<env_prefix>_<SCOPE>=<value>`` keys
+    and return a ``{lower_scope: float}`` dict suitable for the per-venue
+    or per-pair profitability threshold overrides.
+
+    ``<SCOPE>`` is everything after the prefix's trailing underscore and
+    is lowercased on the way in so it matches the platform/pair keys the
+    validator uses internally (e.g. ``forecastex`` for the platform scope,
+    ``forecastex_kalshi`` for the pair scope).
+
+    The bare global env name (``ARBITER_<env_prefix>``, no trailing
+    underscore) is NOT matched here — it is consumed by the global
+    threshold via ``_env_money`` / ``_env_float``.
+
+    Range-violating or non-numeric entries are logged and dropped so a
+    typo in one line can't poison the whole override dict.
+
+    Relax-only semantics live at the lookup site (``effective_*`` helpers);
+    this loader is just the raw env parse.
+    """
+    full_prefix = f"ARBITER_{env_prefix}_"
+    out: Dict[str, float] = {}
+    for raw_name, raw_val in os.environ.items():
+        if not raw_name.startswith(full_prefix):
+            continue
+        scope_raw = raw_name[len(full_prefix):]
+        if not scope_raw:
+            continue
+        try:
+            value = float(raw_val)
+        except (TypeError, ValueError):
+            logger.warning(
+                "Invalid %s=%r — ignoring profitability scope override",
+                raw_name, raw_val,
+            )
+            continue
+        if not lo <= value <= hi:
+            logger.warning(
+                "%s=%s out of range [%s, %s] — ignoring profitability scope override",
+                raw_name, value, lo, hi,
+            )
+            continue
+        out[scope_raw.lower()] = value
+    return out
+
+
 @dataclass
 class ProfitabilityConfig:
     evaluation_interval: float = 5.0
@@ -116,9 +167,67 @@ class ProfitabilityConfig:
     min_profitable_execution_ratio: float = field(
         default_factory=lambda: _env_float("ARBITER_MIN_PROFITABLE_RATIO", 0.65)
     )
+    # Per-scope (platform OR pair) overrides — populated from env at
+    # startup. CV-04 (2026-06-05): the global thresholds are tuned for
+    # the broad portfolio, but a brand-new venue with zero arb_pnl
+    # history (forecastex has 16 executions all aborted at the
+    # secondary-leg adverse-move guard, predating the 2026-05-27/28
+    # FX fixes) gets locked out indefinitely under the global gate.
+    # Operator can set ``ARBITER_MIN_TOTAL_PNL_<SCOPE>=0`` (etc.) to
+    # temporarily relax the per-scope threshold without weakening the
+    # broader gate. Relax-only semantics enforced at lookup time: the
+    # effective threshold is ``min(global, override)`` so an operator
+    # override can lower a per-scope floor below the global but never
+    # raise it above.
+    #
+    # SCOPE is the lowercase platform key (e.g. ``forecastex``) or the
+    # lowercase pair key (e.g. ``forecastex_kalshi``). Env naming
+    # mirrors the global form with the scope appended:
+    #
+    #   ARBITER_MIN_TOTAL_PNL_FORECASTEX=0
+    #   ARBITER_MIN_TOTAL_PNL_FORECASTEX_KALSHI=0
+    #   ARBITER_MIN_AVG_REALIZED_PNL_FORECASTEX=0
+    #   ARBITER_MIN_PROFITABLE_RATIO_FORECASTEX=0
+    min_total_realized_pnl_by_scope: Dict[str, float] = field(
+        default_factory=lambda: _env_scope_overrides("MIN_TOTAL_PNL"),
+    )
+    min_average_realized_pnl_by_scope: Dict[str, float] = field(
+        default_factory=lambda: _env_scope_overrides("MIN_AVG_REALIZED_PNL"),
+    )
+    min_profitable_execution_ratio_by_scope: Dict[str, float] = field(
+        default_factory=lambda: _env_scope_overrides("MIN_PROFITABLE_RATIO", hi=1.0),
+    )
     min_audit_pass_rate: float = 0.995
     max_incident_rate: float = 0.15
     max_critical_incidents: int = 0
+
+    def effective_min_total_realized_pnl(self, scope_key: str) -> float:
+        """Per-scope effective floor for total realized P&L. Relax-only:
+        the override can lower the global floor for one scope but never
+        raise it above. Falls back to global when no override is set for
+        this scope."""
+        override = self.min_total_realized_pnl_by_scope.get(
+            (scope_key or "").lower(),
+        )
+        if override is None:
+            return self.min_total_realized_pnl
+        return min(self.min_total_realized_pnl, override)
+
+    def effective_min_average_realized_pnl(self, scope_key: str) -> float:
+        override = self.min_average_realized_pnl_by_scope.get(
+            (scope_key or "").lower(),
+        )
+        if override is None:
+            return self.min_average_realized_pnl
+        return min(self.min_average_realized_pnl, override)
+
+    def effective_min_profitable_execution_ratio(self, scope_key: str) -> float:
+        override = self.min_profitable_execution_ratio_by_scope.get(
+            (scope_key or "").lower(),
+        )
+        if override is None:
+            return self.min_profitable_execution_ratio
+        return min(self.min_profitable_execution_ratio, override)
 
     def to_dict(self) -> dict:
         return {
@@ -526,6 +635,14 @@ class ProfitabilityValidator:
         average_edge_cents = mean(edge_samples) if edge_samples else 0.0
         profitable_ratio = len(profitable) / total if total else 0.0
 
+        # CV-04 (2026-06-05): resolve per-scope effective thresholds. The
+        # operator can RELAX the global gate for a single platform or
+        # pair via env (e.g. ARBITER_MIN_TOTAL_PNL_FORECASTEX=0); the
+        # global remains the ceiling for every other scope.
+        scope_min_total = self.config.effective_min_total_realized_pnl(key)
+        scope_min_avg = self.config.effective_min_average_realized_pnl(key)
+        scope_min_ratio = self.config.effective_min_profitable_execution_ratio(key)
+
         verdict = self._resolve_verdict(
             scan_count=self.config.min_scan_count,
             published_opportunities=self.config.min_published_opportunities,
@@ -537,6 +654,9 @@ class ProfitabilityValidator:
             audit_pass_rate=1.0,
             incident_rate=0.0,
             critical_incidents=0,
+            min_total_realized_pnl_override=scope_min_total,
+            min_average_realized_pnl_override=scope_min_avg,
+            min_profitable_execution_ratio_override=scope_min_ratio,
         )
         reasons = self._build_reasons(
             scan_count=self.config.min_scan_count,
@@ -549,6 +669,9 @@ class ProfitabilityValidator:
             audit_pass_rate=1.0,
             incident_rate=0.0,
             critical_incidents=0,
+            min_total_realized_pnl_override=scope_min_total,
+            min_average_realized_pnl_override=scope_min_avg,
+            min_profitable_execution_ratio_override=scope_min_ratio,
         )
         return {
             "key": key,
@@ -582,7 +705,26 @@ class ProfitabilityValidator:
         audit_pass_rate: float,
         incident_rate: float,
         critical_incidents: int,
+        min_total_realized_pnl_override: Optional[float] = None,
+        min_average_realized_pnl_override: Optional[float] = None,
+        min_profitable_execution_ratio_override: Optional[float] = None,
     ) -> str:
+        min_total = (
+            min_total_realized_pnl_override
+            if min_total_realized_pnl_override is not None
+            else self.config.min_total_realized_pnl
+        )
+        min_avg = (
+            min_average_realized_pnl_override
+            if min_average_realized_pnl_override is not None
+            else self.config.min_average_realized_pnl
+        )
+        min_ratio = (
+            min_profitable_execution_ratio_override
+            if min_profitable_execution_ratio_override is not None
+            else self.config.min_profitable_execution_ratio
+        )
+
         if (
             audit_pass_rate < self.config.min_audit_pass_rate
             or critical_incidents > self.config.max_critical_incidents
@@ -597,10 +739,10 @@ class ProfitabilityValidator:
             return "collecting_evidence"
 
         if (
-            total_realized_pnl < self.config.min_total_realized_pnl
-            or average_realized_pnl < self.config.min_average_realized_pnl
+            total_realized_pnl < min_total
+            or average_realized_pnl < min_avg
             or average_edge_cents < self.config.min_average_edge_cents
-            or profitable_ratio < self.config.min_profitable_execution_ratio
+            or profitable_ratio < min_ratio
             or incident_rate > self.config.max_incident_rate
         ):
             return "not_profitable"
@@ -620,7 +762,26 @@ class ProfitabilityValidator:
         audit_pass_rate: float,
         incident_rate: float,
         critical_incidents: int,
+        min_total_realized_pnl_override: Optional[float] = None,
+        min_average_realized_pnl_override: Optional[float] = None,
+        min_profitable_execution_ratio_override: Optional[float] = None,
     ) -> List[str]:
+        min_total = (
+            min_total_realized_pnl_override
+            if min_total_realized_pnl_override is not None
+            else self.config.min_total_realized_pnl
+        )
+        min_avg = (
+            min_average_realized_pnl_override
+            if min_average_realized_pnl_override is not None
+            else self.config.min_average_realized_pnl
+        )
+        min_ratio = (
+            min_profitable_execution_ratio_override
+            if min_profitable_execution_ratio_override is not None
+            else self.config.min_profitable_execution_ratio
+        )
+
         reasons: List[str] = []
 
         if audit_pass_rate < self.config.min_audit_pass_rate:
@@ -646,21 +807,21 @@ class ProfitabilityValidator:
             )
 
         if completed_executions >= self.config.min_completed_executions:
-            if total_realized_pnl < self.config.min_total_realized_pnl:
+            if total_realized_pnl < min_total:
                 reasons.append(
-                    f"Total realized P&L ${total_realized_pnl:.2f} is below the required ${self.config.min_total_realized_pnl:.2f}"
+                    f"Total realized P&L ${total_realized_pnl:.2f} is below the required ${min_total:.2f}"
                 )
-            if average_realized_pnl < self.config.min_average_realized_pnl:
+            if average_realized_pnl < min_avg:
                 reasons.append(
-                    f"Average realized P&L ${average_realized_pnl:.2f} is below the required ${self.config.min_average_realized_pnl:.2f}"
+                    f"Average realized P&L ${average_realized_pnl:.2f} is below the required ${min_avg:.2f}"
                 )
             if average_edge_cents < self.config.min_average_edge_cents:
                 reasons.append(
                     f"Average edge {average_edge_cents:.2f}¢ is below the required {self.config.min_average_edge_cents:.2f}¢"
                 )
-            if profitable_ratio < self.config.min_profitable_execution_ratio:
+            if profitable_ratio < min_ratio:
                 reasons.append(
-                    f"Profitable execution ratio {profitable_ratio:.2%} is below the required {self.config.min_profitable_execution_ratio:.2%}"
+                    f"Profitable execution ratio {profitable_ratio:.2%} is below the required {min_ratio:.2%}"
                 )
             if incident_rate > self.config.max_incident_rate:
                 reasons.append(
