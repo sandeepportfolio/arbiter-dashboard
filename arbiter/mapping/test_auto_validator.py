@@ -99,12 +99,30 @@ class TestMappingAutoValidator:
         assert "no platform identifiers" in result.reason
 
     @pytest.mark.asyncio
-    async def test_validate_all_checks_error(self, validator):
-        """When all platform checks return errors (no collector), recommendation is REVIEW."""
-        mapping = _make_mapping()
+    async def test_validate_skipped_platforms_excluded(self, validator):
+        """Platforms with no collector are skipped, not counted as errors.
+
+        When Kalshi/FX have no collector (skipped) but Polymarket works
+        standalone via gamma-api, the mapping should be CONFIRM (Poly is
+        live) or REVIEW (if slug not found). The key invariant is that
+        skipped platforms don't force an EXPIRE recommendation.
+        """
+        mapping = _make_mapping(
+            kalshi_market_id="",
+            polymarket_slug="",
+            forecastex_contract_id="",
+        )
         result = await validator.validate_mapping(mapping)
-        # All checks return "no collector" error
-        assert result.recommendation in (
+        # No platform identifiers at all → EXPIRE
+        assert result.recommendation == ValidationRecommendation.EXPIRE
+
+        # With only skipped platforms (no collector, but IDs present)
+        mapping2 = _make_mapping(
+            polymarket_slug="",  # no slug to check
+        )
+        result2 = await validator.validate_mapping(mapping2)
+        # Kalshi and FX skipped (no collector), Poly empty → no checks
+        assert result2.recommendation in (
             ValidationRecommendation.REVIEW,
             ValidationRecommendation.EXPIRE,
         )

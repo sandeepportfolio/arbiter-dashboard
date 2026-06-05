@@ -119,7 +119,7 @@ class MappingAutoDiscovery:
 
         try:
             from .auto_discovery import discover as discover_market_mappings
-            from ..main import load_market_discovery_settings, OperatorSettingsStore
+            from ..operator_settings import OperatorSettingsStore, load_market_discovery_settings
 
             settings_store = OperatorSettingsStore()
             runtime = load_market_discovery_settings(settings_store)
@@ -154,7 +154,7 @@ class MappingAutoDiscovery:
             return 0
 
         try:
-            from .forecastex_discovery import discover_forecastex_mappings
+            from .forecastex_discovery import discover as discover_forecastex_mappings
             attached = await discover_forecastex_mappings(
                 self.forecastex_client,
                 self.store,
