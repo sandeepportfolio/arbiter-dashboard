@@ -52,6 +52,13 @@ _MAX_PRICE = 0.99
 # scanner saw a fake $0.47 and the real ask was $0.55).
 _PRICE_DRIFT_CENTS_THRESHOLD = 5.0
 
+# Sentinel marking an Order whose broker_id we couldn't capture from the
+# place-order response AND couldn't recover via the live-orders fallback.
+# The order is returned as FAILED with this suffix so the engine recovery
+# path runs, and so the defensive guard in get_order/cancel_order can
+# detect it and skip the wasted HTTP round-trip that would otherwise 400.
+_BROKER_ID_LOST_SUFFIX = "-FCST-NOID"
+
 
 class ForecastExAdapter:
     """Execution adapter for ForecastEx (via IBKR Client Portal Web API).
@@ -217,6 +224,7 @@ class ForecastExAdapter:
         snapped = self._snap_to_tick(price)
 
         t_before_place_ns = time.monotonic_ns()
+        placed_after_wall_ts = time.time()
         try:
             response = await self._client.place_order(
                 conid=market_id, side="SELL",
@@ -230,7 +238,7 @@ class ForecastExAdapter:
                 place_ms=place_ms_failed, err=str(exc),
             )
             return Order(
-                order_id=f"{arb_id}-{normalized_side.upper() or 'SELL'}-FCST",
+                order_id=f"{arb_id}-{normalized_side.upper() or 'SELL'}{_BROKER_ID_LOST_SUFFIX}",
                 platform="forecastex",
                 market_id=market_id,
                 canonical_id=canonical_id,
@@ -244,14 +252,55 @@ class ForecastExAdapter:
             )
         place_ms = round((time.monotonic_ns() - t_before_place_ns) / 1e6, 1)
 
+        broker_order_id = self._extract_broker_order_id(response)
+        recovery_path = "ack"
+        if not broker_order_id:
+            logger.warning(
+                "forecastex.sell.no_broker_id_in_ack",
+                arb_id=arb_id, market_id=market_id, side=side, op=op,
+                raw_response=str(response)[:500],
+            )
+            broker_order_id = await self._lookup_broker_id_via_live_orders(
+                market_id=market_id,
+                normalized_side="SELL",
+                qty=int(qty),
+                placed_after_ts=placed_after_wall_ts,
+            )
+            recovery_path = "live_orders_lookup" if broker_order_id else "lost"
+
+        if not broker_order_id:
+            logger.error(
+                "forecastex.sell.broker_id_unrecoverable",
+                arb_id=arb_id, market_id=market_id, side=side, op=op,
+                place_ms=place_ms, raw_response=str(response)[:500],
+            )
+            return Order(
+                order_id=f"{arb_id}-{normalized_side.upper() or 'SELL'}{_BROKER_ID_LOST_SUFFIX}",
+                platform="forecastex",
+                market_id=market_id,
+                canonical_id=canonical_id,
+                side=side,
+                price=snapped,
+                quantity=int(qty),
+                status=OrderStatus.FAILED,
+                timestamp=time.time(),
+                error=(
+                    f"forecastex {op} broker_id unrecoverable from ack and "
+                    "live-orders lookup; sell MAY be live at IBKR"
+                ),
+                external_client_order_id=None,
+            )
+
         order = self._order_from_response(
             response, arb_id, market_id, canonical_id, side, snapped, int(qty),
+            broker_order_id=broker_order_id,
         )
         logger.info(
             "forecastex.sell.placed",
             arb_id=arb_id, market_id=market_id, side=side, op=op, tif=tif,
             price=snapped, qty=qty, place_ms=place_ms,
             order_status=order.status.value, fill_qty=order.fill_qty,
+            broker_order_id=broker_order_id, broker_id_path=recovery_path,
         )
         return order
 
@@ -328,6 +377,7 @@ class ForecastExAdapter:
             )
 
         t_before_place_ns = time.monotonic_ns()
+        placed_after_wall_ts = time.time()
         try:
             response = await self._client.place_order(
                 conid=market_id, side="BUY",
@@ -343,7 +393,7 @@ class ForecastExAdapter:
                 place_ms=place_ms_failed, err=str(exc),
             )
             return Order(
-                order_id=f"{arb_id}-{normalized_side or 'BUY'}-FCST",
+                order_id=f"{arb_id}-{normalized_side or 'BUY'}{_BROKER_ID_LOST_SUFFIX}",
                 platform="forecastex",
                 market_id=market_id,
                 canonical_id=canonical_id,
@@ -357,8 +407,55 @@ class ForecastExAdapter:
             )
         place_ms = round((time.monotonic_ns() - t_before_place_ns) / 1e6, 1)
 
+        broker_order_id = self._extract_broker_order_id(response)
+        recovery_path = "ack"
+        if not broker_order_id:
+            # Ack didn't carry an id. Log the raw shape (truncated) so the
+            # next round of diagnosis has the ground truth from production,
+            # then try the live-orders lookup before giving up.
+            logger.warning(
+                "forecastex.submit.no_broker_id_in_ack",
+                arb_id=arb_id, market_id=market_id, side=side, op=op,
+                raw_response=str(response)[:500],
+            )
+            broker_order_id = await self._lookup_broker_id_via_live_orders(
+                market_id=market_id,
+                normalized_side="BUY",
+                qty=int(qty),
+                placed_after_ts=placed_after_wall_ts,
+            )
+            recovery_path = "live_orders_lookup" if broker_order_id else "lost"
+
+        if not broker_order_id:
+            # We have no handle on the order. It MAY still be live at
+            # IBKR; the engine returning FAILED here prevents the secondary
+            # leg from firing (no naked exposure on our side). Log loudly
+            # so operators can manually intervene if the order does fill.
+            logger.error(
+                "forecastex.submit.broker_id_unrecoverable",
+                arb_id=arb_id, market_id=market_id, side=side, op=op,
+                place_ms=place_ms, raw_response=str(response)[:500],
+            )
+            return Order(
+                order_id=f"{arb_id}-{normalized_side or 'BUY'}{_BROKER_ID_LOST_SUFFIX}",
+                platform="forecastex",
+                market_id=market_id,
+                canonical_id=canonical_id,
+                side=side,
+                price=snapped,
+                quantity=int(qty),
+                status=OrderStatus.FAILED,
+                timestamp=time.time(),
+                error=(
+                    "forecastex broker_id unrecoverable from ack and live-orders "
+                    "lookup; order MAY be live at IBKR — operator review required"
+                ),
+                external_client_order_id=None,
+            )
+
         order = self._order_from_response(
             response, arb_id, market_id, canonical_id, side, snapped, int(qty),
+            broker_order_id=broker_order_id,
         )
         # V19 wire-path telemetry — per-leg place latency so operators can
         # tell venue slowness apart from network slowness in live-fire.
@@ -367,10 +464,33 @@ class ForecastExAdapter:
             arb_id=arb_id, market_id=market_id, side=side, tif=tif,
             price=snapped, qty=qty, place_ms=place_ms,
             order_status=order.status.value, fill_qty=order.fill_qty,
+            broker_order_id=broker_order_id, broker_id_path=recovery_path,
         )
         return order
 
     # ─── Status queries ───────────────────────────────────────────────────
+
+    @staticmethod
+    def _looks_like_synthetic_id(order_id: str) -> bool:
+        """Return True when ``order_id`` is one of the internal sentinels
+        the adapter falls back to when no real broker id is available
+        (e.g. ``-FCST-NOID`` after the place-order ack came back empty).
+
+        IBKR-assigned order ids are short numeric strings; the synthetic
+        sentinels embed our ARB- prefix and a recognizable suffix. The
+        belt-and-suspenders check here avoids the 400-storm observed on
+        ARB-000768/769 even if some future regression reintroduces a
+        synthetic-id path the extraction logic missed.
+        """
+        if not order_id:
+            return True
+        return (
+            order_id.startswith("ARB-")
+            and (
+                order_id.endswith(_BROKER_ID_LOST_SUFFIX)
+                or order_id.endswith("-FCST")
+            )
+        )
 
     async def get_order(self, order: Order) -> Order:
         """Query IBKR for the current order state.
@@ -385,6 +505,17 @@ class ForecastExAdapter:
         flip a resting Forecastex order to FAILED and trigger an
         unwarranted naked-leg unwind on the paired leg.
         """
+        # ARB-000768/769 backstop: never round-trip a synthetic id back
+        # to IBKR — it always 400s, burns rate budget, and floods the log
+        # with one warning per poll. Mark ambiguous and let the engine's
+        # recovery path own the resolution.
+        if self._looks_like_synthetic_id(order.order_id):
+            logger.warning(
+                "forecastex.get_order.synthetic_id_skip",
+                order_id=order.order_id, status=order.status.value,
+            )
+            order.idempotency_ambiguous = True
+            return order
         try:
             payload = await self._client.get_order(order.order_id)
         except Exception as exc:
@@ -453,6 +584,13 @@ class ForecastExAdapter:
         return await self.get_order(order)
 
     async def cancel_order(self, order: Order) -> bool:
+        # See note in ``get_order`` — synthetic ids can never cancel.
+        if self._looks_like_synthetic_id(order.order_id):
+            logger.warning(
+                "forecastex.cancel_order.synthetic_id_skip",
+                order_id=order.order_id, status=order.status.value,
+            )
+            return False
         try:
             await self._client.cancel_order(order.order_id)
             return True
@@ -617,6 +755,158 @@ class ForecastExAdapter:
             return OrderStatus.FAILED
         return default
 
+    @staticmethod
+    def _extract_broker_order_id(response: Any) -> Optional[str]:
+        """Walk a ForecastEx/IBKR place-order response and return the
+        broker-assigned order id, or None if no broker id is present.
+
+        ARB-000768/ARB-000769 (2026-06-05): the previous extraction logic
+        sat inline in ``_order_from_response`` and fell back to a synthetic
+        ``ARB-...-FCST`` id whenever the response didn't carry any of the
+        three keys we checked (``order_id``/``orderId``/``id``). That
+        synthetic id then got threaded into every subsequent
+        ``get_order``/``cancel_order`` call, which IBKR rightly rejected
+        with HTTP 400 — locking the leg into "submitted, fill_qty=0" for
+        the entire poll window and burning the FX trade.
+
+        Shapes we accept here:
+
+          1. Top-level dict ack:  ``{"order_id": "1370093173", ...}``
+          2. items-wrapped list:  ``{"items": [{"order_id": "..."}]}``
+             (``_request`` wraps top-level lists this way)
+          3. ``orders`` wrapper:  ``{"orders": [{"order_id": "..."}]}``
+          4. camelCase:           ``{"orderId": "..."}``
+          5. Reply-chain ``id``:  ``{"id": "..."}`` — only when no
+             ``message`` field is present (a confirmation prompt's ``id``
+             is a reply UUID, not an order id, and is handled upstream by
+             ``_answer_reply_chain``).
+          6. Singleton list:      ``[{"order_id": "..."}]`` (raw, in case
+             a caller hands us the unwrapped form).
+        """
+        if response is None:
+            return None
+        # Singleton list shape (raw, unwrapped by _request).
+        if isinstance(response, list):
+            return ForecastExAdapter._extract_broker_order_id(
+                response[0] if response else None
+            )
+        if not isinstance(response, dict):
+            return None
+
+        # Direct hit on the standard ack keys.
+        for key in ("order_id", "orderId"):
+            value = response.get(key)
+            if value not in (None, "", 0, "0"):
+                return str(value)
+
+        # ``id`` is ambiguous: it doubles as the reply-UUID on
+        # confirmation prompts. Only accept it when there's no
+        # ``message`` field (which would mark it as a prompt).
+        if response.get("id") and not response.get("message"):
+            return str(response["id"])
+
+        # Nested under ``items`` (the wrap _request applies to top-level
+        # lists) or ``orders`` (some gateway versions).
+        for wrapper_key in ("items", "orders"):
+            wrapped = response.get(wrapper_key)
+            if isinstance(wrapped, list) and wrapped:
+                nested = ForecastExAdapter._extract_broker_order_id(wrapped[0])
+                if nested:
+                    return nested
+
+        return None
+
+    async def _lookup_broker_id_via_live_orders(
+        self,
+        *,
+        market_id: str,
+        normalized_side: str,
+        qty: int,
+        placed_after_ts: float,
+    ) -> Optional[str]:
+        """Fallback: if the place-order ack didn't carry a broker id, ask
+        IBKR for the live-orders list and find the order we just placed
+        by conid + side + size, preferring the most recent match.
+
+        Without this, an empty/malformed ack would leave a live order at
+        IBKR that we have no handle to query or cancel — the exact failure
+        mode that broke ARB-000768. We accept a one-shot extra round-trip
+        as the safety belt because the alternative is naked exposure.
+        """
+        if not hasattr(self._client, "list_live_orders"):
+            return None
+        try:
+            live = await self._client.list_live_orders()
+        except Exception as exc:
+            logger.warning(
+                "forecastex.broker_id_lookup.list_live_orders_failed",
+                err=str(exc),
+            )
+            return None
+        if not isinstance(live, list):
+            return None
+
+        target_conid = str(market_id).strip()
+        best_id: Optional[str] = None
+        best_ts: float = -1.0
+        for entry in live:
+            if not isinstance(entry, dict):
+                continue
+            entry_conid = str(
+                entry.get("conid") or entry.get("conidEx") or ""
+            ).split("@", 1)[0].strip()
+            if entry_conid != target_conid:
+                continue
+            entry_side = str(entry.get("side") or "").upper()
+            if entry_side and entry_side != normalized_side:
+                continue
+            # IBKR may report total size as ``totalSize``, ``size``, or
+            # ``quantity`` depending on the gateway version. Match on the
+            # union — qty mismatch ≠ definitively a different order.
+            entry_qty = (
+                entry.get("totalSize")
+                or entry.get("size")
+                or entry.get("quantity")
+            )
+            try:
+                if entry_qty is not None and int(float(entry_qty)) != int(qty):
+                    continue
+            except (TypeError, ValueError):
+                pass
+            # Prefer the most recent placement: ``lastExecutionTime_r`` is
+            # epoch-millis on IBKR; ``lastExecutionTime`` is the same in a
+            # different unit. Accept whichever shows up.
+            try:
+                entry_ts = float(
+                    entry.get("lastExecutionTime_r")
+                    or entry.get("lastExecutionTime")
+                    or 0.0
+                )
+            except (TypeError, ValueError):
+                entry_ts = 0.0
+            # IBKR ms-epoch fields will be ≫ our `placed_after_ts` seconds
+            # value; normalize the comparison so both are seconds.
+            if entry_ts > 1e12:
+                entry_ts = entry_ts / 1000.0
+            if placed_after_ts and entry_ts and entry_ts + 5.0 < placed_after_ts:
+                # This live order predates our placement — not ours.
+                continue
+            entry_order_id = str(
+                entry.get("orderId") or entry.get("order_id") or ""
+            ).strip()
+            if not entry_order_id:
+                continue
+            if entry_ts >= best_ts:
+                best_ts = entry_ts
+                best_id = entry_order_id
+        if best_id:
+            logger.info(
+                "forecastex.broker_id_lookup.recovered_via_live_orders",
+                market_id=market_id, side=normalized_side, qty=qty,
+                broker_order_id=best_id,
+            )
+        return best_id
+
     def _order_from_response(
         self,
         response: dict,
@@ -626,35 +916,29 @@ class ForecastExAdapter:
         side: str,
         price: float,
         qty: int,
+        broker_order_id: str,
     ) -> Order:
+        """Build an ``Order`` from the venue ack using the broker id that
+        the caller already extracted (or recovered via the live-orders
+        fallback). The caller is responsible for ensuring
+        ``broker_order_id`` is the IBKR-assigned id — never an internal
+        synthetic id — because every subsequent ``get_order``/``cancel_order``
+        round-trip threads it back to IBKR verbatim.
+        """
         now = time.time()
         if not isinstance(response, dict):
-            return Order(
-                order_id=f"{arb_id}-{str(side).upper() or 'BUY'}-FCST",
-                platform="forecastex",
-                market_id=market_id,
-                canonical_id=canonical_id,
-                side=side,
-                price=price,
-                quantity=int(qty),
-                status=OrderStatus.FAILED,
-                timestamp=now,
-                error="Unexpected non-dict response from ForecastEx",
-                external_client_order_id=None,
-            )
+            response = {}
 
-        # IBKR returns an order placement payload as either {"order_id": ...}
-        # or a list under "items". Normalize.
+        # Walk the same wrappers as ``_extract_broker_order_id`` so we
+        # read order_status / fill fields from the inner ack, not the
+        # outer items wrapper.
         items = response.get("items") if isinstance(response, dict) else None
         if isinstance(items, list) and items:
             response = items[0] if isinstance(items[0], dict) else response
+        orders_wrap = response.get("orders") if isinstance(response, dict) else None
+        if isinstance(orders_wrap, list) and orders_wrap:
+            response = orders_wrap[0] if isinstance(orders_wrap[0], dict) else response
 
-        order_id = str(
-            response.get("order_id")
-            or response.get("orderId")
-            or response.get("id")
-            or f"{arb_id}-{str(side).upper() or 'BUY'}-FCST"
-        )
         api_status = str(
             response.get("order_status")
             or response.get("orderStatus")
@@ -703,7 +987,7 @@ class ForecastExAdapter:
             fill_qty = float(qty)
 
         return Order(
-            order_id=order_id,
+            order_id=broker_order_id,
             platform="forecastex",
             market_id=market_id,
             canonical_id=canonical_id,

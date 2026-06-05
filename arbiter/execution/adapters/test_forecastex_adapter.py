@@ -596,3 +596,336 @@ async def test_place_resting_sell_partial_fill_status():
     )
     assert order.status == OrderStatus.PARTIAL
     assert order.fill_qty == 3
+
+
+# ── Broker order-ID round-trip (ARB-000768/769 postmortem) ───────────────
+# These tests lock in the fix for the bug that broke the first live FX trade:
+# the adapter was passing our synthetic ``ARB-XXX-YES-FCST`` id back to
+# IBKR for every ``get_order``/``cancel_order`` poll, which always 400'd
+# because IBKR has no record of that id. The broker-assigned id from the
+# place-order ack must round-trip; if the ack is malformed, the live-orders
+# fallback recovers it; if THAT fails too, the order returns FAILED so the
+# engine recovery path runs instead of letting the leg hang in SUBMITTED.
+
+
+# ── _extract_broker_order_id: shape coverage ──────────────────────────────
+
+
+def test_extract_broker_id_from_top_level_dict():
+    assert ForecastExAdapter._extract_broker_order_id(
+        {"order_id": "1370093173", "order_status": "PreSubmitted"}
+    ) == "1370093173"
+
+
+def test_extract_broker_id_from_items_wrapped():
+    # _request wraps top-level JSON arrays this way; the wire ack is
+    # `[{"order_id":...}]` which becomes `{"items":[{...}]}`.
+    assert ForecastExAdapter._extract_broker_order_id(
+        {"items": [{"order_id": "1370093173", "order_status": "Submitted"}]}
+    ) == "1370093173"
+
+
+def test_extract_broker_id_from_camelcase():
+    assert ForecastExAdapter._extract_broker_order_id(
+        {"orderId": "abc-99", "orderStatus": "Submitted"}
+    ) == "abc-99"
+
+
+def test_extract_broker_id_from_orders_wrapper():
+    assert ForecastExAdapter._extract_broker_order_id(
+        {"orders": [{"order_id": "xyz-1"}]}
+    ) == "xyz-1"
+
+
+def test_extract_broker_id_from_id_field_when_no_message():
+    # Some gateway versions emit ``{"id": "<order_id>"}`` for the ack.
+    # Accept that ONLY when there's no ``message`` field (a confirmation
+    # prompt's ``id`` is a reply UUID, not an order id).
+    assert ForecastExAdapter._extract_broker_order_id(
+        {"id": "1234", "order_status": "Submitted"}
+    ) == "1234"
+
+
+def test_extract_broker_id_ignores_id_when_message_present():
+    # Confirmation-prompt shape — ``id`` is the reply UUID, not the
+    # order id. _answer_reply_chain should have walked through this
+    # already, but defense-in-depth: never mis-route a reply UUID as
+    # an order id.
+    assert ForecastExAdapter._extract_broker_order_id(
+        {"id": "reply-uuid", "message": ["confirm?"]}
+    ) is None
+
+
+def test_extract_broker_id_returns_none_for_empty_dict():
+    assert ForecastExAdapter._extract_broker_order_id({}) is None
+
+
+def test_extract_broker_id_returns_none_for_non_dict():
+    assert ForecastExAdapter._extract_broker_order_id(None) is None
+    assert ForecastExAdapter._extract_broker_order_id("oops") is None
+
+
+def test_extract_broker_id_handles_singleton_list():
+    assert ForecastExAdapter._extract_broker_order_id(
+        [{"order_id": "in-list"}]
+    ) == "in-list"
+
+
+def test_extract_broker_id_ignores_falsy_values():
+    # zero / empty-string are NOT a valid IBKR order id.
+    assert ForecastExAdapter._extract_broker_order_id(
+        {"order_id": 0, "orderId": "", "id": None}
+    ) is None
+
+
+# ── Hard-fail when broker id is unrecoverable ─────────────────────────────
+
+
+async def test_place_fok_returns_failed_when_ack_has_no_broker_id_and_no_live_orders():
+    """If the ack is empty AND list_live_orders can't find our just-placed
+    order, the adapter must NOT silently use a synthetic id — that's the
+    exact regression that caused ARB-000768. Return FAILED instead."""
+    client = _mock_client(place_response={})  # ack with no order_id
+    client.list_live_orders = AsyncMock(return_value=[])
+    adapter = ForecastExAdapter(client=client)
+    order = await adapter.place_fok(
+        arb_id="ARB-768", market_id="773659815", canonical_id="GOP_SENATE_2026",
+        side="yes", price=0.49, qty=1,
+    )
+    assert order.status == OrderStatus.FAILED, (
+        f"expected FAILED; got status={order.status} order_id={order.order_id!r}"
+    )
+    assert "broker_id unrecoverable" in order.error
+    # The id is a synthetic sentinel — the defensive guard recognizes it.
+    assert ForecastExAdapter._looks_like_synthetic_id(order.order_id)
+
+
+async def test_place_ioc_returns_failed_when_ack_has_no_broker_id_and_no_live_orders():
+    client = _mock_client(place_response={"encrypt_message": "1"})  # no id field
+    client.list_live_orders = AsyncMock(return_value=[])
+    adapter = ForecastExAdapter(client=client)
+    order = await adapter.place_ioc(
+        arb_id="ARB-769", market_id="745924270", canonical_id="DEM_SENATE_2026",
+        side="no", price=0.51, qty=1,
+    )
+    assert order.status == OrderStatus.FAILED
+    assert ForecastExAdapter._looks_like_synthetic_id(order.order_id)
+
+
+# ── Live-orders fallback recovers broker_id ───────────────────────────────
+
+
+async def test_place_fok_recovers_broker_id_via_live_orders_when_ack_empty():
+    """If the place ack is empty, the live-orders lookup must recover the
+    broker id by matching conid + side + qty. The Order returned must
+    carry that recovered id, NOT a synthetic fallback."""
+    client = _mock_client(place_response={})  # ack with no order_id
+    client.list_live_orders = AsyncMock(return_value=[
+        # An older order on a different conid — must be ignored.
+        {"orderId": "stale-1", "conid": "999", "side": "BUY",
+         "totalSize": 5, "lastExecutionTime_r": 0},
+        # The one we just placed.
+        {"orderId": "live-1370093173", "conid": "773659815",
+         "side": "BUY", "totalSize": 1, "lastExecutionTime_r": 9.9e12},
+    ])
+    adapter = ForecastExAdapter(client=client)
+    order = await adapter.place_fok(
+        arb_id="ARB-768", market_id="773659815", canonical_id="GOP_SENATE_2026",
+        side="yes", price=0.49, qty=1,
+    )
+    assert order.order_id == "live-1370093173"
+    # Status should reflect the (empty) ack default — engine's poll loop
+    # will get the real status on the next get_order.
+    assert order.status == OrderStatus.SUBMITTED
+
+
+async def test_place_unwind_sell_recovers_broker_id_via_live_orders_when_ack_empty():
+    client = _mock_client(place_response={})
+    client.list_live_orders = AsyncMock(return_value=[
+        {"orderId": "sell-id", "conid": "111",
+         "side": "SELL", "totalSize": 10, "lastExecutionTime_r": 9.9e12},
+    ])
+    adapter = ForecastExAdapter(client=client)
+    order = await adapter.place_unwind_sell(
+        arb_id="ARB-1", market_id="111", canonical_id="X",
+        side="yes", qty=10, panic_price=0.01,
+    )
+    assert order.order_id == "sell-id"
+
+
+# ── End-to-end round-trip: broker_id flows to get_order/cancel_order ─────
+
+
+async def test_broker_id_round_trips_to_get_order():
+    """Smoke test for the full path. Place returns a broker id; the
+    subsequent get_order(Order) must call client.get_order with THAT
+    broker id — never the synthetic ARB-prefixed fallback."""
+    client = _mock_client(place_response={
+        "order_id": "1370093173", "order_status": "Submitted",
+        "filled_quantity": 0, "avg_price": 0,
+    })
+    client.get_order = AsyncMock(return_value={
+        "order_status": "Submitted", "filled_quantity": 0,
+    })
+    adapter = ForecastExAdapter(client=client)
+    order = await adapter.place_ioc(
+        arb_id="ARB-999", market_id="111", canonical_id="X",
+        side="yes", price=0.50, qty=1,
+    )
+    assert order.order_id == "1370093173"
+    await adapter.get_order(order)
+    client.get_order.assert_awaited_with("1370093173")
+
+
+async def test_broker_id_round_trips_to_cancel_order():
+    client = _mock_client(place_response={
+        "order_id": "1370093173", "order_status": "Submitted",
+    })
+    adapter = ForecastExAdapter(client=client)
+    order = await adapter.place_ioc(
+        arb_id="ARB-999", market_id="111", canonical_id="X",
+        side="yes", price=0.50, qty=1,
+    )
+    ok = await adapter.cancel_order(order)
+    assert ok is True
+    client.cancel_order.assert_awaited_with("1370093173")
+
+
+# ── Defensive guards: synthetic ids must NEVER hit IBKR ───────────────────
+
+
+def test_looks_like_synthetic_id_recognizes_lost_suffix():
+    assert ForecastExAdapter._looks_like_synthetic_id("ARB-768-YES-FCST-NOID")
+    assert ForecastExAdapter._looks_like_synthetic_id("ARB-1-BUY-FCST-NOID")
+
+
+def test_looks_like_synthetic_id_recognizes_legacy_fcst_suffix():
+    # The pre-fix fallback id shape — still in flight at deploy time.
+    assert ForecastExAdapter._looks_like_synthetic_id("ARB-768-YES-FCST")
+
+
+def test_looks_like_synthetic_id_rejects_real_ibkr_id():
+    # IBKR-assigned ids are short numeric strings.
+    assert not ForecastExAdapter._looks_like_synthetic_id("1370093173")
+    assert not ForecastExAdapter._looks_like_synthetic_id("abc-xyz")
+
+
+async def test_get_order_short_circuits_on_synthetic_id():
+    """Belt-and-suspenders against any regression that lets a synthetic id
+    reach get_order — IBKR always 400s on these, and the production
+    log-storm of ARB-000768 burned 20+ rate budget points before timeout."""
+    client = _mock_client()
+    adapter = ForecastExAdapter(client=client)
+    order = Order(
+        order_id="ARB-768-YES-FCST-NOID", platform="forecastex",
+        market_id="m", canonical_id="X", side="yes", price=0.49,
+        quantity=1, status=OrderStatus.SUBMITTED,
+    )
+    result = await adapter.get_order(order)
+    # Must NOT have hit IBKR.
+    client.get_order.assert_not_awaited()
+    assert result.idempotency_ambiguous is True
+    # Status preserved — engine recovery owns the resolution.
+    assert result.status == OrderStatus.SUBMITTED
+
+
+async def test_cancel_order_short_circuits_on_synthetic_id():
+    client = _mock_client()
+    adapter = ForecastExAdapter(client=client)
+    order = Order(
+        order_id="ARB-768-YES-FCST-NOID", platform="forecastex",
+        market_id="m", canonical_id="X", side="yes", price=0.49,
+        quantity=1, status=OrderStatus.SUBMITTED,
+    )
+    ok = await adapter.cancel_order(order)
+    assert ok is False
+    client.cancel_order.assert_not_awaited()
+
+
+async def test_get_order_short_circuits_on_legacy_fcst_suffix():
+    """ARB-000768 logged ``order_id=ARB-000768-YES-FCST``. The defensive
+    guard must catch that exact shape so a re-deploy mid-flight wouldn't
+    keep storming 400s for orders the previous build placed."""
+    client = _mock_client()
+    adapter = ForecastExAdapter(client=client)
+    order = Order(
+        order_id="ARB-000768-YES-FCST", platform="forecastex",
+        market_id="m", canonical_id="X", side="yes", price=0.49,
+        quantity=1, status=OrderStatus.SUBMITTED,
+    )
+    await adapter.get_order(order)
+    client.get_order.assert_not_awaited()
+
+
+# ── Live-orders lookup: filters & matching ────────────────────────────────
+
+
+async def test_live_orders_lookup_ignores_wrong_conid():
+    client = _mock_client()
+    client.list_live_orders = AsyncMock(return_value=[
+        {"orderId": "other-1", "conid": "999", "side": "BUY",
+         "totalSize": 1, "lastExecutionTime_r": 9.9e12},
+    ])
+    adapter = ForecastExAdapter(client=client)
+    found = await adapter._lookup_broker_id_via_live_orders(
+        market_id="111", normalized_side="BUY", qty=1, placed_after_ts=0,
+    )
+    assert found is None
+
+
+async def test_live_orders_lookup_ignores_wrong_side():
+    client = _mock_client()
+    client.list_live_orders = AsyncMock(return_value=[
+        {"orderId": "sell-x", "conid": "111", "side": "SELL",
+         "totalSize": 1, "lastExecutionTime_r": 9.9e12},
+    ])
+    adapter = ForecastExAdapter(client=client)
+    found = await adapter._lookup_broker_id_via_live_orders(
+        market_id="111", normalized_side="BUY", qty=1, placed_after_ts=0,
+    )
+    assert found is None
+
+
+async def test_live_orders_lookup_prefers_most_recent():
+    client = _mock_client()
+    # IBKR ms-epoch values (year 2026 is ~1.78e12).
+    client.list_live_orders = AsyncMock(return_value=[
+        {"orderId": "older", "conid": "111", "side": "BUY",
+         "totalSize": 1, "lastExecutionTime_r": 1.78e12},
+        {"orderId": "newer", "conid": "111", "side": "BUY",
+         "totalSize": 1, "lastExecutionTime_r": 1.79e12},
+    ])
+    adapter = ForecastExAdapter(client=client)
+    found = await adapter._lookup_broker_id_via_live_orders(
+        market_id="111", normalized_side="BUY", qty=1, placed_after_ts=0,
+    )
+    assert found == "newer"
+
+
+async def test_live_orders_lookup_handles_list_failure_gracefully():
+    """If list_live_orders raises, the adapter must NOT crash — it falls
+    through to the FAILED-order path."""
+    client = _mock_client(place_response={})
+    client.list_live_orders = AsyncMock(side_effect=RuntimeError("gateway 503"))
+    adapter = ForecastExAdapter(client=client)
+    order = await adapter.place_ioc(
+        arb_id="ARB-X", market_id="111", canonical_id="X",
+        side="yes", price=0.50, qty=1,
+    )
+    assert order.status == OrderStatus.FAILED
+    assert ForecastExAdapter._looks_like_synthetic_id(order.order_id)
+
+
+async def test_live_orders_lookup_skipped_when_client_lacks_method():
+    """The lookup must be opt-in: a plain object without list_live_orders
+    should NOT trigger an AttributeError — just return None. (MagicMock
+    auto-creates attributes, so this uses SimpleNamespace.)"""
+    client = SimpleNamespace(
+        place_order=AsyncMock(return_value={"order_id": "id-1"}),
+        live_rate_limiter=None, circuit=None,
+    )
+    adapter = ForecastExAdapter(client=client)
+    found = await adapter._lookup_broker_id_via_live_orders(
+        market_id="111", normalized_side="BUY", qty=1, placed_after_ts=0,
+    )
+    assert found is None
