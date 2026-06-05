@@ -178,9 +178,25 @@ class MappingAutoValidator:
             status = str(market.get("status", "")).lower()
             result.is_open = status in ("open", "active")
             result.is_expired = status in ("closed", "settled", "finalized", "ceased_trading")
-            result.yes_price = float(market.get("yes_ask", 0) or market.get("last_price", 0) or 0)
-            result.no_price = float(market.get("no_ask", 0) or 0)
-            result.has_quotes = result.yes_price > 0 or result.no_price > 0
+            # Kalshi price detection: check all price fields (yes_ask, no_ask,
+            # yes_bid, no_bid, last_price). A market with status=open IS live
+            # even when the orderbook is empty (spread markets with no resting
+            # orders still accept trades).
+            yes_ask = float(market.get("yes_ask", 0) or 0)
+            no_ask = float(market.get("no_ask", 0) or 0)
+            yes_bid = float(market.get("yes_bid", 0) or 0)
+            no_bid = float(market.get("no_bid", 0) or 0)
+            last_price = float(market.get("last_price", 0) or 0)
+            result.yes_price = yes_ask or last_price
+            result.no_price = no_ask
+            result.has_quotes = (
+                yes_ask > 0 or no_ask > 0 or yes_bid > 0
+                or no_bid > 0 or last_price > 0
+            )
+            # For Kalshi, status=open itself is sufficient proof of liveness
+            # even if orderbook is currently empty (thin market).
+            if result.is_open and not result.has_quotes:
+                result.has_quotes = True
             result.volume = float(market.get("volume", 0) or 0)
 
         except Exception as e:
@@ -192,33 +208,39 @@ class MappingAutoValidator:
         return result
 
     async def _check_polymarket(self, slug: str) -> PlatformCheckResult:
-        """Check if a Polymarket condition is live."""
+        """Check if a Polymarket condition is live.
+
+        Works both WITH a collector (reuses its session/rate-limiter) and
+        WITHOUT one (creates an ad-hoc aiohttp session against the public
+        gamma-api). This allows standalone scripts to validate Polymarket
+        slugs without bootstrapping the full collector stack.
+        """
         result = PlatformCheckResult(platform="polymarket", market_id=slug)
-        if not self.polymarket or not slug:
-            result.error = "no collector or empty slug"
+        if not slug:
+            result.error = "empty slug"
             return result
 
         t0 = time.monotonic()
         try:
-            # Use the client's session to check the slug
-            client = getattr(self.polymarket, "client", self.polymarket)
+            import aiohttp
 
-            # Rate limit
-            if hasattr(client, "rate_limiter"):
-                await client.rate_limiter.acquire()
-
+            # Try to reuse the collector's session if available
             session = None
-            if hasattr(client, "_session") and client._session and not client._session.closed:
-                session = client._session
-            elif hasattr(client, "_get_session"):
-                session = await client._get_session()
+            _created_session = False
+            if self.polymarket:
+                client = getattr(self.polymarket, "client", self.polymarket)
+                if hasattr(client, "rate_limiter"):
+                    await client.rate_limiter.acquire()
+                if hasattr(client, "_session") and client._session and not client._session.closed:
+                    session = client._session
+                elif hasattr(client, "_get_session"):
+                    session = await client._get_session()
 
             if session is None:
-                import aiohttp
                 session = aiohttp.ClientSession()
                 _created_session = True
-            else:
-                _created_session = False
+                # Standalone rate-limit: 250ms between calls
+                await asyncio.sleep(0.25)
 
             try:
                 # Try gamma-api for market data
@@ -255,17 +277,19 @@ class MappingAutoValidator:
 
                 market = data[0] if isinstance(data, list) else data
                 result.exists = True
-                status = str(market.get("active", True))
-                result.is_open = market.get("active", False) and not market.get("closed", True)
-                result.is_expired = market.get("closed", False) or market.get("archived", False)
-                result.has_quotes = bool(market.get("bestAsk") or market.get("bestBid") or market.get("outcomePrices"))
+                result.is_open = bool(market.get("active", False)) and not bool(market.get("closed", True))
+                result.is_expired = bool(market.get("closed", False)) or bool(market.get("archived", False))
+                result.has_quotes = bool(
+                    market.get("bestAsk") or market.get("bestBid")
+                    or market.get("outcomePrices")
+                )
                 # Parse prices
                 outcome_prices = market.get("outcomePrices")
                 if outcome_prices:
                     try:
+                        import json as _json
                         if isinstance(outcome_prices, str):
-                            import json
-                            prices = json.loads(outcome_prices)
+                            prices = _json.loads(outcome_prices)
                         else:
                             prices = outcome_prices
                         if isinstance(prices, list) and len(prices) >= 1:
@@ -376,26 +400,43 @@ class MappingAutoValidator:
             else:
                 result.platforms[name] = check_result
 
-        # Determine recommendation
-        live_count = result.live_platform_count
-        error_count = sum(1 for p in result.platforms.values() if p.error and not p.error.startswith("no "))
+        # Determine recommendation.
+        # Separate actually-checked platforms from those skipped due to
+        # missing collector/empty ID ("no collector or empty ticker" etc.).
+        # Skipped checks are NOT failures — a K-only mapping with no Poly
+        # slug should be judged solely on its Kalshi check.
+        checked = {
+            name: p for name, p in result.platforms.items()
+            if not p.error or not p.error.startswith("no ")
+        }
+        skipped = {
+            name: p for name, p in result.platforms.items()
+            if p.error and p.error.startswith("no ")
+        }
 
-        if result.all_expired:
-            result.recommendation = ValidationRecommendation.EXPIRE
-            result.reason = f"all {len(result.platforms)} platform(s) expired/settled"
-        elif live_count == 0 and error_count == len(result.platforms):
-            # All checks errored — don't expire, might be temporary
+        live_count = sum(1 for p in checked.values() if p.is_live)
+        expired_count = sum(1 for p in checked.values() if p.is_expired or not p.exists)
+        error_count = sum(1 for p in checked.values() if p.error)
+        checked_count = len(checked)
+
+        if checked_count == 0:
+            # Nothing was actually checked (all skipped / no collectors)
+            # Don't expire — can't confirm death without evidence
             result.recommendation = ValidationRecommendation.REVIEW
-            result.reason = f"all {error_count} platform checks failed with errors"
-        elif live_count == 0:
-            result.recommendation = ValidationRecommendation.EXPIRE
-            result.reason = "no live platforms found"
-        elif live_count >= 1 and result.has_live_quotes:
+            result.reason = f"no platforms could be checked ({len(skipped)} skipped)"
+        elif live_count > 0:
             result.recommendation = ValidationRecommendation.CONFIRM
-            result.reason = f"{live_count} platform(s) live with quotes"
-        else:
+            result.reason = f"{live_count}/{checked_count} platform(s) live"
+        elif checked_count > 0 and error_count == checked_count:
+            # All checked platforms errored (rate-limited, timeout, etc.)
             result.recommendation = ValidationRecommendation.REVIEW
-            result.reason = f"{live_count} platform(s) live but no active quotes"
+            result.reason = f"all {error_count} checked platform(s) returned errors"
+        elif expired_count == checked_count:
+            result.recommendation = ValidationRecommendation.EXPIRE
+            result.reason = f"all {checked_count} checked platform(s) expired/settled"
+        else:
+            result.recommendation = ValidationRecommendation.EXPIRE
+            result.reason = f"no live platforms found ({checked_count} checked, {expired_count} expired)"
 
         return result
 
