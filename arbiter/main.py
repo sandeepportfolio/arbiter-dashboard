@@ -1594,6 +1594,70 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
                 name="revalidate-review-mappings",
             ))
 
+    # ── Auto-validator + auto-discovery pipeline ──────────────────
+    # Validates confirmed mappings against live APIs every 30 min and
+    # auto-expires dead markets. Discovers new cross-platform pairs
+    # every 2 hours and auto-promotes validated candidates with
+    # score >= 0.95 and live quotes on 2+ platforms.
+    if mapping_store is not None:
+        try:
+            from .mapping.auto_validator import MappingAutoValidator
+            from .mapping.auto_discovery_pipeline import MappingAutoDiscovery
+
+            fx_client = None
+            if forecastex is not None:
+                fx_client = getattr(forecastex, "client", None)
+
+            auto_validator = MappingAutoValidator(
+                mapping_store=mapping_store,
+                kalshi_collector=kalshi,
+                polymarket_collector=polymarket,
+                forecastex_client=fx_client,
+            )
+
+            auto_discovery = MappingAutoDiscovery(
+                mapping_store=mapping_store,
+                kalshi_collector=kalshi,
+                polymarket_collector=polymarket,
+                forecastex_client=fx_client,
+                auto_validator=auto_validator,
+            )
+
+            # Expose on API for /api/system stats
+            api.auto_validator = auto_validator
+            api.auto_discovery = auto_discovery
+
+            validator_interval_s = float(os.getenv("AUTO_VALIDATOR_INTERVAL_S", "1800"))
+            tasks.append(asyncio.create_task(
+                auto_validator.run_periodic(
+                    interval_seconds=validator_interval_s,
+                    notifier=(monitor.notifier if monitor is not None else None),
+                ),
+                name="auto-validator",
+            ))
+            logger.info(
+                "auto-validator task scheduled (interval=%ss)",
+                validator_interval_s,
+            )
+
+            discovery_interval_s = float(os.getenv("AUTO_DISCOVERY_PIPELINE_INTERVAL_S", "7200"))
+            tasks.append(asyncio.create_task(
+                auto_discovery.run_periodic(
+                    interval_seconds=discovery_interval_s,
+                    notifier=(monitor.notifier if monitor is not None else None),
+                ),
+                name="auto-discovery-pipeline",
+            ))
+            logger.info(
+                "auto-discovery-pipeline task scheduled (interval=%ss)",
+                discovery_interval_s,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Auto-validator/discovery pipeline setup failed: %s", exc,
+                exc_info=True,
+            )
+
     # Stuck-trade recovery loop (5-min default). Only runs when a Postgres
     # store and at least one platform adapter are configured — otherwise the
     # loop has nothing to query or reconcile against.
