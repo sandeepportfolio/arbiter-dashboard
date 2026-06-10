@@ -958,11 +958,10 @@ async def test_first_cycle_throttle_sleeps_once_per_cache_miss(monkeypatch):
         m.get(re.compile(r".*/iserver/marketdata/snapshot\?.*conids=600001.*"), payload=no_b)
         await collector.fetch_markets()
 
-    # One sleep per YES conid that needed discovery (both 500000 and 600000 were cache misses).
+    # One 2.0s sleep per YES conid that needed network discovery
+    # (both 500000 and 600000 were cache misses, under per-cycle cap).
     assert len(sleep_calls) == 2
-    assert all(d == 0.2 for d in sleep_calls)
-    # Throttle dropped after first cycle.
-    assert collector._first_discovery_cycle is False
+    assert all(d == 2.0 for d in sleep_calls)
     await client.close()
 
 

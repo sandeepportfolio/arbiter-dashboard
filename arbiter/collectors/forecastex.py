@@ -22,6 +22,7 @@ import logging
 import os
 import ssl
 import time
+import random
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -793,7 +794,14 @@ class ForecastExCollector:
         # endpoint). TTL is short enough that the next IBKR window can
         # still pick up the conid once rate-limiting clears.
         self._no_discovery_soft_block: dict[str, float] = {}
-        self._no_discovery_soft_block_ttl_s: float = 300.0
+        self._no_discovery_soft_block_ttl_s: float = 600.0
+        # Jitter range added to the base TTL so soft-blocks don't all
+        # expire at once (thundering-herd fix, CV-03 2026-06-10).
+        self._no_discovery_soft_block_jitter_s: float = 300.0
+        # Max NO-conid discoveries per fetch_markets cycle. Prevents
+        # burst of secdef/strikes calls when many soft-blocks expire
+        # in the same window (CV-03 2026-06-10).
+        self._max_discoveries_per_cycle: int = 3
         # YES conids attached to multiple canonical markets are ambiguous and
         # unsafe. Skip them entirely until discovery/operator mapping assigns
         # unique ForecastX child conids.
@@ -1004,7 +1012,9 @@ class ForecastExCollector:
             # the soft-block TTL so we don't replay the 5s/15s/45s retry
             # ladder on every poll cycle while IBKR is rate-limiting us.
             self._no_discovery_soft_block[yes_conid] = (
-                time.time() + self._no_discovery_soft_block_ttl_s
+                time.time()
+                + self._no_discovery_soft_block_ttl_s
+                + random.uniform(0, self._no_discovery_soft_block_jitter_s)
             )
             return None
         try:
@@ -1246,6 +1256,7 @@ class ForecastExCollector:
     async def fetch_markets(self) -> list[PricePoint]:
         self.refresh_tracked_markets()
         results: list[PricePoint] = []
+        _cycle_discoveries: int = 0
 
         for canonical_id, (yes_conid, mapped_no_conid) in self._conid_map.items():
             if yes_conid in self._inactive_conids:
@@ -1290,19 +1301,32 @@ class ForecastExCollector:
                 # then emits a YES-only quote.
                 no_conid: Optional[str] = mapped_no_conid or None
                 if not no_conid:
-                    # First-cycle throttle (see __post_init__ comment).
-                    # Only sleep when we're actually about to do
-                    # network-bound discovery (cache miss + not in
-                    # negative cache); cached lookups are free.
-                    if (
-                        self._first_discovery_cycle
-                        and yes_conid not in self._no_discovery_cache
-                        and yes_conid not in self._no_discovery_failed
-                    ):
-                        await asyncio.sleep(
-                            self._first_cycle_discovery_throttle_s
-                        )
-                    no_conid = await self._attempt_no_conid_discovery(yes_conid)
+                    # Check if this would be a real network call (not
+                    # cached). If so, respect the per-cycle cap to
+                    # prevent thundering-herd 429 storms (CV-03
+                    # 2026-06-10).
+                    is_cache_hit = (
+                        yes_conid in self._no_discovery_cache
+                        or yes_conid in self._no_discovery_failed
+                    )
+                    soft_blocked = (
+                        yes_conid in self._no_discovery_soft_block
+                        and time.time() < self._no_discovery_soft_block.get(yes_conid, 0)
+                    )
+                    _skip_discovery = False
+                    if not is_cache_hit and not soft_blocked:
+                        if _cycle_discoveries >= self._max_discoveries_per_cycle:
+                            # Budget exhausted — skip network discovery
+                            # this cycle but still emit YES-only quote.
+                            _skip_discovery = True
+                        else:
+                            _cycle_discoveries += 1
+                            # Always throttle between discovery calls
+                            # (not just first cycle) to stay under
+                            # IBKR secdef/strikes rate limit (CV-03).
+                            await asyncio.sleep(2.0)
+                    if not _skip_discovery:
+                        no_conid = await self._attempt_no_conid_discovery(yes_conid)
 
                 no_snapshot = (
                     await self._fetch_side_snapshot(yes_conid, no_conid)
