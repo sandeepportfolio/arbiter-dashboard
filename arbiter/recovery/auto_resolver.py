@@ -477,6 +477,34 @@ class AutoResolver:
         )
 
         verdict = _classify_arm_reason(armed_by, armed_reason)
+
+        # Recovery probe: when the kill switch was armed by a transient DB
+        # failure, check whether the database has since recovered.  If it
+        # has AND there are no open positions, reclassify as BENIGN so the
+        # auto_resolver recommends a manual disarm instead of letting the
+        # system stay muted indefinitely.  This covers the common scenario
+        # where a momentary Postgres hiccup arms the kill switch and the
+        # DB comes back seconds later, but the flag stays latched forever.
+        if (
+            verdict == KillSwitchVerdict.GENUINE
+            and armed_by == "execution_engine:db_failure"
+        ):
+            try:
+                db_ok = await self._db_is_healthy_now()
+                no_exposure = not await self._has_any_open_positions() if db_ok else False
+                if db_ok and no_exposure:
+                    verdict = KillSwitchVerdict.BENIGN
+                    logger.warning(
+                        "auto_resolver: db_failure arm reclassified BENIGN -- "
+                        "DB is healthy, no open positions "
+                        "(armed_by=%s reason=%s)",
+                        armed_by, armed_reason,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "auto_resolver: db_failure recovery probe failed: %s", exc,
+                )
+
         blocking: List[str] = []
         if not credentials_ok:
             blocking.append("credentials check failed")
@@ -549,6 +577,57 @@ class AutoResolver:
                     "auto_resolver: safety_events recommend_disarm insert "
                     "failed: %s", exc,
                 )
+
+
+    async def _db_is_healthy_now(self) -> bool:
+        """Probe the database with a trivial SELECT to confirm connectivity.
+
+        Used by ``classify_kill_switch`` to detect when a transient
+        ``execution_engine:db_failure`` arm has healed -- the DB is back and
+        there are no open positions, so the kill switch can safely be
+        recommended for disarm rather than staying armed indefinitely.
+
+        Returns True only when the pool is reachable AND the query succeeds;
+        any exception returns False (fail-closed).
+        """
+        pool = getattr(self.store, "_pool", None)
+        if pool is None:
+            try:
+                await self.store.connect()
+            except Exception:
+                return False
+            pool = getattr(self.store, "_pool", None)
+            if pool is None:
+                return False
+        try:
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow("SELECT 1 AS ok")
+                return row is not None and row["ok"] == 1
+        except Exception:
+            return False
+
+    async def _has_any_open_positions(self) -> bool:
+        """Return True if any execution_orders row is still non-terminal.
+
+        A non-terminal order means the system may have live venue exposure.
+        The kill switch must NOT be recommended for disarm while exposure
+        exists, even if the DB is healthy.
+        """
+        pool = getattr(self.store, "_pool", None)
+        if pool is None:
+            return True  # fail-closed: assume exposure exists
+        try:
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT COUNT(*)::int AS n
+                      FROM execution_orders
+                     WHERE status IN ('pending', 'submitted', 'partial')
+                    """
+                )
+            return int(row["n"] or 0) > 0 if row else True
+        except Exception:
+            return True  # fail-closed
 
     # ─── Component C: warm-restart eligibility for readiness gate ─────────
 
