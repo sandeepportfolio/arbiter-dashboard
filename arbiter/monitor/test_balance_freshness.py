@@ -105,6 +105,114 @@ def test_successful_fetch_clears_prior_error():
     assert "kalshi" not in errors
 
 
+class _ToggleCollector:
+    """Collector that returns a good balance, then fails on demand.
+
+    Models the ForecastEx failure mode: a healthy fetch primes a known-good
+    value, then the IBKR gateway SSO expires and subsequent fetches raise
+    (circuit open) — the monitor must degrade to the last-known-good value,
+    not collapse the platform to null.
+    """
+
+    balance_source = "forecastex:ibkr-gateway"
+
+    def __init__(self, balance):
+        self._balance = balance
+        self.mode = "ok"  # "ok" | "raise" | "none"
+
+    async def fetch_balance(self):
+        if self.mode == "raise":
+            raise RuntimeError("Circuit [forecastex-rest] is OPEN — request rejected")
+        if self.mode == "none":
+            return None
+        return self._balance
+
+
+def test_failed_fetch_degrades_to_last_known_good_on_exception():
+    """After one good read, a raising fetch must re-serve the last-known-good
+    balance flagged stale, with the error reason and the ORIGINAL timestamp —
+    never a bare null that drops the platform from current_balances.
+    """
+    async def runner():
+        coll = _ToggleCollector(298.95)
+        monitor = _make_monitor({"forecastex": coll})
+        await monitor.check_balances()
+        good = monitor.current_balances["forecastex"]
+        good_ts = good.timestamp
+        # Gateway dies — circuit opens.
+        coll.mode = "raise"
+        await monitor.check_balances()
+        return monitor.current_balances, monitor.last_errors, good_ts
+
+    balances, errors, good_ts = asyncio.run(runner())
+    assert "forecastex" in balances, "platform must NOT vanish to null"
+    snap = balances["forecastex"]
+    assert snap.balance == 298.95
+    assert snap.stale is True
+    assert snap.timestamp == good_ts, "stale value keeps original known-good ts"
+    assert "OPEN" in snap.error
+    assert snap.source == "forecastex:ibkr-gateway"
+    # The error map still carries the live failure reason.
+    assert "forecastex" in errors
+    assert "OPEN" in errors["forecastex"]["message"]
+
+
+def test_failed_fetch_degrades_to_last_known_good_on_none():
+    """A None return (no creds / swallowed error) also degrades to last-good."""
+    async def runner():
+        coll = _ToggleCollector(123.0)
+        monitor = _make_monitor({"forecastex": coll})
+        await monitor.check_balances()
+        coll.mode = "none"
+        await monitor.check_balances()
+        return monitor.current_balances
+
+    balances = asyncio.run(runner())
+    assert balances["forecastex"].balance == 123.0
+    assert balances["forecastex"].stale is True
+    assert "unavailable" in balances["forecastex"].error
+
+
+def test_no_known_good_means_platform_absent_not_phantom():
+    """If a platform NEVER produced a good read this process, a failure must
+    leave it absent from current_balances (the error map carries the reason) —
+    we must not fabricate a $0 phantom balance out of nothing.
+    """
+    async def runner():
+        monitor = _make_monitor({"forecastex": _RaisingCollector("never-good")})
+        await monitor.check_balances()
+        return monitor.current_balances, monitor.last_errors
+
+    balances, errors = asyncio.run(runner())
+    assert "forecastex" not in balances
+    assert "forecastex" in errors
+    assert "never-good" in errors["forecastex"]["message"]
+
+
+def test_recovery_clears_stale_flag():
+    """When the gateway comes back, the next good read must overwrite the stale
+    last-known-good snapshot with a fresh, non-stale one and clear the error.
+    """
+    async def runner():
+        coll = _ToggleCollector(298.95)
+        monitor = _make_monitor({"forecastex": coll})
+        await monitor.check_balances()          # good
+        coll.mode = "raise"
+        await monitor.check_balances()          # degrade → stale
+        assert monitor.current_balances["forecastex"].stale is True
+        coll.mode = "ok"
+        coll._balance = 305.10                  # gateway back, new number
+        await monitor.check_balances()          # recover
+        return monitor.current_balances, monitor.last_errors
+
+    balances, errors = asyncio.run(runner())
+    snap = balances["forecastex"]
+    assert snap.balance == 305.10
+    assert snap.stale is False
+    assert snap.error == ""
+    assert "forecastex" not in errors
+
+
 def test_refresh_balances_serialises_concurrent_callers():
     """force_refresh from multiple concurrent /api/balances requests should
     coalesce — the lock holds while one in-flight refresh completes, and the

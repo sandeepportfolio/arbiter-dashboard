@@ -77,6 +77,51 @@ services:
     networks:
       - arbiter_prod_net
 
+  # ── IB Gateway (ForecastEx persistent TWS socket — IBC-managed login) ─
+  # Replaces the IBKR Client Portal Web API gateway (REST, port 5000) whose
+  # SSO session expires every few hours. The gnzsnz/ib-gateway image bundles
+  # IB Gateway + IBC, keeps itself logged in, and restarts nightly at
+  # AUTO_RESTART_TIME to avoid the daily IBKR re-login/2FA prompt.
+  #
+  # IMPORTANT: this service is OFF in the trading path until IBKR_USE_TWS=true
+  # (read by the arbiter container). Until then it just runs alongside; the
+  # arbiter API does NOT depend on it, so a gateway login hiccup can never
+  # block the live trading API from starting.
+  #
+  # Port nuance (gnzsnz image): inside the container IB Gateway binds 4001
+  # (live) / 4002 (paper) on localhost; the image's socat bridge re-exposes
+  # them to other containers on 4003 (live) / 4004 (paper). The arbiter
+  # container therefore connects to ib-gateway:4003 for live (see the
+  # IBKR_TWS_* overrides on arbiter-api-prod below).
+  ib-gateway:
+    image: ghcr.io/gnzsnz/ib-gateway:stable
+    container_name: arbiter-ib-gateway-prod
+    environment:
+      # Credentials — fill IBKR_USERNAME / IBKR_PASSWORD in .env.production.
+      # The image expects TWS_USERID / TWS_PASSWORD; we map our placeholder
+      # names onto them so .env.production keeps a single naming convention.
+      TWS_USERID: ${IBKR_USERNAME}
+      TWS_PASSWORD: ${IBKR_PASSWORD}
+      # live | paper. Keep in lockstep with IBKR_PAPER_TRADING on the arbiter
+      # side (paper -> port 4004, live -> port 4003).
+      TRADING_MODE: ${IBKR_TRADING_MODE:-live}
+      # Nightly self-restart keeps the session fresh and sidesteps the daily
+      # IBKR re-auth window. 23:45 in the gateway's configured timezone.
+      AUTO_RESTART_TIME: "23:45"
+      TIME_ZONE: ${IBKR_TWS_TIME_ZONE:-America/New_York}
+      # If 2FA times out, restart and let IBC retry rather than exiting.
+      TWOFA_TIMEOUT_ACTION: restart
+      # The arbiter places live orders, so the API must be read/write.
+      READ_ONLY_API: "no"
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    networks:
+      - arbiter_prod_net
+
   # ── ARBITER API + Scanner + Engine ──────────────────────────────────
   arbiter-api-prod:
     build:
@@ -98,6 +143,15 @@ services:
       # which was causing .env.production's value to be silently ignored.
       # AUTO_PROMOTE_ENABLED is set in .env.production (loaded via env_file above).
       # Do NOT override it here — same env_file precedence issue as AUTO_EXECUTE.
+      #
+      # ForecastEx over the IB Gateway socket: when IBKR_USE_TWS=true (set in
+      # .env.production), the arbiter connects to the in-compose ib-gateway
+      # service rather than a host gateway. Pin host/port here so they resolve
+      # on the Docker network regardless of any localhost value in
+      # .env.production. gnzsnz socat ports: 4003=live, 4004=paper — keep this
+      # in lockstep with TRADING_MODE / IBKR_PAPER_TRADING.
+      IBKR_TWS_HOST: ib-gateway
+      IBKR_TWS_PORT: ${IBKR_TWS_PORT:-4003}
     ports:
       - "${ARBITER_PORT:-8080}:8080"
     extra_hosts:

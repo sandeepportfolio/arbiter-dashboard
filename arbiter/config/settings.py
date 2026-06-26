@@ -617,6 +617,45 @@ class ForecastExConfig:
 
 
 @dataclass
+class IBGatewayConfig:
+    """IB Gateway (TWS socket) settings for the ForecastEx feed/execution.
+
+    This is the persistent-socket alternative to the Client Portal Web API
+    (``ForecastExConfig.gateway_url``). When ``use_tws`` is true,
+    ``build_forecastex_collector`` instantiates ``ForecastExTWSClient``
+    (``arbiter.collectors.forecastex_tws``) instead of the REST client.
+
+    ``use_tws`` defaults to **false** so the existing REST path keeps working
+    untouched until an operator explicitly switches over. ``account_id`` /
+    ``paper_trading`` intentionally reuse the same env vars as
+    ``ForecastExConfig`` (``IBKR_ACCOUNT_ID`` / ``IBKR_PAPER_TRADING``) — the
+    account is the same regardless of transport.
+    """
+    host: str = field(
+        default_factory=lambda: os.getenv("IBKR_TWS_HOST", "127.0.0.1")
+    )
+    port: int = field(
+        default_factory=lambda: int(os.getenv("IBKR_TWS_PORT", "4001"))
+    )
+    client_id: int = field(
+        default_factory=lambda: int(os.getenv("IBKR_TWS_CLIENT_ID", "11"))
+    )
+    account_id: str = field(
+        default_factory=lambda: os.getenv("IBKR_ACCOUNT_ID", "")
+    )
+    paper_trading: bool = field(
+        default_factory=lambda: _env_bool("IBKR_PAPER_TRADING", True)
+    )
+    connect_timeout: float = field(
+        default_factory=lambda: float(os.getenv("IBKR_TWS_CONNECT_TIMEOUT", "30"))
+    )
+    # Feature flag: false keeps the REST Client Portal path (default).
+    use_tws: bool = field(
+        default_factory=lambda: _env_bool("IBKR_USE_TWS", False)
+    )
+
+
+@dataclass
 class PolymarketUSConfig:
     """Polymarket US (CFTC-regulated DCM) configuration. Uses Ed25519 key auth."""
     api_url: str = field(default_factory=lambda: os.getenv("POLYMARKET_US_API_URL", "https://api.polymarket.us/v1"))
@@ -921,6 +960,7 @@ class ArbiterConfig:
     kalshi: KalshiConfig = field(default_factory=KalshiConfig)
     polymarket: Optional[Union[PolymarketConfig, PolymarketUSConfig]] = field(default_factory=PolymarketConfig)
     forecastex: Optional[ForecastExConfig] = field(default_factory=ForecastExConfig)
+    ib_gateway: IBGatewayConfig = field(default_factory=IBGatewayConfig)
     alerts: AlertConfig = field(default_factory=AlertConfig)
     scanner: ScannerConfig = field(default_factory=ScannerConfig)
     safety: SafetyConfig = field(default_factory=SafetyConfig)

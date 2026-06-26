@@ -1,6 +1,10 @@
 # ARBITER — Dependencies
 aiohttp>=3.9.0
 cryptography>=46.0.0
+# IB Gateway socket client for ForecastEx (replaces the Client Portal REST
+# gateway whose SSO session expires every few hours). Used only when
+# IBKR_USE_TWS=true; imported lazily so the REST path keeps working without it.
+ib_async>=1.0.0
 redis[hiredis]>=5.0.0
 asyncpg>=0.29.0
 python-dotenv>=1.0.0

@@ -695,14 +695,24 @@ class ArbiterAPI:
         for platform, snapshot in snapshots.items():
             age = max(0.0, now_after - snapshot.timestamp)
             err = last_errors.get(platform)
+            # A snapshot can be explicitly stale when it's a re-served
+            # last-known-good value (the live fetch failed but we're degrading
+            # to the last good number rather than collapsing to null). In that
+            # case the snapshot carries its own failure reason; prefer it but
+            # keep the timestamp from last_errors for when the failure occurred.
+            snap_stale = bool(getattr(snapshot, "stale", False))
+            snap_error = getattr(snapshot, "error", "") or None
+            stale = snap_stale or age > max(cache_ttl * 6, 30.0)
+            error_msg = (err.get("message") if err else None) or snap_error
             platforms[platform] = {
                 "balance": round(snapshot.balance, 2),
                 "is_low": snapshot.is_low,
                 "timestamp": snapshot.timestamp,
                 "age_seconds": round(age, 2),
                 "source": snapshot.source or "",
-                "stale": age > max(cache_ttl * 6, 30.0),
-                "error": (err.get("message") if err else None),
+                "stale": stale,
+                "last_known_good": snap_stale,
+                "error": error_msg,
                 "error_timestamp": (err.get("timestamp") if err else None),
             }
 

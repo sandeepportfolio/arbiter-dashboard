@@ -307,6 +307,14 @@ class BalanceSnapshot:
     # "polymarket:funder-erc20" — so the dashboard can tell which surface the
     # number actually came from. Stays "" for legacy callers.
     source: str = ""
+    # When True, this snapshot is a re-served *last-known-good* value because
+    # the most recent live fetch failed (circuit open / gateway down). The
+    # ``timestamp`` then refers to when the value was last KNOWN GOOD, not when
+    # it was re-served, so the dashboard can age it honestly. ``error`` carries
+    # the reason the live fetch failed so operators see "stale, last-known $X,
+    # reason: <…>" instead of a bare null. Defaults keep legacy callers intact.
+    stale: bool = False
+    error: str = ""
 
 
 @dataclass
@@ -525,6 +533,15 @@ class BalanceMonitor:
         # Per-platform last-error message + timestamp so the dashboard can tell
         # operators *why* a balance number looks stale. None = no recent error.
         self._last_errors: Dict[str, dict] = {}
+        # Per-platform last *successful* (known-good) snapshot. When a live
+        # fetch fails (e.g. ForecastEx IBKR gateway SSO expired → circuit open),
+        # we re-serve this value flagged stale + with the failure reason rather
+        # than collapsing the platform to a bare null. A null balance makes the
+        # platform vanish from current_balances entirely, which trips readiness
+        # ("no fresh quotes") and blinds operators. Survives only in-memory —
+        # cleared on restart, which is the conservative default (no balance is
+        # better than a balance we can't vouch for after a cold start).
+        self._last_good: Dict[str, BalanceSnapshot] = {}
         # Serialize check_balances() calls so concurrent /api/balances requests
         # with force_refresh=1 don't hammer the platform APIs.
         self._refresh_lock = asyncio.Lock()
@@ -581,6 +598,9 @@ class BalanceMonitor:
                     )
                     snapshots[platform] = snap
                     self._balances[platform] = snap
+                    # Remember this as the last KNOWN-GOOD value so a future
+                    # failed fetch can degrade to it instead of a bare null.
+                    self._last_good[platform] = snap
                     # Successful fetch clears any prior error
                     self._last_errors.pop(platform, None)
 
@@ -590,19 +610,54 @@ class BalanceMonitor:
                 else:
                     # fetch_balance() returned None — collector swallowed the
                     # error or has no credentials; surface that to the UI.
-                    self._last_errors[platform] = {
-                        "message": "balance unavailable (no credentials or fetch returned None)",
-                        "timestamp": time.time(),
-                    }
+                    self._record_failure(
+                        platform,
+                        "balance unavailable (no credentials or fetch returned None)",
+                    )
 
             except Exception as e:
                 logger.error(f"Balance check error for {platform}: {e}")
-                self._last_errors[platform] = {
-                    "message": str(e),
-                    "timestamp": time.time(),
-                }
+                self._record_failure(platform, str(e))
 
         return snapshots
+
+    def _record_failure(self, platform: str, message: str) -> None:
+        """Record a failed balance fetch and, when possible, degrade to the
+        last-known-good value instead of letting the platform collapse to a
+        bare null.
+
+        A null balance is the dangerous state: ``current_balances`` then has no
+        entry for the platform, so it disappears from the dashboard, trips
+        readiness ("no fresh quotes for X"), and gives operators no number at
+        all to reason about. Re-serving the last-known-good value — explicitly
+        flagged ``stale`` with the failure reason and the original timestamp —
+        is both safer and more honest: the UI shows "stale, last-known $X as of
+        <ts>, reason: <…>" and the value ages naturally.
+        """
+        now = time.time()
+        self._last_errors[platform] = {"message": message, "timestamp": now}
+
+        good = self._last_good.get(platform)
+        if good is None:
+            # Never had a good read this process lifetime — nothing to fall
+            # back to. The platform stays absent from current_balances and the
+            # error map (above) carries the reason for the UI's null block.
+            self._balances.pop(platform, None)
+            return
+
+        # Re-serve the known-good value, flagged stale, preserving its original
+        # timestamp so age_seconds reflects true data age (not re-serve time).
+        threshold = self._thresholds.get(platform, 50.0)
+        stale_snap = BalanceSnapshot(
+            platform=platform,
+            balance=good.balance,
+            timestamp=good.timestamp,
+            is_low=good.balance < threshold,
+            source=good.source,
+            stale=True,
+            error=message,
+        )
+        self._balances[platform] = stale_snap
 
     async def refresh_balances(self) -> Dict[str, BalanceSnapshot]:
         """Force a balance refresh, serialised so concurrent callers share a

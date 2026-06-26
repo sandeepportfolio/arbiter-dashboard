@@ -261,14 +261,39 @@ def build_forecastex_collector(config: ArbiterConfig, price_store: PriceStore):
     cfg = getattr(config, "forecastex", None)
     if cfg is None or not cfg.enabled:
         return None
-    from .collectors.forecastex import ForecastExClient, ForecastExCollector
+    from .collectors.forecastex import ForecastExCollector
 
-    client = ForecastExClient(
-        gateway_url=cfg.gateway_url,
-        account_id=cfg.account_id,
-        verify_ssl=cfg.verify_ssl,
-        paper_trading=cfg.paper_trading,
-    )
+    ibgw = getattr(config, "ib_gateway", None)
+    use_tws = bool(ibgw is not None and ibgw.use_tws)
+
+    if use_tws:
+        # Persistent IB Gateway socket client (ib_async). Replaces the
+        # Client Portal REST gateway whose SSO session expires every few
+        # hours. Off by default — flip IBKR_USE_TWS=true to switch over.
+        from .collectors.forecastex_tws import ForecastExTWSClient
+
+        client = ForecastExTWSClient(
+            host=ibgw.host,
+            port=ibgw.port,
+            client_id=ibgw.client_id,
+            account_id=cfg.account_id,
+            paper_trading=cfg.paper_trading,
+            connect_timeout=ibgw.connect_timeout,
+        )
+        logging.getLogger("arbiter.main").info(
+            "ForecastEx: using IB Gateway TWS socket client "
+            "(%s:%s clientId=%s paper=%s)",
+            ibgw.host, ibgw.port, ibgw.client_id, cfg.paper_trading,
+        )
+    else:
+        from .collectors.forecastex import ForecastExClient
+
+        client = ForecastExClient(
+            gateway_url=cfg.gateway_url,
+            account_id=cfg.account_id,
+            verify_ssl=cfg.verify_ssl,
+            paper_trading=cfg.paper_trading,
+        )
     return ForecastExCollector(config=cfg, store=price_store, client=client)
 
 
