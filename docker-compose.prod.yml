@@ -111,8 +111,25 @@ services:
       TIME_ZONE: ${IBKR_TWS_TIME_ZONE:-America/New_York}
       # If 2FA times out, restart and let IBC retry rather than exiting.
       TWOFA_TIMEOUT_ACTION: restart
+      # Keep retrying the login after a 2FA timeout until the operator's
+      # weekly IBKR-Mobile tap lands — otherwise a missed tap leaves the bot
+      # unauthenticated until someone notices.
+      RELOGIN_AFTER_TWOFA_TIMEOUT: "yes"
       # The arbiter places live orders, so the API must be read/write.
       READ_ONLY_API: "no"
+      # Suppress the order "precautions" modal so an unattended order is not
+      # parked behind a blocking dialog (order-level risk limits still apply).
+      BYPASS_WARNING: "yes"
+    # TCP liveness on the socat-relayed live API port. Does NOT prove a
+    # logged-in session, but catches a dead container / crashed socat. The
+    # arbiter does NOT depends_on this service, so an unhealthy gateway never
+    # blocks the live API from starting.
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/4003' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
     restart: always
     logging:
       driver: json-file

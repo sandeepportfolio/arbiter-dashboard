@@ -38,3 +38,7 @@ portable-secrets/*.tmp
 arbiter-architecture.html
 network.log
 funds-*.png
+
+# IBKR ForecastEx auto-login — NEVER commit credentials or OAuth key material
+deploy/ib-gateway/oauth/
+deploy/ib-gateway/secrets/
