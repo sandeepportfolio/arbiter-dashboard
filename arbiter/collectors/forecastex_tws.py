@@ -110,6 +110,14 @@ def _num(value: Any) -> float:
     return f
 
 
+def _env_truthy(name: str, default: bool = False) -> bool:
+    """Parse a boolean-ish env var (1/true/yes/on). Missing → ``default``."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
 def _normalize_status(status: str) -> str:
     """Map ib_async order statuses onto the wire strings ForecastExAdapter
     already recognises in ``_map_status``.
@@ -208,6 +216,9 @@ class ForecastExTWSClient:
                 raise RuntimeError(
                     f"Circuit [{self.circuit.name}] is OPEN — TWS connect rejected"
                 )
+            # Gate the live switchover: refuse paper/live ↔ account mismatches
+            # before we ever open a socket to the gateway.
+            self._assert_safe_routing()
             ib = self._ib if self._ib is not None else IB()
             # A stale half-open socket must be torn down before reconnecting.
             try:
@@ -234,11 +245,64 @@ class ForecastExTWSClient:
             # A fresh connection invalidates any cached subscriptions.
             self._tickers.clear()
             self.circuit.record_success()
+            # Re-request open orders so get_order/list_live_orders survive the
+            # nightly IBC restart (otherwise reconnected sessions lose order
+            # visibility → untracked naked legs).
+            await self._resync_open_orders(ib)
             logger.info(
                 "forecastex TWS connected (%s:%s clientId=%s paper=%s)",
                 self.host, self.port, self.client_id, self.paper_trading,
             )
             return ib
+
+    def _assert_safe_routing(self) -> None:
+        """Refuse paper/live ↔ account-prefix mismatches before connecting.
+
+        Closes the diagnosis's "do NOT bare-flip ``IBKR_USE_TWS``" hole:
+        ``paper_trading`` was cosmetic (logged, never gated the port), so a
+        misconfig could route REAL orders while the system believed it was
+        simulating. We key off the IBKR account prefix (paper accounts start
+        with ``DU``) and require an explicit ``IBKR_TWS_ALLOW_LIVE`` opt-in
+        before any live routing.
+        """
+        acct = (self.account_id or "").strip().upper()
+        is_paper_acct = acct.startswith("DU")
+        if self.paper_trading:
+            if acct and not is_paper_acct:
+                raise RuntimeError(
+                    f"Unsafe TWS routing: paper_trading=True but account "
+                    f"{acct!r} is not a paper (DU…) account — refusing to "
+                    "connect to avoid routing real orders as paper. Set "
+                    "IBKR_PAPER_TRADING=false and IBKR_TWS_ALLOW_LIVE=true to "
+                    "trade this live account."
+                )
+        else:
+            if not _env_truthy("IBKR_TWS_ALLOW_LIVE", False):
+                raise RuntimeError(
+                    "Unsafe TWS routing: paper_trading=False (live) but "
+                    "IBKR_TWS_ALLOW_LIVE is not set — refusing to route live "
+                    "orders without an explicit opt-in."
+                )
+            if is_paper_acct:
+                raise RuntimeError(
+                    f"Unsafe TWS routing: paper_trading=False (live) but "
+                    f"account {acct!r} is a paper (DU…) account — config "
+                    "mismatch."
+                )
+
+    async def _resync_open_orders(self, ib: Any) -> None:
+        """Re-request all open orders after a (re)connect.
+
+        Best-effort: an IB stub without ``reqAllOpenOrdersAsync`` is tolerated
+        (keeps unit tests and older ib_async builds working).
+        """
+        fn = getattr(ib, "reqAllOpenOrdersAsync", None)
+        if fn is None:
+            return
+        try:
+            await fn()
+        except Exception as exc:  # noqa: BLE001 - best effort, never fatal
+            logger.warning("forecastex TWS open-order resync failed: %s", exc)
 
     def _on_op_exception(self, name: str, exc: Exception) -> None:
         """Record a breaker failure when an op failed due to a dropped socket."""
@@ -648,9 +712,30 @@ class ForecastExTWSClient:
         if not self.account_id:
             raise RuntimeError("IBKR_ACCOUNT_ID is not configured")
         normalized_side = str(side).upper()
-        if normalized_side not in ("BUY", "SELL"):
+        if normalized_side != "BUY":
+            # ForecastEx is BUY-only: you cannot sell an event contract. Close
+            # or reduce by BUYING the opposing-right contract (Put to flatten a
+            # Call) at the same strike — IBKR auto-nets. Reject SELL loudly so
+            # the unwind path routes through the buy-opposite flow instead of
+            # silently failing at the venue.
             raise ValueError(
-                f"forecastex.place_order rejects side={side!r}: must be BUY or SELL"
+                f"forecastex.place_order rejects side={side!r}: ForecastEx is "
+                "BUY-only — flatten by buying the opposing-right contract."
+            )
+        normalized_tif = str(tif).upper()
+        if normalized_tif == "FOK":
+            # FOK is not supported on FORECASTX (DAY/GTC/IOC only). For the
+            # qty=1 arb legs IOC is equivalent (no partial possible); for
+            # larger qty IOC is the safe all-or-some analogue.
+            logger.warning(
+                "forecastex TWS: FOK unsupported on FORECASTX — using IOC "
+                "(conid=%s qty=%s)", conid, quantity,
+            )
+            normalized_tif = "IOC"
+        if normalized_tif not in ("DAY", "GTC", "IOC"):
+            raise ValueError(
+                f"forecastex.place_order rejects tif={tif!r}: ForecastEx "
+                "supports only DAY, GTC, IOC."
             )
         await self.live_rate_limiter.acquire()
         ib = await self._ensure_connected()
@@ -664,7 +749,7 @@ class ForecastExTWSClient:
             action=normalized_side,
             totalQuantity=int(quantity),
             lmtPrice=float(price),
-            tif=tif,
+            tif=normalized_tif,
             account=self.account_id,
             outsideRth=True,
         )
@@ -680,7 +765,7 @@ class ForecastExTWSClient:
         deadline = self.connect_timeout  # reuse as an upper bound (seconds)
         waited = 0.0
         step = 0.1
-        terminal = _DONE_STATES if str(tif).upper() in ("IOC", "FOK") else (
+        terminal = _DONE_STATES if normalized_tif == "IOC" else (
             _DONE_STATES | _LIVE_STATES
         )
         while waited < min(deadline, 5.0):
@@ -693,20 +778,104 @@ class ForecastExTWSClient:
 
     @staticmethod
     def _trade_to_dict(trade: Any, contract: Any, side: str) -> dict:
-        """Translate an ib_async ``Trade`` into a REST-style ack dict."""
+        """Translate an ib_async ``Trade`` into a REST-style ack dict.
+
+        Drains executions: a Cancelled IOC can carry real fills that the
+        rounded ``orderStatus.filled`` missed. We take the larger of
+        ``orderStatus.filled`` and the summed execution shares so a genuine
+        partial fill is NEVER reported as zero (the "phantom no-fill" class
+        that produced unverifiable exposure).
+        """
         os_ = trade.orderStatus
         order_id = (
             getattr(trade.order, "orderId", 0)
             or getattr(os_, "orderId", 0)
             or getattr(trade.order, "permId", 0)
         )
+        status_filled = _num(getattr(os_, "filled", 0.0))
+        avg_price = _num(getattr(os_, "avgFillPrice", 0.0))
+
+        fill_shares = 0.0
+        weighted_px = 0.0
+        for f in getattr(trade, "fills", None) or []:
+            ex = getattr(f, "execution", None)
+            if ex is None:
+                continue
+            shares = _num(getattr(ex, "shares", 0.0))
+            px = _num(getattr(ex, "price", 0.0)) or _num(getattr(ex, "avgPrice", 0.0))
+            fill_shares += shares
+            weighted_px += shares * px
+        filled = max(status_filled, fill_shares)
+        if avg_price <= 0 and fill_shares > 0:
+            avg_price = weighted_px / fill_shares
+
         return {
             "order_id": str(order_id) if order_id else "",
             "order_status": _normalize_status(getattr(os_, "status", "")),
-            "filled_quantity": _num(getattr(os_, "filled", 0.0)),
-            "avg_price": _num(getattr(os_, "avgFillPrice", 0.0)),
+            "filled_quantity": filled,
+            "avg_price": avg_price,
             "conid": str(getattr(contract, "conId", "") or ""),
             "side": side,
+        }
+
+    async def preview_order(
+        self,
+        conid: str,
+        side: str,
+        price: float,
+        quantity: int,
+        *,
+        order_type: str = "LMT",
+        tif: str = "IOC",
+    ) -> dict:
+        """whatIf *preview* — returns margin/commission/warning WITHOUT placing.
+
+        Used to verify ForecastEx trading permission + margin safely before
+        the first live order. A permission/margin reject surfaces in the
+        returned ``warning``/``error`` (or raises) without ever executing.
+        """
+        if not self.account_id:
+            raise RuntimeError("IBKR_ACCOUNT_ID is not configured")
+        if str(side).upper() != "BUY":
+            raise ValueError(
+                f"forecastex.preview_order rejects side={side!r}: ForecastEx "
+                "is BUY-only."
+            )
+        normalized_tif = "IOC" if str(tif).upper() == "FOK" else str(tif).upper()
+        ib = await self._ensure_connected()
+        contract = await self._contract_for_conid(conid)
+        if contract is None:
+            raise RuntimeError(
+                f"forecastex TWS: could not qualify contract for conid {conid!r}"
+            )
+        order = Order(
+            orderType=order_type,
+            action="BUY",
+            totalQuantity=int(quantity),
+            lmtPrice=float(price),
+            tif=normalized_tif,
+            account=self.account_id,
+            outsideRth=True,
+            whatIf=True,
+        )
+        try:
+            state = await ib.whatIfOrderAsync(contract, order)
+            self.circuit.record_success()
+        except Exception as exc:
+            self._on_op_exception("preview_order", exc)
+            raise
+        return {
+            "commission": _num(getattr(state, "commission", 0.0)),
+            "init_margin": str(
+                getattr(state, "initMarginChange", "")
+                or getattr(state, "initMarginAfter", "")
+            ),
+            "maint_margin": str(
+                getattr(state, "maintMarginChange", "")
+                or getattr(state, "maintMarginAfter", "")
+            ),
+            "equity_with_loan": str(getattr(state, "equityWithLoanChange", "")),
+            "warning": str(getattr(state, "warningText", "") or ""),
         }
 
     async def get_order(self, order_id: str) -> dict:
