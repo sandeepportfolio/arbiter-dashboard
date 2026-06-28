@@ -20,7 +20,38 @@ import aiohttp  # noqa: F401  (kept for adapter callers importing the module)
 import structlog
 
 from ..engine import Order, OrderStatus
-from .retry_policy import TRANSIENT_EXCEPTIONS, transient_retry
+from .retry_policy import (
+    KalshiTransientInfraError,
+    TRANSIENT_EXCEPTIONS,
+    infra_transient_retry,
+    transient_retry,
+)
+
+
+def _is_kalshi_infra_response(status: int, body: str) -> bool:
+    """True when an HTTP response is a Kalshi-SIDE infra error worth retrying.
+
+    Infra = any 5xx, OR a 401 whose body is a gateway/Envoy "service
+    unavailable" / INTERNAL_SERVER_ERROR / upstream-connect error (NOT a
+    signing/permission failure). A signing 401 (INCORRECT_API_KEY_SIGNATURE)
+    or ``forbidden`` is explicitly NOT infra — retrying cannot fix it and only
+    widens the naked window, so it is returned as-is for the caller to fail.
+    """
+    if status in (500, 502, 503, 504):
+        return True
+    if status == 401:
+        b = (body or "").lower()
+        if "incorrect_api_key_signature" in b or "forbidden" in b:
+            return False
+        if (
+            "service unavailable" in b
+            or "internal_server_error" in b
+            or "upstream connect error" in b
+            or "reset reason" in b
+            or "disconnect" in b
+        ):
+            return True
+    return False
 
 log = structlog.get_logger("arbiter.adapters.kalshi")
 
@@ -288,13 +319,17 @@ class KalshiAdapter:
             external_client_order_id=client_order_id,
         )
 
-    @transient_retry()
+    @infra_transient_retry()
     async def _post_order(self, body: dict) -> tuple[int, str, dict]:
         """Inner HTTP call wrapped by tenacity.
 
         Idempotent on Kalshi via ``client_order_id`` — safe to retry on transient
-        network errors (OPS-03). Rate-limiter is inside the retry decorator so
-        every attempt waits for a token (Pitfall 4).
+        network errors AND Kalshi-side infra responses (infra-401 / 5xx), which
+        are raised as ``KalshiTransientInfraError`` so the retry decorator fires
+        (P1 #5). The retry re-sends the SAME body + ``client_order_id`` so Kalshi
+        dedups (no double-place). A signing-401 / 403 is returned as-is (the
+        caller maps it to FAILED with no retry). Rate-limiter is inside the
+        retry decorator so every attempt waits for a token (Pitfall 4).
 
         Returns ``(status, body_text, response_headers)``. Headers are exposed
         so ``place_fok`` can read ``Retry-After`` on 429 responses (SAFE-04).
@@ -322,6 +357,11 @@ class KalshiAdapter:
                 place_ms=place_ms,
                 api_status=response.status,
             )
+            # Infra-401 / 5xx → raise so the retry decorator re-POSTs the SAME
+            # client_order_id (idempotent). Signing-401 / other statuses are
+            # returned for the caller to classify.
+            if _is_kalshi_infra_response(response.status, payload):
+                raise KalshiTransientInfraError(response.status, payload)
             return response.status, payload, resp_headers
 
     # ─── place_unwind_sell ────────────────────────────────────────────────
@@ -954,20 +994,25 @@ class KalshiAdapter:
         return cancelled_ids
 
     async def _list_all_open_orders(self) -> list[Order]:
-        """Fetch every resting Kalshi order. Returns [] on error (never raises).
+        """Fetch every resting Kalshi order. FAILS CLOSED — raises on error.
 
         Uses the same GET /portfolio/orders?status=resting endpoint as
         ``list_open_orders_by_client_id`` but without any client-order-id
         prefix filter — used by SAFE-05 cancel_all to discover shutdown
         candidates.
+
+        Unlike the old behaviour, this NO LONGER swallows errors into ``[]``:
+        ``_list_orders`` retries infra-401 / 5xx and, if still failing, raises;
+        a non-200 / parse error also raises. A swallowed error would make
+        cancel_all under-cancel (report "no resting orders" and leave them
+        live). ``cancel_all`` wraps this call and logs ``list_failed`` so the
+        failure is visible instead of masquerading as a clean empty book
+        (P1 #5).
         """
         if not self.auth or not getattr(self.auth, "is_authenticated", False):
             return []
-        try:
-            status_code, payload, resp_headers = await self._list_orders("resting")
-        except Exception as exc:
-            log.warning("kalshi.list_all_open_orders.failed", err=str(exc))
-            return []
+        # NB: errors from _list_orders propagate (fail closed) — do NOT catch.
+        status_code, payload, resp_headers = await self._list_orders("resting")
 
         if status_code == 429:
             retry_after = resp_headers.get("Retry-After", "1") if resp_headers else "1"
@@ -979,21 +1024,18 @@ class KalshiAdapter:
                 "kalshi.rate_limited", penalty_seconds=delay, op="list_all_open",
             )
             self.circuit.record_failure()
-            return []
+            raise RuntimeError(
+                f"kalshi list_all_open_orders rate-limited ({delay:.1f}s) — "
+                "failing closed so cancel_all does not under-cancel"
+            )
 
         if status_code not in (200, 201):
-            log.warning(
-                "kalshi.list_all_open_orders.http_error",
-                status=status_code, body=payload[:200] if payload else "",
+            raise RuntimeError(
+                f"kalshi list_all_open_orders HTTP {status_code}: "
+                f"{payload[:200] if payload else ''}"
             )
-            return []
 
-        try:
-            data = json.loads(payload)
-        except Exception as exc:
-            log.warning("kalshi.list_all_open_orders.parse_failed", err=str(exc))
-            return []
-
+        data = json.loads(payload)
         orders_raw = data.get("orders", []) if isinstance(data, dict) else []
         return [self._order_data_to_order(od) for od in orders_raw if isinstance(od, dict)]
 
@@ -1264,7 +1306,7 @@ class KalshiAdapter:
             log.warning("kalshi.list_orders.failed", err=str(exc))
             return []
 
-    @transient_retry()
+    @infra_transient_retry()
     async def _list_orders(self, status: str) -> tuple[int, str, dict]:
         # G-1 fix (Plan 04-09, 2026-04-20): Kalshi PSS signing requires a
         # querystring-free path in the signed message. The querystring is
@@ -1281,7 +1323,13 @@ class KalshiAdapter:
         headers = self.auth.get_headers("GET", path)
         async with self.session.get(url, headers=headers) as response:
             resp_headers = dict(response.headers) if response.headers else {}
-            return response.status, await response.text(), resp_headers
+            payload = await response.text()
+            # Kill-switch read path: an infra-401 / 5xx must be RETRIED, not
+            # swallowed — a transient blip that returns [] under-cancels resting
+            # orders during emergency shutdown (P1 #5).
+            if _is_kalshi_infra_response(response.status, payload):
+                raise KalshiTransientInfraError(response.status, payload)
+            return response.status, payload, resp_headers
 
     # ─── helpers ──────────────────────────────────────────────────────────
 
