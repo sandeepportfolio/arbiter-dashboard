@@ -62,13 +62,17 @@ async def test_fok_happy_path(monkeypatch):
     monkeypatch.delenv("PHASE4_MAX_ORDER_USD", raising=False)
     monkeypatch.delenv("PHASE5_MAX_ORDER_USD", raising=False)
     client = _make_client()
+    # A real FOK fill echoes the matched quantity; include it (filledQty=10) so
+    # this is a genuine full fill. A bare FILLED with no quantity is now treated
+    # as unconfirmed (SUBMITTED) per the phantom-fill fix.
     client.place_order = AsyncMock(
-        return_value={"orderId": "ord-happy", "status": "FILLED"}
+        return_value={"orderId": "ord-happy", "status": "FILLED", "filledQty": 10}
     )
     adapter = _make_adapter(client=client)
     # Small notional: 0.5 * 10 = $5
     order = await adapter.place_fok("ARB-1", "mkt-slug", "CAN-1", "yes", 0.50, 10)
     assert order.status == OrderStatus.FILLED
+    assert order.fill_qty == 10.0
     assert order.order_id == "ord-happy"
 
 

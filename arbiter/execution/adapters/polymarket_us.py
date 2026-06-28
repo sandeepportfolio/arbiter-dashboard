@@ -1051,6 +1051,23 @@ class PolymarketUSAdapter:
         if explicit_zero_fill:
             mapped_status = OrderStatus.CANCELLED
 
+        # Implicit-unconfirmed FILLED: the venue said FILLED but gave NO fill
+        # quantity at all (no cumQuantity / filledQty / size_matched). We must
+        # NOT report a phantom FILLED-fill_qty-0 (the 25-leg phantom-fill class
+        # that produced unverifiable exposure). Treat it as unconfirmed →
+        # SUBMITTED so the engine's post-submit poll fetches the authoritative
+        # cumQuantity via get_order (verify-before-act). Never assume a fill
+        # without a confirmed quantity, and never silently full-fill either.
+        implicit_unconfirmed_fill = (
+            mapped_status == OrderStatus.FILLED
+            and fill_qty == 0.0
+            and "cumQuantity" not in execution_order
+            and "filledQty" not in response
+            and "size_matched" not in response
+        )
+        if implicit_unconfirmed_fill:
+            mapped_status = OrderStatus.SUBMITTED
+
         return Order(
             order_id=order_id,
             platform="polymarket",
