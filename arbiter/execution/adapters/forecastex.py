@@ -29,7 +29,7 @@ ForecastEx-specific:
 from __future__ import annotations
 
 import time
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 import structlog
 
@@ -88,6 +88,18 @@ class ForecastExAdapter:
         self._supervisor = supervisor
         self.rate_limiter = getattr(client, "live_rate_limiter", None)
         self.circuit = getattr(client, "circuit", None)
+        # Cross-side exit bookkeeping (2026-07-06 live probe: the venue
+        # CANCELS every SELL order — orders 249901302/303 — so exits must
+        # BUY the opposing conid and IBKR nets the position).
+        # _sibling_cache: conid -> opposite-side conid (structural, stable
+        # for the contract's lifetime, so cached per adapter instance).
+        # _inverted_exits: broker order ids whose venue fills are sibling
+        # BUY prices and must be translated back to sell-side terms
+        # (sell at p == buy sibling at 1-p). NOTE: in-memory only — after a
+        # process restart a pre-existing resting exit re-reads untranslated;
+        # the recovery reconciler owns that window.
+        self._sibling_cache: Dict[str, str] = {}
+        self._inverted_exits: set = set()
 
     # ─── Hard-lock helpers ────────────────────────────────────────────────
 
@@ -158,17 +170,19 @@ class ForecastExAdapter:
         price: float,
         qty: int,
     ) -> Order:
-        """GTC LMT SELL at ``price`` (typically break-even per smart-unwind).
+        """Resting exit at sell-price ``price`` (typically break-even).
 
-        Phase 1 of ``ExecutionEngine._smart_unwind``: rest at break-even for
-        ~30s so passive buyers can hit our cost basis. If nothing matches,
-        the engine cancels and falls back to ``place_unwind_sell``.
+        Phase 1 of ``ExecutionEngine._smart_unwind``: rest for ~30s so the
+        market can hit our cost basis. If nothing matches, the engine
+        cancels and falls back to ``place_unwind_sell``.
 
-        ``side`` is the side originally bought ("yes" → we hold YES long,
-        "no" → we hold NO long). We sell the SAME conid that was bought
-        — IBKR position accounting handles the offset directly, no opposite-
-        leg routing required.
+        ForecastEx cancels direct SELL orders (verified live 2026-07-06:
+        GTC SELL @0.25 and IOC SELL @0.01 against a 0.19 bid were both
+        accepted then venue-cancelled with zero fill). The exit therefore
+        BUYS the opposing conid GTC at ``1 - price`` — IBKR nets the two
+        positions out; economics are identical to selling at ``price``.
 
+        ``side`` is the side originally bought ("yes" → we hold YES long).
         Deliberately skips PHASE4/5/supervisor gates (closing exposure must
         not be blocked by gates that exist to stop opening it). Always
         returns an Order; never raises across this boundary.
@@ -187,14 +201,16 @@ class ForecastExAdapter:
         qty: int,
         panic_price: float = 0.01,
     ) -> Order:
-        """IOC LMT SELL at ``panic_price`` to close a naked leg immediately.
+        """Immediate exit at sell-price ``panic_price`` to close a naked leg.
 
         Phase 2 of ``ExecutionEngine._smart_unwind`` (also the no-resting-
-        support fallback): sell whatever the book absorbs at >= ``panic_price``
+        support fallback): exit whatever the book absorbs at >= ``panic_price``
         and the IOC TIF cancels the rest. Residual unfilled qty becomes a
         manual-review incident upstream.
 
-        ``side`` is the side originally bought. We sell the SAME conid.
+        Routed as an IOC BUY of the opposing conid at ``1 - panic_price``
+        (the venue cancels direct SELLs — see ``place_resting_sell``).
+        ``side`` is the side originally bought.
         Skips PHASE4/5/supervisor gates by design (see class docstring).
         Always returns an Order in a terminal state; never raises.
         """
@@ -215,20 +231,51 @@ class ForecastExAdapter:
         tif: str,
         op: str,
     ) -> Order:
-        """Common path for resting + unwind sells.
+        """Common path for resting + unwind exits.
 
         Deliberately omits ``_check_gates`` — see class-level docstring for
         why the close-exposure path bypasses PHASE4/5/supervisor.
+
+        Cross-side routing: ForecastEx venue-cancels every SELL order, so
+        the exit BUYS the sibling conid at ``1 - price``. The returned
+        Order keeps sell-side semantics for the engine (``price`` and
+        ``fill_price`` are the effective sell prices) while ``market_id``
+        records the sibling conid the venue order actually lives on.
         """
         normalized_side = str(side).strip().lower()
         snapped = self._snap_to_tick(price)
+
+        sibling_conid = await self._resolve_sibling_conid(str(market_id).strip())
+        if not sibling_conid:
+            logger.error(
+                "forecastex.sell.sibling_unresolved",
+                arb_id=arb_id, market_id=market_id, side=side, op=op,
+            )
+            return Order(
+                order_id=f"{arb_id}-{normalized_side.upper() or 'SELL'}{_BROKER_ID_LOST_SUFFIX}",
+                platform="forecastex",
+                market_id=market_id,
+                canonical_id=canonical_id,
+                side=side,
+                price=snapped,
+                quantity=int(qty),
+                status=OrderStatus.FAILED,
+                timestamp=time.time(),
+                error=(
+                    f"forecastex {op} refused: sibling conid unresolved for "
+                    f"{market_id} — cross-side exit unavailable (the venue "
+                    "cancels direct SELL orders)"
+                ),
+                external_client_order_id=None,
+            )
+        buy_price = self._snap_to_tick(1.0 - snapped)
 
         t_before_place_ns = time.monotonic_ns()
         placed_after_wall_ts = time.time()
         try:
             response = await self._client.place_order(
-                conid=market_id, side="SELL",
-                price=snapped, quantity=int(qty), tif=tif,
+                conid=sibling_conid, side="BUY",
+                price=buy_price, quantity=int(qty), tif=tif,
             )
         except Exception as exc:
             place_ms_failed = round((time.monotonic_ns() - t_before_place_ns) / 1e6, 1)
@@ -261,8 +308,8 @@ class ForecastExAdapter:
                 raw_response=str(response)[:500],
             )
             broker_order_id = await self._lookup_broker_id_via_live_orders(
-                market_id=market_id,
-                normalized_side="SELL",
+                market_id=sibling_conid,
+                normalized_side="BUY",
                 qty=int(qty),
                 placed_after_ts=placed_after_wall_ts,
             )
@@ -277,7 +324,7 @@ class ForecastExAdapter:
             return Order(
                 order_id=f"{arb_id}-{normalized_side.upper() or 'SELL'}{_BROKER_ID_LOST_SUFFIX}",
                 platform="forecastex",
-                market_id=market_id,
+                market_id=sibling_conid,
                 canonical_id=canonical_id,
                 side=side,
                 price=snapped,
@@ -286,23 +333,103 @@ class ForecastExAdapter:
                 timestamp=time.time(),
                 error=(
                     f"forecastex {op} broker_id unrecoverable from ack and "
-                    "live-orders lookup; sell MAY be live at IBKR"
+                    "live-orders lookup; cross-side exit BUY MAY be live at IBKR"
                 ),
                 external_client_order_id=None,
             )
 
         order = self._order_from_response(
-            response, arb_id, market_id, canonical_id, side, snapped, int(qty),
-            broker_order_id=broker_order_id,
+            response, arb_id, sibling_conid, canonical_id, side, snapped, int(qty),
+            broker_order_id=broker_order_id, invert_fill_price=True,
         )
+        self._inverted_exits.add(str(broker_order_id))
         logger.info(
             "forecastex.sell.placed",
-            arb_id=arb_id, market_id=market_id, side=side, op=op, tif=tif,
-            price=snapped, qty=qty, place_ms=place_ms,
+            arb_id=arb_id, market_id=market_id, sibling_conid=sibling_conid,
+            side=side, op=op, tif=tif,
+            sell_price=snapped, buy_price=buy_price, qty=qty, place_ms=place_ms,
             order_status=order.status.value, fill_qty=order.fill_qty,
             broker_order_id=broker_order_id, broker_id_path=recovery_path,
         )
         return order
+
+    async def _resolve_sibling_conid(self, conid: str) -> Optional[str]:
+        """Opposite-side conid for ``conid`` (YES↔NO at the same strike).
+
+        Path: ``get_contract_info(conid)`` → parent + strike + right;
+        ``resolve_event_children(parent)`` → the child with the OPPOSITE
+        right at the same strike. Positive and structural-negative results
+        are cached for the adapter's lifetime (contract structure is
+        immutable); transient lookup failures are NOT cached so the next
+        exit attempt retries. Returns None when the sibling cannot be
+        proven — callers must fail closed, never fall back to a SELL.
+        """
+        if not conid or conid in ("0", "None"):
+            return None
+        if conid in self._sibling_cache:
+            return self._sibling_cache[conid] or None
+        try:
+            info = await self._client.get_contract_info(conid)
+        except Exception as exc:
+            logger.warning(
+                "forecastex.sibling.contract_info_failed",
+                conid=conid, err=str(exc),
+            )
+            return None
+        if not isinstance(info, dict) or not info:
+            self._sibling_cache[conid] = ""
+            return None
+        parent = (
+            info.get("underlying_con_id")
+            or info.get("underlyingConid")
+            or info.get("undConid")
+            or info.get("underconid")
+        )
+        strike = info.get("strike")
+        right = str(info.get("right") or "").upper()
+        if not parent or right not in ("C", "CALL", "P", "PUT"):
+            self._sibling_cache[conid] = ""
+            logger.warning(
+                "forecastex.sibling.unresolvable_contract_info",
+                conid=conid, parent=parent, strike=strike, right=right,
+            )
+            return None
+        want_right = ("P", "PUT") if right in ("C", "CALL") else ("C", "CALL")
+        try:
+            children = await self._client.resolve_event_children(str(parent))
+        except Exception as exc:
+            logger.warning(
+                "forecastex.sibling.children_lookup_failed",
+                conid=conid, parent=parent, err=str(exc),
+            )
+            return None
+        try:
+            strike_f = float(strike) if strike is not None else None
+        except (TypeError, ValueError):
+            strike_f = None
+        for child in children or []:
+            if not isinstance(child, dict):
+                continue
+            if str(child.get("right", "")).upper() not in want_right:
+                continue
+            if strike_f is not None:
+                try:
+                    if abs(float(child.get("strike") or 0.0) - strike_f) > 1e-6:
+                        continue
+                except (TypeError, ValueError):
+                    continue
+            candidate = str(child.get("conid") or "").strip()
+            if candidate and candidate != conid:
+                self._sibling_cache[conid] = candidate
+                # The sibling's sibling is us — prime the reverse edge.
+                self._sibling_cache.setdefault(candidate, conid)
+                return candidate
+        self._sibling_cache[conid] = ""
+        logger.warning(
+            "forecastex.sibling.not_found",
+            conid=conid, parent=parent, strike=strike,
+        )
+        return None
 
     async def _submit(
         self,
@@ -559,6 +686,11 @@ class ForecastExAdapter:
                 payload.get("filled_quantity")
                 or payload.get("filledQuantity")
                 or payload.get("cumQty")
+                # /iserver/account/order/status/{id} reports fills as
+                # cum_fill (verified live 2026-07-06, order 249901299) —
+                # missing it made FILLED orders read as fill_qty=0, which
+                # the engine's FILL-02 guard treats as "no exposure".
+                or payload.get("cum_fill")
                 or 0.0
             )
             if fill_qty:
@@ -570,12 +702,18 @@ class ForecastExAdapter:
                 payload.get("avg_price")
                 or payload.get("avgPrice")
                 or payload.get("avgFillPrice")
+                # same endpoint reports the fill price as average_price
+                or payload.get("average_price")
                 or 0.0
             )
             if avg_px:
-                order.fill_price = (
-                    avg_px if avg_px <= 1.0 else avg_px / 100.0
-                )
+                px = avg_px if avg_px <= 1.0 else avg_px / 100.0
+                # Cross-side exits fill on the SIBLING conid; translate the
+                # sibling BUY price back to sell-side terms (sell at p ==
+                # buy sibling at 1-p).
+                if str(order.order_id) in self._inverted_exits:
+                    px = round(1.0 - px, 4)
+                order.fill_price = px
         except (TypeError, ValueError):
             pass
         return order
@@ -917,6 +1055,7 @@ class ForecastExAdapter:
         price: float,
         qty: int,
         broker_order_id: str,
+        invert_fill_price: bool = False,
     ) -> Order:
         """Build an ``Order`` from the venue ack using the broker id that
         the caller already extracted (or recovered via the live-orders
@@ -961,24 +1100,35 @@ class ForecastExAdapter:
                 response.get("avg_price")
                 or response.get("avgPrice")
                 or response.get("avgFillPrice")
+                or response.get("average_price")
                 or 0.0
             )
         except (TypeError, ValueError):
             avg_px = 0.0
-        fill_price = (avg_px if avg_px <= 1.0 else avg_px / 100.0) or price
+        normalized_avg = avg_px if avg_px <= 1.0 else avg_px / 100.0
+        if normalized_avg and invert_fill_price:
+            # Cross-side exit: the venue fill is a sibling BUY price;
+            # 1 - it is the effective sell price the engine reasons in.
+            normalized_avg = round(1.0 - normalized_avg, 4)
+        fill_price = normalized_avg or price
         # BUG #1 (same pattern as polymarket_us): if the venue gives us an
         # explicit zero fill quantity but a FILLED status, downgrade to
         # CANCELLED so the engine does not fire a secondary leg on a phantom
         # primary fill. Only triggered on an *explicit* zero key — bare
         # legacy "FILLED" responses with no fill-qty key keep their existing
-        # backfill semantics.
+        # backfill semantics. The key list must cover every spelling the
+        # qty parser reads, or an explicit 0 under a parsed-but-unlisted key
+        # slips into the backfill and fabricates a full fill.
         explicit_zero_fill = (
             mapped == OrderStatus.FILLED
             and fill_qty == 0.0
             and (
                 "filled_qty" in response
                 or "filledQty" in response
+                or "filled_quantity" in response
+                or "filledQuantity" in response
                 or "cumQty" in response
+                or "cum_fill" in response
             )
         )
         if explicit_zero_fill:

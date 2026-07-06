@@ -32,6 +32,15 @@ def _mock_client(place_response=None, place_exc=None):
     client.market_snapshot = AsyncMock(
         return_value={"84": "44", "86": "47", "7295": "5", "7296": "20"},
     )
+    # Sibling resolution for cross-side exits: any conid resolves as a YES
+    # (right=C) whose NO sibling is conid "777" at the same strike.
+    client.get_contract_info = AsyncMock(return_value={
+        "underlying_con_id": 999111, "strike": 2.0, "right": "C",
+    })
+    client.resolve_event_children = AsyncMock(return_value=[
+        {"conid": "111", "right": "C", "strike": 2.0},
+        {"conid": "777", "right": "P", "strike": 2.0},
+    ])
     client.live_rate_limiter = None
     client.circuit = None
     return client
@@ -422,8 +431,9 @@ async def test_list_open_orders_by_client_id_returns_empty():
 
 async def test_place_unwind_sell_accepts_sell_yes_side_alias():
     """The engine may pass either 'yes' (original bought side) or 'SELL_YES'
-    (post-translation by callers that don't know the venue is BUY-symmetric).
-    Both must route to a SELL on the same conid."""
+    (post-translation by callers that don't know venue exit semantics).
+    Both must route to a BUY of the OPPOSITE conid — ForecastEx cancels
+    every SELL order (verified live 2026-07-06, orders 249901302/303)."""
     client = _mock_client()
     adapter = ForecastExAdapter(client=client)
     await adapter.place_unwind_sell(
@@ -431,17 +441,21 @@ async def test_place_unwind_sell_accepts_sell_yes_side_alias():
         side="SELL_YES", qty=5,
     )
     kwargs = client.place_order.await_args.kwargs
-    assert kwargs["side"] == "SELL"
+    assert kwargs["side"] == "BUY"
+    assert kwargs["conid"] == "777"
 
 # ── Sell-side (place_resting_sell / place_unwind_sell) ───────────────────
+# ForecastEx is a BUY-ONLY venue: SELL orders are accepted by the gateway
+# then cancelled by the venue with zero fill (live probe 2026-07-06:
+# GTC SELL @0.25 and IOC SELL @0.01 against a 0.19 bid both venue-cancelled).
+# The only exit is buying the opposing conid — IBKR nets the position out.
+# Economics: selling held side at price p == buying the sibling at (1 - p).
 
 
-async def test_place_resting_sell_uses_gtc_and_sells_same_conid():
-    """Resting sell should call client.place_order with side=SELL and GTC.
-
-    The same conid we bought is the one we sell — IBKR position accounting
-    handles the offset; no opposite-leg routing required.
-    """
+async def test_place_resting_sell_routes_gtc_buy_on_opposite_conid():
+    """Resting exit at sell-price p must place a GTC BUY of the sibling
+    conid at (1 - p); the returned Order keeps sell-side semantics for the
+    engine (price=p) while market_id records the conid actually resting."""
     client = _mock_client(place_response={
         "order_id": "rest-1", "order_status": "Submitted",
         "filled_quantity": 0, "avg_price": 0.0,
@@ -454,17 +468,22 @@ async def test_place_resting_sell_uses_gtc_and_sells_same_conid():
     assert order.order_id == "rest-1"
     assert order.status == OrderStatus.SUBMITTED
     kwargs = client.place_order.await_args.kwargs
-    assert kwargs["side"] == "SELL"
-    assert kwargs["conid"] == "111"
+    assert kwargs["side"] == "BUY"
+    assert kwargs["conid"] == "777"
     assert kwargs["tif"] == "GTC"
-    assert kwargs["price"] == 0.55
+    assert kwargs["price"] == pytest.approx(0.45)
     assert kwargs["quantity"] == 10
+    assert order.price == pytest.approx(0.55)
+    assert order.market_id == "777"
 
 
-async def test_place_unwind_sell_uses_ioc_at_panic_price():
+async def test_place_unwind_sell_buys_opposite_conid_ioc():
+    """Panic exit at sell-price 0.01 == pay up to 0.99 for the sibling.
+    A venue fill at 0.80 on the sibling means we exited at 0.20 in
+    sell-side terms — the Order must carry the translated fill price."""
     client = _mock_client(place_response={
         "order_id": "unw-1", "order_status": "Filled",
-        "filled_quantity": 10, "avg_price": 0.02,
+        "filled_quantity": 10, "avg_price": 0.80,
     })
     adapter = ForecastExAdapter(client=client)
     order = await adapter.place_unwind_sell(
@@ -473,10 +492,12 @@ async def test_place_unwind_sell_uses_ioc_at_panic_price():
     )
     assert order.status == OrderStatus.FILLED
     assert order.fill_qty == 10
+    assert order.fill_price == pytest.approx(0.20)
     kwargs = client.place_order.await_args.kwargs
-    assert kwargs["side"] == "SELL"
+    assert kwargs["side"] == "BUY"
     assert kwargs["tif"] == "IOC"
-    assert kwargs["price"] == 0.01
+    assert kwargs["price"] == pytest.approx(0.99)
+    assert kwargs["conid"] == "777"
 
 
 async def test_place_unwind_sell_default_panic_price_is_one_cent():
@@ -486,17 +507,19 @@ async def test_place_unwind_sell_default_panic_price_is_one_cent():
         arb_id="arb-1", market_id="333", canonical_id="X",
         side="yes", qty=5,
     )
-    assert client.place_order.await_args.kwargs["price"] == 0.01
+    # sell at >= 0.01  ==  buy sibling at <= 0.99
+    assert client.place_order.await_args.kwargs["price"] == pytest.approx(0.99)
 
 
-async def test_place_resting_sell_snaps_price():
+async def test_place_resting_sell_snaps_translated_price():
     client = _mock_client()
     adapter = ForecastExAdapter(client=client)
     await adapter.place_resting_sell(
         arb_id="arb-1", market_id="111", canonical_id="X",
         side="yes", price=0.5733, qty=1,
     )
-    assert client.place_order.await_args.kwargs["price"] == 0.57
+    # 1 - 0.5733 = 0.4267 -> snapped to the venue cent grid
+    assert client.place_order.await_args.kwargs["price"] == pytest.approx(0.43)
 
 
 async def test_place_resting_sell_skips_phase4_hardlock():
@@ -581,13 +604,14 @@ async def test_place_resting_sell_returns_failed_on_client_exception():
 
 
 async def test_place_resting_sell_partial_fill_status():
-    """A resting sell may take an instant partial when there's already a
-    crossing bid for some of the qty."""
+    """A resting exit may take an instant partial when the sibling book
+    already crosses part of the qty. Venue avg 0.44 on the sibling buy
+    == 0.56 in sell-side terms."""
     client = _mock_client(place_response={
         "order_id": "rest-partial",
         "order_status": "PartiallyFilled",
         "filled_quantity": 3,
-        "avg_price": 0.55,
+        "avg_price": 0.44,
     })
     adapter = ForecastExAdapter(client=client)
     order = await adapter.place_resting_sell(
@@ -596,6 +620,7 @@ async def test_place_resting_sell_partial_fill_status():
     )
     assert order.status == OrderStatus.PARTIAL
     assert order.fill_qty == 3
+    assert order.fill_price == pytest.approx(0.56)
 
 
 # ── Broker order-ID round-trip (ARB-000768/769 postmortem) ───────────────
@@ -740,17 +765,19 @@ async def test_place_fok_recovers_broker_id_via_live_orders_when_ack_empty():
 
 
 async def test_place_unwind_sell_recovers_broker_id_via_live_orders_when_ack_empty():
+    # The exit is a BUY resting on the SIBLING conid — the live-orders
+    # lookup must match that, not the held conid.
     client = _mock_client(place_response={})
     client.list_live_orders = AsyncMock(return_value=[
-        {"orderId": "sell-id", "conid": "111",
-         "side": "SELL", "totalSize": 10, "lastExecutionTime_r": 9.9e12},
+        {"orderId": "exit-id", "conid": "777",
+         "side": "BUY", "totalSize": 10, "lastExecutionTime_r": 9.9e12},
     ])
     adapter = ForecastExAdapter(client=client)
     order = await adapter.place_unwind_sell(
         arb_id="ARB-1", market_id="111", canonical_id="X",
         side="yes", qty=10, panic_price=0.01,
     )
-    assert order.order_id == "sell-id"
+    assert order.order_id == "exit-id"
 
 
 # ── End-to-end round-trip: broker_id flows to get_order/cancel_order ─────
@@ -929,3 +956,168 @@ async def test_live_orders_lookup_skipped_when_client_lacks_method():
         market_id="111", normalized_side="BUY", qty=1, placed_after_ts=0,
     )
     assert found is None
+
+
+# ── get_order: real /iserver/account/order/status/{id} shape ──────────────
+# Verbatim field names from the 2026-07-06 live probe (order 249901299,
+# GOP_HOUSE_2026 YES, filled 1 @ $0.20): fills arrive as ``cum_fill`` and
+# ``average_price`` — none of the previously-parsed aliases. Missing them
+# made get_order report FILLED with fill_qty=0, which the engine's FILL-02
+# guard reads as "no exposure": a silently naked leg.
+
+
+def _live_status_payload(**overrides):
+    payload = {
+        "order_id": 249901299,
+        "conid": 773659700,
+        "conidex": "773659700@FORECASTX",
+        "side": "B",
+        "size": "0.0",
+        "total_size": "1.0",
+        "cum_fill": "1.0",
+        "order_status": "Filled",
+        "order_status_description": "Order Filled",
+        "average_price": "0.20",
+        "limit_price": "0.20",
+        "order_type": "LIMIT",
+        "tif": "IOC",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _submitted_order(order_id="249901299", market_id="773659700"):
+    return Order(
+        order_id=order_id, platform="forecastex", market_id=market_id,
+        canonical_id="GOP_HOUSE_2026", side="yes", price=0.20, quantity=1,
+        status=OrderStatus.SUBMITTED,
+    )
+
+
+async def test_get_order_parses_cum_fill_and_average_price():
+    client = _mock_client()
+    client.get_order = AsyncMock(return_value=_live_status_payload())
+    adapter = ForecastExAdapter(client=client)
+    refreshed = await adapter.get_order(_submitted_order())
+    assert refreshed.status == OrderStatus.FILLED
+    assert refreshed.fill_qty == 1
+    assert refreshed.fill_price == pytest.approx(0.20)
+
+
+async def test_get_order_parses_cum_fill_for_partials():
+    client = _mock_client()
+    client.get_order = AsyncMock(return_value=_live_status_payload(
+        cum_fill="3.0", size="7.0", total_size="10.0",
+        order_status="PartiallyFilled", average_price="0.19",
+    ))
+    adapter = ForecastExAdapter(client=client)
+    order = _submitted_order()
+    order.quantity = 10
+    refreshed = await adapter.get_order(order)
+    assert refreshed.status == OrderStatus.PARTIAL
+    assert refreshed.fill_qty == 3
+    assert refreshed.fill_price == pytest.approx(0.19)
+
+
+async def test_get_order_translates_fills_for_inverted_exit():
+    """After a cross-side exit (BUY sibling), get_order re-reads must
+    translate the sibling fill back to sell-side terms: venue avg 0.80
+    on the NO buy == exit at 0.20 on the held YES."""
+    client = _mock_client(place_response={
+        "order_id": "unw-9", "order_status": "Submitted",
+    })
+    adapter = ForecastExAdapter(client=client)
+    order = await adapter.place_unwind_sell(
+        arb_id="a", market_id="111", canonical_id="X", side="yes", qty=10,
+    )
+    assert order.order_id == "unw-9"
+    client.get_order = AsyncMock(return_value=_live_status_payload(
+        order_id="unw-9", conid=777, cum_fill="10.0", total_size="10.0",
+        average_price="0.80", order_status="Filled",
+    ))
+    refreshed = await adapter.get_order(order)
+    assert refreshed.status == OrderStatus.FILLED
+    assert refreshed.fill_qty == 10
+    assert refreshed.fill_price == pytest.approx(0.20)
+
+
+# ── Cross-side exit: sibling resolution fail-closed ───────────────────────
+
+
+async def test_sell_exit_fails_closed_when_sibling_unresolvable():
+    """No sibling conid -> no exit order. Returning FAILED (never raising,
+    never falling back to a SELL that the venue will cancel) hands the
+    naked leg to the engine's recovery/incident path."""
+    client = _mock_client()
+    client.get_contract_info = AsyncMock(side_effect=RuntimeError("429 rate limited"))
+    adapter = ForecastExAdapter(client=client)
+    order = await adapter.place_unwind_sell(
+        arb_id="a", market_id="111", canonical_id="X", side="yes", qty=5,
+    )
+    assert order.status == OrderStatus.FAILED
+    assert "sibling" in order.error.lower()
+    client.place_order.assert_not_awaited()
+
+
+async def test_sell_exit_fails_closed_when_no_opposite_right_child():
+    client = _mock_client()
+    client.resolve_event_children = AsyncMock(return_value=[
+        {"conid": "111", "right": "C", "strike": 2.0},  # only ourselves
+    ])
+    adapter = ForecastExAdapter(client=client)
+    order = await adapter.place_resting_sell(
+        arb_id="a", market_id="111", canonical_id="X", side="yes",
+        price=0.5, qty=5,
+    )
+    assert order.status == OrderStatus.FAILED
+    assert "sibling" in order.error.lower()
+    client.place_order.assert_not_awaited()
+
+
+async def test_sell_exit_from_no_position_buys_yes_sibling():
+    """Held conid is a NO (right=P) -> the exit buys the C sibling."""
+    client = _mock_client()
+    client.get_contract_info = AsyncMock(return_value={
+        "underlying_con_id": 999111, "strike": 2.0, "right": "P",
+    })
+    adapter = ForecastExAdapter(client=client)
+    await adapter.place_unwind_sell(
+        arb_id="a", market_id="777", canonical_id="X", side="no", qty=5,
+    )
+    kwargs = client.place_order.await_args.kwargs
+    assert kwargs["side"] == "BUY"
+    assert kwargs["conid"] == "111"
+
+
+async def test_sibling_resolution_cached_per_conid():
+    client = _mock_client()
+    adapter = ForecastExAdapter(client=client)
+    await adapter.place_unwind_sell(
+        arb_id="a", market_id="111", canonical_id="X", side="yes", qty=1,
+    )
+    await adapter.place_unwind_sell(
+        arb_id="b", market_id="111", canonical_id="X", side="yes", qty=1,
+    )
+    client.get_contract_info.assert_awaited_once()
+    client.resolve_event_children.assert_awaited_once()
+
+
+# ── Explicit zero-fill downgrade: key-name completeness ───────────────────
+
+
+async def test_filled_ack_with_explicit_zero_filled_quantity_downgrades():
+    """An ack that SAYS Filled but carries an explicit filled_quantity of 0
+    must downgrade to CANCELLED, not backfill a phantom full fill. The
+    explicit-zero check previously looked for 'filled_qty'/'filledQty'
+    while the parser read 'filled_quantity'/'filledQuantity' — a payload
+    using the parsed spellings with 0 slipped through to the backfill."""
+    client = _mock_client(place_response={
+        "order_id": "x1", "order_status": "Filled", "filled_quantity": 0,
+    })
+    adapter = ForecastExAdapter(client=client)
+    order = await adapter.place_ioc(
+        arb_id="a", market_id="111", canonical_id="X",
+        side="yes", price=0.5, qty=5,
+    )
+    assert order.status == OrderStatus.CANCELLED
+    assert order.fill_qty == 0
