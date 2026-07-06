@@ -38,6 +38,8 @@ class ReadinessSnapshot:
     blocking_reasons: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     checks: List[ReadinessCheck] = field(default_factory=list)
+    venue_readiness: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    venue_pairs: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -47,6 +49,10 @@ class ReadinessSnapshot:
             "blocking_reasons": list(self.blocking_reasons),
             "warnings": list(self.warnings),
             "checks": [check.to_dict() for check in self.checks],
+            # Additive fields: the legacy global boolean remains conservative,
+            # while these scoped views show which venues/pairs are blocked.
+            "venue_readiness": dict(self.venue_readiness),
+            "venue_pairs": dict(self.venue_pairs),
         }
 
 
@@ -101,6 +107,9 @@ class OperationalReadiness:
             warnings=warnings,
             checks=checks,
         )
+        venue_readiness, venue_pairs = self._build_scoped_readiness(checks)
+        snapshot.venue_readiness = venue_readiness
+        snapshot.venue_pairs = venue_pairs
         self._last_snapshot = snapshot
         return snapshot
 
@@ -177,6 +186,110 @@ class OperationalReadiness:
             return True
         return platform in {str(p).lower() for p in involved_platforms}
 
+    def _known_platforms(self, checks: List[ReadinessCheck]) -> List[str]:
+        platforms = set(str(name).lower() for name in self.collectors.keys())
+        balances = getattr(self.monitor, "current_balances", {}) or {}
+        platforms.update(str(name).lower() for name in balances.keys())
+        for check in checks:
+            if isinstance(check.details, dict):
+                for key, value in check.details.items():
+                    if isinstance(value, dict) and key in {"kalshi", "polymarket", "forecastex"}:
+                        platforms.add(str(key).lower())
+        platforms.update({"kalshi", "polymarket"})
+        if "forecastex" in self.collectors or "forecastex" in balances:
+            platforms.add("forecastex")
+        preferred = {"kalshi": 0, "polymarket": 1, "forecastex": 2}
+        return sorted(platforms, key=lambda name: (preferred.get(name, 99), name))
+
+    def _platform_scope_for_check(self, check: ReadinessCheck) -> Optional[set[str]]:
+        """Return venue names for venue-local checks; ``None`` means global."""
+        if check.key == "collectors":
+            return {
+                name.strip().lower()
+                for name in (check.summary or "").split(":")[-1].split(",")
+                if name.strip()
+            }
+        if check.key == "balances" and isinstance(check.details, dict):
+            low = {
+                str(platform).lower()
+                for platform, entry in check.details.items()
+                if isinstance(entry, dict) and entry.get("is_low")
+            }
+            if low:
+                return low
+        if check.key == "incidents" and isinstance(check.details, dict):
+            incidents = check.details.get("critical_incidents") or []
+            scoped: set[str] = set()
+            for incident in incidents:
+                metadata = incident.get("metadata") if isinstance(incident, dict) else None
+                platform = ""
+                if isinstance(metadata, dict):
+                    platform = str(metadata.get("platform") or "").lower()
+                if not platform:
+                    return None
+                scoped.add(platform)
+            if scoped:
+                return scoped
+        return None
+
+    def _build_scoped_readiness(
+        self,
+        checks: List[ReadinessCheck],
+    ) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+        platforms = self._known_platforms(checks)
+        platform_set = set(platforms)
+        per_platform: Dict[str, Dict[str, Any]] = {
+            platform: {
+                "ready_for_live_trading": True,
+                "blocking_reasons": [],
+                "warnings": [],
+            }
+            for platform in platforms
+        }
+        global_blocking: List[str] = []
+
+        for check in checks:
+            if check.status in {"warning", "manual"}:
+                scope = self._platform_scope_for_check(check)
+                targets = platforms if scope is None else sorted(scope & platform_set)
+                for platform in targets:
+                    per_platform[platform]["warnings"].append(check.summary)
+
+            if not check.blocking or check.status == "pass":
+                continue
+
+            scope = self._platform_scope_for_check(check)
+            if scope is None:
+                global_blocking.append(check.summary)
+                for platform in platforms:
+                    per_platform[platform]["blocking_reasons"].append(check.summary)
+            else:
+                for platform in sorted(scope & platform_set):
+                    per_platform[platform]["blocking_reasons"].append(check.summary)
+
+        for payload in per_platform.values():
+            payload["ready_for_live_trading"] = not payload["blocking_reasons"]
+
+        venue_pairs: Dict[str, Dict[str, Any]] = {}
+        for i, left in enumerate(platforms):
+            for right in platforms[i + 1:]:
+                blocking = list(dict.fromkeys(
+                    global_blocking
+                    + per_platform[left]["blocking_reasons"]
+                    + per_platform[right]["blocking_reasons"]
+                ))
+                warnings = list(dict.fromkeys(
+                    per_platform[left]["warnings"]
+                    + per_platform[right]["warnings"]
+                ))
+                venue_pairs[f"{left}:{right}"] = {
+                    "ready_for_live_trading": not blocking,
+                    "blocking_reasons": blocking,
+                    "warnings": warnings,
+                }
+
+        return per_platform, venue_pairs
+
     def allow_execution(self, opportunity) -> Tuple[bool, str, Dict[str, Any]]:
         if self.config.scanner.dry_run:
             return True, "dry-run mode collecting evidence", self.refresh().to_dict()
@@ -188,19 +301,21 @@ class OperationalReadiness:
         # check; every other blocker (credentials, profitability, incidents,
         # mappings, alerts, reconciliation, balances) keeps system-wide
         # blocking semantics.
-        involved_platforms = {opportunity.yes_platform, opportunity.no_platform}
+        involved_platforms = {
+            str(opportunity.yes_platform).lower(),
+            str(opportunity.no_platform).lower(),
+        }
         relevant_blocking: List[str] = []
         for check in snapshot.checks:
             if not check.blocking or check.status == "pass":
                 continue
             if check.key == "collectors":
-                # _check_collectors lists the failed collector names after the
-                # last colon in its summary ("Collector health is degraded: X, Y").
-                summary_platforms = {
-                    name.strip() for name in check.summary.split(":")[-1].split(",")
-                    if name.strip()
-                }
+                summary_platforms = self._platform_scope_for_check(check) or set()
                 if summary_platforms and not (summary_platforms & involved_platforms):
+                    continue
+            if check.key == "balances":
+                balance_platforms = self._platform_scope_for_check(check) or set()
+                if balance_platforms and not (balance_platforms & involved_platforms):
                     continue
             if check.key == "profitability":
                 scoped_validator = getattr(self.profitability, "validate_opportunity_scope", None)

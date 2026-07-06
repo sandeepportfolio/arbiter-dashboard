@@ -214,6 +214,147 @@ def test_allow_execution_uses_scoped_profitability_for_specific_pair():
             MARKET_MAP["TEST_READY"] = original
 
 
+def test_snapshot_exposes_venue_scoped_pair_readiness_when_forecastex_degraded():
+    """Operator readiness must show ForecastEx outage blocks only FX pairs."""
+    original = MARKET_MAP.get("TEST_READY")
+    MARKET_MAP["TEST_READY"] = {
+        "description": "Readiness gate market",
+        "status": "confirmed",
+        "allow_auto_trade": True,
+        "mapping_score": 0.95,
+    }
+    try:
+        config = ArbiterConfig()
+        config.scanner.dry_run = False
+        config.alerts.telegram_bot_token = "token"
+        config.alerts.telegram_chat_id = "chat"
+        config.polymarket.private_key = "poly"
+        config.kalshi.api_key_id = "kalshi"
+        config.kalshi.private_key_path = "/tmp/key.pem"
+        balances = {
+            "kalshi": SimpleNamespace(balance=100.0, is_low=False, timestamp=1.0),
+            "polymarket": SimpleNamespace(balance=100.0, is_low=False, timestamp=1.0),
+            "forecastex": SimpleNamespace(balance=100.0, is_low=False, timestamp=1.0),
+        }
+        readiness = OperationalReadiness(
+            config,
+            engine=StubEngine(),
+            monitor=StubMonitor(balances),
+            profitability=ScopedProfitability("validated_profitable", True, "ok"),
+            collectors={
+                "kalshi": StubCollector(authenticated=True),
+                "polymarket": StubCollector(authenticated=True),
+                "forecastex": StubCollector(authenticated=True, circuit_state="open"),
+            },
+        )
+
+        payload = readiness.refresh().to_dict()
+
+        assert payload["ready_for_live_trading"] is False
+        assert payload["blocking_reasons"] == ["Collector health is degraded: forecastex"]
+        assert payload["venue_readiness"]["forecastex"]["ready_for_live_trading"] is False
+        assert payload["venue_readiness"]["kalshi"]["ready_for_live_trading"] is True
+        assert payload["venue_readiness"]["polymarket"]["ready_for_live_trading"] is True
+        assert payload["venue_pairs"]["kalshi:polymarket"]["ready_for_live_trading"] is True
+        assert payload["venue_pairs"]["kalshi:forecastex"]["ready_for_live_trading"] is False
+        assert payload["venue_pairs"]["polymarket:forecastex"]["ready_for_live_trading"] is False
+    finally:
+        if original is None:
+            MARKET_MAP.pop("TEST_READY", None)
+        else:
+            MARKET_MAP["TEST_READY"] = original
+
+
+def test_allow_execution_blocks_fx_leg_when_forecastex_collector_degraded():
+    original = MARKET_MAP.get("TEST_READY")
+    MARKET_MAP["TEST_READY"] = {
+        "description": "Readiness gate market",
+        "status": "confirmed",
+        "allow_auto_trade": True,
+        "mapping_score": 0.95,
+    }
+    try:
+        config = ArbiterConfig()
+        config.scanner.dry_run = False
+        config.alerts.telegram_bot_token = "token"
+        config.alerts.telegram_chat_id = "chat"
+        config.polymarket.private_key = "poly"
+        config.kalshi.api_key_id = "kalshi"
+        config.kalshi.private_key_path = "/tmp/key.pem"
+        balances = {
+            "kalshi": SimpleNamespace(balance=100.0, is_low=False, timestamp=1.0),
+            "forecastex": SimpleNamespace(balance=100.0, is_low=False, timestamp=1.0),
+        }
+        collectors = {
+            "kalshi": StubCollector(authenticated=True),
+            "polymarket": StubCollector(authenticated=True),
+            "forecastex": StubCollector(authenticated=True, circuit_state="open"),
+        }
+        readiness = OperationalReadiness(
+            config,
+            engine=StubEngine(),
+            monitor=StubMonitor(balances),
+            profitability=ScopedProfitability("validated_profitable", True, "ok"),
+            collectors=collectors,
+        )
+        opp = make_opportunity()
+        opp.no_platform = "forecastex"
+        opp.no_market_id = "FX-NO"
+
+        allowed, reason, _ = readiness.allow_execution(opp)
+
+        assert allowed is False
+        assert reason == "Collector health is degraded: forecastex"
+    finally:
+        if original is None:
+            MARKET_MAP.pop("TEST_READY", None)
+        else:
+            MARKET_MAP["TEST_READY"] = original
+
+
+def test_allow_execution_blocks_kp_when_kalshi_collector_degraded():
+    original = MARKET_MAP.get("TEST_READY")
+    MARKET_MAP["TEST_READY"] = {
+        "description": "Readiness gate market",
+        "status": "confirmed",
+        "allow_auto_trade": True,
+        "mapping_score": 0.95,
+    }
+    try:
+        config = ArbiterConfig()
+        config.scanner.dry_run = False
+        config.alerts.telegram_bot_token = "token"
+        config.alerts.telegram_chat_id = "chat"
+        config.polymarket.private_key = "poly"
+        config.kalshi.api_key_id = "kalshi"
+        config.kalshi.private_key_path = "/tmp/key.pem"
+        balances = {
+            "kalshi": SimpleNamespace(balance=100.0, is_low=False, timestamp=1.0),
+            "polymarket": SimpleNamespace(balance=100.0, is_low=False, timestamp=1.0),
+        }
+        readiness = OperationalReadiness(
+            config,
+            engine=StubEngine(),
+            monitor=StubMonitor(balances),
+            profitability=ScopedProfitability("validated_profitable", True, "ok"),
+            collectors={
+                "kalshi": StubCollector(authenticated=True, circuit_state="open"),
+                "polymarket": StubCollector(authenticated=True),
+                "forecastex": StubCollector(authenticated=True),
+            },
+        )
+
+        allowed, reason, _ = readiness.allow_execution(make_opportunity())
+
+        assert allowed is False
+        assert reason == "Collector health is degraded: kalshi"
+    finally:
+        if original is None:
+            MARKET_MAP.pop("TEST_READY", None)
+        else:
+            MARKET_MAP["TEST_READY"] = original
+
+
 def test_allow_execution_blocks_unprofitable_scoped_pair():
     original = MARKET_MAP.get("TEST_READY")
     MARKET_MAP["TEST_READY"] = {

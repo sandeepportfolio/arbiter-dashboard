@@ -1,6 +1,7 @@
 import asyncio
 import json
 import time
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -8,7 +9,7 @@ import pytest
 from arbiter.config import settings as settings_module
 from arbiter.config.settings import ArbiterConfig
 from arbiter.execution.engine import ExecutionEngine
-from arbiter.monitor.balance import BalanceMonitor
+from arbiter.monitor.balance import BalanceMonitor, BalanceSnapshot
 from arbiter.scanner.arbitrage import ArbitrageOpportunity
 from arbiter.utils.price_store import PricePoint, PriceStore
 
@@ -43,6 +44,8 @@ def confirmed_synthetic_mappings():
         "TEST_AUTO",
         "TEST_BAD_MATH",
         "TEST_INCIDENT",
+        "TEST_KP_GATE_PASS",
+        "TEST_FX_GATE_BLOCK",
         "TEST_LIVE_GATE",
         "TEST_MANUAL",
         "TEST_MANUAL_ACTIONS",
@@ -558,6 +561,139 @@ def test_live_trade_gate_blocks_execution_until_ready():
         assert execution is None
         assert len(engine.incidents) == 1
         assert "Trade gate blocked execution" in engine.incidents[0].message
+
+    asyncio.run(runner())
+
+
+def test_execute_opportunity_uses_venue_scoped_readiness_gate_for_kp_during_fx_degradation():
+    async def runner():
+        from arbiter.readiness import OperationalReadiness
+
+        class StubCollector:
+            def __init__(self, *, circuit_state="closed"):
+                self.total_fetches = 1
+                self.total_errors = 0
+                self.consecutive_errors = 0
+                self.circuit = SimpleNamespace(stats={"state": circuit_state})
+                self.auth = SimpleNamespace(is_authenticated=True)
+
+        class StubProfitability:
+            def get_snapshot(self):
+                return SimpleNamespace(
+                    verdict="validated_profitable",
+                    progress=1.0,
+                    total_realized_pnl=10.0,
+                    completed_executions=25,
+                )
+
+            def validate_opportunity_scope(self, opportunity):
+                return True, "venue pair validated", {"canonical_id": opportunity.canonical_id}
+
+        store = PriceStore(ttl=60)
+        config = ArbiterConfig()
+        config.scanner.dry_run = False
+        config.scanner.confidence_threshold = 0.1
+        config.scanner.min_edge_cents = 1.0
+        config.alerts.telegram_bot_token = "token"
+        config.alerts.telegram_chat_id = "chat"
+        config.polymarket.private_key = "poly"
+        config.kalshi.api_key_id = "kalshi"
+        config.kalshi.private_key_path = "/tmp/key.pem"
+        config.safety.max_platform_exposure_usd = 1_000_000.0
+        monitor = BalanceMonitor(config.alerts, {"kalshi": object(), "polymarket": object(), "forecastex": object()})
+        monitor._balances = {
+            "kalshi": BalanceSnapshot("kalshi", 100.0, 1.0, is_low=False),
+            "polymarket": BalanceSnapshot("polymarket", 100.0, 1.0, is_low=False),
+            "forecastex": BalanceSnapshot("forecastex", 100.0, 1.0, is_low=False),
+        }
+        engine = ExecutionEngine(config, monitor, price_store=store, collectors={})
+        engine.risk._max_daily_trades = 250
+        engine.risk._max_total_exposure = 50_000
+        engine._audit_opportunity = AsyncMock(return_value=True)
+        readiness = OperationalReadiness(
+            config,
+            engine=engine,
+            monitor=monitor,
+            profitability=StubProfitability(),
+            collectors={
+                "kalshi": StubCollector(),
+                "polymarket": StubCollector(),
+                "forecastex": StubCollector(circuit_state="open"),
+            },
+        )
+        engine.set_trade_gate(lambda opp: readiness.allow_execution(opp))
+
+        kp_opp = ArbitrageOpportunity(
+            canonical_id="TEST_KP_GATE_PASS",
+            description="K-P should pass while FX degraded",
+            yes_platform="kalshi",
+            yes_price=0.40,
+            yes_fee=0.02,
+            yes_market_id="K-KP",
+            no_platform="polymarket",
+            no_price=0.45,
+            no_fee=0.01,
+            no_market_id="P-KP",
+            gross_edge=0.15,
+            total_fees=0.03,
+            net_edge=0.12,
+            net_edge_cents=12.0,
+            suggested_qty=1,
+            max_profit_usd=0.12,
+            timestamp=time.time(),
+            confidence=0.9,
+            status="manual",
+            persistence_count=3,
+            quote_age_seconds=1.0,
+            min_available_liquidity=100.0,
+            mapping_status="confirmed",
+            mapping_score=0.95,
+            requires_manual=True,
+            yes_fee_rate=0.07,
+            no_fee_rate=0.01,
+        )
+        fx_opp = ArbitrageOpportunity(
+            canonical_id="TEST_FX_GATE_BLOCK",
+            description="FX leg should remain blocked while FX degraded",
+            yes_platform="kalshi",
+            yes_price=0.40,
+            yes_fee=0.02,
+            yes_market_id="K-FX",
+            no_platform="forecastex",
+            no_price=0.45,
+            no_fee=0.01,
+            no_market_id="FX-FX",
+            gross_edge=0.15,
+            total_fees=0.03,
+            net_edge=0.12,
+            net_edge_cents=12.0,
+            suggested_qty=1,
+            max_profit_usd=0.12,
+            timestamp=time.time() + 1,
+            confidence=0.9,
+            status="manual",
+            persistence_count=3,
+            quote_age_seconds=1.0,
+            min_available_liquidity=100.0,
+            mapping_status="confirmed",
+            mapping_score=0.95,
+            requires_manual=True,
+            yes_fee_rate=0.07,
+            no_fee_rate=0.005,
+        )
+
+        kp_execution = await engine.execute_opportunity(kp_opp)
+        fx_execution = await engine.execute_opportunity(fx_opp)
+
+        assert kp_execution is not None
+        assert kp_execution.status == "manual_pending"
+        assert fx_execution is None
+        assert any(
+            "Collector health is degraded: forecastex" in incident.message
+            for incident in engine.incidents
+        )
+        await engine.stop()
+        await monitor.stop()
 
     asyncio.run(runner())
 
