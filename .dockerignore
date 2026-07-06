@@ -18,6 +18,16 @@ output/
 node_modules/
 logs/
 *.log
+.arbiter-runtime/
+.arbiter-scheduled-state/
+arbiter.db
+ops-*.png
+signal-filters-live.png
+premium-stays.html
+01-overview.png
+arbiter-architecture.html
+network.log
+funds-*.png
 .claude/
 data/
 .claude/

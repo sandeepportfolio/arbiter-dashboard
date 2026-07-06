@@ -303,7 +303,16 @@ class ArbiterAPI:
         }
 
     def _discovery_snapshot(self) -> dict[str, Any]:
-        return json.loads(json.dumps(self._discovery_status, default=str))
+        snapshot = json.loads(json.dumps(self._discovery_status, default=str))
+        pm_us = getattr(self, "_pm_us_metrics", {}) or {}
+        mapping_settings = self._settings_snapshot().get("mapping", {})
+        snapshot["continuous"] = {
+            "enabled": bool(mapping_settings.get("auto_discovery_enabled", True)),
+            "last_written": int(pm_us.get("auto_discovery_last_written", 0) or 0),
+            "candidates_pending": int(pm_us.get("auto_discovery_candidates_pending", 0) or 0),
+            "last_pass_at": pm_us.get("auto_discovery_last_pass_at"),
+        }
+        return snapshot
 
     def _record_discovery_event(self, event: dict[str, Any]) -> None:
         phase = str(event.get("phase") or "running")
@@ -4099,6 +4108,7 @@ class ArbiterAPI:
             "completed_at": self._discovery_status.get("completed_at"),
             "candidates_pending": int(pm_us.get("auto_discovery_candidates_pending", 0)),
             "last_written": int(pm_us.get("auto_discovery_last_written", 0)),
+            "last_pass_at": pm_us.get("auto_discovery_last_pass_at"),
         }
         summary = {
             "status_counts": status_counts,

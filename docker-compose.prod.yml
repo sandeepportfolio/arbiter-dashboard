@@ -184,6 +184,10 @@ services:
     volumes:
       # RSA private key mounted read-only
       - ./keys:/app/keys:ro
+      # Persist operator runtime settings (dashboard toggles). This file
+      # overrides env defaults at runtime; keep AUTO_DISCOVERY_ENABLED in
+      # .env.production as boot intent, and this mount as durable operator state.
+      - ./.arbiter-runtime:/root/.arbiter
       # Claude Code CLI verifier service runs on the host (port 8079)
       # No need to mount auth config — the service handles Claude CLI auth natively
     healthcheck:

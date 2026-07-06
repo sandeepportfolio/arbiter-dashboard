@@ -24,10 +24,11 @@ evidence/05/
 # Playwright isolated profile caches (regenerated on each run)
 .playwright-*/
 
-# Runtime logs (structured logging writes to stdout; file logs are local-only)
+# Runtime logs and operator state (structured logging writes to stdout; file logs are local-only)
 logs/
 output/*.log
 output/*.err
+.arbiter-runtime/
 
 # Portable secret bundle working files
 portable-secrets/backups/

@@ -917,6 +917,14 @@ async def run_market_discovery_loop(
                 max_candidates=int(runtime["auto_discovery_max_candidates"]),
                 promotion_settings=runtime,
             )
+            # Surface K↔P progress immediately. ForecastEx attachment can run
+            # for minutes or hit CP secdef 503s; operators still need to see
+            # that the core K↔P discovery loop completed instead of another
+            # misleading "idle forever" status.
+            if metrics is not None:
+                metrics["auto_discovery_last_written"] = written
+                metrics["auto_discovery_candidates_pending"] = await mapping_store.count_candidates()
+                metrics["auto_discovery_last_pass_at"] = time.time()
             # ForecastEx-side discovery: walk confirmed K↔P mappings and
             # attach IBKR conids for ones that have a matching FORECASTX
             # event title. Runs after the K↔P pass so newly confirmed
@@ -945,6 +953,7 @@ async def run_market_discovery_loop(
             if metrics is not None:
                 metrics["auto_discovery_candidates_pending"] = pending
                 metrics["auto_discovery_last_written"] = written
+                metrics["auto_discovery_last_pass_at"] = time.time()
             logger.info(
                 "Market discovery pass complete: wrote=%s pending_candidates=%s interval=%.1fs budget_rps=%.2f min_score=%.2f max_candidates=%s",
                 written,
@@ -1208,6 +1217,7 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
 
     pm_us_metrics = {
         "auto_discovery_candidates_pending": 0,
+        "auto_discovery_last_pass_at": None,
         "auto_promote_rejections": {},
     }
     setattr(api, "_pm_us_metrics", pm_us_metrics)

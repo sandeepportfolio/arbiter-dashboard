@@ -1008,6 +1008,45 @@ def test_system_endpoint_includes_mappings_summary():
     asyncio.run(_run())
 
 
+def test_discovery_status_includes_continuous_loop_metrics():
+    """GET /api/discovery/status must preserve batch-run fields and add
+    continuous-loop visibility so the dashboard no longer reports idle while
+    the background discovery loop is actively writing candidates.
+    """
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async def _run():
+        api = await _make_rate_limit_api()
+        api._market_discovery_settings["auto_discovery_enabled"] = True
+        api._pm_us_metrics = {
+            "auto_discovery_candidates_pending": 213,
+            "auto_discovery_last_written": 43,
+            "auto_discovery_last_pass_at": 1783377000.5,
+        }
+
+        app = web.Application()
+        app.router.add_get("/api/discovery/status", api.handle_discovery_status)
+        async with TestClient(TestServer(app)) as client:
+            response = await client.get("/api/discovery/status")
+            assert response.status == 200
+            body = await response.json()
+
+        assert body["status"] == "idle"
+        assert body["run_id"] is None
+        continuous = body["continuous"]
+        assert continuous == {
+            "enabled": True,
+            "last_written": 43,
+            "candidates_pending": 213,
+            "last_pass_at": 1783377000.5,
+        }
+
+    free_port()
+    asyncio.run(_run())
+
+
+
 def test_system_endpoint_mapping_summary_falls_back_to_runtime_cache():
     """When mapping_store is None (or count_by_status missing), the snapshot
     falls back to counting MARKET_MAP entries — never blank."""
