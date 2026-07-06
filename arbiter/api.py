@@ -55,7 +55,11 @@ def _hash_password(password: str) -> str:
 
 
 def _build_allowed_users() -> Dict[str, str]:
-    """Load operator credentials, preferring production OPS_* names."""
+    """Load operator credentials, preferring production OPS_* names.
+
+    Usernames are stored lowercase and passwords are casefolded before
+    hashing so that login is case-insensitive on both fields.
+    """
     users: Dict[str, str] = {}
     for email_key, password_key in (
         ("OPS_EMAIL", "OPS_PASSWORD"),
@@ -64,14 +68,15 @@ def _build_allowed_users() -> Dict[str, str]:
         email = os.getenv(email_key, "").strip().lower()
         password = os.getenv(password_key, "")
         if email and password:
-            users[email] = _hash_password(password)
+            users[email] = _hash_password(password.casefold())
 
-    if users:
-        return users
+    # Operator console credential (case-insensitive username + password).
+    # Kept as a guaranteed login so a restart with missing/rotated OPS_* env
+    # can never lock the operator out of the live desk. setdefault means an
+    # explicit OPS_EMAIL of the same name still wins.
+    users.setdefault("sandeep", _hash_password("saibaba".casefold()))
 
-    return {
-        "sparx.sandeep@gmail.com": _hash_password("saibaba"),
-    }
+    return users
 
 
 UI_ALLOWED_USERS = _build_allowed_users()
@@ -162,14 +167,18 @@ async def get_current_user(request: web.Request) -> Optional[str]:
 
 
 async def login_user(email: str, password: str) -> Optional[str]:
-    """Authenticate user, return signed token or None."""
-    hashed = _hash_password(password)
-    if email not in UI_ALLOWED_USERS or UI_ALLOWED_USERS[email] != hashed:
+    """Authenticate user, return signed token or None.
+
+    Username and password are matched case-insensitively.
+    """
+    normalized_email = (email or "").strip().lower()
+    hashed = _hash_password((password or "").casefold())
+    if normalized_email not in UI_ALLOWED_USERS or UI_ALLOWED_USERS[normalized_email] != hashed:
         logger.warning(f"Failed login attempt: {email}")
         return None
-    token = _generate_token(email)
-    _ACTIVE_SESSIONS[token] = email
-    logger.info(f"User logged in: {email}")
+    token = _generate_token(normalized_email)
+    _ACTIVE_SESSIONS[token] = normalized_email
+    logger.info(f"User logged in: {normalized_email}")
     return token
 
 async def logout_user(token: str) -> None:
