@@ -36,6 +36,7 @@ def confirmed_synthetic_mappings():
         "MKT_BURST_2",
         "MKT_CNC",
         "MKT_DRYRUN_PARITY",
+        "MKT_UNWIND_E2E",
         "MKT_REC",
         "REJ_PER_PLATFORM",
         "REJ_STALE",
@@ -4226,3 +4227,111 @@ def test_canonical_lock_allows_parallel_distinct_canonicals():
                 _os_test.environ["EXECUTION_ORDER"] = _old_exec
 
     asyncio.run(runner())
+
+
+def test_live_leg2_clean_reject_triggers_full_unwind_e2e():
+    """E2E through execute_opportunity (Phase-3 pin, 2026-07-06): primary
+    fills, secondary venue-rejects CLEANLY, and the recovery path must
+    actually SELL the primary back — not merely log an incident. Asserts
+    the full chain: unwind order placed for the full primary qty, unwind
+    pnl booked into realized_pnl, the surviving leg's reservation released,
+    and the one-leg-exposure incident auto-resolved after the unwind.
+
+    Every pre-existing e2e either no-op'd the unwind (_wire_unwind_failed)
+    or called _recover_one_leg_risk directly with pre-built legs.
+    """
+    import os as _os_test
+    _old_exec_order = _os_test.environ.get("EXECUTION_ORDER")
+    _os_test.environ["EXECUTION_ORDER"] = "kalshi_first"
+    from arbiter.execution.engine import Order, OrderStatus
+
+    async def runner():
+        engine = _build_live_engine_for_safe02_gap()
+        engine._secondary_requote_attempts = 0  # requote covered elsewhere
+        engine._secondary_requote_delay_ms = 0.0
+        engine._smart_unwind_timeout_s = 0.0
+
+        kalshi = MagicMock()
+        kalshi.platform = "kalshi"
+        _wire_live_depth(kalshi, 0.60)
+        primary_fill = Order(
+            order_id="K-PRIMARY", platform="kalshi", market_id="M-kalshi",
+            canonical_id="MKT_UNWIND_E2E", side="yes", price=0.60,
+            quantity=100, status=OrderStatus.FILLED,
+            fill_qty=100, fill_price=0.60, timestamp=time.time(),
+        )
+        kalshi.place_fok = AsyncMock(return_value=primary_fill)
+        kalshi.place_ioc = AsyncMock(return_value=primary_fill)
+        kalshi.cancel_order = AsyncMock(return_value=True)
+        # Smart-unwind: resting sell at break-even fills in full.
+        unwind_fill = Order(
+            order_id="K-UNWIND", platform="kalshi", market_id="M-kalshi",
+            canonical_id="MKT_UNWIND_E2E", side="yes", price=0.60,
+            quantity=100, status=OrderStatus.FILLED,
+            fill_qty=100, fill_price=0.58, timestamp=time.time(),
+        )
+        kalshi.place_resting_sell = AsyncMock(return_value=unwind_fill)
+        kalshi.place_unwind_sell = AsyncMock(return_value=unwind_fill)
+
+        poly = MagicMock()
+        poly.platform = "polymarket"
+        _wire_live_depth(poly, 0.30)
+
+        def _rejected() -> Order:
+            return Order(
+                order_id="P-REJ", platform="polymarket", market_id="M-poly",
+                canonical_id="MKT_UNWIND_E2E", side="no", price=0.30,
+                quantity=100, status=OrderStatus.FAILED,
+                fill_qty=0, timestamp=time.time(),
+                error="ORDER_STATE_REJECTED",
+            )
+
+        poly.place_ioc = AsyncMock(return_value=_rejected())
+        poly.place_fok = AsyncMock(return_value=_rejected())
+        poly.cancel_order = AsyncMock(return_value=True)
+        engine.adapters = {"kalshi": kalshi, "polymarket": poly}
+
+        incidents_q = engine.subscribe_incidents()
+
+        opp = _make_safety_opp(
+            canonical_id="MKT_UNWIND_E2E",
+            yes_platform="kalshi",
+            no_platform="polymarket",
+            yes_price=0.60,
+            no_price=0.30,
+            suggested_qty=100,
+        )
+
+        execution = await engine.execute_opportunity(opp)
+        assert execution is not None
+        assert execution.status == "recovering"
+
+        # 1. The unwind actually ran (resting-at-break-even path).
+        assert (
+            kalshi.place_resting_sell.await_count
+            + kalshi.place_unwind_sell.await_count
+        ) > 0
+        # 2. Unwind pnl booked: bought 100 @ 0.60, sold back @ 0.58.
+        assert execution.realized_pnl == pytest.approx(100 * (0.58 - 0.60))
+        # 3. The primary's reservation was released after the unwind.
+        assert engine.risk._platform_exposures.get("kalshi", 0.0) == 0.0
+        # 4. one_leg_exposure incident emitted, then auto-resolved.
+        seen_naked = False
+        seen_unwound = False
+        while not incidents_q.empty():
+            incident = incidents_q.get_nowait()
+            etype = (incident.metadata or {}).get("event_type")
+            if etype == "one_leg_exposure":
+                seen_naked = True
+            if etype == "auto_unwind":
+                seen_unwound = True
+        assert seen_naked, "expected one_leg_exposure incident"
+        assert seen_unwound, "expected auto_unwind incident"
+        # 5. Recovery trail is on the execution notes.
+        assert any("unwind-yes" in n for n in (execution.notes or []))
+
+    asyncio.run(runner())
+    if _old_exec_order is None:
+        _os_test.environ.pop("EXECUTION_ORDER", None)
+    else:
+        _os_test.environ["EXECUTION_ORDER"] = _old_exec_order

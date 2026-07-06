@@ -556,6 +556,29 @@ class ExecutionEngine:
             self._inter_leg_delay_ms = 500.0
         self._inter_leg_delay_ms = max(0.0, self._inter_leg_delay_ms)
 
+        # SECONDARY_REQUOTE_MAX_ATTEMPTS / SECONDARY_REQUOTE_DELAY_MS:
+        # after a CLEAN secondary failure (or an EDGE-LOST pre-submit
+        # abort), re-walk the secondary book up to N times, DELAY ms
+        # apart, and retry an IOC while the walked price is affordable.
+        # Books that moved one tick between walk and submit routinely
+        # come back within a second — one stale IOC + a doomed same-price
+        # FOK was the single biggest naked-leg factory (93 naked arbs of
+        # 402 executions). 0 attempts restores the old behavior.
+        try:
+            self._secondary_requote_attempts = int(
+                _os_init.getenv("SECONDARY_REQUOTE_MAX_ATTEMPTS", "2") or "2"
+            )
+        except (TypeError, ValueError):
+            self._secondary_requote_attempts = 2
+        self._secondary_requote_attempts = max(0, self._secondary_requote_attempts)
+        try:
+            self._secondary_requote_delay_ms = float(
+                _os_init.getenv("SECONDARY_REQUOTE_DELAY_MS", "250") or "250"
+            )
+        except (TypeError, ValueError):
+            self._secondary_requote_delay_ms = 250.0
+        self._secondary_requote_delay_ms = max(0.0, self._secondary_requote_delay_ms)
+
         # SMART_UNWIND_TIMEOUT_S: how long the recovery loop rests a
         # break-even SELL before falling back to the market-IOC panic
         # sell.  Default 30s — long enough for a buyer to take the bid
@@ -1760,29 +1783,10 @@ class ExecutionEngine:
                         max_affordable_secondary, primary_fill_price, abort_secondary,
                     )
 
-                    if abort_secondary:
-                        logger.error(
-                            "  ✗ ABORT secondary: walked=%.4f > max_affordable=%.4f "
-                            "(primary_fill=%.4f).  Primary will be unwound on %s.",
-                            secondary_fok_price, max_affordable_secondary,
-                            primary_fill_price, primary_platform,
-                        )
-                        secondary_leg = Order(
-                            order_id=f"{arb_id}-{secondary_side.upper()}-EDGE-LOST",
-                            platform=secondary_platform,
-                            market_id=secondary_market,
-                            canonical_id=opp.canonical_id,
-                            side=secondary_side,
-                            price=secondary_fok_price,
-                            quantity=effective_qty,
-                            status=OrderStatus.ABORTED,
-                            timestamp=time.time(),
-                            error=(
-                                f"Secondary live-book exec price {secondary_fok_price:.4f} "
-                                f"exceeds max-affordable {max_affordable_secondary:.4f} "
-                                f"after primary fill at {primary_fill_price:.4f}"
-                            ),
-                        )
+                    # Break-even ceiling for the requote loop's final
+                    # attempt: max_affordable already subtracts the edge
+                    # floor, so adding it back is the 0¢-net price.
+                    break_even_secondary = max_affordable_secondary + edge_floor
 
                     # Recompute the actual post-walk net edge for visibility.
                     if (
@@ -1814,7 +1818,52 @@ class ExecutionEngine:
                         )
 
                     if abort_secondary:
-                        pass  # secondary_leg already constructed as ABORTED above
+                        # EDGE-LOST entry: the walked book is unaffordable
+                        # RIGHT NOW, but one-tick moves routinely bounce
+                        # back within the requote window. Enter the loop
+                        # without an initial attempt; only if it never
+                        # comes back do we construct the ABORTED leg (the
+                        # path ~35 naked arbs took unconditionally before).
+                        secondary_leg = await self._execute_with_fallbacks(
+                            arb_id=arb_id,
+                            secondary_platform=secondary_platform,
+                            secondary_market=secondary_market,
+                            canonical_id=opp.canonical_id,
+                            secondary_side=secondary_side,
+                            initial_price=buffered_limit,
+                            qty=effective_qty,
+                            max_affordable_price=max_affordable_secondary,
+                            primary_leg=primary_leg,
+                            primary_platform=primary_platform,
+                            opp=opp,
+                            break_even_price=break_even_secondary,
+                            skip_initial_attempt=True,
+                        )
+                        if secondary_leg is None:
+                            logger.error(
+                                "  ✗ ABORT secondary: walked=%.4f > max_affordable=%.4f "
+                                "(primary_fill=%.4f) and requote never recovered. "
+                                "Primary will be unwound on %s.",
+                                secondary_fok_price, max_affordable_secondary,
+                                primary_fill_price, primary_platform,
+                            )
+                            secondary_leg = Order(
+                                order_id=f"{arb_id}-{secondary_side.upper()}-EDGE-LOST",
+                                platform=secondary_platform,
+                                market_id=secondary_market,
+                                canonical_id=opp.canonical_id,
+                                side=secondary_side,
+                                price=secondary_fok_price,
+                                quantity=effective_qty,
+                                status=OrderStatus.ABORTED,
+                                timestamp=time.time(),
+                                error=(
+                                    f"Secondary live-book exec price {secondary_fok_price:.4f} "
+                                    f"exceeds max-affordable {max_affordable_secondary:.4f} "
+                                    f"after primary fill at {primary_fill_price:.4f} "
+                                    f"(requote attempts exhausted)"
+                                ),
+                            )
                     else:
                         secondary_leg = await self._execute_with_fallbacks(
                             arb_id=arb_id,
@@ -1828,6 +1877,7 @@ class ExecutionEngine:
                             primary_leg=primary_leg,
                             primary_platform=primary_platform,
                             opp=opp,
+                            break_even_price=break_even_secondary,
                         )
                 except Exception as _secondary_exc:
                     # Silent-naked bug fix: anything in the block above —
@@ -2258,67 +2308,147 @@ class ExecutionEngine:
         primary_leg: "Order",
         primary_platform: str,
         opp: "ArbitrageOpportunity",
-    ) -> "Order":
-        """Execute secondary leg with multiple fallback strategies.
+        break_even_price: Optional[float] = None,
+        skip_initial_attempt: bool = False,
+    ) -> Optional["Order"]:
+        """Execute secondary leg with requote-then-retry fallbacks.
 
-        Fallback chain:
-        1. IOC at walked/buffered price (current behavior)
-        2. IOC at max_affordable price (widest profitable limit)
-        3. FOK at max_affordable price (some venues handle FOK differently)
-        All attempts failed -> return last failed order for recovery path.
+        Chain:
+        1. IOC at walked/buffered price (skipped when ``skip_initial_attempt``
+           — the EDGE-LOST entry, where the pre-submit walk already showed
+           an unaffordable book so a marketable order can't exist yet).
+        2. Requote loop (``SECONDARY_REQUOTE_MAX_ATTEMPTS``): re-walk the
+           live book; while walked <= max_affordable, retry an IOC at
+           max_affordable. On the FINAL attempt only, ``break_even_price``
+           (when provided) raises the ceiling — completing the arb at
+           >= 0¢ net always beats a panic unwind, but the edge floor is
+           never silently given up before the last try.
+        3. FOK at max_affordable (legacy last rung; venues occasionally
+           fill FOK where the IOC just missed).
+
+        Any leg returning ``idempotency_ambiguous`` stops the chain dead —
+        retrying with a fresh client_order_id could stack exposure on a
+        latent fill (C3, unchanged).
+
+        Returns None ONLY when ``skip_initial_attempt`` is set and the loop
+        never found an affordable book — nothing was submitted, so the call
+        site constructs its ABORTED EDGE-LOST leg exactly as before.
         """
         # Uses module-level logger = logging.getLogger("arbiter.execution")
 
-        # Attempt 1: IOC at walked/buffered price
-        order = await self._place_order_for_leg(
-            arb_id, secondary_platform, secondary_market,
-            canonical_id, secondary_side, initial_price, qty,
-            use_ioc=True,
-        )
-        if order.status in {OrderStatus.FILLED, OrderStatus.PARTIAL}:
-            logger.info(
-                "  ✓ FALLBACK-1 (IOC at walked): %s filled %d/%d @ %.4f",
-                secondary_side.upper(), order.fill_qty, qty, order.fill_price,
-            )
-            return order
+        order: Optional[Order] = None
+        requote_notes: List[str] = []
 
-        # C3: fail-closed gate. When the timeout-recovery path could not
-        # prove the platform never received (or never filled) attempt 1's
-        # order, firing attempt 2 with a fresh client_order_id risks
-        # stacking new exposure on top of a latent fill from attempt 1.
-        # Refuse the retry; the operator must reconcile manually.
-        if order.idempotency_ambiguous:
-            logger.error(
-                "  ✗ FALLBACK SKIPPED: attempt 1 returned idempotency_ambiguous=True"
-                " for %s on %s (status=%s). Refusing retry to avoid double-submit."
-                " Manual reconciliation required.",
-                secondary_side.upper(), secondary_platform, order.status.value,
-            )
-            order.error += "; fallback retry suppressed - idempotency unproven"
-            return order
-
-        # Attempt 2: IOC at max affordable price (widest profitable limit)
-        order2 = None
-        if max_affordable_price > initial_price + 0.005:
-            logger.info(
-                "  ↻ FALLBACK-2: retrying IOC at max_affordable=%.4f (was %.4f)",
-                max_affordable_price, initial_price,
-            )
-            order2 = await self._place_order_for_leg(
-                f"{arb_id}-F2", secondary_platform, secondary_market,
-                canonical_id, secondary_side, max_affordable_price, qty,
+        if not skip_initial_attempt:
+            # Attempt 1: IOC at walked/buffered price
+            order = await self._place_order_for_leg(
+                arb_id, secondary_platform, secondary_market,
+                canonical_id, secondary_side, initial_price, qty,
                 use_ioc=True,
             )
-            if order2.status in {OrderStatus.FILLED, OrderStatus.PARTIAL}:
+            if order.status in {OrderStatus.FILLED, OrderStatus.PARTIAL}:
                 logger.info(
-                    "  ✓ FALLBACK-2 (IOC wider): filled %d/%d @ %.4f",
-                    order2.fill_qty, qty, order2.fill_price,
+                    "  ✓ FALLBACK-1 (IOC at walked): %s filled %d/%d @ %.4f",
+                    secondary_side.upper(), order.fill_qty, qty, order.fill_price,
                 )
-                return order2
+                return order
 
-        # Attempt 3: FOK at max affordable (some venues handle FOK differently)
+            # C3: fail-closed gate. When the timeout-recovery path could not
+            # prove the platform never received (or never filled) attempt 1's
+            # order, firing attempt 2 with a fresh client_order_id risks
+            # stacking new exposure on top of a latent fill from attempt 1.
+            # Refuse the retry; the operator must reconcile manually.
+            if order.idempotency_ambiguous:
+                logger.error(
+                    "  ✗ FALLBACK SKIPPED: attempt 1 returned idempotency_ambiguous=True"
+                    " for %s on %s (status=%s). Refusing retry to avoid double-submit."
+                    " Manual reconciliation required.",
+                    secondary_side.upper(), secondary_platform, order.status.value,
+                )
+                order.error += "; fallback retry suppressed - idempotency unproven"
+                return order
+
+        # Requote loop: the book that moved one tick between walk and
+        # submit routinely comes back within a second. Re-walk and retry
+        # while affordable instead of declaring the primary naked.
+        adapter = self.adapters.get(secondary_platform)
+        can_walk = adapter is not None and hasattr(adapter, "best_executable_price")
+        attempts = int(self._secondary_requote_attempts)
+        for attempt in range(1, attempts + 1):
+            if not can_walk:
+                break
+            if self._secondary_requote_delay_ms > 0:
+                await asyncio.sleep(self._secondary_requote_delay_ms / 1000.0)
+            try:
+                fillable, walked = await adapter.best_executable_price(
+                    secondary_market, secondary_side, qty,
+                )
+                walked = float(walked)
+            except Exception as exc:
+                logger.warning(
+                    "  ↻ REQUOTE-%d walk failed on %s: %s",
+                    attempt, secondary_platform, exc,
+                )
+                requote_notes.append(f"RQ{attempt}:walk-error")
+                continue
+            if not fillable or walked <= 0:
+                requote_notes.append(f"RQ{attempt}:no-book")
+                continue
+            is_final = attempt == attempts
+            ceiling = max_affordable_price
+            if (
+                is_final
+                and break_even_price is not None
+                and break_even_price > ceiling
+            ):
+                # Final attempt: accept down to break-even. Filling at 0¢
+                # net edge beats paying the spread + fees on an unwind.
+                ceiling = float(break_even_price)
+            if walked > ceiling + 1e-9:
+                requote_notes.append(f"RQ{attempt}:walked={walked:.4f}>cap={ceiling:.4f}")
+                continue
+            logger.info(
+                "  ↻ REQUOTE-%d: book back within reach (walked=%.4f <= %.4f)"
+                " — retrying IOC on %s",
+                attempt, walked, ceiling, secondary_platform,
+            )
+            retry = await self._place_order_for_leg(
+                f"{arb_id}-RQ{attempt}", secondary_platform, secondary_market,
+                canonical_id, secondary_side, ceiling, qty,
+                use_ioc=True,
+            )
+            if retry.status in {OrderStatus.FILLED, OrderStatus.PARTIAL}:
+                logger.info(
+                    "  ✓ REQUOTE-%d: filled %d/%d @ %.4f",
+                    attempt, retry.fill_qty, qty, retry.fill_price,
+                )
+                return retry
+            if retry.idempotency_ambiguous:
+                logger.error(
+                    "  ✗ REQUOTE-%d returned idempotency_ambiguous — chain stops.",
+                    attempt,
+                )
+                retry.error += "; requote retry suppressed - idempotency unproven"
+                return retry
+            requote_notes.append(f"RQ{attempt}:{retry.status.value}")
+            order = retry
+
+        if skip_initial_attempt and order is None:
+            # EDGE-LOST entry and the book never came back: nothing was
+            # submitted, no venue state exists. Signal the call site to
+            # construct its ABORTED leg (a FOK here would be doomed —
+            # the walk just proved the book unaffordable).
+            logger.info(
+                "  ✗ REQUOTE exhausted with no affordable book on %s (%s)",
+                secondary_platform,
+                "; ".join(requote_notes) or "no walks",
+            )
+            return None
+
+        # Legacy final rung: FOK at max affordable (some venues handle
+        # FOK differently and the book may flicker back at submit time).
         logger.info(
-            "  ↻ FALLBACK-3: trying FOK at max_affordable=%.4f",
+            "  ↻ FALLBACK-FOK: trying FOK at max_affordable=%.4f",
             max_affordable_price,
         )
         order3 = await self._place_order_for_leg(
@@ -2328,13 +2458,13 @@ class ExecutionEngine:
         )
         if order3.status in {OrderStatus.FILLED}:
             logger.info(
-                "  ✓ FALLBACK-3 (FOK wider): filled %d @ %.4f",
+                "  ✓ FALLBACK-FOK: filled %d @ %.4f",
                 order3.fill_qty, order3.fill_price,
             )
             return order3
 
-        # All attempts failed — return the last failed order
-        order2_status = order2.status.value if order2 is not None else "skipped"
+        # All attempts failed — return the first failed order with an
+        # aggregated error trail for downstream logging/recovery.
         logger.error(
             "  ✗ ALL FALLBACKS EXHAUSTED for %s on %s. "
             "Primary %s on %s is now naked.",
@@ -2342,14 +2472,15 @@ class ExecutionEngine:
             "YES" if secondary_side == "no" else "NO",
             primary_platform,
         )
-        # Aggregate error onto the original order for downstream logging
-        order.error = (
+        final = order if order is not None else order3
+        final.error = (
             f"All fallbacks exhausted: "
-            f"IOC@{initial_price:.4f} -> {order.status.value}, "
-            f"IOC@{max_affordable_price:.4f} -> {order2_status}, "
+            f"IOC@{initial_price:.4f} -> "
+            f"{order.status.value if order is not None else 'skipped'}, "
+            f"requote[{'; '.join(requote_notes) or 'none'}], "
             f"FOK@{max_affordable_price:.4f} -> {order3.status.value}"
         )
-        return order
+        return final
 
     async def _place_order_for_leg(
         self,
@@ -2686,6 +2817,48 @@ class ExecutionEngine:
                 return f"{parts[0]}-{parts[1]}"
         return None
 
+    @staticmethod
+    def _leg_possibly_live(leg: Order) -> bool:
+        """A dead-looking leg whose venue state is not actually proven.
+
+        Markers: the C3 ``idempotency_ambiguous`` flag (every local-timeout
+        exit sets it) or error text produced by the orphan-cancel and
+        broker-id-loss paths ("cancel failed", "MAY be live").
+        """
+        if getattr(leg, "idempotency_ambiguous", False):
+            return True
+        err = (leg.error or "").lower()
+        return "cancel failed" in err or "may be live" in err or "may still be live" in err
+
+    async def _verify_leg_dead(self, leg: Order) -> Optional[bool]:
+        """Re-read a possibly-live leg at the venue before unwinding against it.
+
+        Returns True when the venue proves the leg dead with zero fills,
+        False when the venue reports fills (``leg`` is mutated with the
+        fresh state so callers can re-pair), and None when the state is
+        still unprovable — callers MUST fail closed on None.
+        """
+        adapter = self.adapters.get(leg.platform)
+        if adapter is None or not hasattr(adapter, "get_order"):
+            return None
+        try:
+            refreshed = await adapter.get_order(leg)
+        except Exception as exc:
+            logger.error(
+                "verify_before_unwind.get_order_failed platform=%s order=%s err=%s",
+                leg.platform, leg.order_id, exc,
+            )
+            return None
+        target = refreshed if refreshed is not None else leg
+        if float(getattr(target, "fill_qty", 0) or 0) > 0:
+            return False
+        if getattr(target, "idempotency_ambiguous", False):
+            return None
+        if target.status in {OrderStatus.CANCELLED, OrderStatus.FAILED, OrderStatus.ABORTED}:
+            return True
+        # Anything still non-terminal at the venue is not proven dead.
+        return None
+
     async def _recover_one_leg_risk(self, arb_id: str, opp: ArbitrageOpportunity, leg_yes: Order, leg_no: Order) -> Tuple[List[str], float]:
         """Handle one-leg exposure (SAFE-03, plan 03-03).
 
@@ -2864,6 +3037,69 @@ class ExecutionEngine:
                     yes_qty, no_qty, unhedged_qty,
                     unhedged_leg.side.upper(), unhedged_leg.platform,
                 )
+
+        # VERIFY-BEFORE-UNWIND (2026-07-06): when the dead-looking
+        # counterpart is only AMBIGUOUSLY dead (timeout with failed orphan
+        # cancel, unproven-empty lookup, "MAY be live" error), selling the
+        # primary now races a latent secondary fill — a late fill after the
+        # unwind leaves the book net-short with no owner. Re-verify at the
+        # venue first: proven dead -> unwind; proven late-filled -> the arb
+        # actually completed (unwind only any remaining diff); unprovable
+        # -> block the unwind and route to manual reconciliation with
+        # exposure still booked.
+        if unhedged_leg is not None and unhedged_qty > 0:
+            counterpart = leg_no if unhedged_leg is leg_yes else leg_yes
+            if (
+                float(counterpart.fill_qty or 0) == 0
+                and self._leg_possibly_live(counterpart)
+            ):
+                verdict = await self._verify_leg_dead(counterpart)
+                if verdict is None:
+                    notes.append(
+                        f"unwind-blocked:ambiguous-secondary({counterpart.platform})"
+                    )
+                    await self._record_incident(
+                        arb_id, opp, "critical",
+                        "Unwind blocked: secondary order state unverifiable — "
+                        "it MAY still be live at the venue; manual "
+                        "reconciliation required before closing the primary",
+                        metadata={
+                            "event_type": "unwind_blocked_ambiguous_secondary",
+                            "ambiguous_platform": counterpart.platform,
+                            "ambiguous_order_id": counterpart.order_id,
+                            "ambiguous_error": counterpart.error,
+                            "filled_platform": unhedged_leg.platform,
+                            "filled_side": unhedged_leg.side,
+                            "filled_qty": unhedged_leg.fill_qty,
+                            "filled_price": unhedged_leg.fill_price,
+                            "recommended_action": (
+                                "Confirm the secondary order's true state at "
+                                f"{counterpart.platform} (id "
+                                f"{counterpart.order_id}); if dead, manually "
+                                "unwind the primary; if filled, the arb "
+                                "completed and needs no unwind"
+                            ),
+                        },
+                    )
+                    return notes, unwind_pnl
+                if verdict is False:
+                    late_qty = int(counterpart.fill_qty or 0)
+                    notes.append(f"verify-secondary:late-fill({late_qty})")
+                    if late_qty >= unhedged_qty:
+                        await self._record_incident(
+                            arb_id, opp, "warning",
+                            "Late secondary fill discovered during recovery — "
+                            "legs are paired; unwind skipped",
+                            metadata={
+                                "event_type": "late_secondary_fill_balanced",
+                                "platform": counterpart.platform,
+                                "late_fill_qty": late_qty,
+                            },
+                        )
+                        return notes, unwind_pnl
+                    unhedged_qty -= late_qty
+                else:
+                    notes.append("verify-secondary:dead")
 
         if unhedged_leg is not None and unhedged_qty > 0:
             filled_leg = unhedged_leg
