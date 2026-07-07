@@ -70,6 +70,56 @@ _FOK_STATUS_MAP: dict[str, OrderStatus] = {
 # log kalshi.fok.unexpected_resting when it sees that status.
 _RESTING_STATUS_MAP: dict[str, OrderStatus] = dict(_FOK_STATUS_MAP)
 
+_CREATE_ORDER_V2_PATH = "/trade-api/v2/portfolio/events/orders"
+_CANCEL_ORDER_V2_PATH_PREFIX = "/trade-api/v2/portfolio/events/orders"
+
+
+def _float_from_order(order_data: dict[str, Any], *keys: str, default: float = 0.0) -> float:
+    for key in keys:
+        value = order_data.get(key)
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return default
+
+
+def _map_order_status_from_counts(
+    order_data: dict[str, Any],
+    target_qty: int,
+    *,
+    resting_expected: bool = False,
+) -> OrderStatus:
+    """Map both legacy Order objects and V2 create-order responses.
+
+    V2 create responses return only fill/remaining counts, not ``status``.  A
+    fully-filled response is FILLED, a partial response is PARTIAL, a resting
+    response with remaining count is SUBMITTED, and an unfilled terminal response
+    is CANCELLED.
+    """
+    api_status = order_data.get("status")
+    if api_status:
+        return (_RESTING_STATUS_MAP if resting_expected else _FOK_STATUS_MAP).get(
+            str(api_status),
+            OrderStatus.SUBMITTED,
+        )
+    fill_qty = _float_from_order(order_data, "fill_count", "fill_count_fp", "count_filled")
+    remaining_qty = _float_from_order(
+        order_data,
+        "remaining_count",
+        "remaining_count_fp",
+        "count_remaining",
+    )
+    if fill_qty >= max(float(target_qty) - 1e-9, 0.0):
+        return OrderStatus.FILLED
+    if fill_qty > 0:
+        return OrderStatus.PARTIAL
+    if remaining_qty > 0:
+        return OrderStatus.SUBMITTED
+    return OrderStatus.CANCELLED
+
 
 class KalshiAdapter:
     """Per-platform execution adapter for Kalshi (EXEC-04).
@@ -95,6 +145,59 @@ class KalshiAdapter:
         self.auth = auth
         self.rate_limiter = rate_limiter
         self.circuit = circuit
+
+    @staticmethod
+    def _book_side_for(action: str, outcome_side: str) -> str:
+        side = str(outcome_side).lower()
+        if side not in {"yes", "no"}:
+            raise ValueError(f"invalid Kalshi outcome side {outcome_side!r}")
+        act = str(action).lower()
+        if act == "buy":
+            return "bid" if side == "yes" else "ask"
+        if act == "sell":
+            return "ask" if side == "yes" else "bid"
+        raise ValueError(f"invalid Kalshi action {action!r}")
+
+    @staticmethod
+    def _book_price_for(outcome_side: str, outcome_price: float) -> float:
+        """Translate Arbiter outcome-side price to Kalshi V2 YES-book price.
+
+        ``/portfolio/events/orders`` quotes a single YES book: ``bid`` buys YES
+        and ``ask`` sells YES. A NO-side order at price ``p`` is therefore sent
+        on the YES book at ``1 - p``. Keep Order.price/fill_price on Arbiter's
+        outcome-side scale so engine economics remain unchanged.
+        """
+        side = str(outcome_side).lower()
+        price = float(outcome_price)
+        if side == "yes":
+            return price
+        if side == "no":
+            return 1.0 - price
+        raise ValueError(f"invalid Kalshi outcome side {outcome_side!r}")
+
+    def _event_order_body(
+        self,
+        *,
+        ticker: str,
+        client_order_id: str,
+        action: str,
+        outcome_side: str,
+        price: float,
+        qty: int,
+        time_in_force: str,
+    ) -> dict[str, Any]:
+        return {
+            "ticker": ticker,
+            "client_order_id": client_order_id,
+            "side": self._book_side_for(action, outcome_side),
+            "count": f"{float(qty):.2f}",
+            "price": f"{self._book_price_for(outcome_side, price):.4f}",
+            "time_in_force": time_in_force,
+            "self_trade_prevention_type": "taker_at_cross",
+            "post_only": False,
+            "cancel_order_on_pause": False,
+            "reduce_only": False,
+        }
 
     # ─── place_fok / place_ioc ────────────────────────────────────────────
 
@@ -214,19 +317,15 @@ class KalshiAdapter:
                 )
 
         client_order_id = f"{arb_id}-{side.upper()}-{uuid.uuid4().hex[:8]}"
-        order_body: dict[str, Any] = {
-            "ticker": market_id,
-            "client_order_id": client_order_id,
-            "action": "buy",
-            "side": side,
-            "type": "limit",
-            "count_fp": f"{float(qty):.2f}",
-            "time_in_force": time_in_force,
-        }
-        if side == "yes":
-            order_body["yes_price_dollars"] = f"{price:.4f}"
-        else:
-            order_body["no_price_dollars"] = f"{price:.4f}"
+        order_body = self._event_order_body(
+            ticker=market_id,
+            client_order_id=client_order_id,
+            action="buy",
+            outcome_side=side,
+            price=price,
+            qty=qty,
+            time_in_force=time_in_force,
+        )
 
         try:
             response_status, payload, response_headers = await self._post_order(order_body)
@@ -287,8 +386,8 @@ class KalshiAdapter:
             )
 
         order_data = data.get("order", data) if isinstance(data, dict) else {}
-        api_status = order_data.get("status", "resting")
-        mapped_status = _FOK_STATUS_MAP.get(api_status, OrderStatus.SUBMITTED)
+        api_status = order_data.get("status")
+        mapped_status = _map_order_status_from_counts(order_data, qty)
         if api_status == "resting":
             log.warning(
                 "kalshi.fok.unexpected_resting",
@@ -296,9 +395,7 @@ class KalshiAdapter:
                 status=api_status,
             )
 
-        fill_qty = float(
-            order_data.get("fill_count_fp", order_data.get("count_filled", "0")) or "0"
-        )
+        fill_qty = _float_from_order(order_data, "fill_count", "fill_count_fp", "count_filled")
         fill_price = self._extract_fill_price(order_data, side, fill_qty, price)
 
         return Order(
@@ -335,8 +432,8 @@ class KalshiAdapter:
         so ``place_fok`` can read ``Retry-After`` on 429 responses (SAFE-04).
         """
         await self.rate_limiter.acquire()
-        path = "/trade-api/v2/portfolio/orders"
-        url = f"{self.config.kalshi.base_url}/portfolio/orders"
+        path = _CREATE_ORDER_V2_PATH
+        url = f"{self.config.kalshi.base_url}/portfolio/events/orders"
         headers = self.auth.get_headers("POST", path)
         t_before_ns = time.monotonic_ns()
         async with self.session.post(url, json=body, headers=headers) as response:
@@ -400,19 +497,15 @@ class KalshiAdapter:
             )
 
         client_order_id = f"{arb_id}-{side.upper()}-UNWIND-{uuid.uuid4().hex[:8]}"
-        order_body: dict[str, Any] = {
-            "ticker": market_id,
-            "client_order_id": client_order_id,
-            "action": "sell",
-            "side": side,
-            "type": "limit",
-            "count_fp": f"{float(qty):.2f}",
-            "time_in_force": "immediate_or_cancel",
-        }
-        if side == "yes":
-            order_body["yes_price_dollars"] = f"{panic_price:.4f}"
-        else:
-            order_body["no_price_dollars"] = f"{panic_price:.4f}"
+        order_body = self._event_order_body(
+            ticker=market_id,
+            client_order_id=client_order_id,
+            action="sell",
+            outcome_side=side,
+            price=panic_price,
+            qty=qty,
+            time_in_force="immediate_or_cancel",
+        )
 
         try:
             response_status, payload, _ = await self._post_order(order_body)
@@ -452,11 +545,9 @@ class KalshiAdapter:
             )
 
         order_data = data.get("order", data) if isinstance(data, dict) else {}
-        api_status = order_data.get("status", "executed")
-        mapped_status = _FOK_STATUS_MAP.get(api_status, OrderStatus.SUBMITTED)
-        fill_qty = float(
-            order_data.get("fill_count_fp", order_data.get("count_filled", "0")) or "0"
-        )
+        api_status = order_data.get("status")
+        mapped_status = _map_order_status_from_counts(order_data, qty)
+        fill_qty = _float_from_order(order_data, "fill_count", "fill_count_fp", "count_filled")
         fill_price = self._extract_fill_price(order_data, side, fill_qty, panic_price)
 
         log.info(
@@ -505,10 +596,10 @@ class KalshiAdapter:
         nothing matches, the engine cancels and falls back to the
         existing place_unwind_sell market-IOC.
 
-        Like place_resting_limit, omits ``time_in_force`` so Kalshi treats
-        it as GTC (rests until cancelled or filled).  Returns the Order
-        with status SUBMITTED on success; caller must poll get_order or
-        cancel_order to drive the lifecycle.
+        Uses V2 ``time_in_force=good_till_canceled`` so the order rests until
+        cancelled or filled.  Returns the Order with status SUBMITTED on
+        success; caller must poll get_order or cancel_order to drive the
+        lifecycle.
 
         ``side`` is the side originally bought (we held YES → sell YES;
         held NO → sell NO).  Always returns an Order; never raises.
@@ -526,20 +617,15 @@ class KalshiAdapter:
             )
 
         client_order_id = f"{arb_id}-{side.upper()}-RESTSELL-{uuid.uuid4().hex[:8]}"
-        order_body: dict[str, Any] = {
-            "ticker": market_id,
-            "client_order_id": client_order_id,
-            "action": "sell",
-            "side": side,
-            "type": "limit",
-            "count_fp": f"{float(qty):.2f}",
-            # No time_in_force = GTC.  Engine cancels if not filled within
-            # the smart-unwind timeout.
-        }
-        if side == "yes":
-            order_body["yes_price_dollars"] = f"{price:.4f}"
-        else:
-            order_body["no_price_dollars"] = f"{price:.4f}"
+        order_body = self._event_order_body(
+            ticker=market_id,
+            client_order_id=client_order_id,
+            action="sell",
+            outcome_side=side,
+            price=price,
+            qty=qty,
+            time_in_force="good_till_canceled",
+        )
 
         try:
             response_status, payload, _ = await self._post_order(order_body)
@@ -571,11 +657,9 @@ class KalshiAdapter:
             )
 
         order_data = data.get("order", data) if isinstance(data, dict) else {}
-        api_status = order_data.get("status", "resting")
-        mapped_status = _RESTING_STATUS_MAP.get(api_status, OrderStatus.SUBMITTED)
-        fill_qty = float(
-            order_data.get("fill_count_fp", order_data.get("count_filled", "0")) or "0"
-        )
+        api_status = order_data.get("status")
+        mapped_status = _map_order_status_from_counts(order_data, qty, resting_expected=True)
+        fill_qty = _float_from_order(order_data, "fill_count", "fill_count_fp", "count_filled")
         fill_price = self._extract_fill_price(order_data, side, fill_qty, price)
 
         log.info(
@@ -622,8 +706,8 @@ class KalshiAdapter:
         and cancel it mid-life). Structure mirrors ``place_fok`` with two
         differences:
 
-        1. ``time_in_force`` is OMITTED from the order body (absence = GTC/resting).
-        2. Kalshi's ``status="resting"`` response is the EXPECTED happy-path
+        1. ``time_in_force`` is ``good_till_canceled`` (rests until cancelled or filled).
+        2. Kalshi's ``status="resting"``/remaining-count response is the EXPECTED happy-path
            terminal response (SUBMITTED), not an anomaly that needs a warning.
 
         The PHASE4_MAX_ORDER_USD adapter-layer hard-lock from Plan 04-02
@@ -707,19 +791,15 @@ class KalshiAdapter:
             )
 
         client_order_id = f"{arb_id}-{side.upper()}-{uuid.uuid4().hex[:8]}"
-        order_body: dict[str, Any] = {
-            "ticker": market_id,
-            "client_order_id": client_order_id,
-            "action": "buy",
-            "side": side,
-            "type": "limit",
-            "count_fp": f"{float(qty):.2f}",
-            # NB: NO time_in_force — absence = GTC/resting at Kalshi.
-        }
-        if side == "yes":
-            order_body["yes_price_dollars"] = f"{price:.4f}"
-        else:
-            order_body["no_price_dollars"] = f"{price:.4f}"
+        order_body = self._event_order_body(
+            ticker=market_id,
+            client_order_id=client_order_id,
+            action="buy",
+            outcome_side=side,
+            price=price,
+            qty=qty,
+            time_in_force="good_till_canceled",
+        )
 
         try:
             response_status, payload, response_headers = await self._post_order(order_body)
@@ -785,15 +865,13 @@ class KalshiAdapter:
             )
 
         order_data = data.get("order", data) if isinstance(data, dict) else {}
-        api_status = order_data.get("status", "resting")
+        api_status = order_data.get("status")
         # Resting is the EXPECTED outcome for this variant — no warning
         # emitted when we see it (unlike place_fok, where resting is an
         # anomaly worth logging).
-        mapped_status = _RESTING_STATUS_MAP.get(api_status, OrderStatus.SUBMITTED)
+        mapped_status = _map_order_status_from_counts(order_data, qty, resting_expected=True)
 
-        fill_qty = float(
-            order_data.get("fill_count_fp", order_data.get("count_filled", "0")) or "0"
-        )
+        fill_qty = _float_from_order(order_data, "fill_count", "fill_count_fp", "count_filled")
         fill_price = self._extract_fill_price(order_data, side, fill_qty, price)
 
         return Order(
@@ -829,8 +907,8 @@ class KalshiAdapter:
 
     @transient_retry()
     async def _delete_order(self, order_id: str) -> bool:
-        path = f"/trade-api/v2/portfolio/orders/{order_id}"
-        url = f"{self.config.kalshi.base_url}/portfolio/orders/{order_id}"
+        path = f"{_CANCEL_ORDER_V2_PATH_PREFIX}/{order_id}"
+        url = f"{self.config.kalshi.base_url}/portfolio/events/orders/{order_id}"
         headers = self.auth.get_headers("DELETE", path)
         async with self.session.delete(url, headers=headers) as response:
             # SAFE-04: 429 on DELETE — apply Retry-After + circuit failure.
@@ -1391,7 +1469,16 @@ class KalshiAdapter:
             except (TypeError, ValueError):
                 pass
 
-        # 2. Side-correct price field.
+        # 2. V2 create-order response: actual average fill price on the YES book.
+        avg_fill_raw = order_data.get("average_fill_price")
+        if avg_fill_raw is not None:
+            try:
+                avg_fill = float(avg_fill_raw)
+                return 1.0 - avg_fill if str(side).lower() == "no" else avg_fill
+            except (TypeError, ValueError):
+                pass
+
+        # 3. Side-correct price field.
         side_key = "no_price_dollars" if str(side).lower() == "no" else "yes_price_dollars"
         side_price_raw = order_data.get(side_key)
         if side_price_raw is not None:

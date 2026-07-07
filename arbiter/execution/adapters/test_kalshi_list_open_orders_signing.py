@@ -167,11 +167,11 @@ async def test_list_open_orders_by_client_id_signs_without_querystring():
 
 
 @pytest.mark.asyncio
-async def test_post_order_still_signs_bare_orders_path():
-    """Regression sibling: place_fok -> _post_order already signs the bare
-    ``/trade-api/v2/portfolio/orders`` path (no querystring). This test exists
-    so any future refactor that accidentally introduces querystring-in-signed-
-    path on POST is caught here next to the G-1 fix.
+async def test_post_order_still_signs_bare_events_orders_path():
+    """Regression sibling: place_fok -> _post_order signs the bare
+    ``/trade-api/v2/portfolio/events/orders`` path (no querystring). This test
+    exists so any future refactor that accidentally introduces querystring-in-
+    signed-path on POST is caught here next to the G-1 fix.
     """
     body = json.dumps({
         "order": {
@@ -201,7 +201,7 @@ async def test_post_order_still_signs_bare_orders_path():
             )
     # Additionally, explicit shape check on the specific call (the POST one).
     signed_paths = [c.args[1] for c in adapter.auth.get_headers.call_args_list if len(c.args) >= 2]
-    assert "/trade-api/v2/portfolio/orders" in signed_paths, (
-        f"Expected at least one signed path == '/trade-api/v2/portfolio/orders'; "
+    assert "/trade-api/v2/portfolio/events/orders" in signed_paths, (
+        f"Expected at least one signed path == '/trade-api/v2/portfolio/events/orders'; "
         f"got {signed_paths!r}"
     )

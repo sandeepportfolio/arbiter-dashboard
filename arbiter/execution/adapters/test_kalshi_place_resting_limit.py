@@ -11,7 +11,7 @@ Method contract:
 - Same signature shape as ``place_fok`` (``arb_id``, ``market_id``,
   ``canonical_id``, ``side``, ``price``, ``qty``) — price is a float in (0, 1)
   using the dollar convention the rest of the adapter uses.
-- Order body: ``time_in_force`` field is OMITTED (absence = GTC/resting).
+- Order body: V2 event order with ``time_in_force=good_till_canceled``.
 - Returns Order; ``SUBMITTED`` when Kalshi responds ``status="resting"``.
 - PHASE4_MAX_ORDER_USD hard-lock applied BEFORE any HTTP call (Pitfall 8).
 - Circuit-breaker + rate-limiter integration mirrors ``place_fok``.
@@ -115,13 +115,12 @@ def _make_adapter(session, *, authenticated: bool = True, can_execute: bool = Tr
     )
 
 
-# ─── HTTP body shape: time_in_force is OMITTED + correct price field ─────
+# ─── HTTP body shape: V2 GTC event order + correct book side ──────────────
 
 @pytest.mark.asyncio
-async def test_resting_limit_body_omits_time_in_force_yes_side():
-    """A resting Kalshi order must NOT carry ``time_in_force=fill_or_kill``
-    (that is what makes it FOK). Absence of the field = GTC/resting at Kalshi.
-    ``yes_price_dollars`` is set; ``no_price_dollars`` is not.
+async def test_resting_limit_body_uses_good_till_canceled_yes_side():
+    """A resting Kalshi order must not carry FOK/IOC semantics. In V2, the
+    explicit GTC value is ``time_in_force=good_till_canceled``.
     """
     body = json.dumps({
         "order": {
@@ -138,16 +137,16 @@ async def test_resting_limit_body_omits_time_in_force_yes_side():
         "ARB-000100", "TICKER", "CAN", "yes", 0.55, 10,
     )
     posted = session.post.call_args.kwargs["json"]
-    # CRITICAL: no time_in_force — absence is what makes it a resting order.
-    assert "time_in_force" not in posted, (
-        f"place_resting_limit must NOT set time_in_force; got {posted!r}"
-    )
-    assert posted["type"] == "limit"
-    assert posted["action"] == "buy"
-    assert posted["side"] == "yes"
+    # CRITICAL: explicit GTC — this is what makes the V2 order rest.
+    assert posted["time_in_force"] == "good_till_canceled"
+    assert posted["side"] == "bid"
     assert posted["ticker"] == "TICKER"
-    assert posted["count_fp"] == "10.00"
-    assert posted["yes_price_dollars"] == "0.5500"
+    assert posted["count"] == "10.00"
+    assert posted["price"] == "0.5500"
+    assert "action" not in posted
+    assert "type" not in posted
+    assert "count_fp" not in posted
+    assert "yes_price_dollars" not in posted
     assert "no_price_dollars" not in posted
     assert posted["client_order_id"].startswith("ARB-000100-YES-")
     # Resting order → SUBMITTED (not FILLED; the order is on the book).
@@ -156,7 +155,7 @@ async def test_resting_limit_body_omits_time_in_force_yes_side():
 
 
 @pytest.mark.asyncio
-async def test_resting_limit_body_omits_time_in_force_no_side():
+async def test_resting_limit_body_uses_good_till_canceled_no_side():
     body = json.dumps({
         "order": {
             "order_id": "K-REST-2",
@@ -172,9 +171,12 @@ async def test_resting_limit_body_omits_time_in_force_no_side():
         "ARB-000101", "TICKER", "CAN", "no", 0.45, 5,
     )
     posted = session.post.call_args.kwargs["json"]
-    assert "time_in_force" not in posted
-    assert posted["no_price_dollars"] == "0.4500"
+    assert posted["time_in_force"] == "good_till_canceled"
+    assert posted["side"] == "ask"
+    assert posted["price"] == "0.5500"
+    assert posted["count"] == "5.00"
     assert "yes_price_dollars" not in posted
+    assert "no_price_dollars" not in posted
     assert posted["client_order_id"].startswith("ARB-000101-NO-")
 
 

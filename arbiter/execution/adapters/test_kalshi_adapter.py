@@ -2,8 +2,8 @@
 
 Covers:
 - Protocol conformance (runtime isinstance)
-- FOK order body shape (time_in_force, count_fp, yes/no_price_dollars, client_order_id)
-- Status mapping (executed/canceled/pending/resting)
+- FOK order body shape (V2 /portfolio/events/orders, bid/ask, count/price, client_order_id)
+- Status mapping (legacy executed/canceled/pending/resting plus V2 fill/remaining counts)
 - Refusal paths (no auth / invalid price / circuit open) — never touches the wire
 - Error paths (non-2xx / exception) — returns FAILED without raising
 - check_depth (sufficient / insufficient / empty book / non-200)
@@ -83,6 +83,23 @@ def _session_with_delete(status: int):
     return session
 
 
+def _v2_created_order(
+    order_id: str,
+    *,
+    fill_count: str = "10.00",
+    remaining_count: str = "0.00",
+    average_fill_price: str = "0.5500",
+) -> str:
+    return json.dumps({
+        "order_id": order_id,
+        "client_order_id": "SERVER-ECHO",
+        "fill_count": fill_count,
+        "remaining_count": remaining_count,
+        "average_fill_price": average_fill_price,
+        "ts_ms": 1715793600123,
+    })
+
+
 def _make_adapter(session, *, authenticated: bool = True, can_execute: bool = True):
     return KalshiAdapter(
         config=_config(),
@@ -105,51 +122,50 @@ def test_kalshi_adapter_satisfies_protocol():
 
 @pytest.mark.asyncio
 async def test_fok_request_body_shape_yes_side():
-    body = json.dumps({
-        "order": {
-            "order_id": "K-1",
-            "status": "executed",
-            "fill_count_fp": "10.00",
-            "yes_price_dollars": "0.5500",
-        },
-    })
-    session = _session_with_post(200, body)
+    session = _session_with_post(201, _v2_created_order("K-1"))
     adapter = _make_adapter(session)
     order = await adapter.place_fok("ARB-000001", "TICKER", "DEM_HOUSE", "yes", 0.55, 10)
 
+    called_args = session.post.call_args.args
     called_kwargs = session.post.call_args.kwargs
+    assert called_args[0].endswith("/trade-api/v2/portfolio/events/orders")
+    adapter.auth.get_headers.assert_called_with("POST", "/trade-api/v2/portfolio/events/orders")
     posted = called_kwargs["json"]
     assert posted["time_in_force"] == "fill_or_kill"
-    assert posted["count_fp"] == "10.00"
-    assert posted["yes_price_dollars"] == "0.5500"
+    assert posted["count"] == "10.00"
+    assert posted["price"] == "0.5500"
+    assert posted["side"] == "bid"
+    assert posted["self_trade_prevention_type"] == "taker_at_cross"
+    assert posted["post_only"] is False
+    assert posted["cancel_order_on_pause"] is False
+    assert posted["reduce_only"] is False
+    assert "action" not in posted
+    assert "type" not in posted
+    assert "count_fp" not in posted
+    assert "yes_price_dollars" not in posted
     assert "no_price_dollars" not in posted
-    assert posted["action"] == "buy"
-    assert posted["type"] == "limit"
-    assert posted["side"] == "yes"
     assert posted["ticker"] == "TICKER"
     assert posted["client_order_id"].startswith("ARB-000001-YES-")
     assert order.status == OrderStatus.FILLED
     assert order.fill_qty == 10.0
+    assert order.fill_price == 0.55
 
 
 @pytest.mark.asyncio
 async def test_fok_request_body_shape_no_side():
-    body = json.dumps({
-        "order": {
-            "order_id": "K-2",
-            "status": "executed",
-            "fill_count_fp": "5.00",
-            "no_price_dollars": "0.4500",
-        },
-    })
-    session = _session_with_post(200, body)
+    session = _session_with_post(201, _v2_created_order("K-2", fill_count="5.00", average_fill_price="0.5500"))
     adapter = _make_adapter(session)
-    await adapter.place_fok("ARB-000002", "TICKER", "DEM", "no", 0.45, 5)
+    order = await adapter.place_fok("ARB-000002", "TICKER", "DEM", "no", 0.45, 5)
     posted = session.post.call_args.kwargs["json"]
-    assert posted["no_price_dollars"] == "0.4500"
-    assert "yes_price_dollars" not in posted
+    assert posted["side"] == "ask"
+    # V2 event orders quote the YES book: buying NO at 45¢ = asking YES at 55¢.
+    assert posted["price"] == "0.5500"
+    assert posted["count"] == "5.00"
     assert posted["client_order_id"].startswith("ARB-000002-NO-")
     assert posted["time_in_force"] == "fill_or_kill"
+    assert "yes_price_dollars" not in posted
+    assert "no_price_dollars" not in posted
+    assert abs(order.fill_price - 0.45) < 1e-9
 
 
 # ─── Status mapping ──────────────────────────────────────────────────────
@@ -538,19 +554,38 @@ async def test_place_ioc_sends_immediate_or_cancel_tif():
     where a stale-by-one-tick book killed the entire order instead of
     accepting the partial fill we'd actually take.
     """
-    body = json.dumps({"order": {
-        "order_id": "K-IOC-1", "status": "executed",
-        "fill_count_fp": "10.00", "yes_price_dollars": "0.5500",
-    }})
-    session = _session_with_post(200, body)
+    session = _session_with_post(201, _v2_created_order("K-IOC-1"))
     adapter = _make_adapter(session)
     order = await adapter.place_ioc("ARB-IOC", "TICKER", "CAN", "yes", 0.55, 10)
 
     posted = session.post.call_args.kwargs["json"]
     assert posted["time_in_force"] == "immediate_or_cancel"
-    assert posted["yes_price_dollars"] == "0.5500"
-    assert posted["count_fp"] == "10.00"
+    assert posted["side"] == "bid"
+    assert posted["price"] == "0.5500"
+    assert posted["count"] == "10.00"
     assert order.status == OrderStatus.FILLED
+
+
+@pytest.mark.asyncio
+async def test_place_ioc_partial_fill_maps_to_partial():
+    session = _session_with_post(
+        201,
+        _v2_created_order(
+            "K-IOC-PARTIAL",
+            fill_count="4.00",
+            remaining_count="0.00",
+            average_fill_price="0.5700",
+        ),
+    )
+    adapter = _make_adapter(session)
+    order = await adapter.place_ioc("ARB-IOC-P", "TICKER", "CAN", "no", 0.43, 10)
+
+    assert order.status == OrderStatus.PARTIAL
+    assert order.fill_qty == 4.0
+    assert order.fill_price == pytest.approx(0.43)
+    posted = session.post.call_args.kwargs["json"]
+    assert posted["side"] == "ask"
+    assert posted["price"] == "0.5700"
 
 
 @pytest.mark.asyncio
@@ -684,25 +719,29 @@ async def test_fill_price_falls_back_to_side_correct_field_when_no_taker_cost():
 
 @pytest.mark.asyncio
 async def test_place_unwind_sell_posts_sell_ioc_at_panic_price():
-    body = json.dumps({"order": {
-        "order_id": "K-UNWIND-1",
-        "status": "executed",
-        "fill_count_fp": "10.0",
-        "yes_price_dollars": "0.4500",
-    }})
-    session = _session_with_post(200, body)
+    session = _session_with_post(
+        201,
+        _v2_created_order(
+            "K-UNWIND-1",
+            fill_count="10.00",
+            remaining_count="0.00",
+            average_fill_price="0.0100",
+        ),
+    )
     adapter = _make_adapter(session)
     order = await adapter.place_unwind_sell(
         "ARB-7-UNWIND", "TICKER", "C", "yes", qty=10,
     )
     assert order.status == OrderStatus.FILLED
     assert order.fill_qty == 10.0
-    # Verify order body shape: action=sell, IOC, panic price 0.01
+    # Verify V2 order body shape: selling YES is book-side ask, IOC, panic price 0.01
     posted_body = session.post.call_args.kwargs["json"]
-    assert posted_body["action"] == "sell"
+    assert posted_body["side"] == "ask"
     assert posted_body["time_in_force"] == "immediate_or_cancel"
-    assert posted_body["yes_price_dollars"] == "0.0100"
-    assert posted_body["count_fp"] == "10.00"
+    assert posted_body["price"] == "0.0100"
+    assert posted_body["count"] == "10.00"
+    assert "action" not in posted_body
+    assert "yes_price_dollars" not in posted_body
 
 
 @pytest.mark.asyncio
@@ -728,15 +767,19 @@ async def test_place_unwind_sell_returns_failed_when_circuit_open():
 
 
 @pytest.mark.asyncio
-async def test_place_unwind_sell_no_side_passes_no_price():
-    body = json.dumps({"order": {"order_id": "K-U", "status": "executed", "fill_count_fp": "5"}})
-    session = _session_with_post(200, body)
+async def test_place_unwind_sell_no_side_uses_bid_book_side():
+    body = _v2_created_order("K-U", fill_count="5.00", average_fill_price="0.9900")
+    session = _session_with_post(201, body)
     adapter = _make_adapter(session)
-    await adapter.place_unwind_sell("ARB-N", "T", "C", "no", qty=5)
+    order = await adapter.place_unwind_sell("ARB-N", "T", "C", "no", qty=5)
     posted_body = session.post.call_args.kwargs["json"]
-    assert posted_body["side"] == "no"
-    assert posted_body["no_price_dollars"] == "0.0100"
+    assert posted_body["side"] == "bid"
+    # V2 quotes the YES book: selling NO at 1¢ = bidding YES at 99¢.
+    assert posted_body["price"] == "0.9900"
+    assert posted_body["count"] == "5.00"
+    assert abs(order.fill_price - 0.01) < 1e-9
     assert "yes_price_dollars" not in posted_body
+    assert "no_price_dollars" not in posted_body
 
 
 # ─── cancel_order ────────────────────────────────────────────────────────
@@ -750,6 +793,8 @@ async def test_cancel_returns_true_on_204():
         side="yes", price=0.5, quantity=1, status=OrderStatus.SUBMITTED,
     )
     assert await adapter.cancel_order(order) is True
+    assert session.delete.call_args.args[0].endswith("/trade-api/v2/portfolio/events/orders/K-1")
+    adapter.auth.get_headers.assert_called_with("DELETE", "/trade-api/v2/portfolio/events/orders/K-1")
 
 
 @pytest.mark.asyncio
