@@ -1,0 +1,233 @@
+{
+  "agent": "Arbiter scheduled mapping/profitability improvement agent",
+  "timestamp": "2026-07-06T20:05:00Z",
+  "run_window_reviewed": {
+    "prior_checkpoint": "mapping_learning_loop.json @ 2026-06-26T19:25:00Z",
+    "this_run": "2026-07-06",
+    "git": {
+      "origin_main": "7a3af51",
+      "local_main": "7a3af51",
+      "main_in_sync": true,
+      "checked_out_branch": "fix/forecastex-live-execution",
+      "branch_head": "916e711",
+      "branch_ahead_of_main_by": 5,
+      "branch_commits": [
+        "916e711 fix(polymarket): never report a phantom fill \u2014 unconfirmed FILLED -> SUBMITTED (P0)",
+        "db1c3a1 fix(kalshi): retry infra-401/5xx + fail-closed kill-switch enumeration (P1 #5)",
+        "001b0b2 feat(ibkr): auto-login infra hardening + OAuth keygen + go-live runbook",
+        "4f9c811 fix(forecastex-tws): live-safety guards before ForecastEx switchover",
+        "50f7185 checkpoint(forecastex): TWS socket client + balance graceful-degradation"
+      ],
+      "uncommitted": [
+        "arbiter/api.py (+22/-13) \u2014 left untouched per mission rules"
+      ],
+      "note": "main matches origin/main. Running production service is this feature branch. Did not switch branches or touch uncommitted api.py diff."
+    }
+  },
+  "headline": "REGRESSION FROM PRIOR RUN'S 'CLEAN' PICTURE. Prior checkpoint read only the arb-execution table and declared 0 one-leg exposure. The portfolio/stranded-reconciler view: 9 OPEN naked-leg positions, $30.59 exposure, -$29.81 unrealized, NONE auto-mitigated. Trade flow dead since 2026-06-20, discovery idle, ForecastEx not ready (gateway degraded, balance null), and lifetime only 1 of 402 executions was a real captured two-leg arb. System is 'validated_profitable' only on directional naked-leg luck, not arbitrage.",
+  "critical_findings": [
+    {
+      "id": "STRANDED-NAKED-LEGS-HELD-BY-DESIGN",
+      "severity": "low-informational",
+      "CORRECTION": "Earlier hypothesis 'detect but never unwind' was DISPROVEN by reading live mitigation_decision on every position. STRANDED_AUTO_CLOSE=true IS live in the running container. The mitigation_engine runs and makes correct +EV decisions on all 9 strands. They persist because closing them would DESTROY value, not because mitigation is broken.",
+      "finding": "portfolio/summary: stranded_count=9, stranded_exposure=$30.59 (cost basis), stranded_unrealized_pnl=-$29.81 (worst-case mark-at-0). All 9 are penny longshot legs or no-bid markets. Per-position live decisions:",
+      "positions": [
+        "paccc-usse-midterms-2026-11-03-rep qty=2 -> HOLD_TO_SETTLE (implied P(NO)=61.3%, EV@settle $1.23 >= close value)",
+        "CONTROLS-2026-D (DEM Senate) qty=1 -> MANUAL_REVIEW (no live BBO 0/0, cannot price a close/hedge without a market; will settle)",
+        "KXDSENATESEATS-27-47 qty=2 -> HOLD_TO_SETTLE (unactionable small lot, no BBO, notional $0.15)",
+        "KXMLSCUP-26-CLT/HOU qty=10 -> HOLD_TO_SETTLE (penny 0.02/sh <= 0.05, fees exceed recovery)",
+        "KXMLB-26-NYM qty=10 -> HOLD_TO_SETTLE (penny 0.025/sh)",
+        "KXMLBNL-26-MIA qty=150 -> HOLD_TO_SETTLE (penny 0.01/sh)",
+        "KXMLBNL-26-PHI qty=70 -> HOLD_TO_SETTLE (unactionable small lot, no BBO, notional $4.20)",
+        "KXMLBAL-26-HOU qty=50 -> HOLD_TO_SETTLE (penny 0.05/sh)"
+      ],
+      "root_cause": "Working as designed. auto_close correctly declines to (a) dump into no-bid books, (b) pay fees to exit sub-penny longshots. Only CONTROLS-2026-D needs an operator glance (a ~$20 no-bid position that will settle). NOT a code defect.",
+      "do_not_repeat": "Do not recommend force-closing these or 'wiring up' auto-unwind \u2014 the wiring exists and is correctly conservative. Verify mitigation_decision before calling strands a bug."
+    },
+    {
+      "id": "ARB-COMPLETION-RATE-NEAR-ZERO",
+      "severity": "high",
+      "finding": "402 lifetime executions: captured_arb_count=1, naked_leg_count=125, zero_fill_count=276. Only ONE real two-leg arb completed. 'lifetime 137.43' = naked_leg_pnl $131.53 (directional luck); captured_arb_pnl only $5.90. Profitability gate satisfied by luck on unhedged legs, not arbitrage.",
+      "implication": "Execution fills one leg then fails/skips the second (sequential execution), leaving strands. Core execution defect, not a safety win."
+    },
+    {
+      "id": "FORECASTEX-NOT-READY",
+      "severity": "high",
+      "finding": "readiness ready_for_live_trading=false, blocking=['Collector health degraded: forecastex'], warnings=['Enabled platforms with no fresh quotes: forecastex']. balances.forecastex=null. 221 auto-trade mappings enabled, ~180 FX \u2014 but FX cannot quote or fill. IBKR gateway gate (host.docker.internal:5000) unresolved despite branch work.",
+      "cross_ref": "memory: arbiter-forecastex-gateway-gate, forecastex-live-execution-effort"
+    },
+    {
+      "id": "DISCOVERY-IDLE",
+      "severity": "medium",
+      "finding": "/api/discovery/status idle, 'No discovery run has started.' AUTO_DISCOVERY_* tuning vars ARE set in the container (interval 300s, min_score 0.18, max 5000) BUT there is NO AUTO_DISCOVERY_ENABLED flag in the container env, and main.py gates the loop on runtime['auto_discovery_enabled'] which is therefore default-off. Net: the discovery loop never runs. Dated game mappings age out unreplenished -> active_opportunities=0, no trades since 2026-06-20.",
+      "root_cause": "auto_discovery runtime toggle is off (no AUTO_DISCOVERY_ENABLED env, runtime default false). This is the single highest-leverage, lowest-risk fix to restore opportunity flow \u2014 promotion gates stay intact so enabling discovery does NOT auto-confirm anything.",
+      "carry_over_from": "prior run ZERO-OPP-FLOW-SINCE-0620 \u2014 now root-caused."
+    }
+  ],
+  "live_state": {
+    "service_url": "http://localhost:8080",
+    "llm_verifier_sidecar": "port 8079 up",
+    "profitability_verdict": "validated_profitable (on naked-leg luck)",
+    "scanner_scans_total": 652946,
+    "active_opportunities": 0,
+    "captured_arb_count": 1,
+    "naked_leg_count": 125,
+    "zero_fill_count": 276,
+    "lifetime_realized_pnl": 137.43,
+    "captured_arb_pnl": 5.9,
+    "naked_leg_pnl": 131.53,
+    "kill_switch_armed": false,
+    "balances": {
+      "kalshi": 354.08,
+      "polymarket": 347.3,
+      "forecastex": null
+    }
+  },
+  "reconciliation": {
+    "summary": "engine reconciliation reports healthy (flag_count=0) but does NOT fold in the 9 stranded naked legs (-$29.81). Blind spot: stranded exposure not reflected in reconciliation flag count.",
+    "flag_count": 0
+  },
+  "mapping_state": {
+    "total": 500,
+    "status_counts": {
+      "confirmed": 229,
+      "candidate": 124,
+      "review": 76,
+      "rejected": 71
+    },
+    "auto_trade_enabled": 221,
+    "note": "No new promotions. Fail-closed correct: active_opportunities=0, 9 open strands, FX not ready. Held all candidates/review."
+  },
+  "validator_verdicts_this_run": {
+    "historical_memory_auditor": "HOLD \u2014 no aged-out/rejected pair revived.",
+    "profitability_auditor": "FAIL-CLOSED \u2014 active_opportunities=0; 'profit' is naked-leg luck.",
+    "liquidity_auditor": "FAIL-CLOSED \u2014 no live tradable depth.",
+    "failure_incident_auditor": "FAIL \u2014 9 open unmitigated strands, -$29.81. Escalated to HIGH.",
+    "skeptic_auditor": "NO new confirmations.",
+    "promotion_rule": "No mapping promoted. Correct conservative outcome."
+  },
+  "decisions_this_run": {
+    "new_confirmed_mappings": [],
+    "candidates_held_for_review": 124,
+    "mappings_to_watch": [
+      "CONTROLS-2026-D / DEM_SENATE_2026 \u2014 open strand re-flagged 3x",
+      "GOP_SENATE_2026 \u2014 persistent unfillability",
+      "All FX_* auto-trade mappings \u2014 enabled but unfillable while gateway degraded"
+    ],
+    "code_changes": "none \u2014 findings are operational/architectural (execution completion, auto-mitigation wiring, discovery scheduling, IBKR gateway); not safe single-file autonomous mutations. Reported to operator via prompt.",
+    "tests_run": "python -m pytest arbiter/mapping tests/test_mapping_validation.py tests/test_safety_guards.py -q => 334 passed in 1.75s"
+  },
+  "do_not_repeat_registry": {
+    "blocked_patterns": [
+      "fuzzy-only auto-confirmation",
+      "reviving rejected/expired/review pairs for auto-trade",
+      "promoting stale or zero-liquidity candidates",
+      "loosening safety gates to increase mapping count",
+      "treating zero-quantity 'filled' legs as executed profitable history",
+      "promoting any candidate while active_opportunities=0",
+      "NEW: declaring 'clean / 0 one-leg exposure' from the arb-execution table alone \u2014 MUST also read portfolio/summary stranded_count and portfolio/positions source=stranded_reconciler"
+    ]
+  },
+  "deploy_model": "Production is LOCAL Docker on this machine (container arbiter-api-prod, up 8d, healthy) + local arbiter-postgres/redis. :8080 is served by that container (an ssh forward also binds 8080). CORRECTS the prior checkpoint's 'SSH-tunneled remote production' assumption. Implication: pushing to main does NOT deploy \u2014 operator must rebuild/restart arbiter-api-prod to pick up code; runtime toggles (auto_discovery_enabled) and env (IBKR gateway) are the live levers.",
+  "next_recommended_action": "Ranked by leverage/safety: (1) [OPERATOR/INFRA, highest] Start+authenticate the IBKR Client Portal gateway on :5000 \u2014 it is DOWN (conn refused); this is the whole FX-venue + repeated-login blocker; no code push fixes it. (2) [CONFIG, low-risk] Set AUTO_DISCOVERY_ENABLED=true (or flip runtime auto_discovery_enabled) to restore mapping replenishment + opportunity flow; promotion gates stay intact. (3) [DECISION] CONTROLS-2026-D: operator glance on the ~$20 no-bid DEM-Senate leg (will settle otherwise). (4) [CODE, deeper, TDD] Raise arb-completion rate above 1/402 \u2014 sequential execution strands leg-2; needs fill-or-clean-abort hardening; requires live opportunity flow (item 2) to exercise. The 9 'stranded' alerts are NOT action items \u2014 mitigation is correctly holding them +EV.",
+  "session_2026_07_06_golive": {
+    "timestamp": "2026-07-06T21:15:00Z",
+    "branch_head": "5db0ffe (9 ahead of main 7a3af51; NOT yet deployed to arbiter-api-prod)",
+    "headline": "IBKR gateway live+keepalive'd; two FX adapter P0s found by $0.20 live probe and fixed; engine requote+verify-before-unwind landed (842 tests green); discovery 'idle' premise was WRONG",
+    "learnings": [
+      "IBKR CP login can succeed at SSO but strand the brokerage session with 'sso dh already set' / 'Invalid_username_or_password Error code =1' \u2014 fix is POST /iserver/auth/ssodh/init {\"publish\":true,\"compete\":true}, NOT /iserver/reauthenticate (deprecated, no-ops). All gateway POSTs need a body or Akamai returns HTML 411.",
+      "ForecastEx venue-CANCELS every SELL order (proven live: GTC @0.25 and IOC @0.01 vs 0.19 bid, orders 249901302/303). Exits must BUY the opposing conid at 1-p; IBKR nets positions (proven: 1 YES + 1 NO -> flat). The adapter's old sell-based smart-unwind could never have closed a naked FX leg.",
+      "/iserver/account/order/status/{id} reports fills as cum_fill and average_price \u2014 the adapter parsed neither, so filled FX orders read as FILLED+fill_qty=0 which FILL-02 treats as 'no exposure' (silent naked leg). Fixed with regression tests on the verbatim live payload.",
+      "AUTO_DISCOVERY_ENABLED defaults TRUE when absent (operator_settings.py:54); the continuous loop was RUNNING all along (prod logs: wrote=43 pending=213 every ~5-17min). /api/discovery/status 'idle' only tracks one-shot batch runs \u2014 the 'discovery is off' memory/prompt premise was false.",
+      "Engine fallback attempt-2 was dead code (live path passes initial==max_affordable, guard needs >0.005 gap); prod error strings 'IOC@p -> failed, IOC@p -> skipped, FOK@p -> failed' were the fingerprint. Replaced with a bounded requote loop (SECONDARY_REQUOTE_MAX_ATTEMPTS=2, SECONDARY_REQUOTE_DELAY_MS=250) + break-even completion tier on the final attempt; EDGE-LOST branch joins the loop.",
+      "Ambiguously-dead secondaries are now venue-verified before the primary is unwound (reverse-short hole closed); unprovable -> unwind BLOCKED + unwind_blocked_ambiguous_secondary critical incident, exposure stays booked.",
+      "Global readiness gating means a degraded forecastex halts K<->P trading too \u2014 with IBKR's daily midnight-NY session reset this recurs nightly. NEW requirement (user, 2026-07-06): scope venue-health gating per pair so K<->P executes/mitigates while FX is being fixed. See HANDOFF_E2E_GOLIVE.md \u00a74.1."
+    ],
+    "operational_state": "Gateway authenticated, com.arbiter.ibkr-keepalive LaunchAgent tickling every 60s (~/.arbiter/ibkr-keepalive.log). Probe cost $0.04, position flat. 9 stranded positions untouched per mitigation_decision.",
+    "handoff": "HANDOFF_E2E_GOLIVE.md in this directory is the authoritative continuation prompt (remaining: K<->P pair-scoped gating 4.1, discovery visibility+tests 4.2, deploy/verify/merge 4.3)."
+  },
+  "session_2026_07_06_golive_session2": {
+    "timestamp": "2026-07-06T23:03:53Z",
+    "branch": "fix/forecastex-live-execution",
+    "headline": "Implemented venue-scoped readiness/trade gating visibility and continuous discovery status before prod redeploy.",
+    "learnings": [
+      "Legacy /api/readiness ready_for_live_trading remains intentionally conservative, but now includes additive venue_readiness and venue_pairs so operators can see that a ForecastEx collector outage blocks only pairs touching ForecastEx; Kalshi\u2194Polymarket remains eligible when both K/P venues are healthy.",
+      "ExecutionEngine.execute_opportunity gate path is covered with a live-mode manual-path E2E regression: K\u2194P passes while ForecastEx collector is open; an FX-leg opportunity is rejected with Collector health is degraded: forecastex.",
+      "/api/discovery/status now has continuous={enabled,last_written,candidates_pending,last_pass_at}; this fixes the misleading idle-only batch status without changing existing batch-run fields.",
+      "run_market_discovery_loop stamps auto_discovery_last_pass_at in pm_us_metrics after a continuous pass; operator settings default AUTO_DISCOVERY_ENABLED is true, and persisted operator settings still override env.",
+      "docker-compose.prod.yml now mounts ./.arbiter-runtime to /root/.arbiter so dashboard operator toggles survive container recreation; .env.production has explicit AUTO_DISCOVERY_ENABLED=true but remains gitignored."
+    ],
+    "tests_run": [
+      "python3 -m pytest arbiter/execution arbiter/mapping arbiter/recovery arbiter/test_readiness.py arbiter/test_api_integration.py arbiter/test_main_discovery_loop.py arbiter/test_operator_settings.py tests/test_mapping_validation.py tests/test_safety_guards.py -q => 1005 passed, 2 skipped in 86.96s",
+      "docker compose -f docker-compose.prod.yml --env-file .env.production config --quiet => compose_config_ok (warnings: IBKR_USERNAME/IBKR_PASSWORD unset for dormant ib-gateway service)",
+      "git diff --check => exit 0",
+      "npm run typecheck => exit 0",
+      "npm test => 6 files / 53 tests passed"
+    ],
+    "live_validation_pending": "Build/recreate arbiter-api-prod, re-run live API gates, prove K\u2194P independence/live arb or leave handoff if no opportunity materializes."
+  },
+  "session_2026_07_06_golive_session3": {
+    "timestamp": "2026-07-07T00:05:00Z",
+    "branch": "fix/forecastex-live-execution",
+    "headline": "Venue-scoped readiness/discovery visibility deployed; Kalshi migrated to V2 event order API with NO-side YES-book price inversion; live go-live still blocked by persisted kill switch and 3 critical incidents.",
+    "commits_added_this_session": [
+      "8612c33 fix(readiness): scope live gates by venue pair",
+      "da9a79e feat(discovery): expose continuous loop status",
+      "41330f9 fix(kalshi): use v2 event order endpoints",
+      "454f2d4 chore(gitignore): ignore production env backups"
+    ],
+    "tests_run": [
+      "python3 -m pytest arbiter/execution/adapters/test_kalshi_adapter.py arbiter/execution/adapters/test_kalshi_place_resting_limit.py arbiter/execution/adapters/test_kalshi_list_open_orders_signing.py -q => 80 passed in 3.22s",
+      "python3 -m pytest arbiter/execution arbiter/mapping arbiter/recovery arbiter/test_readiness.py arbiter/test_api_integration.py arbiter/test_main_discovery_loop.py arbiter/test_operator_settings.py tests/test_mapping_validation.py tests/test_safety_guards.py -q => 1007 passed, 2 skipped in 87.82s",
+      "git diff --check => exit 0",
+      "npm run typecheck => exit 0",
+      "npm test => 6 files / 53 tests passed",
+      "docker compose -f docker-compose.prod.yml --env-file .env.production config --quiet => compose_config_ok (warnings: dormant IBKR_USERNAME/IBKR_PASSWORD unset)"
+    ],
+    "live_validation_after_rebuild": {
+      "container": "arbiter-api-prod rebuilt to image db3ef8fcb13b and recreated from committed branch tree",
+      "service_ready": true,
+      "readiness_ready_for_live_trading": false,
+      "blocking_reasons": [
+        "Profitability verdict is blocked",
+        "3 critical incidents remain unresolved"
+      ],
+      "safety_kill_switch": "armed=true; armed_by=system:redis_restore; reason=prior ExecutionStore.upsert_order write failed (execution_engine:db_failure)",
+      "balances": {
+        "kalshi": 354.08,
+        "polymarket": 347.3,
+        "forecastex": 301.23
+      },
+      "collectors": "kalshi/polymarket/forecastex pass; quote_freshness pass after discovery/collector warmup",
+      "discovery_continuous": {
+        "enabled": true,
+        "last_written": 42,
+        "candidates_pending": 208,
+        "last_pass_at": 1783382693.290891
+      },
+      "opportunities": "2 live opportunities appeared after warmup, both ForecastEx\u2194Kalshi Senate mappings; no K\u2194P live opportunity materialized in this validation window",
+      "portfolio": {
+        "captured_arb_count": 1,
+        "stranded_count": 9,
+        "engine_exposure": 0.47,
+        "open_positions": 9,
+        "realized_pnl": 137.4295
+      },
+      "auto_executor": "considered=2, executed=0, skipped_armed=2; logs show auto_executor.skip.armed for GOP_SENATE_2026 and DEM_SENATE_2026"
+    },
+    "kalshi_v2_learning": [
+      "Create/cancel now sign/use /trade-api/v2/portfolio/events/orders instead of legacy /portfolio/orders.",
+      "V2 event orders quote a single YES book: buying NO at p is sent as side=ask price=1-p; selling NO at p is side=bid price=1-p.",
+      "V2 average_fill_price is also on the YES-book scale; NO-side fills must be inverted back to Arbiter's NO-side economics.",
+      "Tests now assert endpoint path, request body fields, explicit GTC/IOC/FOK time_in_force, and NO-side price inversion."
+    ],
+    "unmet_gates": [
+      "Do not merge: /api/readiness is false because profitability verdict is blocked and 3 critical incidents remain unresolved.",
+      "Do not reset kill switch without explicit operator authorization; /api/safety/status reports armed=true restored from Redis.",
+      "Real two-leg arb completion not proven in this session: captured_arb_count stayed 1 and auto_executor executed 0 due armed kill switch.",
+      "K\u2194P live independence not proven with a real K\u2194P opportunity; unit/E2E tests prove venue-scoped gating, but live opportunities observed were ForecastEx\u2194Kalshi only."
+    ],
+    "next_safe_action": "Operator must decide whether/when to reset the kill switch after reconciling ARB-000919 critical incidents. Then rerun live readiness/opportunities and wait for either K\u2194P opportunity execution or a controlled FX-degradation drill."
+  },
+  "latest_golive_session": "session_2026_07_06_golive_session3"
+}

@@ -1,5 +1,59 @@
 # Arbiter end-to-end go-live — HANDOFF PROMPT (2026-07-06, session 2)
 
+## Latest status — 2026-07-06 session 3 / post-rebuild validation
+
+**Branch:** `fix/forecastex-live-execution`
+
+**New commits added after the older session-2 handoff:**
+
+- `8612c33 fix(readiness): scope live gates by venue pair`
+- `da9a79e feat(discovery): expose continuous loop status`
+- `41330f9 fix(kalshi): use v2 event order endpoints`
+- `454f2d4 chore(gitignore): ignore production env backups`
+
+**What changed:**
+
+- Readiness/trade gating is now venue-scoped for collector degradation: ForecastEx collector degradation blocks ForecastEx-legged opportunities but does not by itself block Kalshi↔Polymarket. Kalshi or Polymarket degradation still blocks K↔P. Legacy `/api/readiness.ready_for_live_trading` remains conservative/backward-compatible.
+- `/api/discovery/status` now exposes the continuous loop: `continuous.enabled`, `continuous.last_written`, `continuous.candidates_pending`, `continuous.last_pass_at`.
+- Runtime operator settings persist through `./.arbiter-runtime:/root/.arbiter`; `.env.production` has explicit `AUTO_DISCOVERY_ENABLED=true` but remains gitignored.
+- Kalshi execution adapter now uses V2 event-order endpoints:
+  - create/sign path: `/trade-api/v2/portfolio/events/orders`
+  - cancel/sign path: `/trade-api/v2/portfolio/events/orders/{order_id}`
+  - request body uses `side=bid|ask`, `count`, `price`, explicit `time_in_force`, `self_trade_prevention_type=taker_at_cross`; no legacy `action`, `count_fp`, `yes_price_dollars`, or `no_price_dollars` request fields.
+  - Critical economics: V2 quotes a single YES book, so NO-side wire prices are inverted (`NO @ p` → YES-book price `1-p`) and V2 `average_fill_price` is inverted back for Arbiter NO-side fills.
+
+**Validation already run after the Kalshi V2 fix:**
+
+- `python3 -m pytest arbiter/execution/adapters/test_kalshi_adapter.py arbiter/execution/adapters/test_kalshi_place_resting_limit.py arbiter/execution/adapters/test_kalshi_list_open_orders_signing.py -q` → `80 passed in 3.22s`
+- `python3 -m pytest arbiter/execution arbiter/mapping arbiter/recovery arbiter/test_readiness.py arbiter/test_api_integration.py arbiter/test_main_discovery_loop.py arbiter/test_operator_settings.py tests/test_mapping_validation.py tests/test_safety_guards.py -q` → `1007 passed, 2 skipped in 87.82s`
+- `git diff --check` → exit `0`
+- `npm run typecheck` → exit `0`
+- `npm test` → `6 files / 53 tests passed`
+- Compose config check → `compose_config_ok` with expected warnings that dormant `IBKR_USERNAME` / `IBKR_PASSWORD` are unset.
+
+**Deployment/validation already run:**
+
+- Rebuilt/recreated `arbiter-api-prod` from committed branch tree; image observed as `db3ef8fcb13b`.
+- `/api/balances`: Kalshi `$354.08`, Polymarket `$347.30`, ForecastEx `$301.23`; all non-low, non-stale.
+- `/api/discovery/status`: `continuous.enabled=true`, `last_written=42`, `candidates_pending=208`, `last_pass_at=1783382693.290891` after warmup.
+- `/api/opportunities`: 2 opportunities appeared after warmup, both ForecastEx↔Kalshi Senate mappings. No K↔P opportunity materialized during this validation window.
+- `/api/portfolio/summary`: `captured_arb_count=1`, `stranded_count=9`, `engine_exposure=0.47`, `open_positions=9`, `realized_pnl=137.4295`.
+- `/api/safety/status`: `armed=true`, `armed_by=system:redis_restore`, reason says the kill switch was restored from a prior `ExecutionStore.upsert_order write failed` (`execution_engine:db_failure`).
+- Logs: `auto_executor.skip.armed` for the observed GOP/DEM Senate opportunities; `auto_executor` considered 2, executed 0, skipped_armed 2.
+
+**Current blockers — do not claim go-live complete:**
+
+1. `/api/readiness.ready_for_live_trading=false` because:
+   - `Profitability verdict is blocked`
+   - `3 critical incidents remain unresolved`
+2. Kill switch is armed from Redis and should **not** be reset without explicit operator authorization.
+3. No real two-leg arb completed in this session; `captured_arb_count` remained `1`.
+4. K↔P independence is proven by tests, but not by live execution/API evidence because no K↔P live opportunity appeared and the kill switch prevented execution attempts.
+
+**Next safe step:** reconcile/decide on `ARB-000919` and the persisted kill-switch state. Only after an explicit operator decision to reset the kill switch should live execution resume. Then rerun readiness, opportunities, portfolio summary, and either prove a real K↔P execution or run a controlled FX-degradation drill.
+
+---
+
 You are continuing the Arbiter cross-venue arbitrage go-live (Kalshi + Polymarket +
 ForecastEx/IBKR) to FULLY WORKING, end to end, autonomously. A prior session completed
 Phases 0/1/3 of `.arbiter-scheduled-state/E2E_GOLIVE_PROMPT.md` (read it for the original
