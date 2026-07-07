@@ -15,6 +15,7 @@ keys/kalshi_demo_private.pem
 
 # Phase 5 live-trading credentials + evidence
 .env.production
+.env.production.bak.*
 evidence/05/
 
 # Orchestrator / agent workspaces (not part of the app)
