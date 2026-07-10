@@ -1201,3 +1201,59 @@ async def test_fetch_failure_defers_mitigation_decisions_that_cycle():
     await rec.run_once()
     # Healthy cycle: decision computed.
     assert mit.decide.await_count == 1
+
+
+# ─── ForecastEx position identification (2026-07-10) ───────────────────────
+#
+# Live bug: the IBKR positions client returns records with exchs=null and NO
+# listingExchange, and contractDesc reads "SENM NOV2026 2 C
+# [SENM_1126_Democratic_YES 1]" — which contains no "FORECASTX" substring.
+# The old filter ("FORECASTX" in exchange/desc) dropped EVERY FX position, so
+# the reconciler tracked zero FX lots (paired count stuck at 1 = the kalshi
+# leg only), leaving FX-side exposure invisible.
+
+from arbiter.recovery.stranded_reconciler import is_forecastex_position
+
+
+def test_identifies_fx_event_contract_by_bracketed_local_symbol():
+    # The exact live record shape (exchs=null, no listingExchange).
+    assert is_forecastex_position({
+        "conid": 773659815,
+        "contractDesc": "SENM   NOV2026 2 C [SENM_1126_Democratic_YES 1]",
+        "assetClass": "OPT",
+        "exchs": None,
+    })
+    assert is_forecastex_position({
+        "conid": 745924270,
+        "contractDesc": "SENM   NOV2026 1 P [SENM_1126_Republican_NO 1]",
+        "assetClass": "OPT",
+    })
+
+
+def test_still_identifies_fx_by_explicit_exchange_marker():
+    assert is_forecastex_position({
+        "listingExchange": "FORECASTX",
+        "contractDesc": "whatever",
+    })
+    assert is_forecastex_position({"exchs": "FORECASTX", "contractDesc": ""})
+
+
+def test_rejects_non_forecastex_holdings():
+    # An equity/option the user might also hold — no FX exchange, no
+    # event-contract bracket pattern.
+    assert not is_forecastex_position({
+        "conid": 265598,
+        "contractDesc": "AAPL",
+        "listingExchange": "NASDAQ",
+        "assetClass": "STK",
+    })
+    assert not is_forecastex_position({
+        "contractDesc": "SPY   DEC2026 500 C",
+        "assetClass": "OPT",
+        "listingExchange": "CBOE",
+    })
+
+
+def test_rejects_empty_or_malformed():
+    assert not is_forecastex_position({})
+    assert not is_forecastex_position({"contractDesc": ""})

@@ -48,6 +48,7 @@ import asyncio
 import html
 import json
 import os
+import re
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -57,6 +58,35 @@ import aiohttp
 import structlog
 
 logger = structlog.get_logger("arbiter.recovery.stranded_reconciler")
+
+
+# ForecastEx event-contract local-symbol signature embedded in the IBKR
+# contractDesc, e.g. "SENM   NOV2026 2 C [SENM_1126_Democratic_YES 1]".
+# This is the stable identifier: the IBKR positions client returns records
+# with exchs=null and no listingExchange (live 2026-07-10), so the exchange
+# string alone drops every FX lot. The bracket pattern — TICKER_DIGITS_...
+# ending in YES/NO — is present in every ForecastEx event contract and in
+# no ordinary equity/option holding.
+_FX_LOCAL_SYMBOL_RE = re.compile(r"\[[A-Z0-9]+_\d+_[A-Za-z0-9_]*(?:YES|NO)\b")
+
+
+def is_forecastex_position(p: dict) -> bool:
+    """True when an IBKR position record is a ForecastEx event contract.
+
+    Matches on either an explicit FORECASTX exchange marker OR the
+    event-contract local-symbol bracket in the contract description.
+    Deliberately narrow so non-ForecastEx IBKR holdings in the same
+    account (equities, ordinary options) are excluded.
+    """
+    if not isinstance(p, dict) or not p:
+        return False
+    exchange = str(
+        p.get("listingExchange") or p.get("exchange") or p.get("exchs") or ""
+    ).upper()
+    if "FORECASTX" in exchange:
+        return True
+    desc = str(p.get("contractDesc") or p.get("name") or "")
+    return bool(_FX_LOCAL_SYMBOL_RE.search(desc))
 
 
 def _html(text: object) -> str:
@@ -833,10 +863,11 @@ class StrandedPositionReconciler:
             if not isinstance(p, dict):
                 continue
             # Filter to FORECASTX inventory only — the user may hold
-            # other IBKR products in the same account.
-            exchange = str(p.get("listingExchange") or p.get("exchange") or "").upper()
-            desc = str(p.get("contractDesc") or p.get("name") or "").upper()
-            if "FORECASTX" not in exchange and "FORECASTX" not in desc:
+            # other IBKR products in the same account. Uses the robust
+            # multi-signal identifier (the exchange field is null on the
+            # live positions payload; the event-contract local-symbol
+            # bracket in contractDesc is the stable marker).
+            if not is_forecastex_position(p):
                 continue
             try:
                 net = float(p.get("position") or 0)
