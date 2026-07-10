@@ -935,41 +935,40 @@ async def test_preflight_skips_when_book_has_no_depth_even_for_one():
 
 # ── Suspicious-edge circuit breaker (2026-07-10 party-swap incident) ───────
 #
-# A crossed-contract mapping produces a large, persistent phantom "edge"
-# (Senate: 15c/9c gross) that is really two legs of the same directional bet.
-# For a two-leg arb the cross-venue divergence EQUALS the gross edge, so a
-# too-good edge is indistinguishable from a wrong mapping at trade time.
-# Route any edge above the coherence threshold to operator review rather than
-# auto-executing — closing the ~5-min window before the mapping sweep quarantines.
+# A COARSE absurdity backstop, not the primary defense (that is the
+# mapping-level coherence sweep). It must never block legitimate arbs — a
+# real K×P arb clears 7c net => ~9.5c gross — so the ceiling sits at 15c and
+# only stops a catastrophically-wrong mapping's absurd edge from auto-firing.
 
 
 @pytest.mark.asyncio
-async def test_suspiciously_large_edge_is_not_auto_executed():
+async def test_absurd_edge_is_not_auto_executed():
     ae, engine = _make_components()
-    opp = _make_opportunity(canonical_id="DEM_SENATE_2026")
-    opp.gross_edge = 0.15          # 15c — the swapped-DEM signature
-    opp.net_edge = 0.125
-    opp.net_edge_cents = 12.5
+    opp = _make_opportunity(canonical_id="BROKEN_MAP")
+    opp.gross_edge = 0.30          # 30c — a catastrophically wrong mapping
+    opp.net_edge = 0.27
+    opp.net_edge_cents = 27.0
     await ae._consider_opportunity(opp)
     engine.execute_opportunity.assert_not_awaited()
     assert ae.stats.skipped_suspicious_edge == 1
 
 
 @pytest.mark.asyncio
-async def test_suspicious_edge_catches_the_smaller_gop_leg_too():
+async def test_legitimate_kp_arb_at_preflight_floor_still_executes():
+    """A real K×P arb at the 7c-net floor is ~9.5c gross — the breaker must
+    NOT block it (that is exactly the volume we want to keep trading)."""
     ae, engine = _make_components()
-    opp = _make_opportunity(canonical_id="GOP_SENATE_2026")
-    opp.gross_edge = 0.09          # 9c gross — the swapped-GOP signature
-    opp.net_edge = 0.065
-    opp.net_edge_cents = 6.5
+    opp = _make_opportunity()
+    opp.gross_edge = 0.095         # ~9.5c gross = 7c net + ~2.5c fees
+    opp.net_edge = 0.07
+    opp.net_edge_cents = 7.0
     await ae._consider_opportunity(opp)
-    engine.execute_opportunity.assert_not_awaited()
-    assert ae.stats.skipped_suspicious_edge == 1
+    engine.execute_opportunity.assert_awaited_once()
+    assert ae.stats.skipped_suspicious_edge == 0
 
 
 @pytest.mark.asyncio
 async def test_normal_few_cent_edge_still_executes():
-    """A genuine 5c gross arb must NOT be blocked by the breaker."""
     ae, engine = _make_components()
     opp = _make_opportunity()      # gross_edge 0.05
     await ae._consider_opportunity(opp)
@@ -980,10 +979,11 @@ async def test_normal_few_cent_edge_still_executes():
 @pytest.mark.asyncio
 async def test_suspicious_edge_threshold_is_configurable():
     ae, engine = _make_components()
-    ae._config.max_auto_gross_edge_cents = 20.0   # operator widened the band
+    ae._config.max_auto_gross_edge_cents = 8.0   # operator tightened the band
     opp = _make_opportunity()
-    opp.gross_edge = 0.15
-    opp.net_edge = 0.125
-    opp.net_edge_cents = 12.5
+    opp.gross_edge = 0.12
+    opp.net_edge = 0.10
+    opp.net_edge_cents = 10.0
     await ae._consider_opportunity(opp)
-    engine.execute_opportunity.assert_awaited_once()
+    engine.execute_opportunity.assert_not_awaited()
+    assert ae.stats.skipped_suspicious_edge == 1

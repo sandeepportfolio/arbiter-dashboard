@@ -60,15 +60,18 @@ class AutoExecutorConfig:
     # Confirmed mappings have been audited end-to-end; unconfirmed ones are
     # exactly the candidates that drove the 2026-05-08 cascade losses.
     require_mapping_confirmed: bool = True
-    # Suspicious-edge circuit breaker (2026-07-10 party-swap incident). For a
-    # two-leg arb the cross-venue divergence equals the gross edge, so a
-    # crossed-contract mapping's large PERSISTENT phantom edge (Senate:
-    # 15c/9c gross) is indistinguishable from a real fat arb at trade time.
-    # Any gross edge above this ceiling is routed to operator review instead
-    # of auto-executed — real cross-venue arbs are a few cents; anything this
-    # large is "too good to be true" and deserves eyes. Matches
-    # MAPPING_COHERENCE_MAX_DIVERGENCE (0.08). Env: MAX_AUTO_GROSS_EDGE_CENTS.
-    max_auto_gross_edge_cents: float = 8.0
+    # Suspicious-edge circuit breaker (2026-07-10 party-swap incident). A
+    # coarse ABSURDITY backstop, NOT the primary defense — the mapping-level
+    # coherence sweep (persistence + same-side cross-venue divergence) is what
+    # actually catches crossed contracts. For a two-leg arb the edge equals
+    # the cross-venue divergence, so this can't finely separate a moderate
+    # phantom from a fat real arb; it must sit ABOVE the legitimate range.
+    # A real K×P arb clears the 7c NET preflight floor => ~9.5c gross, and
+    # genuine dislocations run higher, so the ceiling is 15c: it never blocks
+    # normal trading but stops a catastrophically-wrong mapping (a 20c+
+    # "edge") from auto-firing while the sweep catches up. Routes to operator
+    # review. Env: MAX_AUTO_GROSS_EDGE_CENTS.
+    max_auto_gross_edge_cents: float = 15.0
     # Auto-disable a mapping after this many consecutive losing recoveries.
     # Catches markets like DEM_HOUSE_2026 (2026-05-08 cascade: 22 trades /
     # -$105.80) where the secondary venue persistently rejects orders and
