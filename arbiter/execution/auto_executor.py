@@ -60,6 +60,15 @@ class AutoExecutorConfig:
     # Confirmed mappings have been audited end-to-end; unconfirmed ones are
     # exactly the candidates that drove the 2026-05-08 cascade losses.
     require_mapping_confirmed: bool = True
+    # Suspicious-edge circuit breaker (2026-07-10 party-swap incident). For a
+    # two-leg arb the cross-venue divergence equals the gross edge, so a
+    # crossed-contract mapping's large PERSISTENT phantom edge (Senate:
+    # 15c/9c gross) is indistinguishable from a real fat arb at trade time.
+    # Any gross edge above this ceiling is routed to operator review instead
+    # of auto-executed — real cross-venue arbs are a few cents; anything this
+    # large is "too good to be true" and deserves eyes. Matches
+    # MAPPING_COHERENCE_MAX_DIVERGENCE (0.08). Env: MAX_AUTO_GROSS_EDGE_CENTS.
+    max_auto_gross_edge_cents: float = 8.0
     # Auto-disable a mapping after this many consecutive losing recoveries.
     # Catches markets like DEM_HOUSE_2026 (2026-05-08 cascade: 22 trades /
     # -$105.80) where the secondary venue persistently rejects orders and
@@ -105,6 +114,7 @@ class AutoExecutorStats:
     skipped_bootstrap_full: int = 0
     skipped_stale_quote: int = 0
     skipped_edge_collapsed: int = 0
+    skipped_suspicious_edge: int = 0
     skipped_depth_low: int = 0
     skipped_failed_cooldown: int = 0
     skipped_failure_pattern: int = 0
@@ -129,6 +139,7 @@ class AutoExecutorStats:
             "skipped_bootstrap_full": self.skipped_bootstrap_full,
             "skipped_stale_quote": self.skipped_stale_quote,
             "skipped_edge_collapsed": self.skipped_edge_collapsed,
+            "skipped_suspicious_edge": self.skipped_suspicious_edge,
             "skipped_depth_low": self.skipped_depth_low,
             "skipped_failed_cooldown": self.skipped_failed_cooldown,
             "skipped_failure_pattern": self.skipped_failure_pattern,
@@ -342,6 +353,30 @@ class AutoExecutor:
                     mapping_status=mapping_status,
                 )
                 return
+
+        # Suspicious-edge circuit breaker (2026-07-10 party-swap incident).
+        # A too-good gross edge is, for a two-leg arb, indistinguishable from
+        # a crossed-contract mapping (the divergence IS the edge). Route it
+        # to operator review instead of auto-executing — closes the window
+        # between a mapping going bad and the coherence sweep quarantining it.
+        max_gross_edge_c = float(
+            getattr(self._config, "max_auto_gross_edge_cents", 8.0)
+        )
+        gross_edge_c = float(getattr(opp, "gross_edge", 0.0) or 0.0) * 100.0
+        if max_gross_edge_c > 0 and gross_edge_c > max_gross_edge_c:
+            self.stats.skipped_suspicious_edge += 1
+            log.critical(
+                "auto_executor.skip.suspicious_edge",
+                canonical_id=opp.canonical_id,
+                gross_edge_cents=round(gross_edge_c, 2),
+                ceiling_cents=max_gross_edge_c,
+                reason=(
+                    "gross edge exceeds ceiling — likely a wrong-contract "
+                    "mapping (cross-venue divergence = edge for a 2-leg arb); "
+                    "routed to operator review"
+                ),
+            )
+            return
 
         # Cooldown after failed fill-or-kill (avoid spamming thin orderbooks)
         cooldown_until = self._failed_cooldown.get(opp.canonical_id, 0.0)
@@ -1053,6 +1088,9 @@ def make_auto_executor_from_env(
         ),
         liquidity_adaptive_sizing=_bool(
             config_env.get("LIQUIDITY_ADAPTIVE_SIZING"), default=True,
+        ),
+        max_auto_gross_edge_cents=_float(
+            config_env.get("MAX_AUTO_GROSS_EDGE_CENTS"), 8.0,
         ),
     )
     return AutoExecutor(
