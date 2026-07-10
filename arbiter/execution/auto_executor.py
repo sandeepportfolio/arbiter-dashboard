@@ -1093,7 +1093,11 @@ def make_auto_executor_from_env(
             config_env.get("LIQUIDITY_ADAPTIVE_SIZING"), default=True,
         ),
         max_auto_gross_edge_cents=_float(
-            config_env.get("MAX_AUTO_GROSS_EDGE_CENTS"), 8.0,
+            config_env.get("MAX_AUTO_GROSS_EDGE_CENTS"),
+            # Reference the dataclass default so the env fallback can never
+            # drift from it again (they disagreed 8 vs 15, over-blocking
+            # legitimate sports arbs in prod).
+            AutoExecutorConfig.max_auto_gross_edge_cents,
         ),
     )
     return AutoExecutor(

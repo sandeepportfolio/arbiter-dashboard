@@ -987,3 +987,35 @@ async def test_suspicious_edge_threshold_is_configurable():
     await ae._consider_opportunity(opp)
     engine.execute_opportunity.assert_not_awaited()
     assert ae.stats.skipped_suspicious_edge == 1
+
+
+def test_from_env_gross_edge_ceiling_default_matches_config_default():
+    """Config-consistency regression: the dataclass default (15c) and the
+    make_auto_executor_from_env fallback disagreed (8c), so production —
+    which builds from env — over-blocked legitimate sports arbs (live
+    2026-07-10 23:38Z: a coherent MLB K×P mapping's 10c edge was blocked
+    with ceiling_cents=8.0). The env fallback must match the dataclass."""
+    from arbiter.execution.auto_executor import (
+        AutoExecutorConfig, make_auto_executor_from_env,
+    )
+    ae = make_auto_executor_from_env(
+        scanner=SimpleNamespace(subscribe=lambda: None),
+        engine=SimpleNamespace(),
+        supervisor=SimpleNamespace(is_armed=False),
+        mapping_store=SimpleNamespace(),
+        config_env={},  # nothing set → fallback
+    )
+    assert ae._config.max_auto_gross_edge_cents == AutoExecutorConfig().max_auto_gross_edge_cents
+    assert ae._config.max_auto_gross_edge_cents == 15.0
+
+
+def test_from_env_gross_edge_ceiling_honors_override():
+    from arbiter.execution.auto_executor import make_auto_executor_from_env
+    ae = make_auto_executor_from_env(
+        scanner=SimpleNamespace(subscribe=lambda: None),
+        engine=SimpleNamespace(),
+        supervisor=SimpleNamespace(is_armed=False),
+        mapping_store=SimpleNamespace(),
+        config_env={"MAX_AUTO_GROSS_EDGE_CENTS": "12"},
+    )
+    assert ae._config.max_auto_gross_edge_cents == 12.0
