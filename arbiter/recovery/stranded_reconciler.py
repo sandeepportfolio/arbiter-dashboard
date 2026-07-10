@@ -918,7 +918,7 @@ class StrandedPositionReconciler:
                     unrealized_usd=mtm - cost,
                     best_bid=best_bid,
                     best_ask=best_ask,
-                    title=desc[:80],
+                    title=str(p.get("contractDesc") or p.get("name") or "")[:80],
                     first_seen_ts=time.time(),
                     last_seen_ts=time.time(),
                 )

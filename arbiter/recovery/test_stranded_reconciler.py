@@ -1257,3 +1257,35 @@ def test_rejects_non_forecastex_holdings():
 def test_rejects_empty_or_malformed():
     assert not is_forecastex_position({})
     assert not is_forecastex_position({"contractDesc": ""})
+
+
+async def test_fetch_forecastex_positions_parses_live_record_shape():
+    """End-to-end fetch of the exact live IBKR record (exchs=null, no
+    listingExchange) must yield a StrandedPosition — regression for the
+    NameError that removing the `desc` local introduced, which made the
+    fetch raise every cycle and leave FX exposure untracked."""
+    client = MagicMock()
+    client.account_id = "U25953084"
+    client.positions = AsyncMock(return_value=[
+        {
+            "conid": 773659815,
+            "contractDesc": "SENM   NOV2026 2 C [SENM_1126_Democratic_YES 1]",
+            "position": 51.0,
+            "avgCost": 0.4798,
+            "mktPrice": 0.46,
+            "exchs": None,
+            "assetClass": "OPT",
+        },
+        {"conid": 265598, "contractDesc": "AAPL", "listingExchange": "NASDAQ",
+         "assetClass": "STK", "position": 10.0},
+    ])
+    client.market_snapshot = AsyncMock(return_value={})
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), forecastex_client=client,
+    )
+    out = await rec._fetch_forecastex_positions()
+    assert len(out) == 1
+    assert out[0].platform == "forecastex"
+    assert out[0].market_id == "773659815"
+    assert out[0].qty == 51.0
+    assert "Democratic_YES" in out[0].title
