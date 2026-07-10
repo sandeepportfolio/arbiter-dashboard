@@ -1,6 +1,6 @@
 {
   "agent": "Arbiter scheduled mapping/profitability improvement agent",
-  "timestamp": "2026-07-06T20:05:00Z",
+  "timestamp": "2026-07-10T05:00:00Z",
   "run_window_reviewed": {
     "prior_checkpoint": "mapping_learning_loop.json @ 2026-06-26T19:25:00Z",
     "this_run": "2026-07-06",
@@ -229,5 +229,44 @@
     ],
     "next_safe_action": "Operator must decide whether/when to reset the kill switch after reconciling ARB-000919 critical incidents. Then rerun live readiness/opportunities and wait for either K\u2194P opportunity execution or a controlled FX-degradation drill."
   },
-  "latest_golive_session": "session_2026_07_06_golive_session3"
+  "latest_golive_session": "session_2026_07_09_golive_session4",
+  "session_2026_07_09_golive_session4": {
+    "timestamp": "2026-07-10T05:00:00Z",
+    "headline": "Kill switch reset after full ARB-000919 reconciliation; FIVE live two-leg arbs captured (captured_arb_count 1->6, zero naked legs); FK persistence bug root-caused and fixed; venue-scoped readiness proven live under real FX degradation",
+    "root_cause_ARB_000919": {
+      "finding": "execution_orders_arb_id_fkey violation: requote retry RQ1 was persisted with derived arb_id 'ARB-000919-RQ1' (no parent row). _handle_db_failure armed the kill switch MID-EXECUTION, which then aborted every later fallback AND the auto-unwind (the RQ2 '-DBFAIL' marker order was the C4.2 gate refusing to trade without an audit trail).",
+      "evidence": "arbiter-postgres-prod log 2026-07-06 23:32:33 UTC: DETAIL: Key (arb_id)=(ARB-000919-RQ1) is not present in table execution_arbs",
+      "fix": "commit 0b2f8f0: persist_arb_id kwarg on _place_order_for_leg; -RQ{n}/-F3 call sites persist under parent while keeping derived venue-side idempotency ids. Regression test pins both.",
+      "lesson": "Derived attempt ids serve venue idempotency; FK columns must always be keyed to the parent. Any new retry rung must pass persist_arb_id."
+    },
+    "commits": [
+      "f14ef4b fix(forecastex): verified adjacent-conid sibling fallback for empty SENM children",
+      "fa728e1 fix(recovery): surface ForecastEx filled/fill_qty=0 rows as exposure-bearing",
+      "0b2f8f0 fix(engine): persist requote/FOK retry orders under the PARENT arb_id (P0)",
+      "5d6d5b8 fix(forecastex): reject strike-bearing neighbors when source strike is unknown"
+    ],
+    "validation": "1011 passed/2 skipped (execution+mapping+recovery+readiness+api+main+operator+safety), 34 passed tests/, tsc clean, vitest 53/53, compose config ok, exact new list_half_recorded_arbs SQL returned 0 rows against arbiter_live pre-deploy",
+    "deploy": "image d48ba1ae02d6 built from clean tree at 5d6d5b8, up 2026-07-10T04:26Z; startup: 'recovery: no half-recorded arbs to reconcile'",
+    "live_results": {
+      "kill_switch_reset": "2026-07-10T04:29:30Z by operator:sparx.sandeep@gmail.com after evidence-complete reconciliation (venue flat at IBKR 2x cache-busted, arb closed unwind_pnl=-0.02, 3 incidents already resolved in DB)",
+      "arbs_captured": "ARB-000920..924: DEM_SENATE_2026 x3 (+0.125 each booked), GOP_SENATE_2026 x2 (+0.065 each booked); all two-leg FILLED, zero one-leg incidents, engine_exposure 4.45 all paired",
+      "kalshi_v2_and_forecastex_adapters": "both live paths worked repeatedly (kalshi venue order ids, FX broker ids via reply-confirm loop)"
+    },
+    "fx_degradation_drill_2026_07_10": {
+      "method": "container-only /etc/hosts blackhole of host.docker.internal (gateway untouched, keepalive unaffected), 04:35:03Z-04:46:53Z",
+      "proven_live": "GLOBAL readiness=false 'Collector health is degraded: forecastex' while venue_pairs kalshi:polymarket ready=true blocking=[] and both FX pairs blocked \u2014 the exact 4.1 scoped-readiness behavior, under real collector degradation",
+      "limitation": "warm keep-alive connections kept FX quotes flowing, so degradation FLAPPED (consec_errors 0->8->0); executor gate probes landed on healthy instants, so no live skip.gate_structural denial with the venue-scoped reason was captured",
+      "unresolved_gate": "4.1 executor-half live proof: EITHER a real K<->P arb completes (option a, satisfiable any time a K<->P opp fires) OR a full-outage drill window with a live K<->P opp present"
+    },
+    "new_findings_P1": [
+      "realized_pnl booked from opp.net_edge at DETECTION prices (engine.py:2156), not fill prices: ARB-000920 booked +0.125 vs locked-in +0.045 after slippage. Shadow execution audit correctly flags these. Fix needs care: profitability validator thresholds consume this field.",
+      "StrandedPositionReconciler admits EVERY venue lot with no engine-arb pairing awareness; mitigation engine evaluates lots as singletons and can recommend COMPLETE_ARB for already-paired legs (would DOUBLE the leg if executed). Additionally a failed venue positions-fetch is treated as 'venue empty' for decisions (observed live during drill: FX fetch failure -> CONTROLS-2026-R misdecision). SAFE today ONLY because STRANDED_AUTO_CLOSE is unset/off. DO NOT enable STRANDED_AUTO_CLOSE until the reconciler joins engine arb state and fails closed on fetch errors.",
+      "stranded_count now includes healthy paired inventory (10 = 9 legacy + CONTROLS-2026-R paired leg); use one-leg incidents / naked_leg events as the naked-exposure gate metric, not stranded_count."
+    ],
+    "do_not_repeat": [
+      "Do not blackhole DNS/hosts to simulate venue outage and expect full degradation \u2014 warm keep-alive connections keep frequent endpoints alive; only NEW connections fail (flapping).",
+      "Do not read 'stranded: N' as naked exposure.",
+      "docker logs --since/--until parse timestamps as LOCAL time unless Z-suffixed."
+    ]
+  }
 }
