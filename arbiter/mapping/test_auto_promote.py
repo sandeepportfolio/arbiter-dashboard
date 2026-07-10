@@ -963,3 +963,24 @@ async def test_structural_fast_promote_calls_update_status_for_each_passing_row(
     for call in store.update_status.await_args_list:
         assert call.kwargs.get("status") == MappingStatus.CONFIRMED
         assert call.kwargs.get("allow_auto_trade") is True
+
+
+def test_apply_promotion_respects_no_auto_promote_marker():
+    """A [no-auto-promote] quarantine (coherence sweep / operator) must be
+    terminal for ALL promotion paths. Live 2026-07-10 22:10-22:23Z: the
+    coherence sweep demoted GOP_HOUSE_2026 (0.305 cross-venue divergence)
+    and THIS pipeline re-confirmed it minutes later, wiping the marker via
+    review_note='' on the structural path."""
+    candidate = {
+        "canonical_id": "GOP_HOUSE_2026",
+        "status": "review",
+        "allow_auto_trade": False,
+        "review_note": "[coherence-quarantine][no-auto-promote] cross-venue yes divergence 0.3050",
+    }
+    apply_promotion(
+        candidate,
+        PromotionResult(promoted=True, reason="promoted", match_type="structural"),
+    )
+    assert candidate["status"] == "review"
+    assert candidate["allow_auto_trade"] is False
+    assert "[no-auto-promote]" in candidate["review_note"]

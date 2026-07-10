@@ -168,6 +168,17 @@ def apply_promotion(candidate: dict, result: PromotionResult) -> None:
     same cage — no caller can accidentally promote a semantic-only
     candidate to live-tradable.
     """
+    # Quarantine marker is TERMINAL for every promotion path: the
+    # coherence sweep / an operator demoted this mapping for cause
+    # (wrong-contract mapping, party conflict). Live 2026-07-10: this
+    # pipeline re-confirmed a quarantined mapping minutes after the sweep
+    # demoted it, wiping the marker via review_note="" below. Only an
+    # operator may clear the marker.
+    existing_note = f"{candidate.get('review_note') or ''} {candidate.get('notes') or ''}"
+    if "[no-auto-promote]" in existing_note:
+        candidate["allow_auto_trade"] = False
+        return
+
     if not result.promoted:
         candidate["allow_auto_trade"] = False
         candidate["review_note"] = f"Auto-promote gate: {result.reason}"
