@@ -1,6 +1,6 @@
 {
   "agent": "Arbiter scheduled mapping/profitability improvement agent",
-  "timestamp": "2026-07-10T05:00:00Z",
+  "timestamp": "2026-07-10T20:35:00Z",
   "run_window_reviewed": {
     "prior_checkpoint": "mapping_learning_loop.json @ 2026-06-26T19:25:00Z",
     "this_run": "2026-07-06",
@@ -229,7 +229,7 @@
     ],
     "next_safe_action": "Operator must decide whether/when to reset the kill switch after reconciling ARB-000919 critical incidents. Then rerun live readiness/opportunities and wait for either K\u2194P opportunity execution or a controlled FX-degradation drill."
   },
-  "latest_golive_session": "session_2026_07_09_golive_session4",
+  "latest_golive_session": "session_2026_07_10_golive_session5",
   "session_2026_07_09_golive_session4": {
     "timestamp": "2026-07-10T05:00:00Z",
     "headline": "Kill switch reset after full ARB-000919 reconciliation; FIVE live two-leg arbs captured (captured_arb_count 1->6, zero naked legs); FK persistence bug root-caused and fixed; venue-scoped readiness proven live under real FX degradation",
@@ -268,5 +268,18 @@
       "Do not read 'stranded: N' as naked exposure.",
       "docker logs --since/--until parse timestamps as LOCAL time unless Z-suffixed."
     ]
+  },
+  "session_2026_07_10_golive_session5": {
+    "timestamp": "2026-07-10T20:35:00Z",
+    "headline": "Day-1: 99 arbs captured, 1 naked leg auto-recovered (-$0.01); daily-cap-never-resets P1 found+fixed+deployed (46c58fc); full-outage drills prove venue-scoped readiness live + structural staleness exclusion; merge held on the single K<->P execution datum",
+    "findings": [
+      "P1 FIXED: MAX_DAILY_TRADES/MAX_DAILY_LOSS_USD had no rollover (lifetime counters) \u2014 engine halted permanently at 100 trades (live 20:04Z). check_trade now rolls both at UTC midnight.",
+      "Structural: full FX outage -> FX-leg opps go stale in seconds and are excluded UPSTREAM of the trade gate (scanner publishes only tradable/manual). Gate is the backstop for the flapping regime; e2e tests pin it.",
+      "risk.check_trade runs BEFORE the trade gate in execute_opportunity \u2014 risk denials mask gate evidence in probes.",
+      "P2: execution-history restore drops opportunity confidence -> /api/failed-trades/{id}/retry on restored arbs always rejects 'Low confidence: 0.00'.",
+      "ss -K via netshoot (--net container: --privileged, scoped dst:5000) severs warm keep-alive conns cleanly -> degradation registers in ~2s and sticks; hosts-blackhole alone flaps.",
+      "ARB-000941 live-fire: the exact 919 chain (IOC->RQ1->RQ2->F3 all failed) persisted all retries under the parent arb_id (FK fix held), smart unwind closed at -$0.01, incident auto-resolved, readiness stayed green."
+    ],
+    "merge_status": "HELD per 4.3.5 \u2014 all gates met except a literal K<->P execution (no K<->P opp has existed since go-live). First K<->P capture (no new strand) -> merge main."
   }
 }

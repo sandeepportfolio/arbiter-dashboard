@@ -1,6 +1,59 @@
 # Arbiter end-to-end go-live — HANDOFF PROMPT (2026-07-06, session 2)
 
-## Latest status — 2026-07-09/10 session 4 — LIVE AND TRADING
+## Latest status — 2026-07-10 session 5 (afternoon) — 100 arbs captured; daily-cap bug fixed; §4.1 evidence completed to the extent markets allow
+
+**Branch:** `fix/forecastex-live-execution`, HEAD `46c58fc`, pushed. Deployed image
+`1fa30627b55e` (container up 2026-07-10T20:24Z). Kill switch DISARMED (survives
+restarts; shutdown-arms are lifecycle-only).
+
+**Day-1 live results:** 99 two-leg arbs captured on 07-10 (captured_arb_count=100
+lifetime), ~$9.8 booked, engine exposure ~$87 all paired, ONE naked leg all day
+(ARB-000941) — auto-recovered in 15s for −$0.01 with the incident auto-resolving.
+FX balance $308→$264 (committed to FX legs), all balances fresh.
+
+**NEW P1 FIXED + DEPLOYED — `46c58fc` fix(risk): daily windows never rolled over:**
+`MAX_DAILY_TRADES`/`MAX_DAILY_LOSS_USD` counters had NO reset — after 100 lifetime
+trades the engine halted permanently (live 2026-07-10 20:04Z "Daily trade limit
+reached"; only a container restart — which silently zeroed them — could resume).
+`check_trade` now rolls both windows at UTC midnight (logged). Positional caps
+untouched. TDD'd; execution suite 516 passed.
+
+**§4.1 evidence — completed to the extent market conditions allow (3 more live drills):**
+
+- Full-outage drills (hosts blackhole + `ss -K` killing warm conns via netshoot,
+  `--net container:` + `--privileged`, scoped to dst 192.168.5.2:5000): degradation
+  registers in ~2s and STICKS. Captured repeatedly from the live API during real
+  degradation: global ready=false ("Collector health is degraded: forecastex"),
+  `kalshi:polymarket ready=true blocking=[]`, both FX pairs blocked with the
+  venue-scoped reason.
+- **Structural finding (good news):** in a real full FX outage, FX-leg opportunities
+  go `status=stale` within seconds and are excluded UPSTREAM of the gate (scanner
+  only publishes tradable/manual) — the executor never considers them. The
+  venue-scoped trade gate is the backstop for the narrow flapping regime (fresh
+  quotes + degraded collector), pinned by the deployed e2e tests
+  (TEST_FX_GATE_BLOCK blocked / TEST_KP_GATE_PASS allowed, green in the battery).
+  K↔P scanning continued at full cadence through every outage window.
+- Retry-probe dead-ends documented: (a) `risk.check_trade` runs BEFORE the trade
+  gate in `execute_opportunity` (engine.py ~644 vs ~711), so risk-stage denials
+  mask gate evidence; (b) **P2: execution-history restore drops opportunity
+  confidence** — `POST /api/failed-trades/{id}/retry` on a restored arb always
+  rejects "Low confidence: 0.00". Fix the serialization before relying on manual
+  retries after a restart.
+- **Remaining datum for the literal §4.1 letter: a real K↔P execution.** No K↔P
+  opportunity has materialized since go-live (all 99 captures were FX↔K Senate
+  pairs). The executor will take one autonomously when it appears
+  (captured_arb_count increments on a K/P pair, no FX leg). That single event
+  completes §4.1(a).
+
+**Merge decision: NOT merged to main, per §4.3.5's own rule** ("any gate unmet:
+push branch, leave a precise note — never claim it"). Every §4.3.4 gate is met
+except the literal K↔P execution datum above. Prod runs from this branch's build;
+merge main immediately after the first K↔P capture (verify: no new strand, then
+`git merge fix/forecastex-live-execution && git push`).
+
+---
+
+## Older status — 2026-07-09/10 session 4 — LIVE AND TRADING
 
 **Branch:** `fix/forecastex-live-execution`, HEAD `5d6d5b8`, pushed. Deployed image
 `d48ba1ae02d6` (built from clean tree at 5d6d5b8, container up 2026-07-10T04:26Z).
