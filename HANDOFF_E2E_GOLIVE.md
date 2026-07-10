@@ -28,7 +28,25 @@ COMPLETE_ARB that would have bought 43 MORE Democratic_YES under the $30 auto-cl
 with `STRANDED_AUTO_CLOSE=true` live); decisions defer on venue-fetch failure; stranded
 metrics use residuals (fixed the misleading "-$74 unrealized").
 
-**Operator decision pending:** hold / liquidate / complete-hedge the $101 book.
+**DECISION EXECUTED (2026-07-10 23:01Z) — partial liquidation, forced by venue liquidity:**
+- Kalshi books are DEEP (50k+ contracts at top of book): SOLD both kalshi legs via the
+  tested `place_resting_sell` adapter path — 65× CONTROLS-2026-D YES filled @0.43, 51×
+  CONTROLS-2026-R NO filled @0.44 (price improvement over the 0.41/0.42 limits). Both
+  venue positions now FLAT; ~$50.39 recovered at ~breakeven; the 1 residual naked
+  contract (ARB-000941) swept up in the same sale. Kalshi balance $309→$350.78.
+- ForecastEx legs (51× Democratic_YES 773659815 + 64× Republican_NO 745924270, $50.28
+  cost) are HELD TO SETTLEMENT (Nov 2026): the venue cancels all SELL orders, and the
+  exit-sibling books (745924267 Rep-YES, 773659816 Dem-NO) show ZERO displayed size —
+  bulk-neutralizing 115 contracts 1-lot-at-a-time into empty books at ~0.55-0.61 would
+  lock a larger loss AND tie up $115 for 4 months, strictly worse than holding. These
+  pay $115 if Dems win the Senate / $0 if not (residual ~$50 directional, ~44% implied).
+- Net: directional exposure HALVED ($101→$50), ~$50 cash recovered at breakeven, only
+  the un-exitable FX half remains. Best achievable given venue liquidity.
+- NOTE: the kalshi sale was executed outside the engine (operator liquidation, kill
+  switch stayed armed), so the DB filled-arb records are unchanged — the reconciler still
+  labels the FX legs `paired_hold` (behaviourally correct: no action possible on them
+  anyway). The FX legs are genuinely directional-held-to-settle; documented here as the
+  source of truth.
 
 **Update 22:10Z — containment complete, gates deployed (`52b2c82`):**
 - Cross-venue coherence + FX party-identity gates live in the auto-validator:
