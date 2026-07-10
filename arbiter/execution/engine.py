@@ -635,6 +635,21 @@ class ExecutionEngine:
             self._submit_poll_timeout_s = 10.0
         self._submit_poll_timeout_s = max(0.0, self._submit_poll_timeout_s)
         self._submit_poll_interval_s = 0.5
+        # ForecastEx fills always confirm on the first ~0.5s poll (live:
+        # 100/100 fills confirmed sub-second). A failed FX secondary should
+        # not leave the primary naked for the full kalshi window — a tighter
+        # FX-scoped timeout shrinks the naked window (live 2026-07-10:
+        # ARB-000941's kalshi YES sat naked ~64s while FX retries burned the
+        # 15s-per-attempt poll). Env-overridable.
+        try:
+            self._submit_poll_timeout_forecastex_s = float(
+                _os_init.getenv("SUBMIT_POLL_TIMEOUT_FORECASTEX_S", "3") or "3"
+            )
+        except (TypeError, ValueError):
+            self._submit_poll_timeout_forecastex_s = 3.0
+        self._submit_poll_timeout_forecastex_s = max(
+            0.0, self._submit_poll_timeout_forecastex_s
+        )
 
     def set_trade_gate(self, gate) -> None:
         self._trade_gate = gate
@@ -2735,6 +2750,14 @@ class ExecutionEngine:
                 )
         return order
 
+    def _poll_timeout_for_platform(self, platform: str) -> float:
+        """Post-submit poll timeout for a platform. ForecastEx gets a
+        tighter window (fills confirm sub-second) so a failed FX secondary
+        doesn't leave the primary naked for the full kalshi window."""
+        if str(platform or "").lower() == "forecastex":
+            return float(getattr(self, "_submit_poll_timeout_forecastex_s", 3.0))
+        return float(getattr(self, "_submit_poll_timeout_s", 10.0))
+
     async def _poll_submitted_to_terminal(
         self,
         adapter: "PlatformAdapter",
@@ -2752,7 +2775,9 @@ class ExecutionEngine:
         loop retries on the next interval; only a terminal status or the
         hard timeout exits the loop.
         """
-        timeout = float(getattr(self, "_submit_poll_timeout_s", 10.0))
+        timeout = self._poll_timeout_for_platform(
+            getattr(order, "platform", "") or getattr(adapter, "platform", "")
+        )
         if timeout <= 0:
             return order
         import inspect as _inspect
@@ -2772,11 +2797,13 @@ class ExecutionEngine:
             OrderStatus.FAILED,
             OrderStatus.ABORTED,
         }
-        elapsed = 0.0
+        # Bound on WALL-CLOCK time, not sum-of-sleeps: get_order RTT is
+        # ~one interval, so accumulating only the sleep made a 10s timeout
+        # run ~15-17s wall (live 2026-07-10), extending the naked window.
+        deadline = time.monotonic() + timeout
         current = order
-        while elapsed < timeout:
+        while time.monotonic() < deadline:
             await asyncio.sleep(interval)
-            elapsed += interval
             try:
                 updated = await adapter.get_order(current)
             except Exception as exc:

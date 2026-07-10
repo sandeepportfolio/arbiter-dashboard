@@ -4531,3 +4531,60 @@ def test_risk_manager_daily_limits_roll_over_at_utc_date_change():
         assert risk._open_positions["SOME_MKT"] == 3.0
 
     asyncio.run(runner())
+
+
+def test_poll_timeout_is_shorter_for_forecastex():
+    """ForecastEx fills always confirm on the first ~0.5s poll (live: 100/100
+    fills). A failed FX secondary should NOT leave the primary naked for the
+    full 10s kalshi window — the platform-scoped timeout cuts it to ~3s
+    (SUBMIT_POLL_TIMEOUT_FORECASTEX_S)."""
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        fx = engine._poll_timeout_for_platform("forecastex")
+        kalshi = engine._poll_timeout_for_platform("kalshi")
+        assert fx < kalshi
+        assert fx <= 3.0 + 1e-9
+    asyncio.run(runner())
+
+
+def test_post_submit_poll_honors_wall_clock_not_sleep_count():
+    """The poll loop must bound on WALL-CLOCK time, not sum-of-sleeps: with
+    a slow get_order (RTT ~ interval), accumulating only the sleep made a
+    10s timeout run ~15-17s wall (live 2026-07-10), extending the naked
+    window. A get_order that itself burns ~1 interval must not double the
+    effective timeout."""
+    from arbiter.execution.engine import Order, OrderStatus
+
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        engine._submit_poll_timeout_s = 0.3
+        engine._submit_poll_timeout_forecastex_s = 0.3
+        engine._submit_poll_interval_s = 0.05
+
+        submitted = Order(
+            order_id="FX-OPEN-1", platform="forecastex", market_id="745924270",
+            canonical_id="C", side="no", price=0.49, quantity=1,
+            status=OrderStatus.SUBMITTED,
+        )
+
+        async def slow_get_order(o):
+            await asyncio.sleep(0.05)  # RTT ~ one interval
+            return submitted  # never terminal
+
+        adapter = MagicMock()
+        adapter.platform = "forecastex"
+        adapter.get_order = slow_get_order
+        adapter.cancel_order = AsyncMock(return_value=True)
+        engine.adapters = {"forecastex": adapter}
+
+        import time as _t
+        t0 = _t.monotonic()
+        await engine._poll_submitted_to_terminal(adapter, submitted, "ARB-X")
+        wall = _t.monotonic() - t0
+        # With sleep-only accounting this ran ~0.6s+ (2x). Wall-clock bound
+        # keeps it within a small margin of the 0.3s timeout.
+        assert wall < 0.5, f"poll ran {wall:.3f}s, expected <0.5s (wall-clock bound)"
+
+    asyncio.run(runner())
