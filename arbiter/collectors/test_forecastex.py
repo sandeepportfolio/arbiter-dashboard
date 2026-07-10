@@ -1565,3 +1565,48 @@ def test_circuit_breaker_invalid_env_falls_back_to_min_one(monkeypatch):
     )
     assert c.circuit.failure_threshold >= 1
     assert c.circuit.recovery_timeout >= 1
+
+
+async def test_positions_invalidates_ibkr_cache_before_reading(client):
+    """IBKR serves /portfolio/{acct}/positions/0 from a cache that goes
+    stale/empty after the first read. Live 2026-07-10: the stranded
+    reconciler saw the FX lots on cycle 1 and an empty book on every later
+    cycle, pruning real positions from the tracker (paired count flapped
+    3->1). Every read must POST the invalidate endpoint first; a failed
+    invalidate must not fail the read."""
+    calls: list[tuple] = []
+
+    async def _record(method, path, **kw):
+        calls.append((method, path))
+        if path.endswith("/positions/0"):
+            return [{"conid": 1, "position": 1.0}]
+        return {}
+
+    client.account_id = "U111"
+    client._request = _record
+
+    result = await client.positions()
+
+    assert result == [{"conid": 1, "position": 1.0}]
+    inv = ("POST", "/portfolio/U111/positions/invalidate")
+    read = ("GET", "/portfolio/U111/positions/0")
+    assert inv in calls and read in calls
+    assert calls.index(inv) < calls.index(read)
+
+
+async def test_positions_read_survives_invalidate_failure(client):
+    calls: list[tuple] = []
+
+    async def _record(method, path, **kw):
+        calls.append((method, path))
+        if "invalidate" in path:
+            raise RuntimeError("akamai 411")
+        if path.endswith("/positions/0"):
+            return [{"conid": 2, "position": 3.0}]
+        return {}
+
+    client.account_id = "U111"
+    client._request = _record
+
+    result = await client.positions()
+    assert result == [{"conid": 2, "position": 3.0}]

@@ -321,6 +321,19 @@ class ForecastExClient:
     async def positions(self) -> list[dict]:
         if not self.account_id:
             return []
+        # IBKR serves this endpoint from a cache that goes stale/empty after
+        # the first read. Live 2026-07-10: the stranded reconciler saw the
+        # FX lots on cycle 1 and an empty book on every later cycle, pruning
+        # real positions from its tracker. Invalidate before every read;
+        # best-effort — a failed invalidate must not fail the read.
+        try:
+            await self._request(
+                "POST",
+                f"/portfolio/{self.account_id}/positions/invalidate",
+                json_body={},
+            )
+        except Exception:  # noqa: BLE001
+            pass
         payload = await self._request(
             "GET", f"/portfolio/{self.account_id}/positions/0",
         )
