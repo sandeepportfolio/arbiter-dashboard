@@ -2416,6 +2416,7 @@ class ExecutionEngine:
                 f"{arb_id}-RQ{attempt}", secondary_platform, secondary_market,
                 canonical_id, secondary_side, ceiling, qty,
                 use_ioc=True,
+                persist_arb_id=arb_id,
             )
             if retry.status in {OrderStatus.FILLED, OrderStatus.PARTIAL}:
                 logger.info(
@@ -2455,6 +2456,7 @@ class ExecutionEngine:
             f"{arb_id}-F3", secondary_platform, secondary_market,
             canonical_id, secondary_side, max_affordable_price, qty,
             use_ioc=False,  # FOK
+            persist_arb_id=arb_id,
         )
         if order3.status in {OrderStatus.FILLED}:
             logger.info(
@@ -2495,6 +2497,7 @@ class ExecutionEngine:
         use_ioc: bool = False,
         atomic_arb_stub_opp: Optional["ArbitrageOpportunity"] = None,
         atomic_arb_stub_net_edge: Optional[float] = None,
+        persist_arb_id: Optional[str] = None,
     ) -> Order:
         """Dispatch a leg through self.adapters[platform], wrapped in asyncio.wait_for (EXEC-05).
 
@@ -2506,6 +2509,16 @@ class ExecutionEngine:
         a stale book on the secondary doesn't trigger an FOK reject and
         leave the primary naked — IOC accepts a partial fill and the engine
         unwinds the unfilled excess on the primary.
+
+        ``persist_arb_id``: the PARENT arb row to key DB writes to when
+        ``arb_id`` is a derived attempt id (requote ``-RQ{n}`` / FOK ``-F3``
+        retries pass a suffixed id so each attempt gets a fresh venue-side
+        idempotency key). ``execution_orders.arb_id`` is an FK into
+        ``execution_arbs`` — persisting the derived id has no parent row and
+        the write fails, arming the kill switch mid-execution (live incident
+        ARB-000919, 2026-07-06: RQ1's FK violation aborted every later
+        fallback plus the auto-unwind). Defaults to ``arb_id`` (a real
+        parent) at all non-retry call sites.
         """
         adapter = self.adapters.get(platform)
         if adapter is None:
@@ -2670,11 +2683,12 @@ class ExecutionEngine:
         # The atomic variant collapses that window to zero: the stub cannot
         # exist without its first leg.
         if self.store is not None:
+            db_arb_id = persist_arb_id or arb_id
             try:
                 client_order_id = self._derive_client_order_id(order)
                 if atomic_arb_stub_opp is not None:
                     await self.store.record_arb_stub_with_leg(
-                        arb_id=arb_id,
+                        arb_id=db_arb_id,
                         canonical_id=canonical_id,
                         first_leg=order,
                         opportunity=atomic_arb_stub_opp,
@@ -2683,12 +2697,12 @@ class ExecutionEngine:
                     )
                 else:
                     await self.store.upsert_order(
-                        order, arb_id=arb_id, client_order_id=client_order_id,
+                        order, arb_id=db_arb_id, client_order_id=client_order_id,
                     )
             except Exception as exc:
                 await self._handle_db_failure(
                     op="record_arb_stub_with_leg" if atomic_arb_stub_opp is not None else "upsert_order",
-                    arb_id=arb_id,
+                    arb_id=db_arb_id,
                     canonical_id=canonical_id,
                     exc=exc,
                 )

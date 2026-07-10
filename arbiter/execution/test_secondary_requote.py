@@ -94,14 +94,18 @@ def _adapter(place_results: List[Order], walks: List[tuple],
     adapter.platform = "polymarket"
     ioc_calls: List[float] = []
     fok_calls: List[float] = []
+    ioc_arb_ids: List[str] = []
+    fok_arb_ids: List[str] = []
     walk_state = {"i": 0}
 
     async def _ioc(arb_id, market_id, canonical_id, side, price, qty, **kw):
         ioc_calls.append(price)
+        ioc_arb_ids.append(arb_id)
         return place_results.pop(0) if place_results else _order(OrderStatus.FAILED)
 
     async def _fok(arb_id, market_id, canonical_id, side, price, qty, **kw):
         fok_calls.append(price)
+        fok_arb_ids.append(arb_id)
         return fok_result or _order(OrderStatus.FAILED, order_id="SEC-FOK")
 
     async def _walk(market_id, side, qty):
@@ -115,6 +119,8 @@ def _adapter(place_results: List[Order], walks: List[tuple],
     adapter.cancel_order = AsyncMock(return_value=True)
     adapter._ioc_calls = ioc_calls
     adapter._fok_calls = fok_calls
+    adapter._ioc_arb_ids = ioc_arb_ids
+    adapter._fok_arb_ids = fok_arb_ids
     return adapter
 
 
@@ -289,5 +295,55 @@ def test_no_breakeven_tier_when_not_provided():
         order = await _run_fallbacks(engine, adapter)
         assert len(adapter._ioc_calls) == 1  # attempt 1 only
         assert order.status == OrderStatus.FAILED
+
+    asyncio.run(runner())
+
+
+# ─── Persistence: retries must be keyed to the PARENT arb (FK) ───────────
+
+
+def test_requote_and_fok_retries_persist_under_parent_arb_id():
+    """Regression pin for the live 2026-07-06 FK violation (ARB-000919).
+
+    The RQ1 retry was persisted with arb_id="ARB-000919-RQ1" — a derived id
+    with no parent row in ``execution_arbs`` — so ``upsert_order`` failed the
+    ``execution_orders_arb_id_fkey`` constraint, ``_handle_db_failure`` armed
+    the kill switch mid-execution, and every later fallback plus the
+    auto-unwind was aborted (naked primary, half-recorded arb).
+
+    Contract: retry attempts keep the DERIVED id on the venue side (a fresh
+    idempotency key per attempt so venues don't dedupe the retry) but every
+    DB write is keyed to the PARENT arb_id.
+    """
+    async def runner():
+        engine = _make_engine()
+        engine._secondary_requote_attempts = 2
+        store = MagicMock()
+        store.upsert_order = AsyncMock()
+        engine.store = store
+        adapter = _adapter(
+            place_results=[
+                _order(OrderStatus.FAILED),   # attempt 1 (IOC at walked)
+                _order(OrderStatus.FAILED),   # requote 1
+                _order(OrderStatus.FAILED),   # requote 2
+            ],
+            walks=[(True, 0.49)],             # affordable on every re-walk
+        )
+        order = await _run_fallbacks(engine, adapter)
+        assert order.status == OrderStatus.FAILED
+
+        # Venue side: each retry must keep a UNIQUE derived id (fresh
+        # idempotency key per attempt) — do not regress this.
+        assert adapter._ioc_arb_ids == ["ARB-RQ", "ARB-RQ-RQ1", "ARB-RQ-RQ2"]
+        assert adapter._fok_arb_ids == ["ARB-RQ-F3"]
+
+        # Store side: every persisted row must reference the PARENT arb —
+        # execution_orders.arb_id is an FK into execution_arbs and the
+        # derived ids have no parent row.
+        persisted = [
+            c.kwargs.get("arb_id") for c in store.upsert_order.await_args_list
+        ]
+        assert len(persisted) == 4, persisted  # attempt1 + RQ1 + RQ2 + FOK
+        assert set(persisted) == {"ARB-RQ"}, persisted
 
     asyncio.run(runner())
