@@ -426,6 +426,75 @@ async def test_list_open_orders_by_client_id_returns_empty():
     assert await adapter.list_open_orders_by_client_id("ARB-") == []
 
 
+async def test_resolve_sibling_uses_verified_adjacent_fallback_when_children_empty():
+    """SENM live quirk: secdef children lookup can fail/empty while the YES/NO
+    conids are adjacent. Accept the neighbor only after contract-info proof."""
+    client = _mock_client()
+
+    async def get_contract_info(conid):
+        if str(conid) == "773659815":
+            return {
+                "underlying_con_id": 745923952,
+                "strike": "2.0",
+                "right": "CALL",
+                "exchange": "FORECASTX",
+            }
+        if str(conid) == "773659816":
+            return {
+                "underlying_con_id": 745923952,
+                "strike": "2.0",
+                "right": "PUT",
+                "exchange": "FORECASTX",
+            }
+        return {}
+
+    client.get_contract_info = AsyncMock(side_effect=get_contract_info)
+    client.resolve_event_children = AsyncMock(return_value=[])
+    adapter = ForecastExAdapter(client=client)
+
+    sibling = await adapter._resolve_sibling_conid("773659815")
+
+    assert sibling == "773659816"
+    # Reverse cache is primed so close paths don't re-query.
+    assert adapter._sibling_cache["773659816"] == "773659815"
+
+
+async def test_resolve_sibling_rejects_unverified_adjacent_neighbor():
+    client = _mock_client()
+
+    async def get_contract_info(conid):
+        if str(conid) == "100":
+            return {
+                "underlying_con_id": 1,
+                "strike": "2.0",
+                "right": "CALL",
+                "exchange": "FORECASTX",
+            }
+        if str(conid) == "101":
+            # Same right, not the opposite sibling — must be rejected.
+            return {
+                "underlying_con_id": 1,
+                "strike": "2.0",
+                "right": "CALL",
+                "exchange": "FORECASTX",
+            }
+        if str(conid) == "99":
+            # Opposite right but wrong parent — must also be rejected.
+            return {
+                "underlying_con_id": 2,
+                "strike": "2.0",
+                "right": "PUT",
+                "exchange": "FORECASTX",
+            }
+        return {}
+
+    client.get_contract_info = AsyncMock(side_effect=get_contract_info)
+    client.resolve_event_children = AsyncMock(return_value=[])
+    adapter = ForecastExAdapter(client=client)
+
+    assert await adapter._resolve_sibling_conid("100") is None
+
+
 # ── Sell-side: side-alias acceptance ──────────────────────────────────────
 
 

@@ -420,16 +420,113 @@ class ForecastExAdapter:
                     continue
             candidate = str(child.get("conid") or "").strip()
             if candidate and candidate != conid:
-                self._sibling_cache[conid] = candidate
-                # The sibling's sibling is us — prime the reverse edge.
-                self._sibling_cache.setdefault(candidate, conid)
+                self._cache_sibling_pair(conid, candidate)
                 return candidate
+
+        # IBKR's SENM parent intermittently returns empty / 500 from
+        # secdef/strikes+info even though the verified opposite contract is
+        # adjacent (live 2026-07-06: 773659815 YES ↔ 773659816 NO). As a
+        # conservative fallback, probe nearby conids but accept a candidate
+        # ONLY when contract info proves same FORECASTX parent, same strike,
+        # and opposite right. This keeps close-exposure paths available while
+        # still failing closed on arbitrary neighbors.
+        adjacent = await self._resolve_adjacent_verified_sibling(
+            conid=conid,
+            parent=parent,
+            strike_f=strike_f,
+            want_right=want_right,
+        )
+        if adjacent:
+            self._cache_sibling_pair(conid, adjacent)
+            return adjacent
+
         self._sibling_cache[conid] = ""
         logger.warning(
             "forecastex.sibling.not_found",
             conid=conid, parent=parent, strike=strike,
         )
         return None
+
+    def _cache_sibling_pair(self, conid: str, sibling_conid: str) -> None:
+        self._sibling_cache[conid] = sibling_conid
+        # The sibling's sibling is us — prime the reverse edge.
+        self._sibling_cache.setdefault(sibling_conid, conid)
+
+    async def _resolve_adjacent_verified_sibling(
+        self,
+        *,
+        conid: str,
+        parent: Any,
+        strike_f: Optional[float],
+        want_right: tuple[str, ...],
+    ) -> Optional[str]:
+        try:
+            base = int(str(conid))
+        except (TypeError, ValueError):
+            return None
+        for offset in (1, -1, 2, -2):
+            candidate = str(base + offset)
+            if candidate == conid:
+                continue
+            try:
+                candidate_info = await self._client.get_contract_info(candidate)
+            except Exception as exc:
+                logger.debug(
+                    "forecastex.sibling.adjacent_info_failed",
+                    conid=conid, candidate=candidate, err=str(exc),
+                )
+                continue
+            if self._contract_info_is_verified_sibling(
+                candidate_info,
+                parent=parent,
+                strike_f=strike_f,
+                want_right=want_right,
+            ):
+                logger.info(
+                    "forecastex.sibling.adjacent_verified",
+                    conid=conid,
+                    sibling_conid=candidate,
+                    parent=parent,
+                    strike=strike_f,
+                )
+                return candidate
+        return None
+
+    @staticmethod
+    def _contract_info_is_verified_sibling(
+        info: Any,
+        *,
+        parent: Any,
+        strike_f: Optional[float],
+        want_right: tuple[str, ...],
+    ) -> bool:
+        if not isinstance(info, dict) or not info:
+            return False
+        candidate_parent = (
+            info.get("underlying_con_id")
+            or info.get("underlyingConid")
+            or info.get("undConid")
+            or info.get("underconid")
+        )
+        if str(candidate_parent or "") != str(parent or ""):
+            return False
+        exchange = str(
+            info.get("exchange")
+            or info.get("valid_exchanges")
+            or info.get("listingExchange")
+            or ""
+        ).upper()
+        if exchange and "FORECASTX" not in exchange:
+            return False
+        if str(info.get("right") or "").upper() not in want_right:
+            return False
+        if strike_f is not None:
+            try:
+                if abs(float(info.get("strike") or 0.0) - strike_f) > 1e-6:
+                    return False
+            except (TypeError, ValueError):
+                return False
+        return True
 
     async def _submit(
         self,
