@@ -881,3 +881,34 @@ async def test_integration_incident_persisted():
     async with store._pool.acquire() as conn:
         await conn.execute("DELETE FROM execution_incidents WHERE incident_id = $1", incident.incident_id)
     await store.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_paired_inventory_by_market_returns_filled_arb_leg_sums(mock_pool):
+    """Venue lots covered by BOTH-legs-filled arbs are hedged inventory, not
+    stranded exposure. The reconciler needs per-(platform, market_id, side)
+    filled-quantity sums restricted to arbs whose status='filled' (closed/
+    failed/recovering arbs' legs are true strands or already unwound). Live
+    2026-07-10: 100 filled arbs produced 57+43 perfectly-paired lots that the
+    pairing-blind reconciler booked as $75 'stranded exposure' with -$74
+    'unrealized' — bid-marking hedged pairs that pay $1.00 each at settle."""
+    mock_pool.conn = MockConn(fetch_response=[
+        {"platform": "kalshi", "market_id": "CONTROLS-2026-D", "side": "yes", "filled_qty": 57.0},
+        {"platform": "forecastex", "market_id": "745924270", "side": "no", "filled_qty": 57.0},
+    ])
+    store = ExecutionStore(database_url="postgres://mock/mock")
+    await store.connect()
+
+    result = await store.paired_inventory_by_market()
+
+    method, sql, _args = mock_pool.conn.calls[-1]
+    assert method == "fetch"
+    # Must join orders to arbs and restrict BOTH to filled with real qty.
+    assert "JOIN execution_arbs" in sql
+    assert "a.status = 'filled'" in sql
+    assert "o.status = 'filled'" in sql
+    assert "COALESCE(o.fill_qty, 0) > 0" in sql
+    assert result == {
+        ("kalshi", "CONTROLS-2026-D", "yes"): 57.0,
+        ("forecastex", "745924270", "no"): 57.0,
+    }

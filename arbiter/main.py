@@ -1725,6 +1725,9 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
             forecastex_client=(forecastex.client if forecastex is not None else None),
             price_store=price_store,
             notifier=monitor.notifier if monitor is not None else None,
+            # Paired-inventory truth: venue lots hedged by filled arbs are
+            # tracked as paired_hold, never as stranded exposure.
+            store=store,
         )
         # Stash on the API so /api/system can render the latest
         # snapshot without re-querying the venues.

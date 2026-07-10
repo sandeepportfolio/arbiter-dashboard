@@ -201,6 +201,46 @@ class ExecutionStore:
             )
         return [self._row_to_order(r) for r in rows if r is not None]
 
+    async def paired_inventory_by_market(self) -> Dict[tuple, float]:
+        """Per-(platform, market_id, side) filled-quantity sums restricted to
+        arbs whose ``status='filled'`` — i.e. venue inventory that is HEDGED
+        by the opposite leg of a completed arb and held to settlement.
+
+        The stranded reconciler nets this out of observed venue lots so
+        paired inventory is never classified as stranded exposure (live
+        2026-07-10: 100 filled arbs -> 57+43 perfectly-paired lots that a
+        pairing-blind reconciler booked as "$75 stranded / -$74 unrealized"
+        while every pair pays $1.00 at settlement). Closed / failed /
+        recovering arbs are deliberately excluded: their filled legs are
+        true strands or already unwound.
+        """
+        if self._pool is None:
+            await self.connect()
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT
+                    o.platform,
+                    o.market_id,
+                    o.side,
+                    COALESCE(SUM(o.fill_qty), 0) AS filled_qty
+                FROM execution_orders o
+                JOIN execution_arbs a ON a.arb_id = o.arb_id
+                WHERE a.status = 'filled'
+                  AND o.status = 'filled'
+                  AND COALESCE(o.fill_qty, 0) > 0
+                GROUP BY o.platform, o.market_id, o.side
+                """
+            )
+        return {
+            (
+                str(r["platform"]),
+                str(r["market_id"]),
+                str(r["side"]).lower(),
+            ): float(r["filled_qty"] or 0.0)
+            for r in rows or []
+        }
+
     async def list_half_recorded_arbs(self) -> List[Dict[str, Any]]:
         """Surface arbs that still represent (or recently represented) naked
         single-leg venue exposure that the system has not yet booked.

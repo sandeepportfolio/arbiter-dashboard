@@ -100,6 +100,19 @@ class StrandedPosition:
     # for an arb completion. Plumbed straight through to the API +
     # ops.html so the operator sees the full reasoning chain.
     mitigation_decision: Optional[Dict[str, Any]] = None
+    # Quantity of this venue lot covered by the opposite leg of a
+    # BOTH-legs-filled arb (hedged inventory held to settlement).
+    # Computed each cycle from ``ExecutionStore.paired_inventory_by_market``.
+    # Only the RESIDUAL (|qty| - paired_qty) is true stranded exposure.
+    paired_qty: float = 0.0
+
+    @property
+    def residual_qty(self) -> float:
+        return max(abs(float(self.qty or 0.0)) - float(self.paired_qty or 0.0), 0.0)
+
+    @property
+    def fully_paired(self) -> bool:
+        return abs(float(self.qty or 0.0)) > 0 and self.residual_qty <= 1e-9
 
     @property
     def cost_per_share(self) -> float:
@@ -133,6 +146,8 @@ class StrandedPosition:
             "auto_close_result": self.auto_close_result,
             "mitigation_action": self.mitigation_action,
             "mitigation_decision": self.mitigation_decision,
+            "paired_qty": round(float(self.paired_qty or 0.0), 4),
+            "residual_qty": round(self.residual_qty, 4),
         }
 
 
@@ -147,6 +162,9 @@ class ReconcilerSnapshot:
     duration_ms: float
     errors: List[str]
     auto_close_enabled: bool
+    # Lots fully covered by BOTH-legs-filled arb inventory — hedged, not
+    # stranded. Tracked for visibility but excluded from stranded_count.
+    paired_count: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -157,6 +175,7 @@ class ReconcilerSnapshot:
             "duration_ms": round(self.duration_ms, 1),
             "errors": self.errors,
             "auto_close_enabled": self.auto_close_enabled,
+            "paired_count": self.paired_count,
         }
 
 
@@ -181,10 +200,14 @@ class StrandedPositionReconciler:
         mitigation_engine: Optional[Any] = None,
         notifier: Optional[Any] = None,
         close_retry_window_seconds: float = 300.0,
+        store: Optional[Any] = None,
     ) -> None:
         self._config = config
         self._adapters = adapters or {}
         self._engine = engine
+        # ExecutionStore (optional) — source of paired-inventory truth so
+        # venue lots hedged by filled arbs are never classified stranded.
+        self._store = store
         self._forecastex_client = forecastex_client
         self._price_store = price_store
         self._market_map_provider = market_map_provider
@@ -352,6 +375,11 @@ class StrandedPositionReconciler:
                 pos.first_seen_ts = existing.first_seen_ts
                 pos.auto_close_attempted = existing.auto_close_attempted
                 pos.auto_close_result = existing.auto_close_result
+                # Carry decisions forward so a deferred cycle (incomplete
+                # venue view) keeps the last trustworthy recommendation.
+                pos.mitigation_action = existing.mitigation_action
+                pos.mitigation_decision = existing.mitigation_decision
+                pos.paired_qty = existing.paired_qty
             else:
                 new_keys.append(key)
             pos.last_seen_ts = now
@@ -367,13 +395,52 @@ class StrandedPositionReconciler:
             if key not in observed:
                 del self._tracked[key]
 
+        # ── Paired-inventory netting (2026-07-10) ─────────────────────────
+        # Net BOTH-legs-filled arb inventory out of every venue lot before
+        # anything classifies or decides. 100 filled arbs left perfectly
+        # hedged lots (57 K-YES ↔ 57 FX-NO etc.) that a pairing-blind pass
+        # booked as "$75 stranded / -$74 unrealized" and — under an FX
+        # outage — tried to COMPLETE_ARB (buying the FX leg AGAIN).
+        paired_inventory = await self._load_paired_inventory()
+        for pos in self._tracked.values():
+            pos.paired_qty = self._covered_qty(pos, paired_inventory)
+
+        # A failed venue fetch means the cross-venue view is incomplete:
+        # decisions computed from it are untrustworthy. Defer classify +
+        # mitigation this cycle (previous decisions were carried forward in
+        # the merge); incident emission below keeps operator visibility.
+        decisions_deferred = bool(failed_platforms)
+        if decisions_deferred:
+            logger.warning(
+                "stranded_reconciler.decisions_deferred_incomplete_view",
+                failed_platforms=sorted(failed_platforms),
+            )
+
         # Refresh classification on EVERY position EVERY cycle so the
         # ops UI shows the current recommendation even when auto-close
         # is OFF (operator observation mode). Idempotent — pure read
-        # plus dict assignment.
+        # plus dict assignment. Fully-paired lots get the terminal
+        # ``paired_hold`` label; partially-paired lots are classified on
+        # their RESIDUAL view only.
         for pos in list(self._tracked.values()):
+            if decisions_deferred:
+                break
+            if pos.fully_paired:
+                pos.mitigation_action = "paired_hold"
+                pos.mitigation_decision = {
+                    "action": "PAIRED_HOLD",
+                    "autonomous_ok": False,
+                    "rationale": (
+                        f"{pos.paired_qty:g} contracts hedged by the opposite "
+                        "leg of filled arb(s); pair pays $1.00 at settlement. "
+                        "No action — closing either leg breaks the hedge."
+                    ),
+                }
+                continue
             try:
-                pos.mitigation_action = self.classify_action(pos)
+                pos.mitigation_action = self.classify_action(
+                    self._residual_view(pos)
+                )
             except Exception as exc:
                 logger.debug(
                     "stranded_reconciler.classify_failed",
@@ -385,11 +452,21 @@ class StrandedPositionReconciler:
         # whether auto-close is enabled. Engine output sets the
         # mitigation_action label too (overriding the legacy classify
         # output) so the action badge matches the engine's decision.
-        if self._mitigation_engine is not None:
+        # Fully-paired lots are skipped (decision set above); partial
+        # lots are decided on the residual view so the engine can never
+        # recommend re-buying the hedged portion.
+        if self._mitigation_engine is not None and not decisions_deferred:
             for pos in list(self._tracked.values()):
+                if pos.fully_paired:
+                    continue
                 try:
-                    decision = await self._mitigation_engine.decide(pos)
+                    decision = await self._mitigation_engine.decide(
+                        self._residual_view(pos)
+                    )
                     pos.mitigation_decision = decision.to_dict()
+                    if pos.paired_qty > 0:
+                        pos.mitigation_decision["residual_qty"] = pos.residual_qty
+                        pos.mitigation_decision["paired_qty"] = pos.paired_qty
                     # Map engine action → legacy action label so the
                     # existing ops UI badge keeps working.
                     pos.mitigation_action = decision.action.lower()
@@ -411,6 +488,14 @@ class StrandedPositionReconciler:
         # 25 alerts → ~2 alerts.
         for key in new_keys:
             pos = self._tracked[key]
+            if pos.fully_paired:
+                # Hedged inventory from filled arbs — not a strand, no alert.
+                logger.info(
+                    "stranded_reconciler.paired_hold",
+                    platform=pos.platform, market_id=pos.market_id,
+                    paired_qty=pos.paired_qty,
+                )
+                continue
             dec = pos.mitigation_decision or {}
             action_upper = str(dec.get("action") or "").upper()
             autonomous_ok = bool(dec.get("autonomous_ok"))
@@ -438,9 +523,17 @@ class StrandedPositionReconciler:
         # Auto-mitigation pass — uses the engine's decision when
         # auto_close is enabled. Only autonomous_ok decisions execute
         # silently; the rest leave an incident for operator review.
-        if self._auto_close:
+        if self._auto_close and not decisions_deferred:
             for pos in list(self._tracked.values()):
                 key = (pos.platform, pos.market_id)
+                # Never auto-act on a lot that is (even partially) hedged
+                # by filled-arb inventory: execution helpers act on the
+                # FULL lot quantity, so acting here would break the hedge
+                # or double a leg. Partially-paired lots require operator
+                # judgment until residual-quantity execution exists.
+                if pos.paired_qty > 0:
+                    pos.auto_close_result = "skipped: paired inventory"
+                    continue
                 # Active-arb safety gate: never touch a position whose
                 # venue + market_id matches a leg of an in-flight
                 # ArbExecution. Closing it underneath the live executor
@@ -468,25 +561,95 @@ class StrandedPositionReconciler:
                     await self._maybe_auto_close(pos)
 
         duration_ms = (time.monotonic() - t0) * 1000.0
+        paired_count = sum(1 for p in self._tracked.values() if p.fully_paired)
+        stranded_count = sum(
+            1 for p in self._tracked.values() if not p.fully_paired
+        )
         snapshot = ReconcilerSnapshot(
             timestamp=now,
             cycle_count=self._cycle_count,
-            stranded_count=len(self._tracked),
+            stranded_count=stranded_count,
             stranded=[p.to_dict() for p in self._tracked.values()],
             duration_ms=duration_ms,
             errors=errors,
             auto_close_enabled=self._auto_close,
+            paired_count=paired_count,
         )
         self._last_snapshot = snapshot
         self._history.append(snapshot)
         logger.info(
             "stranded_reconciler.cycle_complete",
             cycle=self._cycle_count,
-            stranded=len(self._tracked),
+            stranded=stranded_count,
+            paired=paired_count,
             new=len(new_keys),
             duration_ms=round(duration_ms, 1),
         )
         return snapshot
+
+    # ─── paired-inventory helpers ─────────────────────────────────────────
+
+    async def _load_paired_inventory(self) -> Dict[tuple, float]:
+        """Load per-(platform, market_id, side) filled quantities of arbs
+        whose status='filled'. Empty dict on any failure — fail SAFE by
+        over-reporting strands, never by hiding exposure."""
+        store = self._store
+        loader = getattr(store, "paired_inventory_by_market", None) if store else None
+        if loader is None:
+            return {}
+        try:
+            return dict(await loader() or {})
+        except Exception as exc:
+            logger.warning(
+                "stranded_reconciler.paired_inventory_load_failed", err=str(exc),
+            )
+            return {}
+
+    @staticmethod
+    def _covered_qty(pos: StrandedPosition, inventory: Dict[tuple, float]) -> float:
+        """Quantity of this venue lot hedged by filled-arb inventory.
+
+        Kalshi/Polymarket lots are SIGNED net positions on one market_id
+        (long-YES positive, long-NO negative), so paired 'yes' fills net
+        against positive lots and 'no' fills against negative ones.
+        ForecastEx lots are per-conid LONGS (YES and NO are sibling conids;
+        the arb-semantic side lives on the order), so every filled buy of
+        the conid hedges the long."""
+        if not inventory:
+            return 0.0
+        platform = str(pos.platform or "").lower()
+        market_id = str(pos.market_id or "")
+        yes_q = float(inventory.get((platform, market_id, "yes"), 0.0) or 0.0)
+        no_q = float(inventory.get((platform, market_id, "no"), 0.0) or 0.0)
+        qty = float(pos.qty or 0.0)
+        if qty == 0.0:
+            return 0.0
+        if platform == "forecastex":
+            expected_long = yes_q + no_q
+            return min(abs(qty), expected_long) if qty > 0 else 0.0
+        expected_signed = yes_q - no_q
+        if expected_signed == 0.0 or (expected_signed > 0) != (qty > 0):
+            return 0.0
+        return min(abs(qty), abs(expected_signed))
+
+    @staticmethod
+    def _residual_view(pos: StrandedPosition) -> StrandedPosition:
+        """Shallow copy scaled to the UNHEDGED residual, for classify /
+        mitigation. Deciding on the full lot is how COMPLETE_ARB doubles
+        already-paired legs."""
+        total = abs(float(pos.qty or 0.0))
+        residual = pos.residual_qty
+        if residual <= 0 or total <= 0 or residual >= total:
+            return pos
+        import copy as _copy
+        frac = residual / total
+        view = _copy.copy(pos)
+        view.qty = residual if float(pos.qty) > 0 else -residual
+        view.cost_basis_usd = float(pos.cost_basis_usd or 0.0) * frac
+        view.mtm_usd = float(pos.mtm_usd or 0.0) * frac
+        view.unrealized_usd = float(pos.unrealized_usd or 0.0) * frac
+        view.paired_qty = 0.0
+        return view
 
     # ─── venue fetchers ───────────────────────────────────────────────────
 
@@ -1474,7 +1637,7 @@ class StrandedPositionReconciler:
 def reconciler_from_env(
     *, config, adapters, engine,
     forecastex_client=None, price_store=None, market_map_provider=None,
-    notifier=None,
+    notifier=None, store=None,
 ) -> StrandedPositionReconciler:
     """Build a reconciler with config sourced from env vars.
 
@@ -1525,6 +1688,7 @@ def reconciler_from_env(
         forecastex_client=forecastex_client,
         price_store=price_store,
         market_map_provider=market_map_provider,
+        store=store,
         interval_s=interval,
         auto_close=auto_close,
         max_auto_close_notional_usd=max_usd,

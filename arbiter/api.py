@@ -2556,11 +2556,25 @@ class ArbiterAPI:
         if isinstance(tracked, dict) and tracked:
             for pos in tracked.values():
                 stranded_count += 1
-                stranded_cost += abs(float(getattr(pos, "cost_basis_usd", 0.0) or 0.0))
-                stranded_mtm += float(getattr(pos, "mtm_usd", 0.0) or 0.0)
+                qty_abs = abs(float(getattr(pos, "qty", 0.0) or 0.0))
+                paired_qty = float(getattr(pos, "paired_qty", 0.0) or 0.0)
+                cost = abs(float(getattr(pos, "cost_basis_usd", 0.0) or 0.0))
+                mtm = float(getattr(pos, "mtm_usd", 0.0) or 0.0)
+                # Full cost basis is deployed capital either way.
+                stranded_cost += cost
+                if qty_abs > 0 and paired_qty > 0:
+                    # Paired portion: each leg of a hedged pair carries
+                    # $0.50/contract of guaranteed settlement value (the
+                    # two legs together always pay exactly $1.00/pair),
+                    # regardless of what the thin-book bid marks it at.
+                    residual_frac = max(qty_abs - paired_qty, 0.0) / qty_abs
+                    stranded_mtm += paired_qty * 0.50 + mtm * residual_frac
+                else:
+                    stranded_mtm += mtm
         deployed_capital += stranded_cost
         # MTM on the venue is the best estimate of what the stranded
-        # cost basis will return at settlement (or sooner if auto-closed).
+        # cost basis will return at settlement (or sooner if auto-closed);
+        # paired portions use their guaranteed settlement value instead.
         expected_settlement += stranded_mtm
         open_positions += stranded_count
 
@@ -3080,13 +3094,32 @@ class ArbiterAPI:
         stranded_exposure = 0.0
         stranded_unrealized = 0.0
         stranded_count = 0
+        paired_count = 0
+        paired_qty_total = 0.0
         recon = getattr(self, "stranded_reconciler", None)
         tracked = getattr(recon, "tracked", None) if recon is not None else None
         if isinstance(tracked, dict) and tracked:
             for pos in tracked.values():
+                # Venue lots hedged by BOTH-legs-filled arbs are paired
+                # inventory (the pair pays $1.00 at settlement) — only the
+                # unhedged residual is stranded exposure. Bid-marking the
+                # hedged portion produced the misleading "-$74 unrealized".
+                qty_abs = abs(float(getattr(pos, "qty", 0.0) or 0.0))
+                paired_qty = float(getattr(pos, "paired_qty", 0.0) or 0.0)
+                paired_qty_total += paired_qty
+                residual_frac = (
+                    max(qty_abs - paired_qty, 0.0) / qty_abs if qty_abs > 0 else 1.0
+                )
+                if residual_frac <= 1e-9:
+                    paired_count += 1
+                    continue
                 stranded_count += 1
-                stranded_exposure += abs(float(getattr(pos, "cost_basis_usd", 0.0) or 0.0))
-                stranded_unrealized += float(getattr(pos, "unrealized_usd", 0.0) or 0.0)
+                stranded_exposure += residual_frac * abs(
+                    float(getattr(pos, "cost_basis_usd", 0.0) or 0.0)
+                )
+                stranded_unrealized += residual_frac * float(
+                    getattr(pos, "unrealized_usd", 0.0) or 0.0
+                )
         # ``open_positions`` is the operator-visible "what's on the
         # venue right now" count. Engine-tracked open arbs plus any
         # stranded lots the reconciler is babysitting.
@@ -3116,7 +3149,9 @@ class ArbiterAPI:
             "stranded_count": stranded_count,
             "stranded_exposure": round(stranded_exposure, 4),
             "stranded_unrealized_pnl": round(stranded_unrealized, 4),
-            "open_positions": engine_open + stranded_count,
+            "paired_lot_count": paired_count,
+            "paired_qty_total": round(paired_qty_total, 4),
+            "open_positions": engine_open + stranded_count + paired_count,
             "engine_open_positions": engine_open,
             "dry_run": self.config.scanner.dry_run,
             "drift_guard_active": True,

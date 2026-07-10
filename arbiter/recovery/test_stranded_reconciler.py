@@ -1026,3 +1026,178 @@ async def test_execute_complete_arb_flips_to_hold_when_gap_is_hopeless():
     await rec._execute_complete_arb(pos, decision)
     assert adapter.place_fok.await_count == 0
     assert pos.mitigation_action == "hold_to_settle"
+
+
+# ─── Paired-inventory awareness (2026-07-10) ──────────────────────────────
+#
+# Live failure this guards: 100 filled arbs produced perfectly-hedged venue
+# lots (57 kalshi YES <-> 57 FX NO, 43 FX YES <-> 43 kalshi NO) that the
+# pairing-blind reconciler tracked as "$75 stranded exposure / -$74
+# unrealized" and — during an FX outage — recommended COMPLETE_ARB for an
+# already-paired Kalshi leg (buying the FX leg AGAIN = doubled exposure).
+
+
+def _paired_store(mapping):
+    store = MagicMock()
+    store.paired_inventory_by_market = AsyncMock(return_value=mapping)
+    return store
+
+
+async def test_fully_paired_lot_is_not_stranded_and_emits_no_incident():
+    engine = MagicMock()
+    engine._record_incident = AsyncMock()
+    store = _paired_store({("kalshi", "CONTROLS-2026-D", "yes"): 57.0})
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), engine=engine, store=store,
+    )
+    rec._fetch_kalshi_positions = AsyncMock(return_value=[
+        _stub_pos(market_id="CONTROLS-2026-D", side="YES", qty=57.0),
+    ])
+    rec._fetch_polymarket_us_positions = AsyncMock(return_value=[])
+    rec._fetch_forecastex_positions = AsyncMock(return_value=[])
+
+    snapshot = await rec.run_once()
+
+    pos = rec._tracked[("kalshi", "CONTROLS-2026-D")]
+    assert pos.paired_qty == 57.0
+    assert pos.mitigation_action == "paired_hold"
+    assert snapshot.stranded_count == 0          # hedged inventory != strand
+    assert snapshot.paired_count == 1
+    assert engine._record_incident.await_count == 0
+
+
+async def test_partially_paired_lot_strands_only_the_residual():
+    """Venue lot 60 with 57 covered by filled arbs -> 3 contracts of true
+    exposure. Mitigation must see the RESIDUAL quantity, never the full lot
+    (deciding on the full lot is how COMPLETE_ARB doubles the paired legs)."""
+    engine = MagicMock()
+    engine._record_incident = AsyncMock()
+    store = _paired_store({("kalshi", "CONTROLS-2026-D", "yes"): 57.0})
+    mit = MagicMock()
+    decision = MagicMock()
+    decision.to_dict.return_value = {"action": "HOLD_TO_SETTLE", "autonomous_ok": False}
+    decision.action = "HOLD_TO_SETTLE"
+    mit.decide = AsyncMock(return_value=decision)
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), engine=engine, store=store,
+        mitigation_engine=mit,
+    )
+    rec._fetch_kalshi_positions = AsyncMock(return_value=[
+        _stub_pos(market_id="CONTROLS-2026-D", side="YES", qty=60.0,
+                  cost_basis_usd=30.0, mtm_usd=6.0),
+    ])
+    rec._fetch_polymarket_us_positions = AsyncMock(return_value=[])
+    rec._fetch_forecastex_positions = AsyncMock(return_value=[])
+
+    snapshot = await rec.run_once()
+
+    pos = rec._tracked[("kalshi", "CONTROLS-2026-D")]
+    assert pos.paired_qty == 57.0
+    assert snapshot.stranded_count == 1
+    assert snapshot.paired_count == 0
+    # Mitigation engine consulted with the residual view only.
+    assert mit.decide.await_count == 1
+    seen = mit.decide.await_args.args[0]
+    assert seen.qty == 3.0
+    assert engine._record_incident.await_count == 1
+
+
+async def test_negative_qty_no_side_lot_nets_against_no_fills():
+    """Kalshi NO inventory is a negative signed position; paired 'no' fills
+    must net against it (sign-aware)."""
+    engine = MagicMock()
+    engine._record_incident = AsyncMock()
+    store = _paired_store({("kalshi", "CONTROLS-2026-R", "no"): 43.0})
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), engine=engine, store=store,
+    )
+    rec._fetch_kalshi_positions = AsyncMock(return_value=[
+        _stub_pos(market_id="CONTROLS-2026-R", side="NO", qty=-43.0),
+    ])
+    rec._fetch_polymarket_us_positions = AsyncMock(return_value=[])
+    rec._fetch_forecastex_positions = AsyncMock(return_value=[])
+
+    snapshot = await rec.run_once()
+
+    pos = rec._tracked[("kalshi", "CONTROLS-2026-R")]
+    assert pos.paired_qty == 43.0
+    assert snapshot.stranded_count == 0
+    assert snapshot.paired_count == 1
+
+
+async def test_forecastex_conid_lot_nets_regardless_of_arb_side_label():
+    """FX venue lots are per-conid longs; the arb-semantic side ('no') lives
+    on the ORDER while the venue position is simply long that conid."""
+    engine = MagicMock()
+    engine._record_incident = AsyncMock()
+    store = _paired_store({("forecastex", "745924270", "no"): 57.0})
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), engine=engine, store=store,
+    )
+    rec._fetch_kalshi_positions = AsyncMock(return_value=[])
+    rec._fetch_polymarket_us_positions = AsyncMock(return_value=[])
+    rec._fetch_forecastex_positions = AsyncMock(return_value=[
+        _stub_pos(platform="forecastex", market_id="745924270",
+                  side="YES", qty=57.0),
+    ])
+
+    snapshot = await rec.run_once()
+
+    pos = rec._tracked[("forecastex", "745924270")]
+    assert pos.paired_qty == 57.0
+    assert snapshot.stranded_count == 0
+
+
+async def test_store_failure_falls_back_to_no_netting():
+    """Pairing info unavailable -> fail SAFE by over-reporting strands
+    (today's behavior), never by hiding exposure."""
+    engine = MagicMock()
+    engine._record_incident = AsyncMock()
+    store = MagicMock()
+    store.paired_inventory_by_market = AsyncMock(side_effect=RuntimeError("db down"))
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), engine=engine, store=store,
+    )
+    rec._fetch_kalshi_positions = AsyncMock(return_value=[
+        _stub_pos(market_id="CONTROLS-2026-D", side="YES", qty=57.0),
+    ])
+    rec._fetch_polymarket_us_positions = AsyncMock(return_value=[])
+    rec._fetch_forecastex_positions = AsyncMock(return_value=[])
+
+    snapshot = await rec.run_once()
+
+    assert snapshot.stranded_count == 1
+    assert engine._record_incident.await_count == 1
+
+
+async def test_fetch_failure_defers_mitigation_decisions_that_cycle():
+    """A failed venue positions-fetch means the cross-venue view is
+    incomplete — mitigation decisions computed from it are untrustworthy
+    (live 2026-07-10 drill: FX fetch failure -> COMPLETE_ARB recommended for
+    an already-paired leg). Defer decisions; keep visibility."""
+    engine = MagicMock()
+    engine._record_incident = AsyncMock()
+    mit = MagicMock()
+    decision = MagicMock()
+    decision.to_dict.return_value = {"action": "HOLD_TO_SETTLE", "autonomous_ok": False}
+    decision.action = "HOLD_TO_SETTLE"
+    mit.decide = AsyncMock(return_value=decision)
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), engine=engine, mitigation_engine=mit,
+    )
+    rec._fetch_kalshi_positions = AsyncMock(return_value=[
+        _stub_pos(market_id="K-NEW", qty=5.0),
+    ])
+    rec._fetch_polymarket_us_positions = AsyncMock(return_value=[])
+    rec._fetch_forecastex_positions = AsyncMock(side_effect=RuntimeError("gw down"))
+
+    await rec.run_once()
+    # Incomplete view: no mitigation decision this cycle, but the lot IS
+    # tracked and the operator IS alerted (visibility preserved).
+    assert mit.decide.await_count == 0
+    assert engine._record_incident.await_count == 1
+
+    rec._fetch_forecastex_positions = AsyncMock(return_value=[])
+    await rec.run_once()
+    # Healthy cycle: decision computed.
+    assert mit.decide.await_count == 1
