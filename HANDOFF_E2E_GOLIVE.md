@@ -1,5 +1,42 @@
 # Arbiter end-to-end go-live — HANDOFF PROMPT (2026-07-06, session 2)
 
+## ⛔ CRITICAL — 2026-07-10 21:50Z: Senate FX mappings were PARTY-SWAPPED; system halted by operator kill switch
+
+**Verified via IBKR /iserver/contract/info:** `DEM_SENATE_2026` mapped to conids
+745924267/745924270 = `SENM_1126_Republican_YES/NO`; `GOP_SENATE_2026` mapped to
+773659815/773659816 = `SENM_1126_Democratic_YES/NO`. Every executed "arb" bought TWO
+legs of the SAME long-Democrat bet. The persistent "12.5¢ edge" was phantom (comparing
+non-complementary contracts) — that is why it never closed.
+
+**Book as halted (115 filled pairs, $100.96 cost, ~+$129 / −$101 binary on Senate
+control):** kalshi CONTROLS-2026-D YES ×64 @0.4400; FX Republican_NO ×64 @0.4113;
+FX Democratic_YES ×51 @0.4698; kalshi CONTROLS-2026-R NO ×51 @0.4416. Current bids
+imply liquidation recovery ≈ $92–97 (1-lot books — slow to work).
+
+**Halt chain (all timestamps 07-10):** 21:38Z `disable_auto_trade`+`review` via API →
+**auto-validator RE-CONFIRMED the mapping** (semantic validation matches titles, cannot
+see conid party; ARB-001036/1037 filled 21:41/21:46) → 21:53Z operator KILL SWITCH armed
+→ 21:55Z both mappings set `status='rejected'` (terminal: excluded from runtime
+hydration and promotion). **Do NOT reset the kill switch until** a conid-party /
+price-coherence validation exists and the corrected mapping (DEM→773659815/816,
+GOP→745924267/270) passes it. **Do NOT re-map by hand without that validator — manual
+conid entry is the suspected origin of the swap.**
+
+**Deployed protections (bb7c8f2):** reconciler paired-inventory awareness — hedged lots
+are `paired_hold`, never mitigated/auto-closed (kills the standing autonomous
+COMPLETE_ARB that would have bought 43 MORE Democratic_YES under the $30 auto-close cap
+with `STRANDED_AUTO_CLOSE=true` live); decisions defer on venue-fetch failure; stranded
+metrics use residuals (fixed the misleading "-$74 unrealized").
+
+**Operator decision pending:** hold / liquidate / complete-hedge the $101 book.
+
+**Validation gap to fix before ANY FX mapping re-enable:** cross-venue price-coherence
+check (a true YES_A/NO_B complement pair must satisfy |yes_A + no_B − 1| ≲ spread; the
+swapped pair sat at 0.85 for days) + FX conid `local_symbol` party/semantics match
+against the canonical.
+
+---
+
 ## Latest status — 2026-07-10 session 5 (afternoon) — 100 arbs captured; daily-cap bug fixed; §4.1 evidence completed to the extent markets allow
 
 **Branch:** `fix/forecastex-live-execution`, HEAD `46c58fc`, pushed. Deployed image
