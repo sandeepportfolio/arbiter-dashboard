@@ -1,5 +1,41 @@
 # Arbiter end-to-end go-live — HANDOFF PROMPT (2026-07-06, session 2)
 
+## ✅ INCIDENT RESOLVED — 2026-07-10 23:20Z: full defense stack deployed, book de-risked
+
+**Defense-in-depth against the mapping-error class (all TDD'd + deployed):**
+1. Mapping promotion coherence gate: cross-venue same-side YES divergence >0.08 blocks
+   promotion (`arbiter/mapping/coherence.py`).
+2. FX party-identity gate: a party-tokened canonical must map to a same-party FX
+   contract (fails closed without the symbol).
+3. `[no-auto-promote]` marker now TERMINAL across ALL FOUR promotion paths:
+   apply_promotion (010f23f), auto_promote_validated (52b2c82),
+   structural_fast_promote (690f16c), and the per-cycle coherence sweep — the marker
+   was being wiped/resurrected by each ungated path (live: GOP_HOUSE re-confirmed 3×).
+4. Per-cycle coherence sweep quarantines any CONFIRMED mapping that turns incoherent.
+5. Per-trade suspicious-edge breaker: gross edge >15c routes to operator review
+   (coarse absurdity backstop; set above the ~9.5c legitimate K×P range so it never
+   blocks real arbs).
+
+**Second bad mapping caught by the new sweep:** GOP_HOUSE_2026 (0.305 polymarket-vs-FX
+divergence; FX conids party-correct, polymarket side suspect, ZERO exposure) — now
+review + marker.
+
+**All three bad mappings quarantined:** DEM_SENATE_2026 / GOP_SENATE_2026 rejected
+(conids corrected); GOP_HOUSE_2026 review + marker.
+
+**Other hardening this session:** FK persistence under parent arb_id (0b2f8f0), daily-cap
+UTC rollover (46c58fc), reconciler paired-inventory + FX-position identification
+(bb7c8f2/a5f524a/b00baa7), FX positions cache handling (e616f77/4038955), tighter FX
+post-submit poll + wall-clock timeout (3ee3fa6).
+
+**Kill switch:** ARMED pending final quarantine-persistence confirmation; then reset to
+resume trading on the coherence-validated set. NOTE: real cross-venue arb edges are rare
+(a few cents) — "hundreds of trades" come from real market inefficiencies, NOT forced
+volume; chasing volume on a persistent too-good edge is precisely what produced this
+incident, and is now blocked at four layers.
+
+---
+
 ## ⛔ CRITICAL — 2026-07-10 21:50Z: Senate FX mappings were PARTY-SWAPPED; system halted by operator kill switch
 
 **Verified via IBKR /iserver/contract/info:** `DEM_SENATE_2026` mapped to conids
