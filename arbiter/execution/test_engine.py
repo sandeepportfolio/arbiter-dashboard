@@ -4471,3 +4471,63 @@ def test_live_leg2_clean_reject_triggers_full_unwind_e2e():
         _os_test.environ.pop("EXECUTION_ORDER", None)
     else:
         _os_test.environ["EXECUTION_ORDER"] = _old_exec_order
+
+
+# ─── RiskManager: daily limits must ROLL OVER at UTC date change ──────────
+
+
+def test_risk_manager_daily_limits_roll_over_at_utc_date_change():
+    """MAX_DAILY_TRADES / MAX_DAILY_LOSS_USD are documented, named, and
+    env-configured as DAILY limits, but the counters had no rollover: after
+    100 lifetime trades the engine halted permanently (observed live
+    2026-07-10 20:04Z — 'Daily trade limit reached' with no reset path short
+    of a container restart, which silently zeroes the counter anyway). The
+    window must reset when the UTC date changes; positional exposure caps
+    are NOT daily and must be untouched."""
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)
+        risk = engine.risk
+        risk._max_daily_trades = 5
+        opp = ArbitrageOpportunity(
+            canonical_id="TEST_AUTO",
+            description="rollover probe",
+            yes_platform="kalshi",
+            yes_price=0.44,
+            yes_fee_rate=0.0,
+            yes_fee=0.0,
+            yes_market_id="K-1",
+            no_platform="polymarket",
+            no_price=0.41,
+            no_fee=0.0,
+            no_market_id="P-1",
+            gross_edge=0.15,
+            total_fees=0.0,
+            net_edge=0.05,
+            net_edge_cents=5.0,
+            suggested_qty=1,
+            timestamp=time.time(),
+            confidence=0.9,
+            status="tradable",
+        )
+
+        # Saturate the daily window: trades at cap, pnl through the floor.
+        risk._daily_trades = 5
+        risk._daily_pnl = -100.0
+        allowed, reason = risk.check_trade(opp)
+        assert not allowed
+        assert "limit" in reason.lower()
+
+        # Positional state that must SURVIVE the rollover.
+        risk._open_positions["SOME_MKT"] = 3.0
+
+        # Simulate the UTC date changing (yesterday's window recorded).
+        risk._daily_window_day = "2020-01-01"
+
+        allowed, reason = risk.check_trade(opp)
+        assert allowed, f"post-rollover check_trade denied: {reason}"
+        assert risk._daily_trades == 0
+        assert risk._daily_pnl == 0.0
+        assert risk._open_positions["SOME_MKT"] == 3.0
+
+    asyncio.run(runner())

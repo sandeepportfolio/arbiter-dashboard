@@ -344,6 +344,32 @@ class RiskManager:
         self._max_total_exposure: float = _risk_float(
             "MAX_TOTAL_EXPOSURE_USD", 500.0,
         )
+        # Daily-window anchor for MAX_DAILY_TRADES / MAX_DAILY_LOSS_USD.
+        # Without this the "daily" counters were lifetime counters: after
+        # 100 trades the engine halted permanently (live 2026-07-10 20:04Z,
+        # "Daily trade limit reached" with no reset path short of a container
+        # restart — which silently zeroed them anyway, so the lifetime
+        # reading provided no real guarantee either). The window rolls at
+        # UTC midnight; positional exposure caps are NOT daily and are
+        # deliberately untouched by the rollover.
+        self._daily_window_day: str = self._utc_day()
+
+    @staticmethod
+    def _utc_day() -> str:
+        return time.strftime("%Y-%m-%d", time.gmtime())
+
+    def _roll_daily_window(self) -> None:
+        today = self._utc_day()
+        if today != self._daily_window_day:
+            logger.warning(
+                "RiskManager: daily window rolled %s -> %s "
+                "(resetting daily_trades=%d, daily_pnl=%.4f)",
+                self._daily_window_day, today,
+                self._daily_trades, self._daily_pnl,
+            )
+            self._daily_window_day = today
+            self._daily_trades = 0
+            self._daily_pnl = 0.0
 
     def check_trade(self, opp: ArbitrageOpportunity) -> Tuple[bool, str]:
         if opp.status not in {"tradable", "manual"}:
@@ -364,6 +390,7 @@ class RiskManager:
             return False, f"Edge too thin: {opp.net_edge_cents:.2f}¢"
         if opp.quote_age_seconds > self.config.max_quote_age_seconds:
             return False, f"Stale quote: {opp.quote_age_seconds:.2f}s"
+        self._roll_daily_window()
         if self._daily_trades >= self._max_daily_trades:
             return False, "Daily trade limit reached"
         if self._daily_pnl <= self._max_daily_loss:
