@@ -39,11 +39,23 @@ untouched. TDD'd; execution suite 516 passed.
   confidence** — `POST /api/failed-trades/{id}/retry` on a restored arb always
   rejects "Low confidence: 0.00". Fix the serialization before relying on manual
   retries after a restart.
-- **Remaining datum for the literal §4.1 letter: a real K↔P execution.** No K↔P
-  opportunity has materialized since go-live (all 99 captures were FX↔K Senate
-  pairs). The executor will take one autonomously when it appears
-  (captured_arb_count increments on a K/P pair, no FX leg). That single event
-  completes §4.1(a).
+- **CAPTURED (2026-07-10 20:29:44Z) — the §4.1(b) executor-half core evidence:**
+  in drill 5's recovery tail (FX quotes freshened before the collector cleared —
+  the exact fresh-quotes/degraded-collector race the gate backstops), the
+  auto-executor attempted the live DEM_SENATE_2026 FX-leg opportunity and the
+  venue-scoped gate REJECTED it:
+  `auto_executor.skip.gate_structural canonical_id=DEM_SENATE_2026
+  reason="Collector health is degraded: forecastex"` — while the simultaneous
+  venue_pairs capture showed `kalshi:polymarket ready=true`. Note: the denial
+  comes from the executor's gate pre-check, so no `trade_gate_blocked` incident
+  is recorded (that only fires inside `execute_opportunity`); the log line is
+  the artifact. Side effect: 30-min structural cooldown on (DEM, that reason).
+- **Remaining fragment for the strictest §4.1 letter:** "auto_executor attempts
+  a K↔P opportunity during FX degradation" — unsatisfiable until a K↔P
+  opportunity exists (none has since go-live; all 99 captures were FX↔K Senate
+  pairs). Equivalent closer per §4.1(a): any real K↔P capture, any time
+  (captured_arb_count increments on a K/P pair, no new strand). The executor
+  takes it autonomously when it appears.
 
 **Merge decision: NOT merged to main, per §4.3.5's own rule** ("any gate unmet:
 push branch, leave a precise note — never claim it"). Every §4.3.4 gate is met
