@@ -229,7 +229,7 @@
     ],
     "next_safe_action": "Operator must decide whether/when to reset the kill switch after reconciling ARB-000919 critical incidents. Then rerun live readiness/opportunities and wait for either K\u2194P opportunity execution or a controlled FX-degradation drill."
   },
-  "latest_golive_session": "session_2026_07_10_golive_session5",
+  "latest_golive_session": "session_2026_07_10_party_swap_incident",
   "session_2026_07_09_golive_session4": {
     "timestamp": "2026-07-10T05:00:00Z",
     "headline": "Kill switch reset after full ARB-000919 reconciliation; FIVE live two-leg arbs captured (captured_arb_count 1->6, zero naked legs); FK persistence bug root-caused and fixed; venue-scoped readiness proven live under real FX degradation",
@@ -281,5 +281,22 @@
       "ARB-000941 live-fire: the exact 919 chain (IOC->RQ1->RQ2->F3 all failed) persisted all retries under the parent arb_id (FK fix held), smart unwind closed at -$0.01, incident auto-resolved, readiness stayed green."
     ],
     "merge_status": "HELD per 4.3.5 \u2014 all gates met except a literal K<->P execution (no K<->P opp has existed since go-live). First K<->P capture (no new strand) -> merge main."
+  },
+  "session_2026_07_10_party_swap_incident": {
+    "timestamp": "2026-07-10T22:15:00Z",
+    "headline": "CRITICAL: DEM/GOP_SENATE_2026 FX conids were party-swapped \u2014 115 'arbs' ($101) were one-way long-Democrat exposure. Halted (kill switch + rejected status), conids corrected, coherence+party gates deployed; sweep immediately caught a SECOND bad mapping (GOP_HOUSE_2026, 0.305 divergence, zero exposure).",
+    "how_it_happened": "Mapping validation was semantic-only (titles match: both contracts are 'US Senate Majority'); manual conid entry (suspected origin, /api/market-mappings/{id}/forecastex_conid override) crossed the parties; auto_promote_validated re-promoted on liveness+score alone and FORCE-SET allow_auto_trade=true, resurrecting an operator demotion within minutes.",
+    "detection": "Phantom edge signature: a 12.5c 'risk-free' edge persisting for DAYS (persistence_count 860+) \u2014 real arbs get consumed. Cross-venue implied-YES divergence 0.09-0.17 was visible the whole time.",
+    "fixes_deployed": [
+      "52b2c82 coherence gates: max_yes_divergence<=0.08 to promote, FX party-identity match (fails closed w/o symbol), [no-auto-promote] marker respected, per-cycle quarantine sweep of CONFIRMED mappings",
+      "bb7c8f2 reconciler paired-inventory netting (also isolates the ~$0.77 true naked residual on CONTROLS-2026-D)"
+    ],
+    "do_not_repeat": [
+      "NEVER trust a persistent too-good edge \u2014 check cross-venue implied-YES divergence first.",
+      "NEVER hand-enter FX conids without verifying local_symbol party/semantics via /iserver/contract/{conid}/info.",
+      "Mapping halts via status=review are NOT halts \u2014 auto-promotion resurrects them. Use rejected status or the [no-auto-promote] marker (now enforced).",
+      "grep output piped through head can silently hide matches \u2014 my STRANDED_AUTO_CLOSE misread came from that."
+    ],
+    "open": "Operator decision on the $101 long-Dem book (hold/liquidate/hedge); GOP_HOUSE_2026 incoherence root-cause (polymarket side suspect, zero exposure); kill switch stays armed until decision."
   }
 }
