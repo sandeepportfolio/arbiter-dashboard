@@ -984,3 +984,37 @@ def test_apply_promotion_respects_no_auto_promote_marker():
     assert candidate["status"] == "review"
     assert candidate["allow_auto_trade"] is False
     assert "[no-auto-promote]" in candidate["review_note"]
+
+
+@pytest.mark.asyncio
+async def test_structural_fast_promote_skips_quarantined_marker():
+    """structural_fast_promote is a THIRD promotion path (besides
+    apply_promotion and auto_promote_validated). It must also honor the
+    [no-auto-promote] quarantine marker. Live 2026-07-10 23:18Z: it
+    re-confirmed GOP_HOUSE_2026 (party-swap quarantine) and OVERWROTE the
+    marker via review_note, resurrecting auto-trade on a bad mapping."""
+    from arbiter.mapping.auto_promote import structural_fast_promote
+
+    from arbiter.mapping.market_map import MappingStatus as _MS
+    clean = _make_fast_mapping(canonical_id="FED-CLEAN", mapping_score=0.97,
+                               status=_MS.REVIEW)
+    quarantined = _make_fast_mapping(
+        canonical_id="GOP_HOUSE_2026", mapping_score=1.0, status=_MS.REVIEW,
+        review_note="[coherence-quarantine][no-auto-promote] divergence 0.3050",
+    )
+    store = MagicMock()
+
+    async def _all(*, status, limit):
+        if status == "review":
+            return [clean, quarantined]
+        return []
+
+    store.all = AsyncMock(side_effect=_all)
+    store.update_status = AsyncMock(return_value=None)
+
+    n = await structural_fast_promote(store, min_score=0.95)
+
+    promoted_ids = [c.kwargs.get("canonical_id") for c in store.update_status.await_args_list]
+    assert "GOP_HOUSE_2026" not in promoted_ids
+    assert promoted_ids == ["FED-CLEAN"]
+    assert n == 1

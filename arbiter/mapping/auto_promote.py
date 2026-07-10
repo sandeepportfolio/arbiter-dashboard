@@ -514,6 +514,18 @@ async def structural_fast_promote(
             )
             continue
         for mapping in rows:
+            # Quarantine marker is terminal for the fast path too (it is a
+            # THIRD promotion route besides apply_promotion and
+            # auto_promote_validated). Live 2026-07-10 23:18Z: this pass
+            # re-confirmed the party-swap-quarantined GOP_HOUSE_2026 and
+            # OVERWROTE the marker via review_note. Only an operator clears it.
+            marker_note = (
+                f"{getattr(mapping, 'review_note', '') or ''} "
+                f"{getattr(mapping, 'notes', '') or ''}"
+            )
+            if "[no-auto-promote]" in marker_note:
+                skipped["quarantined_marker"] = skipped.get("quarantined_marker", 0) + 1
+                continue
             verdict = evaluate_structural_promotion(mapping, min_score=min_score)
             if verdict != FAST_PROMOTE_PROMOTED:
                 skipped[verdict] = skipped.get(verdict, 0) + 1
