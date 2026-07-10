@@ -228,15 +228,46 @@ class ExecutionStore:
         so an operator can verify venue state and either book the unwind PnL
         or close the residual position.
 
+        ForecastEx pre-fix fills may persist as ``status='filled'`` with
+        ``fill_qty=0`` even though the live broker account holds the position.
+        Treat those rows as exposure-bearing using ``quantity`` as the
+        effective fill quantity; false positives are safer than letting a
+        naked venue position disappear from readiness.
+
         Returned dicts: ``arb_id``, ``canonical_id``, ``status``,
         ``created_at``, ``leg_count``, ``filled_leg_count``,
-        ``filled_notional``, ``leg_order_ids``.
+        ``zero_qty_filled_leg_count``, ``filled_notional``,
+        ``leg_order_ids``.
         """
         if self._pool is None:
             await self.connect()
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
                 """
+                WITH order_exposure AS (
+                    SELECT
+                        o.*,
+                        CASE
+                            WHEN o.status IN ('filled', 'simulated')
+                             AND COALESCE(o.fill_qty, 0) > 0
+                            THEN COALESCE(o.fill_qty, 0)
+                            WHEN o.platform = 'forecastex'
+                             AND o.status = 'filled'
+                             AND COALESCE(o.fill_qty, 0) = 0
+                             AND COALESCE(o.quantity, 0) > 0
+                            THEN COALESCE(o.quantity, 0)
+                            ELSE 0
+                        END AS effective_fill_qty,
+                        CASE
+                            WHEN o.platform = 'forecastex'
+                             AND o.status = 'filled'
+                             AND COALESCE(o.fill_qty, 0) = 0
+                             AND COALESCE(o.quantity, 0) > 0
+                            THEN 1
+                            ELSE 0
+                        END AS zero_qty_filled_leg
+                    FROM execution_orders o
+                )
                 SELECT
                     a.arb_id,
                     a.canonical_id,
@@ -245,27 +276,29 @@ class ExecutionStore:
                     COUNT(o.order_id) AS leg_count,
                     COALESCE(SUM(
                         CASE
-                            WHEN o.status IN ('filled', 'simulated')
-                             AND COALESCE(o.fill_qty, 0) > 0
+                            WHEN COALESCE(o.effective_fill_qty, 0) > 0
                             THEN 1
                             ELSE 0
                         END
                     ), 0) AS filled_leg_count,
                     COALESCE(SUM(
                         CASE
-                            WHEN NOT (
-                                o.status IN ('filled', 'simulated')
-                                AND COALESCE(o.fill_qty, 0) > 0
-                            )
+                            WHEN NOT (COALESCE(o.effective_fill_qty, 0) > 0)
                             THEN 1
                             ELSE 0
                         END
                     ), 0) AS unfilled_leg_count,
+                    COALESCE(SUM(o.zero_qty_filled_leg), 0) AS zero_qty_filled_leg_count,
                     COALESCE(SUM(
                         CASE
-                            WHEN o.status IN ('filled', 'simulated')
-                             AND COALESCE(o.fill_qty, 0) > 0
-                            THEN COALESCE(o.fill_qty, 0) * COALESCE(o.fill_price, o.price, 0)
+                            WHEN COALESCE(o.effective_fill_qty, 0) > 0
+                            THEN COALESCE(o.effective_fill_qty, 0) * (
+                                CASE
+                                    WHEN COALESCE(o.fill_price, 0) > 0
+                                    THEN COALESCE(o.fill_price, 0)
+                                    ELSE COALESCE(o.price, 0)
+                                END
+                            )
                             ELSE 0
                         END
                     ), 0) AS filled_notional,
@@ -275,7 +308,7 @@ class ExecutionStore:
                         ARRAY[]::text[]
                     ) AS leg_order_ids
                 FROM execution_arbs a
-                LEFT JOIN execution_orders o ON o.arb_id = a.arb_id
+                LEFT JOIN order_exposure o ON o.arb_id = a.arb_id
                 GROUP BY a.arb_id, a.canonical_id, a.status,
                          a.created_at, a.realized_pnl, a.unwind_pnl
                 HAVING
@@ -303,16 +336,12 @@ class ExecutionStore:
                     -- a *legitimate* unwind_pnl of 0.
                     (
                         SUM(
-                            CASE WHEN o.status IN ('filled', 'simulated')
-                                  AND COALESCE(o.fill_qty, 0) > 0
+                            CASE WHEN COALESCE(o.effective_fill_qty, 0) > 0
                                  THEN 1 ELSE 0
                             END
                         ) >= 1
                         AND SUM(
-                            CASE WHEN NOT (
-                                    o.status IN ('filled', 'simulated')
-                                    AND COALESCE(o.fill_qty, 0) > 0
-                                 )
+                            CASE WHEN NOT (COALESCE(o.effective_fill_qty, 0) > 0)
                                  THEN 1 ELSE 0
                             END
                         ) >= 1
@@ -331,6 +360,7 @@ class ExecutionStore:
                 "leg_count": int(r["leg_count"] or 0),
                 "filled_leg_count": int(r["filled_leg_count"] or 0),
                 "unfilled_leg_count": int(r["unfilled_leg_count"] or 0),
+                "zero_qty_filled_leg_count": int(r["zero_qty_filled_leg_count"] or 0),
                 "filled_notional": float(r["filled_notional"] or 0.0),
                 "leg_order_ids": list(r["leg_order_ids"] or []),
             }

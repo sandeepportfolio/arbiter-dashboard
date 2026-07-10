@@ -300,6 +300,7 @@ async def reconcile_half_recorded_arbs(
         arb_id = orphan["arb_id"]
         leg_count = int(orphan.get("leg_count") or 0)
         filled_leg_count = int(orphan.get("filled_leg_count") or 0)
+        zero_qty_filled_leg_count = int(orphan.get("zero_qty_filled_leg_count") or 0)
         filled_notional = float(orphan.get("filled_notional") or 0.0)
         leg_ids = list(orphan.get("leg_order_ids") or [])
         incident = ExecutionIncident(
@@ -319,6 +320,7 @@ async def reconcile_half_recorded_arbs(
                 "arb_id": arb_id,
                 "leg_count": leg_count,
                 "filled_leg_count": filled_leg_count,
+                "zero_qty_filled_leg_count": zero_qty_filled_leg_count,
                 "filled_notional": filled_notional,
                 "leg_order_ids": leg_ids,
                 "stuck_status": orphan.get("status"),

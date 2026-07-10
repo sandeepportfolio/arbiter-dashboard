@@ -567,6 +567,10 @@ async def test_list_half_recorded_arbs_includes_fill_exposure_fields(mock_pool):
     assert method == "fetch"
     assert "filled_leg_count" in sql
     assert "filled_notional" in sql
+    assert "zero_qty_filled_leg_count" in sql
+    assert "effective_fill_qty" in sql
+    assert "o.platform = 'forecastex'" in sql
+    assert "COALESCE(o.quantity, 0)" in sql
     assert "'closed'" in sql
     # 2026-05-22 audit: query MUST surface asymmetric-fill arbs where one
     # leg filled but the counterpart did not and unwind PnL was never booked
@@ -593,6 +597,7 @@ async def test_list_half_recorded_arbs_surfaces_asymmetric_fill(mock_pool):
             "leg_count": 2,
             "filled_leg_count": 1,
             "unfilled_leg_count": 1,
+            "zero_qty_filled_leg_count": 0,
             "filled_notional": 7.40,
             "leg_order_ids": ["k-1", "p-1"],
         }
@@ -607,7 +612,39 @@ async def test_list_half_recorded_arbs_surfaces_asymmetric_fill(mock_pool):
     assert result[0]["status"] == "failed"
     assert result[0]["filled_leg_count"] == 1
     assert result[0]["unfilled_leg_count"] == 1
+    assert result[0]["zero_qty_filled_leg_count"] == 0
     assert result[0]["filled_notional"] == 7.40
+
+
+@pytest.mark.asyncio
+async def test_list_half_recorded_arbs_surfaces_forecastex_zero_qty_filled_rows(mock_pool):
+    """ForecastEx historical rows may say filled/fill_qty=0 while the broker
+    account holds the position. Recovery must not treat those as no-exposure."""
+    mock_pool.conn = MockConn(fetch_response=[
+        {
+            "arb_id": "ARB-000841",
+            "canonical_id": "GOP_SENATE_2026",
+            "status": "failed",
+            "created_at": None,
+            "leg_count": 2,
+            "filled_leg_count": 1,
+            "unfilled_leg_count": 1,
+            "zero_qty_filled_leg_count": 1,
+            "filled_notional": 0.49,
+            "leg_order_ids": ["249901298", "ARB-000841-NO-KALSHI"],
+        }
+    ])
+    store = ExecutionStore(database_url="postgres://mock/mock")
+    await store.connect()
+
+    result = await store.list_half_recorded_arbs()
+
+    assert len(result) == 1
+    assert result[0]["arb_id"] == "ARB-000841"
+    assert result[0]["filled_leg_count"] == 1
+    assert result[0]["unfilled_leg_count"] == 1
+    assert result[0]["zero_qty_filled_leg_count"] == 1
+    assert result[0]["filled_notional"] == 0.49
 
 
 @pytest.mark.asyncio
