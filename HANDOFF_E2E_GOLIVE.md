@@ -30,6 +30,23 @@ metrics use residuals (fixed the misleading "-$74 unrealized").
 
 **Operator decision pending:** hold / liquidate / complete-hedge the $101 book.
 
+**Update 22:10Z — containment complete, gates deployed (`52b2c82`):**
+- Cross-venue coherence + FX party-identity gates live in the auto-validator:
+  promotion now requires yes-price agreement across venues (≤0.08 divergence,
+  `MAPPING_COHERENCE_MAX_DIVERGENCE`), FX party match against the canonical
+  (fails CLOSED without the contract symbol), and respects a `[no-auto-promote]`
+  marker so operator demotions can no longer be resurrected. A per-cycle sweep
+  quarantines CONFIRMED mappings that turn incoherent (review + auto-trade off).
+- Senate mapping conids CORRECTED in DB (DEM→773659815/816 Democratic,
+  GOP→745924267/270 Republican), status stays `rejected` + marker — re-enable
+  requires an operator, and must pass the new gates.
+- Kill switch remains ARMED (survives restarts via redis). Reset ONLY after the
+  operator book decision; on reset, trading resumes with the crossed markets
+  rejected and every other confirmed mapping subject to the coherence sweep.
+- Reconciler residual isolation confirmed live: kalshi CONTROLS-2026-D shows a
+  ~$0.77 residual (the 1–2 genuinely naked contracts from historical unwind
+  shortfalls) while the paired 51-lot CONTROLS-2026-R nets to `paired_hold`.
+
 **Validation gap to fix before ANY FX mapping re-enable:** cross-venue price-coherence
 check (a true YES_A/NO_B complement pair must satisfy |yes_A + no_B − 1| ≲ spread; the
 swapped pair sat at 0.85 for days) + FX conid `local_symbol` party/semantics match
