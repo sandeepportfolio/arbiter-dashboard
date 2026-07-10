@@ -1,6 +1,79 @@
 # Arbiter end-to-end go-live — HANDOFF PROMPT (2026-07-06, session 2)
 
-## Latest status — 2026-07-06 session 3 / post-rebuild validation
+## Latest status — 2026-07-09/10 session 4 — LIVE AND TRADING
+
+**Branch:** `fix/forecastex-live-execution`, HEAD `5d6d5b8`, pushed. Deployed image
+`d48ba1ae02d6` (built from clean tree at 5d6d5b8, container up 2026-07-10T04:26Z).
+
+**ARB-000919 fully reconciled — kill switch RESET, live trading resumed:**
+
+- Root cause found in `arbiter-postgres-prod` logs (2026-07-06 23:32:33 UTC):
+  `execution_orders_arb_id_fkey` violation — the requote retry RQ1 was persisted with
+  DERIVED `arb_id='ARB-000919-RQ1'` (no parent row). `_handle_db_failure` armed the kill
+  switch MID-EXECUTION; the armed switch then aborted every later fallback AND the
+  auto-unwind (`ARB-000919-RQ2-NO-DBFAIL` is the C4.2 gate's marker order, never sent).
+- **Fixed** in `0b2f8f0` (persist requote/FOK retries under the PARENT arb_id via new
+  `persist_arb_id` kwarg; venue-side derived idempotency ids unchanged; regression test
+  pins both). Any future retry rung MUST pass `persist_arb_id`.
+- Venue verified flat at IBKR (0 positions, 2× cache-busted), arb row `closed` with
+  `unwind_pnl=-0.02` booked (manual SQL reconciliation by session 3 at 01:14Z 07-07),
+  all 3 critical incidents already `resolved` in `execution_incidents`.
+- Kill switch reset 2026-07-10T04:29:30Z by `operator:sparx.sandeep@gmail.com` with full
+  evidence note (see `/api/safety/events`).
+
+**Live results after reset (all from live API/DB, image d48ba1ae02d6):**
+
+- **FIVE two-leg arbs captured autonomously, zero naked legs, zero new incidents:**
+  ARB-000920/922/923 (DEM_SENATE_2026, kalshi YES + forecastex NO) and ARB-000921/924
+  (GOP_SENATE_2026, forecastex YES + kalshi NO). `captured_arb_count` 1 → **6**;
+  `engine_exposure` $4.45 (all paired); `realized_pnl` 137.4295 → 137.9345.
+- Kalshi V2 event-order path and ForecastEx CP path (reply-confirm loop) both worked
+  repeatedly. Requote fix deployed; no db_failure recurrence (0 new since 07-06).
+- Profitability: `collecting_evidence` + Phase-5 bootstrap bypass (54/200 used).
+- Readiness: `ready_for_live_trading=true`, blocking `[]`; startup recovery logged
+  "no half-recorded arbs to reconcile" (validates `fa728e1` against prod data).
+- IBKR keepalive absorbed the 07-10 midnight-NY reset via `ssodh/init` with ZERO human
+  logins (keepalive log 21:15–21:18 PT).
+
+**§4.1 K↔P independence — status: PARTIALLY proven live; one residual:**
+
+- Live FX-degradation drill (04:35–04:47Z, container-only /etc/hosts blackhole of
+  host.docker.internal; gateway untouched): under REAL collector degradation the live
+  API showed global `ready=false` ("Collector health is degraded: forecastex") while
+  `venue_pairs["kalshi:polymarket"].ready_for_live_trading=true, blocking=[]` and both
+  FX pairs blocked with the venue-scoped reason. That is the scoped-readiness half.
+- e2e gate tests (8612c33) green on the deployed tree (in the 1011-test battery).
+- **RESIDUAL (do not claim §4.1 complete):** no live `auto_executor.skip.gate_structural`
+  denial with the venue-scoped reason was captured — warm keep-alive connections kept FX
+  quotes flowing, so degradation FLAPPED (consec_errors 0→8→0) and gate probes landed on
+  healthy instants. Satisfiable by EITHER (a) a real K↔P two-leg arb completing (any
+  time a K↔P opp fires — MLB mappings are live; the executor will take it autonomously),
+  OR (b) a drill window during a genuine full FX outage with a live K↔P opp present.
+  Merge to main is gated on this per §4.3.5.
+
+**New P1 findings (documented, not fixed — do not silently drop):**
+
+1. `realized_pnl` is booked from `opp.net_edge` at DETECTION prices (engine.py:2156),
+   not fill prices: ARB-000920 booked +$0.125 vs locked-in +$0.045 after 8¢ slippage.
+   The shadow execution audit correctly flags each case. Fixing needs care — the
+   profitability validator consumes this field.
+2. **`StrandedPositionReconciler` has NO engine-arb pairing awareness**: it admits every
+   venue lot as a "stranded position" and the mitigation engine evaluates lots as
+   singletons — it recommended `COMPLETE_ARB` for ARB-000921's already-paired Kalshi leg
+   (would DOUBLE the FX leg if executed). A failed venue positions-fetch is additionally
+   treated as "venue empty" for decisions. Safe today ONLY because `STRANDED_AUTO_CLOSE`
+   is unset (off) in prod. **DO NOT enable STRANDED_AUTO_CLOSE** until the reconciler
+   joins engine arb state and fails closed on fetch errors.
+3. `stranded_count` (now 10) includes healthy paired inventory; use one-leg-exposure
+   incidents as the naked-exposure metric, not this counter.
+
+**Validation battery (session 4):** 1011 passed / 2 skipped (execution+mapping+recovery+
+readiness+api-integration+main-discovery+operator-settings+safety), tests/ 34 passed,
+`tsc --noEmit` clean, vitest 53/53, compose config ok, `git diff --check` clean.
+
+---
+
+## Older status — 2026-07-06 session 3 / post-rebuild validation
 
 **Branch:** `fix/forecastex-live-execution`
 
