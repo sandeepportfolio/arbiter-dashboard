@@ -35,6 +35,19 @@
 - IBKR keepalive absorbed the 07-10 midnight-NY reset via `ssodh/init` with ZERO human
   logins (keepalive log 21:15–21:18 PT).
 
+**Live-fire validation of the ARB-000919 failure chain (2026-07-10 06:11Z, ARB-000941):**
+
+The exact 07-06 catastrophe sequence replayed in production on the new code: Kalshi YES
+filled, then EVERY ForecastEx NO fallback failed (IOC → RQ1 → RQ2 → F3, all
+submitted-then-cancelled — the 1-lot FX ask vanished mid-execution). This time:
+- All retry orders persisted under parent `arb_id='ARB-000941'` (5 legs in DB, ZERO FK
+  violations) — the `0b2f8f0` fix held under live fire; kill switch stayed DISARMED.
+- Smart unwind recovered the naked Kalshi YES automatically: rested at break-even $0.44
+  for 10s, then market-sold 1 @ $0.43. Net damage **−$0.01** (vs. 3 days of downtime on
+  07-06).
+- The one-leg critical incident AUTO-RESOLVED after the unwind; readiness stayed
+  `ready=true` throughout; trading continued uninterrupted.
+
 **§4.1 K↔P independence — status: PARTIALLY proven live; one residual:**
 
 - Live FX-degradation drill (04:35–04:47Z, container-only /etc/hosts blackhole of
