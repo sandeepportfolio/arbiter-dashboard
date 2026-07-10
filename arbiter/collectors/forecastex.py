@@ -334,14 +334,26 @@ class ForecastExClient:
             )
         except Exception:  # noqa: BLE001
             pass
-        payload = await self._request(
-            "GET", f"/portfolio/{self.account_id}/positions/0",
-        )
-        if isinstance(payload, dict):
-            return list(payload.get("items") or payload.get("positions") or [])
-        if isinstance(payload, list):
-            return payload
-        return []
+        # After an invalidate IBKR rebuilds the cache asynchronously — the
+        # immediately-following read returns EMPTY while it warms (observed
+        # live 2026-07-10 22:20Z). Retry briefly; a still-empty book after
+        # the retries is accepted as genuinely flat.
+        items: list[dict] = []
+        for attempt in range(3):
+            payload = await self._request(
+                "GET", f"/portfolio/{self.account_id}/positions/0",
+            )
+            if isinstance(payload, dict):
+                items = list(payload.get("items") or payload.get("positions") or [])
+            elif isinstance(payload, list):
+                items = payload
+            else:
+                items = []
+            if items:
+                return items
+            if attempt < 2:
+                await asyncio.sleep(2.0)
+        return items
 
     # ── Market data ────────────────────────────────────────────────
 

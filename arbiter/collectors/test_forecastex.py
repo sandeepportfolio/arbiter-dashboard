@@ -1610,3 +1610,37 @@ async def test_positions_read_survives_invalidate_failure(client):
 
     result = await client.positions()
     assert result == [{"conid": 2, "position": 3.0}]
+
+
+async def test_positions_retries_while_cache_warms_after_invalidate(client, monkeypatch):
+    """After POST .../positions/invalidate, IBKR rebuilds the cache
+    asynchronously — the immediately-following read returns EMPTY (live
+    2026-07-10 22:20Z: even cycle 1 lost the FX lots once per-read
+    invalidation landed). Retry the read briefly before accepting empty."""
+    sleeps: list[float] = []
+
+    async def _sleep(d):
+        sleeps.append(float(d))
+
+    monkeypatch.setattr("arbiter.collectors.forecastex.asyncio.sleep", _sleep)
+    reads = {"n": 0}
+    calls: list[tuple] = []
+
+    async def _record(method, path, **kw):
+        calls.append((method, path))
+        if path.endswith("/positions/0"):
+            reads["n"] += 1
+            if reads["n"] == 1:
+                return []          # cache still warming
+            return [{"conid": 9, "position": 2.0}]
+        return {}
+
+    client.account_id = "U111"
+    client._request = _record
+
+    result = await client.positions()
+
+    assert result == [{"conid": 9, "position": 2.0}]
+    assert reads["n"] == 2
+    assert sleeps, "expected a warm-up sleep between empty read and retry"
+    assert ("POST", "/portfolio/U111/positions/invalidate") in calls
