@@ -263,3 +263,166 @@ class TestMappingAutoValidator:
         assert "TEST_001" in s
         assert "confirm" in s
         assert "LIVE" in s
+
+
+# ── Coherence + party gates (2026-07-10 Senate party-swap incident) ────────
+
+
+def _live_check(platform, market_id, yes_price=0.0, contract_symbol=""):
+    r = PlatformCheckResult(
+        platform=platform, market_id=market_id,
+        exists=True, is_open=True, has_quotes=True, yes_price=yes_price,
+    )
+    r.contract_symbol = contract_symbol
+    return r
+
+
+def _promotable_result(canonical_id, checks):
+    vr = ValidationResult(
+        canonical_id=canonical_id, description="t", status="review",
+        recommendation=ValidationRecommendation.CONFIRM,
+        reason="2 platforms live",
+    )
+    for c in checks:
+        vr.platforms[c.platform] = c
+    return vr
+
+
+class TestCoherencePromotionGates:
+    @pytest.fixture
+    def mock_store(self):
+        store = AsyncMock()
+        store.get = AsyncMock()
+        store.update_status = AsyncMock()
+        store.refresh_runtime_cache = AsyncMock()
+        return store
+
+    @pytest.fixture
+    def validator(self, mock_store):
+        return MappingAutoValidator(
+            mapping_store=mock_store,
+            kalshi_collector=None,
+            polymarket_collector=None,
+            forecastex_client=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_auto_promote_blocked_on_incoherent_cross_venue_prices(
+        self, validator, mock_store,
+    ):
+        """Two venues quoting 'the same outcome' 17c apart = wrong contract
+        (live 2026-07-10: kalshi Dem-YES 0.44 vs FX 'yes' 0.61 which was
+        actually Republican_YES). Must never auto-promote."""
+        results = [_promotable_result("SWAPPED", [
+            _live_check("kalshi", "K1", yes_price=0.44),
+            _live_check("forecastex", "745924267", yes_price=0.61),
+        ])]
+        mock_store.get.return_value = _make_mapping(
+            canonical_id="SWAPPED", mapping_score=0.99,
+            resolution_match_status="identical",
+        )
+        promoted = await validator.auto_promote_validated(results=results)
+        assert promoted == []
+
+    @pytest.mark.asyncio
+    async def test_auto_promote_blocked_on_party_conflict(
+        self, validator, mock_store,
+    ):
+        results = [_promotable_result("DEM_SENATE_2026", [
+            _live_check("kalshi", "CONTROLS-2026-D", yes_price=0.44),
+            _live_check("forecastex", "745924267", yes_price=0.44,
+                        contract_symbol="SENM_1126_Republican_YES"),
+        ])]
+        mock_store.get.return_value = _make_mapping(
+            canonical_id="DEM_SENATE_2026",
+            aliases=("democrats senate 2026",),
+            mapping_score=0.99, resolution_match_status="identical",
+        )
+        promoted = await validator.auto_promote_validated(results=results)
+        assert promoted == []
+        # Party conflict is permanent until an operator intervenes: the
+        # quarantine marker must be written so future cycles skip it too.
+        notes = " ".join(
+            str(c.kwargs.get("review_note", "")) + " ".join(str(a) for a in c.args)
+            for c in mock_store.update_status.await_args_list
+        )
+        assert "[no-auto-promote]" in notes
+
+    @pytest.mark.asyncio
+    async def test_auto_promote_fails_closed_without_fx_symbol_on_party_market(
+        self, validator, mock_store,
+    ):
+        """Party canonical + FX leg but the contract symbol could not be
+        fetched -> cannot prove the parties match -> no promotion."""
+        results = [_promotable_result("GOP_SENATE_2026", [
+            _live_check("kalshi", "CONTROLS-2026-R", yes_price=0.56),
+            _live_check("forecastex", "745924267", yes_price=0.56,
+                        contract_symbol=""),
+        ])]
+        mock_store.get.return_value = _make_mapping(
+            canonical_id="GOP_SENATE_2026",
+            aliases=("republicans senate",),
+            mapping_score=0.99, resolution_match_status="identical",
+        )
+        promoted = await validator.auto_promote_validated(results=results)
+        assert promoted == []
+
+    @pytest.mark.asyncio
+    async def test_auto_promote_respects_no_auto_promote_marker(
+        self, validator, mock_store,
+    ):
+        """An operator/quarantine demotion must stay demoted: the
+        auto-validator re-promoted the swapped Senate mapping minutes after
+        the operator set it to review (live 21:38->21:46Z)."""
+        results = [_promotable_result("HELD", [
+            _live_check("kalshi", "K1", yes_price=0.44),
+            _live_check("polymarket", "P1", yes_price=0.45),
+        ])]
+        mock_store.get.return_value = _make_mapping(
+            canonical_id="HELD", mapping_score=0.99,
+            resolution_match_status="identical",
+            review_note="[no-auto-promote] operator quarantine",
+        )
+        promoted = await validator.auto_promote_validated(results=results)
+        assert promoted == []
+
+    @pytest.mark.asyncio
+    async def test_auto_promote_allows_coherent_matching_party_mapping(
+        self, validator, mock_store,
+    ):
+        results = [_promotable_result("DEM_SENATE_2026", [
+            _live_check("kalshi", "CONTROLS-2026-D", yes_price=0.44),
+            _live_check("forecastex", "773659815", yes_price=0.46,
+                        contract_symbol="SENM_1126_Democratic_YES"),
+        ])]
+        mock_store.get.return_value = _make_mapping(
+            canonical_id="DEM_SENATE_2026",
+            aliases=("democrats senate 2026",),
+            mapping_score=0.99, resolution_match_status="identical",
+        )
+        promoted = await validator.auto_promote_validated(results=results)
+        assert promoted == ["DEM_SENATE_2026"]
+
+    @pytest.mark.asyncio
+    async def test_confirmed_sweep_quarantines_incoherent_mapping(
+        self, validator, mock_store,
+    ):
+        """A CONFIRMED auto-trade mapping that turns incoherent must be
+        demoted to review with auto-trade off and the quarantine marker."""
+        vr = _promotable_result("SWAPPED_LIVE", [
+            _live_check("kalshi", "K1", yes_price=0.44),
+            _live_check("forecastex", "745924267", yes_price=0.61),
+        ])
+        vr.status = "confirmed"
+        mock_store.get.return_value = _make_mapping(
+            canonical_id="SWAPPED_LIVE", status=MappingStatus.CONFIRMED,
+            allow_auto_trade=True,
+            mapping_score=0.99, resolution_match_status="identical",
+        )
+        quarantined = await validator.quarantine_incoherent_confirmed([vr])
+        assert quarantined == ["SWAPPED_LIVE"]
+        call = mock_store.update_status.await_args
+        assert call.args[1] == MappingStatus.REVIEW
+        assert call.kwargs.get("allow_auto_trade") is False
+        note = call.kwargs.get("review_note", "")
+        assert "[coherence-quarantine]" in note and "[no-auto-promote]" in note

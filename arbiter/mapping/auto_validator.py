@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
+from . import coherence
 from .market_map import MarketMapping, MarketMappingStore, MappingStatus
 
 logger = logging.getLogger("arbiter.mapping.auto_validator")
@@ -63,6 +64,10 @@ class PlatformCheckResult:
     last_trade_time: Optional[datetime] = None
     error: str = ""
     check_time: float = 0.0  # seconds taken
+    # ForecastEx contract local_symbol (e.g. SENM_1126_Democratic_YES),
+    # fetched best-effort so promotion can verify party/semantics against
+    # the canonical (2026-07-10 Senate party-swap incident).
+    contract_symbol: str = ""
 
     @property
     def is_live(self) -> bool:
@@ -354,6 +359,25 @@ class MappingAutoValidator:
             result.is_open = result.has_quotes
             result.is_expired = not result.is_open and not result.has_quotes
 
+            # Best-effort identity fetch: the local_symbol carries the
+            # party/side (SENM_1126_Democratic_YES). Promotion fails closed
+            # without it on party-tokened canonicals.
+            info_getter = getattr(self.forecastex, "get_contract_info", None)
+            if callable(info_getter):
+                try:
+                    info = await info_getter(conid)
+                    if isinstance(info, dict):
+                        result.contract_symbol = str(
+                            info.get("local_symbol")
+                            or info.get("localSymbol")
+                            or ""
+                        )
+                except Exception as info_exc:  # noqa: BLE001
+                    logger.debug(
+                        "ForecastEx contract-info fetch failed for %s: %s",
+                        conid, info_exc,
+                    )
+
         except Exception as e:
             result.error = str(e)[:200]
             logger.debug("ForecastEx check failed for %s: %s", conid, e)
@@ -606,6 +630,77 @@ class MappingAutoValidator:
                 )
                 continue
 
+            # ── Coherence + identity gates (2026-07-10 party-swap) ──────
+            # Quarantine marker: an operator/coherence demotion must stay
+            # demoted — this loop re-promoted the swapped Senate mapping
+            # minutes after the operator set it to review (21:38→21:46Z).
+            held_note = f"{mapping.review_note or ''} {mapping.notes or ''}"
+            if "[no-auto-promote]" in held_note:
+                logger.info(
+                    "Skipping promotion of %s: [no-auto-promote] marker set",
+                    vr.canonical_id,
+                )
+                continue
+
+            # Cross-venue price coherence: venues quoting the same outcome
+            # must agree. The swapped-party mapping showed a persistent
+            # 0.09-0.17 divergence (a phantom "edge" that never closed).
+            platform_yes = {
+                name: check.yes_price
+                for name, check in vr.platforms.items()
+                if check.is_live and check.yes_price > 0
+            }
+            divergence, div_pair = coherence.max_yes_divergence(platform_yes)
+            if divergence > coherence.DEFAULT_MAX_YES_DIVERGENCE:
+                logger.warning(
+                    "Skipping promotion of %s: cross-venue yes divergence "
+                    "%.4f > %.4f between %s — wrong-contract mapping or an "
+                    "edge large enough to demand operator eyes",
+                    vr.canonical_id, divergence,
+                    coherence.DEFAULT_MAX_YES_DIVERGENCE, div_pair,
+                )
+                continue
+
+            # FX party/identity: a party-tokened canonical must map to an
+            # FX contract of the SAME party; missing symbol fails closed.
+            fx_check = vr.platforms.get("forecastex")
+            canonical_text = " ".join(
+                [vr.canonical_id, *(mapping.aliases or ())]
+            )
+            if fx_check is not None and fx_check.is_live and (
+                coherence.canonical_party(canonical_text) is not None
+            ):
+                symbol = getattr(fx_check, "contract_symbol", "") or ""
+                if not symbol:
+                    logger.warning(
+                        "Skipping promotion of %s: party-tokened canonical "
+                        "but ForecastEx contract symbol unavailable — "
+                        "cannot prove party match (failing closed)",
+                        vr.canonical_id,
+                    )
+                    continue
+                conflict = coherence.party_conflict(canonical_text, symbol)
+                if conflict:
+                    logger.critical(
+                        "Refusing promotion of %s and quarantining: %s",
+                        vr.canonical_id, conflict,
+                    )
+                    try:
+                        await self.store.update_status(
+                            vr.canonical_id,
+                            mapping.status,
+                            review_note=(
+                                f"[no-auto-promote] party conflict: {conflict}"
+                            ),
+                            allow_auto_trade=False,
+                        )
+                    except Exception as q_exc:  # noqa: BLE001
+                        logger.warning(
+                            "Failed to write quarantine note for %s: %s",
+                            vr.canonical_id, q_exc,
+                        )
+                    continue
+
             try:
                 note = (
                     f"[auto-validator {vr.validated_at.isoformat()[:19]}] "
@@ -634,6 +729,78 @@ class MappingAutoValidator:
             await self.store.refresh_runtime_cache()
             logger.info("Auto-promoted %d mappings", len(promoted_ids))
         return promoted_ids
+
+    async def quarantine_incoherent_confirmed(
+        self,
+        results: List[ValidationResult],
+    ) -> List[str]:
+        """Demote CONFIRMED mappings whose live cross-venue prices are
+        incoherent or whose FX contract party conflicts with the canonical.
+
+        2026-07-10: the party-swapped Senate mappings sat CONFIRMED with
+        allow_auto_trade for weeks while quoting a 0.09-0.17 cross-venue
+        divergence — 115 "arbs" of one-way exposure accumulated before an
+        audit caught it. This sweep runs every validator cycle; a violation
+        demotes to review with auto-trade off and the [no-auto-promote]
+        marker so promotion cannot resurrect it without an operator.
+        """
+        quarantined: List[str] = []
+        for vr in results:
+            platform_yes = {
+                name: check.yes_price
+                for name, check in vr.platforms.items()
+                if check.is_live and check.yes_price > 0
+            }
+            divergence, div_pair = coherence.max_yes_divergence(platform_yes)
+            reason = ""
+            if divergence > coherence.DEFAULT_MAX_YES_DIVERGENCE:
+                reason = (
+                    f"cross-venue yes divergence {divergence:.4f} > "
+                    f"{coherence.DEFAULT_MAX_YES_DIVERGENCE:.4f} between {div_pair}"
+                )
+            else:
+                fx_check = vr.platforms.get("forecastex")
+                if fx_check is not None and fx_check.is_live:
+                    mapping = await self.store.get(vr.canonical_id)
+                    canonical_text = " ".join(
+                        [vr.canonical_id, *((mapping.aliases if mapping else ()) or ())]
+                    )
+                    symbol = getattr(fx_check, "contract_symbol", "") or ""
+                    conflict = (
+                        coherence.party_conflict(canonical_text, symbol)
+                        if symbol else None
+                    )
+                    if conflict:
+                        reason = f"party conflict: {conflict}"
+            if not reason:
+                continue
+            logger.critical(
+                "COHERENCE QUARANTINE %s: %s — demoting to review, "
+                "auto-trade OFF",
+                vr.canonical_id, reason,
+            )
+            try:
+                await self.store.update_status(
+                    vr.canonical_id,
+                    MappingStatus.REVIEW,
+                    review_note=(
+                        f"[coherence-quarantine][no-auto-promote] {reason}"
+                    ),
+                    allow_auto_trade=False,
+                )
+                quarantined.append(vr.canonical_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Failed to quarantine %s: %s", vr.canonical_id, exc,
+                )
+        if quarantined:
+            try:
+                await self.store.refresh_runtime_cache()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "refresh_runtime_cache after quarantine failed: %s", exc,
+                )
+        return quarantined
 
     async def update_last_validated(
         self,
@@ -672,6 +839,12 @@ class MappingAutoValidator:
         # 2. Auto-expire dead confirmed
         expired_ids = await self.auto_expire_dead(results=confirmed_results)
 
+        # 2b. Coherence sweep — demote confirmed mappings whose live prices
+        # or FX contract identity contradict the canonical (party-swap class).
+        quarantined_ids = await self.quarantine_incoherent_confirmed(
+            confirmed_results,
+        )
+
         # 3. Validate candidates + review for promotion
         candidate_results = await self.validate_all(status="candidate")
         review_results = await self.validate_all(status="review")
@@ -696,6 +869,8 @@ class MappingAutoValidator:
             "review_checked": len(review_results),
             "promoted": len(promoted_ids),
             "promoted_ids": promoted_ids[:20],
+            "coherence_quarantined": len(quarantined_ids),
+            "coherence_quarantined_ids": quarantined_ids[:20],
             "expired_ids": expired_ids[:20],
             "stamped": stamped,
             "timestamp": datetime.now(timezone.utc).isoformat(),
