@@ -1190,3 +1190,37 @@ async def test_filled_ack_with_explicit_zero_filled_quantity_downgrades():
     )
     assert order.status == OrderStatus.CANCELLED
     assert order.fill_qty == 0
+
+
+async def test_resolve_sibling_adjacent_rejects_strike_bearing_neighbor_when_source_strike_unknown():
+    """If IBKR omits the SOURCE contract's strike, the adjacent-conid
+    fallback cannot prove same-strike. A strike-bearing neighbor (e.g. the
+    next rung of a CPI/FF ladder with the opposite right) must be REJECTED —
+    buying it would open new exposure instead of closing the position. Only
+    a candidate that is symmetrically strike-less may verify."""
+    client = _mock_client()
+
+    async def get_contract_info(conid):
+        if str(conid) == "500":
+            # Source: parent+right known, strike MISSING (flaky payload).
+            return {
+                "underlying_con_id": 9,
+                "right": "CALL",
+                "exchange": "FORECASTX",
+            }
+        if str(conid) == "501":
+            # Neighbor: opposite right, same parent, but carries a strike —
+            # could be a different ladder rung. Must not verify.
+            return {
+                "underlying_con_id": 9,
+                "strike": "3.0",
+                "right": "PUT",
+                "exchange": "FORECASTX",
+            }
+        return {}
+
+    client.get_contract_info = AsyncMock(side_effect=get_contract_info)
+    client.resolve_event_children = AsyncMock(return_value=[])
+    adapter = ForecastExAdapter(client=client)
+
+    assert await adapter._resolve_sibling_conid("500") is None

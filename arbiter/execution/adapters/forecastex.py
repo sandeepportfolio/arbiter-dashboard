@@ -526,6 +526,15 @@ class ForecastExAdapter:
                     return False
             except (TypeError, ValueError):
                 return False
+        else:
+            # Source strike unknown: same-strike cannot be proven, so only a
+            # symmetrically strike-less candidate may verify. A strike-bearing
+            # neighbor could be a different ladder rung (CPI/FF) with the
+            # opposite right — buying it on the close path would open NEW
+            # exposure instead of netting. 0.0 is a legitimate rung
+            # (e.g. FX_CPIY_*_0p0), so ANY present strike value rejects.
+            if info.get("strike") not in (None, ""):
+                return False
         return True
 
     async def _submit(
