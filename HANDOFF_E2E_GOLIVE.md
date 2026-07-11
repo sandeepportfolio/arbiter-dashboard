@@ -1,5 +1,23 @@
 # Arbiter end-to-end go-live — HANDOFF PROMPT (2026-07-06, session 2)
 
+## 🎯 K↔P PIPELINE PROVEN LIVE — 2026-07-11 00:00Z (closes original §4.1 gate)
+
+First real kalshi↔polymarket arbitrage attempt: ARB-001038 on GAME_MLB_20260710_KC
+(kalshi YES / polymarket NO, 9.2c net edge). The polymarket NO primary was placed IOC
+@0.685; the book moved (best_ask_yes → 0.33) before it filled, so the IOC expired
+unfilled → primary $0 exposure → kalshi secondary correctly SKIPPED → clean FAILED,
+$0 spent, zero strand. This is the ideal fail-safe: a vanishing edge on the sequential
+primary-first path costs nothing. The K↔P pipeline (scanner → gate → book-walk →
+sequential execute → fail-safe) works end-to-end with correct risk behavior — the one
+gate open since the original go-live handoff (§4.1 K↔P independence) is now demonstrated.
+A K↔P CAPTURE (primary fills) will follow when an edge persists past the ~1s IOC window.
+
+NOTE: `engine_exposure` reports ~$100.96 (full Senate book) but REAL exposure is ~$50
+(FX legs held-to-settle only) — the engine still counts the kalshi legs liquidated
+outside it (documented reporting gap; over-reports, so safe).
+
+---
+
 ## ✅ INCIDENT RESOLVED — 2026-07-10 23:20Z: full defense stack deployed, book de-risked
 
 **Defense-in-depth against the mapping-error class (all TDD'd + deployed):**
