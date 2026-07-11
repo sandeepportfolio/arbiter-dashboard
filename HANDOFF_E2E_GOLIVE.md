@@ -1,5 +1,49 @@
 # Arbiter end-to-end go-live — HANDOFF PROMPT (2026-07-06, session 2)
 
+## 🔬 FULL FORENSIC AUDIT + FIXES — 2026-07-11 (every alert since resume)
+
+**Every trade classified (the alert-wrong vs execution-wrong split):**
+- ARB-001030..001037 (8 Senate, filled 21:21-21:46Z): FALSE ALERTS. Phantom crossed
+  mapping — both legs long "Dems win", no hedge. Booked \$0.65 is fictional (== detection
+  net_edge, no execution_fills rows). fault=alert_wrong. (Book already de-risked/rejected.)
+- ARB-001038..001041 (4 MLB): REAL edges (7-12c net, correct K-P hedges), captured 0%.
+  Every polymarket primary IOC arrived non-marketable and expired at fill_qty=0.
+  fault=execution (latency), zero exposure every time (sequential fail-safe).
+
+**NEW live crossed mapping found + quarantined (P0):** POL_US_SENATE ...DEM and ...REP
+both confirmed+auto_trade, both pointing at FX conid 745923952 — same party-swap class,
+dormant only because the FX leg was deduped-dark. Plus a latent cascade: 179 FX-economic
+mappings (FF/CPIY/RGDP/PCEY) on shared-INDEX / null conids. ALL quarantined in DB;
+no confirmed auto-trade mapping shares a FX conid now (68 clean remain).
+
+**Guard gaps closed (f6c2392):** structural_fast_promote (3rd promotion path) had NO
+coherence/party gate — added shared-conid refusal. The coherence sweep was blind to
+dark-FX crossings (needs a live FX leg) — added DB-metadata shared-conid detection that
+quarantines regardless of live quotes. New coherence.shared_fx_conid_conflict +
+MarketMappingStore.fx_conid_owner_counts.
+
+**Execution fill-rate fixes (b24a62b) — the "make trades land" work:** root cause was
+~470-570ms pre-placement latency (price was fine — ARB-001041's limit was 2c THROUGH the
+ask and still expired). Three safe fixes, sequential primary-first design unchanged:
+1. Non-blocking tick fetch: _cached_tick did a cold ~300ms get_market_by_slug GET in the
+   order clamp (always a miss on unique game slugs) — now returns default 1c tick and
+   refreshes off-path.
+2. Buffer floor: the slippage buffer was SKIPPED when buffered net dipped under the 7c
+   DISPLAY floor, sending at the bare touch (~50% of fails) — now spends 1-2c of the
+   validated edge as long as the pair still nets >= 2c (FOK_BUFFER_MIN_NET_CENTS).
+3. Fast first poll: 500ms -> ~120ms (SUBMIT_FIRST_POLL_S) so a stale-touch expiry is
+   caught while the edge is still live and the requote loop re-fires.
+
+**ForecastEx reality (make-FX-work):** the EXECUTION path works (100+ Senate fills). The
+gap is the SURFACE: 179 economic mappings point at shared INDEX (IND) conids IBKR won't
+resolve to per-strike binaries; the only 3 tradeable OPT event conids (DEM_HOUSE etc.)
+FAIL marketdata/snapshot ~3600x/24h (FX quote feed degraded). Path to Fed/CPI trading is
+feasible via CP-API re-discovery to per-strike OPT conids BUT requires (a) fixing the FX
+snapshot feed first, (b) unique per-strike YES/NO conids, (c) TWS collector as fallback.
+Substantial project; dangerous parts quarantined, path documented. Not done this session.
+
+---
+
 ## 📊 EDGE & FX-SURFACE AUDIT — 2026-07-11 (answers "are trades profitable / where are real edges")
 
 **A — Lowering the edge floor would NOT help.** Multi-snapshot sweep of live K↔P markets:
