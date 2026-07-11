@@ -426,3 +426,49 @@ class TestCoherencePromotionGates:
         assert call.kwargs.get("allow_auto_trade") is False
         note = call.kwargs.get("review_note", "")
         assert "[coherence-quarantine]" in note and "[no-auto-promote]" in note
+
+
+class TestSharedConidSweep:
+    @pytest.fixture
+    def mock_store(self):
+        store = AsyncMock()
+        store.get = AsyncMock()
+        store.update_status = AsyncMock()
+        store.refresh_runtime_cache = AsyncMock()
+        return store
+
+    @pytest.fixture
+    def validator(self, mock_store):
+        return MappingAutoValidator(
+            mapping_store=mock_store, kalshi_collector=None,
+            polymarket_collector=None, forecastex_client=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_sweep_quarantines_dark_fx_shared_conid_via_db_metadata(
+        self, validator, mock_store,
+    ):
+        """The escape case: FX leg is DARK (not live) so live-quote divergence
+        is clean, but the FX conid is shared by another confirmed mapping.
+        The DB-metadata check must quarantine it anyway (POL_US_SENATE class)."""
+        vr = _promotable_result("POL_US_SENATE_DEM", [
+            _live_check("kalshi", "K1", yes_price=0.44),
+            _live_check("polymarket", "P1", yes_price=0.45),  # coherent, FX dark
+        ])
+        vr.status = "confirmed"
+        mock_store.get.return_value = _make_mapping(
+            canonical_id="POL_US_SENATE_DEM", status=MappingStatus.CONFIRMED,
+            allow_auto_trade=True, mapping_score=0.99,
+            resolution_match_status="identical",
+            forecastex_contract_id="745923952",
+        )
+        mock_store.fx_conid_owner_counts = AsyncMock(return_value={"745923952": 2})
+
+        quarantined = await validator.quarantine_incoherent_confirmed([vr])
+
+        assert quarantined == ["POL_US_SENATE_DEM"]
+        call = mock_store.update_status.await_args
+        assert call.args[1] == MappingStatus.REVIEW
+        assert call.kwargs.get("allow_auto_trade") is False
+        assert "[no-auto-promote]" in call.kwargs.get("review_note", "")
+        assert "745923952" in call.kwargs.get("review_note", "")

@@ -20,7 +20,44 @@ from arbiter.mapping.coherence import (
     DEFAULT_MAX_YES_DIVERGENCE,
     max_yes_divergence,
     party_conflict,
+    shared_fx_conid_conflict,
 )
+
+
+# ── Shared ForecastEx conid detection (2026-07-11 latent party-swap) ───────
+#
+# Live failure this guards: two confirmed+auto_trade canonicals
+# (POL_US_SENATE ...DEM and ...REP) both pointed at the SAME ForecastEx conid
+# 745923952 — at most one can be the correct hedge leg; the other is
+# party-swapped. It escaped the live-quote coherence check because the FX leg
+# was deduped-dark, so this DB-metadata check must catch it independent of quotes.
+
+
+def test_shared_yes_conid_is_a_conflict():
+    counts = {"745923952": 2, "111": 1}
+    c = shared_fx_conid_conflict("745923952", "", counts)
+    assert c is not None
+    assert "745923952" in c and "2" in c
+
+
+def test_shared_no_conid_is_a_conflict():
+    counts = {"999": 3}
+    assert shared_fx_conid_conflict("111", "999", counts) is not None
+
+
+def test_unique_conids_are_clean():
+    counts = {"111": 1, "222": 1}
+    assert shared_fx_conid_conflict("111", "222", counts) is None
+
+
+def test_empty_or_zero_conid_is_not_a_conflict():
+    counts = {"0": 98, "": 30}
+    assert shared_fx_conid_conflict("", "", counts) is None
+    assert shared_fx_conid_conflict("0", "0", counts) is None
+
+
+def test_missing_from_counts_is_clean():
+    assert shared_fx_conid_conflict("abc", "", {}) is None
 
 
 # ── Cross-venue YES divergence ─────────────────────────────────────────────

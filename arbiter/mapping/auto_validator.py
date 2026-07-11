@@ -744,6 +744,18 @@ class MappingAutoValidator:
         demotes to review with auto-trade off and the [no-auto-promote]
         marker so promotion cannot resurrect it without an operator.
         """
+        # Shared-conid detection uses DB metadata so it catches crossings the
+        # live-quote checks below cannot (2026-07-11: POL_US_SENATE DEM/REP
+        # shared one FX conid but the FX leg was deduped-dark, so divergence
+        # over live venues was clean and the mapping escaped for weeks).
+        owner_counts: Dict[str, int] = {}
+        _getter = getattr(self.store, "fx_conid_owner_counts", None)
+        if callable(_getter):
+            try:
+                owner_counts = dict(await _getter() or {})
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("quarantine sweep: fx_conid_owner_counts failed: %s", exc)
+
         quarantined: List[str] = []
         for vr in results:
             platform_yes = {
@@ -753,7 +765,19 @@ class MappingAutoValidator:
             }
             divergence, div_pair = coherence.max_yes_divergence(platform_yes)
             reason = ""
-            if divergence > coherence.DEFAULT_MAX_YES_DIVERGENCE:
+            if owner_counts:
+                _m = await self.store.get(vr.canonical_id)
+                if _m is not None:
+                    _cc = coherence.shared_fx_conid_conflict(
+                        getattr(_m, "forecastex_contract_id", ""),
+                        getattr(_m, "forecastex_no_contract_id", ""),
+                        owner_counts,
+                    )
+                    if _cc:
+                        reason = _cc
+            if reason:
+                pass
+            elif divergence > coherence.DEFAULT_MAX_YES_DIVERGENCE:
                 reason = (
                     f"cross-venue yes divergence {divergence:.4f} > "
                     f"{coherence.DEFAULT_MAX_YES_DIVERGENCE:.4f} between {div_pair}"

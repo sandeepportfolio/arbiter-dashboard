@@ -501,9 +501,23 @@ async def structural_fast_promote(
     startup and surfaces a healthy tradable set.
     """
     from arbiter.mapping.market_map import MappingStatus
+    from arbiter.mapping import coherence
 
     promoted = 0
     skipped: dict[str, int] = {}
+    # Shared-conid guard: a ForecastEx conid owned by >1 confirmed mapping is
+    # ambiguous (party-swap signature) — refuse to auto-trade it regardless of
+    # whether the FX leg is live (2026-07-11: POL_US_SENATE DEM/REP shared one
+    # conid and this path re-promoted both with no coherence check).
+    owner_counts: dict[str, int] = {}
+    _getter = getattr(mapping_store, "fx_conid_owner_counts", None)
+    if callable(_getter):
+        try:
+            owner_counts = dict(await _getter() or {})
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "structural_fast_promote: fx_conid_owner_counts failed: %s", exc,
+            )
     for status in ("candidate", "review"):
         try:
             rows = await mapping_store.all(status=status, limit=limit)
@@ -525,6 +539,18 @@ async def structural_fast_promote(
             )
             if "[no-auto-promote]" in marker_note:
                 skipped["quarantined_marker"] = skipped.get("quarantined_marker", 0) + 1
+                continue
+            conid_conflict = coherence.shared_fx_conid_conflict(
+                getattr(mapping, "forecastex_contract_id", ""),
+                getattr(mapping, "forecastex_no_contract_id", ""),
+                owner_counts,
+            )
+            if conid_conflict:
+                skipped["shared_fx_conid"] = skipped.get("shared_fx_conid", 0) + 1
+                logger.warning(
+                    "structural_fast_promote: refusing %s — %s",
+                    mapping.canonical_id, conid_conflict,
+                )
                 continue
             verdict = evaluate_structural_promotion(mapping, min_score=min_score)
             if verdict != FAST_PROMOTE_PROMOTED:

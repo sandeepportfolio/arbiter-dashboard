@@ -1018,3 +1018,34 @@ async def test_structural_fast_promote_skips_quarantined_marker():
     assert "GOP_HOUSE_2026" not in promoted_ids
     assert promoted_ids == ["FED-CLEAN"]
     assert n == 1
+
+
+@pytest.mark.asyncio
+async def test_structural_fast_promote_skips_shared_fx_conid():
+    """structural_fast_promote must refuse to auto-trade a mapping whose
+    ForecastEx conid is shared by another confirmed mapping (party-swap
+    signature). Live 2026-07-11: POL_US_SENATE DEM/REP shared conid
+    745923952 and this path re-promoted both to auto-trade 42x/day with no
+    coherence gate."""
+    from arbiter.mapping.auto_promote import structural_fast_promote
+
+    clean = _make_fast_mapping(canonical_id="FED-CLEAN", mapping_score=0.97,
+                               forecastex_contract_id="111")
+    from arbiter.mapping.market_map import MappingStatus as _MS
+    shared = _make_fast_mapping(canonical_id="POL_US_SENATE_DEM", mapping_score=1.0,
+                                status=_MS.REVIEW, forecastex_contract_id="745923952")
+    store = MagicMock()
+
+    async def _all(*, status, limit):
+        return [clean, shared] if status == "review" else []
+    store.all = AsyncMock(side_effect=_all)
+    store.update_status = AsyncMock(return_value=None)
+    # conid 745923952 owned by 2 confirmed mappings; 111 unique.
+    store.fx_conid_owner_counts = AsyncMock(return_value={"745923952": 2, "111": 1})
+
+    promoted = await structural_fast_promote(store, min_score=0.95)
+
+    ids = [c.kwargs.get("canonical_id") for c in store.update_status.await_args_list]
+    assert "POL_US_SENATE_DEM" not in ids
+    assert ids == ["FED-CLEAN"]
+    assert promoted == 1

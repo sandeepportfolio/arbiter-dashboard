@@ -76,6 +76,33 @@ def canonical_party(canonical_text: str) -> Optional[str]:
     return None
 
 
+def shared_fx_conid_conflict(
+    yes_conid: object,
+    no_conid: object,
+    owner_counts: Dict[str, int],
+) -> Optional[str]:
+    """Conflict when this mapping's ForecastEx conid is shared by more than
+    one confirmed mapping — at most one can be the correct hedge leg, so a
+    shared conid is the party-swap signature at the DB level (independent of
+    live quotes). Empty/``0`` conids (no FX leg) are never a conflict.
+
+    2026-07-11: POL_US_SENATE ...DEM and ...REP both pointed at conid
+    745923952; the FX leg was deduped-dark so the live-quote coherence check
+    couldn't see it. This catches that class from metadata alone.
+    """
+    for label, conid in (("YES", yes_conid), ("NO", no_conid)):
+        c = str(conid or "").strip()
+        if not c or c == "0":
+            continue
+        n = int(owner_counts.get(c, 0) or 0)
+        if n > 1:
+            return (
+                f"ForecastEx {label} conid {c} is shared by {n} confirmed "
+                "mappings — at most one can be the correct hedge leg"
+            )
+    return None
+
+
 def party_conflict(canonical_text: str, fx_local_symbol: str) -> Optional[str]:
     """Conflict description when the canonical's party contradicts the FX
     contract symbol's party; None when clean or undeterminable.

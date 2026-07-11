@@ -1258,6 +1258,35 @@ class MarketMappingStore:
         finally:
             await self._pool.release(conn)
 
+    async def fx_conid_owner_counts(self) -> Dict[str, int]:
+        """Return ``{forecastex_conid: number_of_confirmed_mappings_using_it}``
+        across both the YES (``forecastex_contract_id``) and NO
+        (``forecastex_no_contract_id``) legs of confirmed mappings.
+
+        A conid with count > 1 is shared by multiple confirmed markets — at
+        most one can be the correct hedge leg, which is the party-swap
+        signature at the DB level (2026-07-11: POL_US_SENATE DEM/REP shared
+        one conid). Promotion paths consult this to refuse auto-trade on
+        ambiguous conids independent of whether the FX leg is live-quoting.
+        """
+        conn = await self.acquire()
+        try:
+            rows = await conn.fetch(
+                """
+                SELECT forecastex_contract_id AS yc, forecastex_no_contract_id AS nc
+                FROM market_mappings WHERE status = 'confirmed'
+                """
+            )
+        finally:
+            await self._pool.release(conn)
+        counts: Dict[str, int] = {}
+        for r in rows:
+            for c in (r["yc"], r["nc"]):
+                c = str(c or "").strip()
+                if c and c != "0":
+                    counts[c] = counts.get(c, 0) + 1
+        return counts
+
     async def refresh_runtime_cache(self) -> int:
         """Mirror all durable mappings into the legacy in-process MARKET_MAP.
 
