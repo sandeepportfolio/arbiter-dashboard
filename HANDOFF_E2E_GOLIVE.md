@@ -1,5 +1,45 @@
 # Arbiter end-to-end go-live — HANDOFF PROMPT (2026-07-06, session 2)
 
+## 🎯 THE NEXT LEVER — 2026-07-11 22:30Z: why nothing captures (deep dive, in progress)
+
+**BIGGEST FINDING: Polymarket US has NEVER filled a real order** — 0 of 244 orders have
+fill_qty>0 (the 27 "filled" are all fill_qty=0, the data bug). Kalshi fills (315),
+ForecastEx fills (131). So the ONLY pair that has ever mechanically captured is
+kalshi↔forecastex (which was the Senate phantom). **K↔P — the bulk surface — has never
+captured a real trade.**
+
+**Why (partial):**
+- Polymarket US liquidity IS real: 22 of 30 mapped markets have DEEP books (politics
+  ~22k qty/side; upcoming MLB games too). The 8 EMPTY books are games that already
+  FINISHED (CLE/NYY/LAA 07-11). So books are real for upcoming/live markets.
+- BUT the scanner's liquidity gate uses `yes_volume`/`no_volume` (a market-data number —
+  MLB games show 213k historical volume) NOT real current orderbook depth
+  (`get_orderbook` bids/offers). So it publishes "fillable" edges on markets whose live
+  book is empty/fleeting. Every failed trade (ARB-001038..042) fired on in-progress/ending
+  07-11 games where prices move fast (transient edges) but the thin book vanishes in the
+  ~280ms before the IOC lands.
+- UNVERIFIED but suspicious given 0/244: the NO-leg order encoding sends
+  ORDER_INTENT_BUY_SHORT with price = 1 − no_price (YES-scale, e.g. 0.79 for a 0.21 NO).
+  If Polymarket US expects the NO-scale price, no order would ever match. Needs
+  confirmation against the PM-US API spec / a deep-stable-book test.
+
+**Execution fixes ARE working** (verified on ARB-001042): clamp_ms dropped 300ms→0.1ms
+(tick fix), the slippage buffer now applies (0.19→0.21) instead of sending at the bare
+touch. Latency roughly halved. But the order still expired — because on an ending game the
+book is genuinely gone, OR the encoding is wrong. Fixes are correct; they're necessary but
+not sufficient.
+
+**FX feed finding (1 of 6 agents):** the FX marketdata/snapshot failure is SYSTEMIC (feed/
+subscription), NOT bad conids — the OPT event conids (762089343 etc.) are valid. (Rest of
+FX deep-dive in progress.)
+
+**Emerging direction:** the real tradeable K↔P surface is LIQUID markets with real books
+(politics, upcoming games) — NOT the ending-game phantom edges the system chases. The
+highest-value fix is a REAL-orderbook-depth gate (require live bids/offers, not volume,
+before publishing/executing an opportunity), plus verifying the PM-US order encoding.
+
+---
+
 ## 🔬 FULL FORENSIC AUDIT + FIXES — 2026-07-11 (every alert since resume)
 
 **Every trade classified (the alert-wrong vs execution-wrong split):**
