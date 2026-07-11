@@ -1,5 +1,38 @@
 # Arbiter end-to-end go-live — HANDOFF PROMPT (2026-07-06, session 2)
 
+## 📊 EDGE & FX-SURFACE AUDIT — 2026-07-11 (answers "are trades profitable / where are real edges")
+
+**A — Lowering the edge floor would NOT help.** Multi-snapshot sweep of live K↔P markets:
+ZERO net-positive edges even at a 0¢ floor. Real executable edges are NEGATIVE (~−0.5¢
+gross before fees) — kalshi and polymarket price these games within each other's spread.
+The 7¢ floor isn't hiding real edges; there are none. Lowering it only surfaces
+money-losing trades. NOT recommended.
+
+**B — The ForecastEx trading surface is tiny, and the economic bulk is unquotable:**
+- 179 of 233 FX mappings (Fed Funds `FF`, `CPIY`, `RGDP`, `PCEY`) point at the underlying
+  INDEX conids (IBKR type `IND`, e.g. FF.X / CPIY — no bid/ask), NOT the tradeable binary
+  option contracts. IBKR's `/iserver/secdef/strikes` returns empty for these and
+  `secdef/search` resolves "FF" to NYSE equities — the binaries are NOT discoverable via
+  the current CP-API path (the resolver correctly gives up: "resolve_event_children empty
+  … unsupported IBKR conid"). Manual conid entry for 179 strikes is impractical AND is
+  exactly the path that caused the party-swap. These economic markets — the most likely
+  home of real cross-venue edges vs kalshi's KXFED/KXCPI — cannot trade as mapped.
+- ~10 FX EVENT markets (Senate/House/MLB) have proper `OPT` conids that quote. The Senate
+  ones were the crossed (now-rejected) mappings. DEM_HOUSE_2026 is correctly mapped,
+  COHERENT (k_yes 0.82 vs fx_yes 0.83, 1¢ divergence) and EFFICIENT (−2¢ edge, no arb).
+
+**Honest bottom line on profitability:** The system executes correctly (K↔P pipeline proven,
+FX fills proven). But real cross-venue arbitrage edges are genuinely scarce: K↔P is
+efficient (negative edges), and the FX surface is ~a handful of correctly-mapped event
+markets that are also efficient where live. Lifetime genuine clean-arb profit ≈ $6 (a
+couple of NBA/MLS games); the 115 Senate "captures" were the phantom mapping (now
+liquidated at ~breakeven); the $131 "naked_leg_pnl" is murky unwind/settlement accounting,
+not clean arbitrage. The real levers are (1) faster/resting execution to catch transient
+edges before they close (like the 9¢ KC edge that evaporated in ~1s), and (2) less-efficient
+market types — NOT a lower floor and NOT the FX economic markets (unresolvable via the API).
+
+---
+
 ## 🎯 K↔P PIPELINE PROVEN LIVE — 2026-07-11 00:00Z (closes original §4.1 gate)
 
 First real kalshi↔polymarket arbitrage attempt: ARB-001038 on GAME_MLB_20260710_KC
