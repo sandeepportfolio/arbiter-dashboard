@@ -3758,6 +3758,60 @@ def test_fok_slippage_buffer_lifts_primary_price_by_two_ticks_default():
     asyncio.run(runner())
 
 
+def test_fok_buffer_applies_below_display_floor_but_above_buffer_floor():
+    """2026-07-11 fill fix: the buffer used to be SKIPPED whenever the
+    buffered net dipped under the 7c DISPLAY floor, sending the primary at
+    the bare touch (least fillable) — ~50% of live MLB fails (ARB-001038/40).
+    Now it spends 1-2c of the already-validated edge to win the fill as long
+    as the buffered pair still nets >= FOK_BUFFER_MIN_NET_CENTS (2c)."""
+    from arbiter.execution.engine import Order, OrderStatus
+
+    async def runner():
+        import os as _os_test
+        saved = {k: _os_test.environ.get(k) for k in
+                 ("EXECUTION_ORDER","FOK_SLIPPAGE_TICKS","FOK_SLIPPAGE_TICKS_POLYMARKET","FOK_BUFFER_MIN_NET_CENTS")}
+        _os_test.environ["EXECUTION_ORDER"] = "poly_first"
+        _os_test.environ.pop("FOK_SLIPPAGE_TICKS", None)
+        _os_test.environ.pop("FOK_SLIPPAGE_TICKS_POLYMARKET", None)
+        _os_test.environ.pop("FOK_BUFFER_MIN_NET_CENTS", None)  # default 2c
+        try:
+            engine = _build_live_engine_for_safe02_gap()
+
+            def _mk(platform, walked):
+                a = MagicMock(); a.platform = platform
+                _wire_live_depth(a, walked)
+                async def _place(arb_id, market_id, canonical_id, side_, price, qty_, max_affordable=None):
+                    return Order(order_id=f"O-{platform}", platform=platform,
+                        market_id=market_id, canonical_id=canonical_id, side=side_,
+                        price=price, quantity=qty_, status=OrderStatus.FILLED,
+                        fill_qty=qty_, fill_price=price, timestamp=time.time())
+                a.place_fok = AsyncMock(side_effect=_place)
+                a.place_ioc = AsyncMock(side_effect=_place)
+                a.get_order = AsyncMock(); a.cancel_order = AsyncMock(return_value=True)
+                return a
+            # yes 0.42 + no 0.47 => gross 11c, ~8.5c net (clears 7c gate).
+            # Buffered poly YES +2t -> 0.44; total 0.91 gross 9c, ~6.5c net:
+            # BELOW 7c display floor but ABOVE the 2c buffer floor -> APPLIED.
+            poly = _mk("polymarket", 0.42); kalshi = _mk("kalshi", 0.47)
+            engine.adapters = {"polymarket": poly, "kalshi": kalshi}
+            opp = _make_safety_opp(canonical_id="MKT1", yes_platform="polymarket",
+                no_platform="kalshi", yes_price=0.42, no_price=0.47, suggested_qty=100)
+            result = await engine.execute_opportunity(opp)
+            assert result is not None
+            pm = poly.place_ioc if poly.place_ioc.await_count > 0 else poly.place_fok
+            pm.assert_awaited()
+            sent = float(pm.await_args.kwargs.get("price",
+                pm.await_args.args[4] if len(pm.await_args.args) > 4 else 0.0))
+            assert abs(sent - 0.44) < 1e-9, (
+                f"buffer must apply (0.42 -> 0.44) despite buffered net < 7c; got {sent}")
+        finally:
+            for k,v in saved.items():
+                if v is None: _os_test.environ.pop(k, None)
+                else: _os_test.environ[k]=v
+
+    asyncio.run(runner())
+
+
 def test_fok_slippage_buffer_per_platform_override():
     """FOK_SLIPPAGE_TICKS_<PLATFORM> takes precedence over the global
     default. Lets the operator dial Polymarket up (fast-moving sports)

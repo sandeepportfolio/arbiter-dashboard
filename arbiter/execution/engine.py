@@ -1588,19 +1588,36 @@ class ExecutionEngine:
                     effective_qty, opp.no_fee_rate,
                 ) / max(effective_qty, 1)
                 buffered_net = buffered_gross - buffered_yes_fee - buffered_no_fee
-                if buffered_net * 100 >= MIN_NET_EDGE_CENTS:
+                # Gate the buffer on a low PROFITABILITY floor, not the 7¢
+                # DISPLAY floor. The arb already cleared MIN_NET_EDGE at scan;
+                # the buffer only spends 1-2¢ of that already-earned edge to
+                # win the fill, and sending at the bare touch is what killed
+                # ~50% of live fills (2026-07-11 ARB-001038/001040: buffer
+                # skipped because buffered net dipped under 7¢, order sent at
+                # the exact touch and IOC-expired at fill_qty=0). Apply the
+                # buffer as long as the buffered pair still nets a healthy
+                # margin (FOK_BUFFER_MIN_NET_CENTS, default 2¢) — comfortably
+                # profitable and leaving room for the secondary leg.
+                try:
+                    buffer_min_net_cents = float(
+                        os.getenv("FOK_BUFFER_MIN_NET_CENTS", "2") or "2"
+                    )
+                except (TypeError, ValueError):
+                    buffer_min_net_cents = 2.0
+                if buffered_net * 100 >= buffer_min_net_cents:
                     logger.info(
                         "  ↑ FOK slippage buffer applied: walked=%.4f + %d tick(s) "
-                        "= %.4f; revised net edge %.2f¢ ≥ %.1f¢ minimum",
+                        "= %.4f; buffered net edge %.2f¢ ≥ %.1f¢ buffer-floor "
+                        "(spent from the %.1f¢-validated edge to win the fill)",
                         primary_fok_price, fok_slippage_ticks, buffered_price,
-                        buffered_net * 100, MIN_NET_EDGE_CENTS,
+                        buffered_net * 100, buffer_min_net_cents, MIN_NET_EDGE_CENTS,
                     )
                     primary_fok_price = buffered_price
                 else:
                     logger.info(
                         "  · FOK slippage buffer skipped: buffered net %.2f¢ < "
-                        "%.1f¢ minimum; sending at walked price %.4f without buffer",
-                        buffered_net * 100, MIN_NET_EDGE_CENTS, primary_fok_price,
+                        "%.1f¢ buffer-floor; sending at walked price %.4f",
+                        buffered_net * 100, buffer_min_net_cents, primary_fok_price,
                     )
 
             # Step 1: Execute the primary leg.
@@ -2802,8 +2819,22 @@ class ExecutionEngine:
         # run ~15-17s wall (live 2026-07-10), extending the naked window.
         deadline = time.monotonic() + timeout
         current = order
+        # First poll fires fast (~120ms) so a stale-touch IOC expiry is
+        # detected quickly and the requote loop can re-fire WHILE the edge
+        # is still live (2026-07-11: MLB edges stayed positive ~30s after
+        # the fail, but the 500ms first poll delayed terminal detection to
+        # ~700-960ms, wasting the live window). Subsequent polls use the
+        # normal interval.
+        try:
+            first_poll_s = float(
+                os.getenv("SUBMIT_FIRST_POLL_S", "0.12") or "0.12"
+            )
+        except (TypeError, ValueError):
+            first_poll_s = 0.12
+        first_poll_s = max(0.0, min(first_poll_s, interval))
+        _poll_delays = iter([first_poll_s])
         while time.monotonic() < deadline:
-            await asyncio.sleep(interval)
+            await asyncio.sleep(next(_poll_delays, interval))
             try:
                 updated = await adapter.get_order(current)
             except Exception as exc:

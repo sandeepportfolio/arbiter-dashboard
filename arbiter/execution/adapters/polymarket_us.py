@@ -18,6 +18,7 @@ arguments).  Never duplicated from ``arbiter.config.settings``.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import time
@@ -812,10 +813,42 @@ class PolymarketUSAdapter:
         cached = self._market_meta_cache.get(slug)
         if cached is not None and cached[1] > now:
             return cached[0]
-        meta = await self._fetch_market_meta(slug)
-        tick = self._tick_from_meta(meta)
-        self._market_meta_cache[slug] = (tick, now + self._market_meta_ttl_s)
-        return tick
+        # Cache MISS: do NOT block the order on a ~300ms cold get_market_by_slug
+        # fetch (unique per-game slugs are always cold on the first/only order,
+        # and the touch vanishes during that window — live 2026-07-11 fill
+        # misses). Return the default 1c tick now and refresh in the background;
+        # _snap_to_tick rounds-to-nearest and max_affordable still guards, so a
+        # sub-penny market at worst gets a 1c snap on the first order only.
+        if not getattr(self, "_tick_refresh_inflight", None):
+            self._tick_refresh_inflight = set()
+        if slug not in self._tick_refresh_inflight:
+            self._tick_refresh_inflight.add(slug)
+            try:
+                asyncio.get_running_loop().create_task(self._refresh_tick(slug))
+            except RuntimeError:
+                # No running loop (sync context): fall back to inline refresh.
+                self._tick_refresh_inflight.discard(slug)
+                meta = await self._fetch_market_meta(slug)
+                tick = self._tick_from_meta(meta)
+                self._market_meta_cache[slug] = (tick, now + self._market_meta_ttl_s)
+                return tick
+        return _DEFAULT_TICK
+
+    async def _refresh_tick(self, slug: str) -> None:
+        """Background-fetch and cache a slug's real tick (off the order hot
+        path). Failures leave the default in place; the next order retries."""
+        try:
+            meta = await self._fetch_market_meta(slug)
+            tick = self._tick_from_meta(meta)
+            self._market_meta_cache[slug] = (
+                tick, time.time() + self._market_meta_ttl_s,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("polymarket_us.tick_refresh_failed slug=%s err=%s", slug, exc)
+        finally:
+            inflight = getattr(self, "_tick_refresh_inflight", None)
+            if inflight is not None:
+                inflight.discard(slug)
 
     async def _marketability_clamp_and_snap(
         self,

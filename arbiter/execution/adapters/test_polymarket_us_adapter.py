@@ -380,9 +380,13 @@ async def test_clamp_for_buy_short_sends_engine_price_as_is():
 
 
 async def test_tick_snap_rounds_to_market_tick():
-    """0.5-cent tick markets: a 0.4533 limit snaps to 0.455, not 0.4533."""
+    """0.5-cent tick markets: a 0.4533 limit snaps to 0.455, not 0.4533.
+    Pre-seed the tick cache so this exercises real-tick snapping rather than
+    the cold-path default-1c fast return."""
+    import time as _t
     client = _make_client_with_bbo(best_bid=0.40, best_ask=0.40, tick=0.005)
     adapter = _make_adapter(client=client)
+    adapter._market_meta_cache["slug-3"] = (0.005, _t.time() + 300)
 
     # 0.4533 snapped to 0.005 grid -> 0.455.
     await adapter.place_ioc("ARB-SNAP", "slug-3", "CAN-3", "yes", 0.4533, 10)
@@ -396,8 +400,10 @@ async def test_max_affordable_aborts_when_snapped_price_too_high():
     rounds the engine's price above the slippage budget. Engine passes a
     deliberately-strict cap so the adapter is a last-line safety check.
     """
+    import time as _t
     client = _make_client_with_bbo(best_bid=0.55, best_ask=0.60, tick=0.05)
     adapter = _make_adapter(client=client)
+    adapter._market_meta_cache["slug-4"] = (0.05, _t.time() + 300)
 
     # 0.48 snapped to 0.05 grid → 0.50. max_affordable=0.49 ⇒ abort.
     with pytest.raises(OrderRejected, match="max_affordable"):
@@ -427,7 +433,10 @@ async def test_market_meta_is_cached_across_orders():
     client = _make_client_with_bbo(best_bid=0.40, best_ask=0.40, tick=0.01)
     adapter = _make_adapter(client=client)
 
+    import asyncio as _a
+    # First order schedules a background tick refresh (default 1c used inline).
     await adapter.place_ioc("ARB-META-1", "slug-cache", "CAN-1", "yes", 0.50, 10)
+    await _a.sleep(0.05)  # let the background refresh populate the cache
     await adapter.place_ioc("ARB-META-2", "slug-cache", "CAN-1", "yes", 0.51, 10)
     await adapter.place_ioc("ARB-META-3", "slug-cache", "CAN-1", "yes", 0.52, 10)
 
@@ -642,3 +651,34 @@ async def test_unwind_sell_skips_phase_hardlocks():
     await adapter.place_unwind_sell("ARB-RECOV", "slug-r", "CAN-R", "yes", 5)
     await adapter.place_resting_sell("ARB-REST", "slug-r", "CAN-R", "yes", 0.40, 5)
     assert client.place_order.await_count == 2
+
+
+async def test_cached_tick_miss_is_non_blocking_and_refreshes_async():
+    """Cold-slug fills were dying to a ~300ms synchronous get_market_by_slug
+    inside the order clamp (live 2026-07-11: MLB game slugs are unique so the
+    FIRST/only order per game always paid the cold fetch, and the touch
+    vanished before the IOC landed). A cache MISS must return the default 1c
+    tick immediately (off the hot path) and refresh the real tick in the
+    background for subsequent orders."""
+    import asyncio as _a, time as _t
+    slow_meta = {"orderPriceMinTickSize": "0.001"}
+
+    async def _slow_get(slug):
+        await _a.sleep(0.3)
+        return slow_meta
+
+    client = MagicMock()
+    client.get_market_by_slug = AsyncMock(side_effect=_slow_get)
+    adapter = _make_adapter(client=client)
+
+    t0 = _t.monotonic()
+    tick = await adapter._cached_tick("cold-slug")
+    elapsed = _t.monotonic() - t0
+
+    assert tick == 0.01, "cache miss must return the default 1c tick immediately"
+    assert elapsed < 0.1, f"_cached_tick blocked {elapsed:.3f}s on the cold fetch"
+
+    # Background refresh populates the real tick for the next order.
+    await _a.sleep(0.4)
+    tick2 = await adapter._cached_tick("cold-slug")
+    assert tick2 == 0.001, "real tick must be cached after the async refresh"
