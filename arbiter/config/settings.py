@@ -615,6 +615,50 @@ class ForecastExConfig:
         default_factory=lambda: _env_bool("FORECASTEX_ENABLED", False)
     )
 
+    # ── Web API OAuth 1.0a (zero-touch machine-to-machine auth) ──────────
+    # When a consumer key is present, the client authenticates directly to
+    # IBKR (api.ibkr.com) with a keypair-derived Live Session Token — no local
+    # gateway, no browser login, no 2FA. Left blank until IBKR activates the
+    # self-service registration (~1-2 weeks). See deploy/ib-gateway/RUNBOOK.md
+    # § Path B. Falls back to the gateway path when unset.
+    oauth_consumer_key: str = field(
+        default_factory=lambda: os.getenv("IBKR_OAUTH_CONSUMER_KEY", "")
+    )
+    oauth_access_token: str = field(
+        default_factory=lambda: os.getenv("IBKR_OAUTH_ACCESS_TOKEN", "")
+    )
+    oauth_access_token_secret: str = field(
+        default_factory=lambda: os.getenv("IBKR_OAUTH_ACCESS_TOKEN_SECRET", "")
+    )
+    oauth_signature_key_fp: str = field(
+        default_factory=lambda: os.getenv("IBKR_OAUTH_SIGNATURE_KEY", "")
+    )
+    oauth_encryption_key_fp: str = field(
+        default_factory=lambda: os.getenv("IBKR_OAUTH_ENCRYPTION_KEY", "")
+    )
+    oauth_dh_param_fp: str = field(
+        default_factory=lambda: os.getenv("IBKR_OAUTH_DH_PARAM", "")
+    )
+    oauth_realm: str = field(
+        default_factory=lambda: os.getenv("IBKR_OAUTH_REALM", "limited_poa")
+    )
+    oauth_api_base: str = field(
+        default_factory=lambda: os.getenv(
+            "IBKR_OAUTH_API_BASE", "https://api.ibkr.com/v1/api",
+        )
+    )
+
+    @property
+    def oauth_configured(self) -> bool:
+        """True when all OAuth 1.0a material is present (post-activation)."""
+        return bool(
+            self.oauth_consumer_key
+            and self.oauth_access_token
+            and self.oauth_signature_key_fp
+            and self.oauth_encryption_key_fp
+            and self.oauth_dh_param_fp
+        )
+
 
 @dataclass
 class IBGatewayConfig:

@@ -1,0 +1,208 @@
+"""IBKR Web API OAuth 1.0a (first-party / self-service) authentication.
+
+The zero-touch, machine-to-machine "API keys" path for ForecastEx: no local
+gateway, no browser login, no 2FA tap. The bot derives a ~24h Live Session
+Token (LST) from a keypair handshake, then signs every request with it.
+
+Flow (per IBKR OAuth 1.0a spec):
+  1. Decrypt the registration access-token secret with the RSA *encryption*
+     private key -> the "prepend" used in the LST signature base string.
+  2. Diffie-Hellman challenge: A = g^a mod p (random a).
+  3. POST /oauth/live_session_token, signed RSA-SHA256 with the *signature*
+     private key. Response gives B = g^b mod p and an LST signature.
+  4. Shared secret K = B^a mod p. LST = base64(HMAC-SHA1(K_bytes, prepend_bytes)).
+  5. Validate LST against the returned signature (HMAC-SHA1(LST, consumer_key)).
+  6. Sign each API request OAuth-1.0a HMAC-SHA256 with key = base64decode(LST).
+
+⚠️ LIVE-VALIDATION PENDING: the RSA-SHA256 signing, HMAC signing, signature
+base-string construction and header formatting are unit-tested here, but the
+end-to-end DH handshake can only be validated against IBKR once the operator's
+consumer key is activated (~1-2 weeks after registration). Do NOT flip the
+collector to OAuth mode in production until get_live_session_token() succeeds
+against api.ibkr.com and validate_lst() returns True. See
+deploy/ib-gateway/RUNBOOK.md § Path B.
+"""
+from __future__ import annotations
+
+import base64
+import hashlib
+import hmac
+import os
+import random
+import time
+from dataclasses import dataclass
+from typing import Optional
+from urllib.parse import quote, urlencode
+
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding
+
+
+# RFC 3986 unreserved set — everything else is percent-encoded in OAuth.
+def _rfc3986(value: str) -> str:
+    return quote(str(value), safe="~-._")
+
+
+def _nonce() -> str:
+    # 16 random hex chars. random (not secrets) is acceptable for an OAuth
+    # nonce (uniqueness, not secrecy) and keeps this import-light.
+    return "".join(random.choices("0123456789abcdef", k=16))
+
+
+def _to_byte_array(n: int) -> bytes:
+    """Big-endian bytes of a positive int, with a leading 0x00 when the high
+    bit is set — the exact convention IBKR uses for the DH shared secret so
+    the HMAC key matches their server-side derivation."""
+    length = (n.bit_length() + 7) // 8
+    b = n.to_bytes(length, "big")
+    if b and (b[0] & 0x80):
+        b = b"\x00" + b
+    return b
+
+
+@dataclass
+class IbkrOAuth1a:
+    """Holds OAuth 1.0a credentials + a cached Live Session Token.
+
+    Construct via ``from_config`` (reads key files from disk once)."""
+
+    consumer_key: str
+    access_token: str
+    access_token_secret: str          # base64, RSA-encrypted (as issued)
+    signature_key_pem: bytes          # private RSA signing key
+    encryption_key_pem: bytes         # private RSA encryption key
+    dh_prime: int                     # DH prime p
+    dh_generator: int                 # DH generator g
+    realm: str = "limited_poa"
+    api_base: str = "https://api.ibkr.com/v1/api"
+
+    _lst_b64: Optional[str] = None
+    _lst_expires: float = 0.0
+
+    # ── construction ────────────────────────────────────────────────
+    @classmethod
+    def from_config(cls, cfg) -> "IbkrOAuth1a":
+        """Build from a ForecastExConfig (reads the three key files)."""
+        with open(cfg.oauth_signature_key_fp, "rb") as fh:
+            sig = fh.read()
+        with open(cfg.oauth_encryption_key_fp, "rb") as fh:
+            enc = fh.read()
+        prime, gen = cls._read_dh_params(cfg.oauth_dh_param_fp)
+        return cls(
+            consumer_key=cfg.oauth_consumer_key,
+            access_token=cfg.oauth_access_token,
+            access_token_secret=cfg.oauth_access_token_secret,
+            signature_key_pem=sig,
+            encryption_key_pem=enc,
+            dh_prime=prime,
+            dh_generator=gen,
+            realm=cfg.oauth_realm,
+            api_base=cfg.oauth_api_base,
+        )
+
+    @staticmethod
+    def _read_dh_params(path: str) -> tuple[int, int]:
+        with open(path, "rb") as fh:
+            params = serialization.load_pem_parameters(fh.read())
+        nums = params.parameter_numbers()
+        return nums.p, nums.g
+
+    # ── testable primitives ─────────────────────────────────────────
+    @staticmethod
+    def signature_base_string(method: str, url: str, params: dict, prepend: str = "") -> str:
+        """OAuth 1.0a signature base string: [prepend]METHOD&url&sorted-params.
+
+        ``prepend`` is empty for HMAC request signing and the decrypted
+        access-token secret (hex) for the LST request."""
+        norm = "&".join(
+            f"{_rfc3986(k)}={_rfc3986(v)}" for k, v in sorted(params.items())
+        )
+        return f"{prepend}{method.upper()}&{_rfc3986(url)}&{_rfc3986(norm)}"
+
+    def _rsa_sha256_sign(self, base_string: str) -> str:
+        key = serialization.load_pem_private_key(self.signature_key_pem, password=None)
+        sig = key.sign(base_string.encode("utf-8"), padding.PKCS1v15(), hashes.SHA256())
+        return _rfc3986(base64.b64encode(sig).decode("utf-8"))
+
+    @staticmethod
+    def _hmac_sha256_sign(base_string: str, lst_b64: str) -> str:
+        key = base64.b64decode(lst_b64)
+        digest = hmac.new(key, base_string.encode("utf-8"), hashlib.sha256).digest()
+        return _rfc3986(base64.b64encode(digest).decode("utf-8"))
+
+    @staticmethod
+    def _oauth_header(realm: str, params: dict) -> str:
+        inner = ", ".join(
+            f'{_rfc3986(k)}="{_rfc3986(v)}"' for k, v in sorted(params.items())
+        )
+        return f'OAuth realm="{realm}", {inner}'
+
+    # ── live session token (DH handshake — live-validation pending) ──
+    def _decrypt_access_token_secret(self) -> bytes:
+        key = serialization.load_pem_private_key(self.encryption_key_pem, password=None)
+        return key.decrypt(base64.b64decode(self.access_token_secret), padding.PKCS1v15())
+
+    def build_lst_request(self) -> tuple[str, dict, int]:
+        """Assemble the signed /oauth/live_session_token request WITHOUT sending
+        (so it is unit-testable). Returns (url, headers, dh_random_a)."""
+        prepend = self._decrypt_access_token_secret().hex()
+        a = random.getrandbits(256)
+        A = pow(self.dh_generator, a, self.dh_prime)
+        url = f"{self.api_base}/oauth/live_session_token"
+        params = {
+            "oauth_consumer_key": self.consumer_key,
+            "oauth_nonce": _nonce(),
+            "oauth_signature_method": "RSA-SHA256",
+            "oauth_timestamp": str(int(time.time())),
+            "oauth_token": self.access_token,
+            "diffie_hellman_challenge": format(A, "x"),
+        }
+        base = self.signature_base_string("POST", url, params, prepend=prepend)
+        params["oauth_signature"] = self._rsa_sha256_sign(base)
+        headers = {"Authorization": self._oauth_header(self.realm, params),
+                   "User-Agent": "arbiter-ibkr-oauth/1.0"}
+        return url, headers, a
+
+    def compute_lst(self, dh_response_hex: str, dh_random_a: int) -> str:
+        """K = B^a mod p; LST = base64(HMAC-SHA1(K_bytes, prepend_bytes))."""
+        B = int(dh_response_hex, 16)
+        K = pow(B, dh_random_a, self.dh_prime)
+        prepend = self._decrypt_access_token_secret()
+        lst = hmac.new(_to_byte_array(K), prepend, hashlib.sha1).digest()
+        self._lst_b64 = base64.b64encode(lst).decode("utf-8")
+        # IBKR LSTs live ~24h; refresh with a safety margin.
+        self._lst_expires = time.time() + 22 * 3600
+        return self._lst_b64
+
+    def validate_lst(self, lst_signature_hex: str) -> bool:
+        """LST is valid iff HMAC-SHA1(base64decode(LST), consumer_key) matches."""
+        if not self._lst_b64:
+            return False
+        expected = hmac.new(
+            base64.b64decode(self._lst_b64), self.consumer_key.encode("utf-8"),
+            hashlib.sha1,
+        ).hexdigest()
+        return hmac.compare_digest(expected, lst_signature_hex)
+
+    # ── per-request signing ─────────────────────────────────────────
+    def auth_header(self, method: str, url: str, extra_oauth: Optional[dict] = None) -> str:
+        """Build the OAuth 1.0a Authorization header for a live request.
+        Requires a valid cached LST (compute_lst must have run)."""
+        if not self._lst_b64:
+            raise RuntimeError("no live session token — call get_live_session_token first")
+        params = {
+            "oauth_consumer_key": self.consumer_key,
+            "oauth_nonce": _nonce(),
+            "oauth_signature_method": "HMAC-SHA256",
+            "oauth_timestamp": str(int(time.time())),
+            "oauth_token": self.access_token,
+        }
+        if extra_oauth:
+            params.update(extra_oauth)
+        base = self.signature_base_string(method, url, params)
+        params["oauth_signature"] = self._hmac_sha256_sign(base, self._lst_b64)
+        return self._oauth_header(self.realm, params)
+
+    @property
+    def lst_valid(self) -> bool:
+        return bool(self._lst_b64) and time.time() < self._lst_expires
