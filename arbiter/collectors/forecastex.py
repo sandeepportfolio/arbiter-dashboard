@@ -89,6 +89,12 @@ class ForecastExClient:
     # /iserver request re-POST init — a ~9641/hr storm on 2026-07-13. Env
     # override BRIDGE_INIT_COOLDOWN_S; 0 disables (tests / force-retry).
     _bridge_init_last_attempt: float = field(default=0.0, init=False, repr=False)
+    # Session keepalive. IBKR CP sessions soft-expire without a periodic
+    # /tickle; the 2026-07-10 24h outage had NO keepalive at all. maybe_keepalive
+    # tickles at most once per _keepalive_interval and auto-fires
+    # /iserver/reauthenticate if the brokerage session dropped while SSO is
+    # still valid — self-healing WITHOUT a human browser login.
+    _last_tickle: float = field(default=0.0, init=False, repr=False)
 
     def __post_init__(self) -> None:
         # Env-tunable circuit breaker (2026-06-02). Previously hardcoded
@@ -195,7 +201,11 @@ class ForecastExClient:
         # the first FORECASTX discovery call after gateway restart doesn't
         # silently 400.  /portfolio/* and a handful of read-only endpoints
         # work without the bridge, so we don't gate them.
-        if path.startswith("/iserver/") and path != "/iserver/auth/ssodh/init":
+        if (
+            path.startswith("/iserver/")
+            and path != "/iserver/auth/ssodh/init"
+            and path != "/iserver/reauthenticate"
+        ):
             await self._ensure_iserver_bridge()
 
         for attempt in range(3):
@@ -313,6 +323,56 @@ class ForecastExClient:
         raise RuntimeError(
             f"forecastex rate-limit retry exhausted after 3 attempts ({method} {path})"
         )
+
+    # ── Session keepalive ──────────────────────────────────────────
+
+    async def tickle(self) -> dict:
+        """POST /tickle — the IBKR CP session keepalive. use_circuit=False so a
+        keepalive blip never trips the trading circuit."""
+        return await self._request("POST", "/tickle", use_circuit=False)
+
+    async def reauthenticate(self) -> dict:
+        """POST /iserver/reauthenticate — re-establish the brokerage session
+        WITHOUT a browser login (works while the SSO session is still valid)."""
+        return await self._request("POST", "/iserver/reauthenticate", use_circuit=False)
+
+    async def maybe_keepalive(self) -> None:
+        """Rate-limited session keepalive for the collector run loop. Tickles at
+        most once per interval; if the brokerage session has dropped (tickle's
+        iserver.authStatus.authenticated=false) it auto-fires reauthenticate to
+        self-heal. Never raises — keepalive must not break the poll loop.
+
+        This is the mitigation for the 2026-07-10 24h outage, which happened
+        because nothing kept the session warm or recovered a soft drop."""
+        try:
+            interval = float(os.getenv("FX_KEEPALIVE_INTERVAL_S", "55") or "55")
+        except (TypeError, ValueError):
+            interval = 55.0
+        now = time.monotonic()
+        if self._last_tickle > 0.0 and (now - self._last_tickle) < interval:
+            return
+        self._last_tickle = now
+        try:
+            resp = await self.tickle()
+        except Exception as exc:  # noqa: BLE001 — keepalive is best-effort
+            logger.warning("forecastex keepalive tickle failed: %s", exc)
+            return
+        # Detect a dropped brokerage session while SSO is still alive and
+        # self-heal without operator action.
+        auth = (
+            (resp or {}).get("iserver", {}).get("authStatus", {})
+            if isinstance(resp, dict) else {}
+        )
+        if auth and auth.get("authenticated") is False:
+            logger.warning(
+                "forecastex: brokerage session dropped (SSO alive) — "
+                "auto-reauthenticating without operator login"
+            )
+            try:
+                await self.reauthenticate()
+                self._bridge_ready = False  # force a fresh bridge init next call
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("forecastex reauthenticate failed: %s", exc)
 
     # ── Account / portfolio ────────────────────────────────────────
 
@@ -1450,6 +1510,11 @@ class ForecastExCollector:
         )
         while self._running:
             try:
+                # Session keepalive FIRST (rate-limited internally): tickle the
+                # IBKR CP session so it never soft-expires, and auto-reauth a
+                # dropped brokerage session without an operator login. Prevents
+                # a recurrence of the 2026-07-10 24h dark-session outage.
+                await self.client.maybe_keepalive()
                 await self.fetch_markets()
                 await asyncio.sleep(self.config.poll_interval)
             except asyncio.CancelledError:

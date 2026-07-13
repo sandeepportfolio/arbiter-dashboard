@@ -1704,3 +1704,54 @@ async def test_bridge_init_failure_is_rate_limited(client, monkeypatch):
     # Only the first attempt should have hit the wire while inside the cooldown.
     assert first_count == 1, f"init must be rate-limited; fired {first_count}x in cooldown window"
     await client.close()
+
+
+# ── /tickle keepalive + auto-reauth (2026-07-13: never silently die again) ──
+
+async def test_tickle_keeps_session_alive(client):
+    """tickle() POSTs /tickle (the IBKR session keepalive) and returns the body."""
+    client._bridge_ready = True
+    with aioresponses() as m:
+        m.post(re.compile(r".*/tickle.*"),
+               payload={"session": "abc", "ssoExpires": 600000,
+                        "iserver": {"authStatus": {"authenticated": True}}})
+        r = await client.tickle()
+    assert r.get("session") == "abc"
+    await client.close()
+
+
+async def test_maybe_keepalive_is_rate_limited(client, monkeypatch):
+    """maybe_keepalive tickles at most once per keepalive interval so the run
+    loop can call it every poll cycle without hammering /tickle."""
+    import yarl
+    now = {"t": 1000.0}
+    monkeypatch.setattr("arbiter.collectors.forecastex.time.monotonic", lambda: now["t"])
+    with aioresponses() as m:
+        m.post(re.compile(r".*/tickle.*"),
+               payload={"iserver": {"authStatus": {"authenticated": True}}}, repeat=True)
+        await client.maybe_keepalive()   # fires
+        await client.maybe_keepalive()   # within interval -> skipped
+        now["t"] += 0.5
+        await client.maybe_keepalive()   # still within interval -> skipped
+        cnt = len(m.requests.get(("POST", yarl.URL("https://localhost:5000/v1/api/tickle")), []))
+    assert cnt == 1, f"tickle must be rate-limited to once per interval; fired {cnt}x"
+    await client.close()
+
+
+async def test_maybe_keepalive_reauths_on_soft_drop(client, monkeypatch):
+    """If /tickle reports the brokerage session dropped (authenticated=false)
+    while the SSO session is still valid, auto-fire /iserver/reauthenticate to
+    self-heal WITHOUT a human browser login."""
+    import yarl
+    client._bridge_ready = True
+    now = {"t": 5000.0}
+    monkeypatch.setattr("arbiter.collectors.forecastex.time.monotonic", lambda: now["t"])
+    with aioresponses() as m:
+        m.post(re.compile(r".*/tickle.*"),
+               payload={"session": "s", "iserver": {"authStatus": {"authenticated": False}}})
+        m.post(re.compile(r".*/iserver/reauthenticate.*"), payload={"message": "triggered"})
+        await client.maybe_keepalive()
+        reauth = len(m.requests.get(("POST", yarl.URL(
+            "https://localhost:5000/v1/api/iserver/reauthenticate")), []))
+    assert reauth == 1, "a dropped brokerage session must auto-trigger reauthenticate"
+    await client.close()
