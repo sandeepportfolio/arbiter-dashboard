@@ -682,3 +682,91 @@ async def test_cached_tick_miss_is_non_blocking_and_refreshes_async():
     await _a.sleep(0.4)
     tick2 = await adapter._cached_tick("cold-slug")
     assert tick2 == 0.001, "real tick must be cached after the async refresh"
+
+
+# ─── get_order re-extracts authoritative fill quantity (async-fill fix) ────────
+
+async def test_get_order_extracts_cumquantity_on_async_fill():
+    """ROOT CAUSE (2026-07-13 live probe): PM-US returns ORDER_STATE_NEW /
+    cumQuantity=0 on the synchronous submit response, then fills a few ms
+    later. The engine's post-submit poll calls adapter.get_order, which
+    mapped state->FILLED but NEVER re-extracted cumQuantity/avgPx — so the
+    fill landed with fill_qty=0. The engine then recorded no fill (invisible
+    fill) and, when polymarket was the primary leg, aborted the hedge,
+    leaving the real fill NAKED. get_order must read the authoritative
+    cumQuantity and avgPx from the venue payload.
+    """
+    client = MagicMock()
+    client.get_order = AsyncMock(
+        return_value={
+            "order": {
+                "id": "ord-async",
+                "state": "ORDER_STATE_FILLED",
+                "cumQuantity": "3",
+                "leavesQuantity": "0",
+                "avgPx": {"value": "0.2080", "currency": "USD"},
+            }
+        }
+    )
+    adapter = _make_adapter(client=client)
+    order = Order(
+        order_id="ord-async",
+        platform="polymarket",
+        market_id="mkt",
+        canonical_id="CAN",
+        side="yes",
+        price=0.22,
+        quantity=3,
+        status=OrderStatus.SUBMITTED,
+        fill_qty=0.0,
+        timestamp=0.0,
+    )
+    updated = await adapter.get_order(order)
+    assert updated.status == OrderStatus.FILLED
+    assert updated.fill_qty == 3.0, (
+        f"get_order must extract cumQuantity as the fill; got {updated.fill_qty}"
+    )
+    assert abs(updated.fill_price - 0.208) < 1e-9, (
+        f"get_order must extract avgPx as the fill price; got {updated.fill_price}"
+    )
+
+
+async def test_get_order_extracts_partial_fill_quantity():
+    """A partially-filled poll response must carry the partial cumQuantity."""
+    client = MagicMock()
+    client.get_order = AsyncMock(
+        return_value={
+            "order": {
+                "id": "ord-part",
+                "state": "ORDER_STATE_PARTIALLY_FILLED",
+                "cumQuantity": "4",
+                "leavesQuantity": "6",
+                "avgPx": {"value": "0.5000", "currency": "USD"},
+            }
+        }
+    )
+    adapter = _make_adapter(client=client)
+    order = Order(
+        order_id="ord-part", platform="polymarket", market_id="mkt",
+        canonical_id="CAN", side="yes", price=0.5, quantity=10,
+        status=OrderStatus.SUBMITTED, fill_qty=0.0, timestamp=0.0,
+    )
+    updated = await adapter.get_order(order)
+    assert updated.status == OrderStatus.PARTIAL
+    assert updated.fill_qty == 4.0, f"partial fill_qty must be 4; got {updated.fill_qty}"
+
+
+async def test_get_order_does_not_zero_out_existing_fill_on_ambiguous():
+    """A 404 / non-dict / empty-status poll must not clobber a fill_qty the
+    order already carries (fail-safe: never lose a confirmed quantity)."""
+    client = MagicMock()
+    client.get_order = AsyncMock(side_effect=Exception("404 Not Found"))
+    adapter = _make_adapter(client=client)
+    order = Order(
+        order_id="ord-x", platform="polymarket", market_id="mkt",
+        canonical_id="CAN", side="yes", price=0.5, quantity=10,
+        status=OrderStatus.SUBMITTED, fill_qty=2.0, timestamp=0.0,
+    )
+    updated = await adapter.get_order(order)
+    assert updated.fill_qty == 2.0, "transient poll error must not zero an existing fill"
+    assert updated.idempotency_ambiguous is True

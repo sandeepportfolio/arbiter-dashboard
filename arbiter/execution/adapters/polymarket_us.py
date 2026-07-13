@@ -515,6 +515,44 @@ class PolymarketUSAdapter:
                 return order
             prev_status = order.status
             order.status = self._map_status(api_status, order.status)
+
+            # ROOT CAUSE FIX (2026-07-13 live probe): PM-US returns
+            # ORDER_STATE_NEW / cumQuantity=0 on the synchronous submit
+            # response, then fills asynchronously a few ms later. This poll
+            # is the ONLY place the authoritative fill becomes visible.
+            # Previously get_order mapped state->FILLED but never re-read
+            # cumQuantity/avgPx, so a real fill landed with fill_qty=0 — an
+            # INVISIBLE fill: the engine recorded nothing and (when polymarket
+            # was the primary leg) aborted the hedge, leaving the fill NAKED.
+            # Extract the venue's cumQuantity/avgPx here. Monotonic guard:
+            # a poll may only RAISE a confirmed fill, never reduce one, so a
+            # stray later cumQuantity=0 cannot erase a fill we already saw.
+            try:
+                cum = payload.get("cumQuantity")
+                if cum is None:
+                    _execs = resp.get("executions") or []
+                    if _execs and isinstance(_execs[0], dict):
+                        cum = (_execs[0].get("order") or {}).get("cumQuantity")
+                if cum is not None:
+                    cum_f = float(cum)
+                    if cum_f > float(order.fill_qty or 0.0):
+                        order.fill_qty = cum_f
+            except (TypeError, ValueError):
+                pass
+            try:
+                _avg = payload.get("avgPx")
+                if _avg is None:
+                    _execs = resp.get("executions") or []
+                    if _execs and isinstance(_execs[0], dict):
+                        _avg = (_execs[0].get("order") or {}).get("avgPx")
+                avg_v = _amount_value(_avg) if isinstance(_avg, dict) else (
+                    float(_avg) if _avg not in (None, "") else 0.0
+                )
+                if avg_v and avg_v > 0:
+                    order.fill_price = avg_v
+            except (TypeError, ValueError):
+                pass
+
             # Diagnostic ring-buffer capture for the SUBMITTED → terminal-
             # non-fill transition. This is the exact event the dashboard
             # currently has zero visibility into: post-submit poll flips
