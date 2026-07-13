@@ -742,3 +742,27 @@ suite 530 passed / 2 skipped.
    forecastex.py:230 circuit-on-401 bug + ssodh/init storm fix; (HUMAN) operator re-login
    at https://localhost:5000 (IBKR creds+2FA) — I am barred from entering credentials.
    Do NOT restart the gateway process (destroys SSO); only the session expired.
+
+## 2026-07-13 — FX hardening deployed (commit 377d700) + OPERATOR ACTION REQUIRED
+
+Deployed the two amplifier-bug fixes. Live-measured impact:
+- ssodh/init storm: ~9641/hr → ~90/hr (**100× reduction**; cooldown works).
+- forecastex-rest circuit-open rejections: ~10015/hr → **0** (no longer pinned).
+- Remaining ~8600/hr are the raw session-401s themselves — only re-login clears them.
+
+**★ OPERATOR ACTION (only a human can do this — I'm barred from entering credentials):**
+The IBKR Client Portal SSO session is dead (auth/status returns empty). To restore the
+ForecastEx leg:
+1. Open **https://localhost:5000** in a browser.
+2. Log in with IBKR username/password + complete 2FA.
+3. Confirm: `curl -sk https://localhost:5000/v1/api/iserver/auth/status` returns
+   `{"authenticated":true,...}`.
+Do **NOT** restart the gateway java process (PID 58124, alive) — that destroys SSO and
+makes re-login harder. Note: a second java gateway (PID 88818, started 11:02 today) is
+running alongside 58124 — operator should verify only one owns :5000. Once authenticated,
+FX snapshots + discovery + the stranded reconciler recover automatically (circuit is no
+longer falsely pinned).
+
+**Still-open follow-ups (autonomous):** (1) /tickle keepalive loop to prevent future SOFT
+expiry (needs collector-lifecycle wiring); (2) real-orderbook-depth gate for K↔P;
+(3) `paccc-usse-midterms-2026-11-03-rep` net −2 (~$0.87) untracked short — reconcile/flag.
