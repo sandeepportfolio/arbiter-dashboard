@@ -136,3 +136,36 @@ The bot then derives a ~24h live session token machine-to-machine (auto
 Tell me when A1–A4 are done (or paste the bot username/password and I'll put them
 in `.env.production` for you) and I'll bring the gateway up and run the $1
 verification.
+
+---
+
+## Path B — STATUS 2026-07-13 (build progress)
+
+**Done (autonomous):**
+- ✅ Key material generated → `deploy/ib-gateway/oauth/` (gitignored): private/public
+  signature + encryption keys + `dhparam.pem`.
+- ✅ OAuth 1.0a module built + unit-tested: `arbiter/auth/ibkr_oauth.py`
+  (RSA-SHA256 signing, DH Live-Session-Token handshake, HMAC-SHA256 request
+  signing). 6 tests incl. a full LST handshake simulated end-to-end.
+- ✅ Config wired: `ForecastExConfig.oauth_*` fields + `oauth_configured` gate.
+- ✅ `.env.production` OAuth placeholders appended (key-file paths set; consumer
+  key/token blank until IBKR issues them).
+- ✅ Registration page opened in the operator's browser.
+
+**Operator action (the one login):** log in at the OAuth self-service page, pick
+a 9-char consumer key, upload `public_signature.pem`, `public_encryption.pem`,
+`dhparam.pem`; Save Key → Generate Token → Enable OAuth Access. IBKR activates
+in ~1-2 weeks and issues the consumer key + access token/secret.
+
+**Remaining cutover (do when the consumer key arrives — it's live-testable then):**
+1. Set `IBKR_OAUTH_CONSUMER_KEY` / `IBKR_OAUTH_ACCESS_TOKEN` /
+   `IBKR_OAUTH_ACCESS_TOKEN_SECRET` in `.env.production`.
+2. Wire `IbkrOAuth1a` into `ForecastExClient._request` (OAuth branch: `api.ibkr.com`
+   base + `auth_header`; add `ensure_live_session_token()`), behind the
+   `oauth_configured` gate. ~1hr, straightforward.
+3. Validate live: LST fetch succeeds + `validate_lst()` True + a read call
+   (`/portfolio/accounts`) returns 200 signed. THEN flip FX to OAuth transport.
+   Gateway path stays as fallback.
+
+Until then: the `/tickle` keepalive (already live) removes the frequent
+soft-expiry logins; only IBKR's ~daily hard reset needs a browser re-login.
