@@ -84,6 +84,11 @@ class ForecastExClient:
     # request and re-initialize if a subsequent call ever sees the same
     # "no bridge" response (e.g. the IBKR session timed out and reconnected).
     _bridge_ready: bool = field(default=False, init=False, repr=False)
+    # Cooldown (monotonic secs) between ssodh/init attempts while the bridge is
+    # NOT ready. Without it a dead SSO session (init 401s forever) made every
+    # /iserver request re-POST init — a ~9641/hr storm on 2026-07-13. Env
+    # override BRIDGE_INIT_COOLDOWN_S; 0 disables (tests / force-retry).
+    _bridge_init_last_attempt: float = field(default=0.0, init=False, repr=False)
 
     def __post_init__(self) -> None:
         # Env-tunable circuit breaker (2026-06-02). Previously hardcoded
@@ -137,6 +142,18 @@ class ForecastExClient:
         """
         if self._bridge_ready:
             return
+        # Rate-limit re-init while the bridge is down. A dead SSO session
+        # returns 401 on ssodh/init forever; without this cooldown every
+        # /iserver request re-fired init (~9641/hr storm, 2026-07-13).
+        try:
+            cooldown = float(os.getenv("BRIDGE_INIT_COOLDOWN_S", "30") or "30")
+        except (TypeError, ValueError):
+            cooldown = 30.0
+        now = time.monotonic()
+        if cooldown > 0 and self._bridge_init_last_attempt > 0.0:
+            if (now - self._bridge_init_last_attempt) < cooldown:
+                return
+        self._bridge_init_last_attempt = now
         session = await self._ensure_session()
         # Best-effort — if init fails the next iserver call will surface
         # the underlying error.  Don't block startup on bridge issues.
@@ -148,6 +165,10 @@ class ForecastExClient:
             ) as resp:
                 if resp.status == 200:
                     self._bridge_ready = True
+                    # Clear the cooldown timer on success so a later transient
+                    # bridge drop ("400 no bridge") can re-init immediately —
+                    # the cooldown only throttles CONSECUTIVE failed inits.
+                    self._bridge_init_last_attempt = 0.0
                     logger.info("forecastex: iserver bridge initialized")
                 else:
                     body = await resp.text()
@@ -227,7 +248,14 @@ class ForecastExClient:
 
                     if resp.status in (401, 403):
                         text = await resp.text()
-                        self.circuit.record_failure()
+                        # BUG FIX (2026-07-13): only the circuit-using call path
+                        # may record a failure. market_snapshot passes
+                        # use_circuit=False precisely so a session 401 doesn't
+                        # starve discovery/reconciler — but this recorded
+                        # unconditionally, pinning forecastex-rest OPEN during
+                        # the 24h SSO outage. Honor use_circuit here.
+                        if use_circuit:
+                            self.circuit.record_failure()
                         raise RuntimeError(
                             f"forecastex auth error {resp.status}: "
                             f"gateway session expired — re-authenticate via /sso. "

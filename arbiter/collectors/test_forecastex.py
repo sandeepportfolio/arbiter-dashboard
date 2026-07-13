@@ -1644,3 +1644,63 @@ async def test_positions_retries_while_cache_warms_after_invalidate(client, monk
     assert reads["n"] == 2
     assert sleeps, "expected a warm-up sleep between empty read and retry"
     assert ("POST", "/portfolio/U111/positions/invalidate") in calls
+
+
+# ── FX session-outage hardening (2026-07-13 agent findings) ─────────────────
+
+async def test_401_with_use_circuit_false_does_not_trip_circuit(client):
+    """BUG (agent adfb5f80): market_snapshot passes use_circuit=False so its
+    401s don't starve discovery — but _request recorded a circuit failure
+    UNCONDITIONALLY on 401/403, pinning forecastex-rest OPEN and blocking the
+    reconciler + discovery (observed live 2026-07-13). A 401 on a
+    use_circuit=False call must NOT touch the circuit."""
+    client._bridge_ready = True  # skip ssodh/init in this test
+    before = client.circuit._failure_count
+    with aioresponses() as m:
+        m.get(re.compile(r".*/iserver/marketdata/snapshot.*"), status=401, body="expired")
+        with pytest.raises(RuntimeError, match="re-authenticate via /sso"):
+            await client._request(
+                "GET", "/iserver/marketdata/snapshot", use_circuit=False,
+            )
+    assert client.circuit._failure_count == before, (
+        "401 on a use_circuit=False call must NOT record a circuit failure"
+    )
+    assert client.circuit.can_execute() is True
+    await client.close()
+
+
+async def test_401_with_use_circuit_true_still_trips_circuit(client):
+    """Guard the guard: circuit-using calls MUST still count 401s so a real
+    auth outage on discovery opens the breaker as designed."""
+    client._bridge_ready = True
+    before = client.circuit._failure_count
+    with aioresponses() as m:
+        m.get(re.compile(r".*/iserver/marketdata/snapshot.*"), status=401, body="expired")
+        with pytest.raises(RuntimeError, match="re-authenticate via /sso"):
+            await client._request(
+                "GET", "/iserver/marketdata/snapshot", use_circuit=True,
+            )
+    assert client.circuit._failure_count == before + 1
+    await client.close()
+
+
+async def test_bridge_init_failure_is_rate_limited(client, monkeypatch):
+    """BUG (agent adfb5f80): when ssodh/init keeps failing (session dead),
+    every /iserver request re-POSTed init -> ~9641/hr storm. A cooldown must
+    bound re-init attempts so a dead session doesn't hammer the gateway."""
+    client._bridge_ready = False
+    now = {"t": 1000.0}
+    monkeypatch.setattr(
+        "arbiter.collectors.forecastex.time.monotonic", lambda: now["t"]
+    )
+    with aioresponses() as m:
+        # init always fails (session dead)
+        m.post(re.compile(r".*/iserver/auth/ssodh/init.*"), status=401, body="dead", repeat=True)
+        await client._ensure_iserver_bridge()   # attempt 1 (fires init)
+        await client._ensure_iserver_bridge()   # within cooldown -> skipped
+        await client._ensure_iserver_bridge()   # within cooldown -> skipped
+        first_count = len(m.requests.get(("POST", __import__("yarl").URL(
+            "https://localhost:5000/v1/api/iserver/auth/ssodh/init")), []))
+    # Only the first attempt should have hit the wire while inside the cooldown.
+    assert first_count == 1, f"init must be rate-limited; fired {first_count}x in cooldown window"
+    await client.close()
