@@ -698,3 +698,47 @@ python3 -m pytest arbiter/execution arbiter/mapping tests/test_mapping_validatio
 # expected: 842 passed, 2 skipped (pre-4.1/4.2 work)
 docker logs arbiter-api-prod --since 30m 2>&1 | grep "Market discovery pass complete" | tail -3
 ```
+
+---
+
+## 2026-07-13 — ★ BREAKTHROUGH: the true root cause of 0/244 poly fills (INVISIBLE ASYNC FILLS) — FIXED + LIVE-VALIDATED
+
+**This overturns the prior "phantom liquidity" theory.** Direct live probing on the
+23k-deep `paccc-usho-midterms-2026-11-03-rep` book (both hosts agree; ~$0.09 total probe
+spend, all self-flattened) proved:
+
+1. **Orders DO fill on real books.** A guaranteed-marketable IOC BUY_LONG at 0.22 vs an
+   84k-deep offer at 0.21 filled (`get_order` readback: cumQuantity=1) — even though the
+   *synchronous submit response* returned `ORDER_STATE_NEW / cumQuantity=0`.
+2. **PM-US fills ASYNCHRONOUSLY** ~1s after a premature `NEW` submit response.
+   `synchronousExecution=true, maxBlockTime=10` does NOT block until terminal for us.
+3. **The engine's poll (`adapter.get_order`) mapped state→FILLED but NEVER re-read
+   cumQuantity/avgPx** → the fill landed with `fill_qty=0`. An INVISIBLE fill: the engine
+   recorded nothing and (when polymarket was the primary leg) aborted the hedge, leaving
+   the fill NAKED + untracked. This — not liquidity, not mapping, not encoding — is why
+   execution_orders shows 0/244 poly fills. The NO-leg encoding (`BUY_SHORT`=1−no_price)
+   is CORRECT (wire→`ORDER_SIDE_SELL`, verified live). `/order/preview` does NOT run the
+   matching engine (returns PENDING_NEW for everything) so it can't test marketability.
+4. **Residue: a live `paccc-usse-midterms-2026-11-03-rep` net −2 (~$0.87) untracked
+   short** exists (NOT created this session; likely Senate-incident residue). Left in
+   place — flag for operator; do not force-close blindly.
+
+**FIX (commit cf749fc, deployed + healthy):** `get_order` now extracts the venue's
+authoritative cumQuantity→fill_qty and avgPx→fill_price (monotonic guard: a poll may only
+RAISE a confirmed fill). Strictly safety-positive — makes fills visible so the engine
+hedges instead of aborting into an undetected naked leg. TDD: 3 new tests; full execution
+suite 530 passed / 2 skipped.
+
+**LIVE E2E VALIDATION (prod adapter path):** place_ioc → premature `submitted/fill_qty=0`
+→ first poll (0.4s) → **`filled / fill_qty=1.0 / fill_price=0.21`**. PASS. Flattened, flat.
+
+### Still open (next levers, priority order)
+1. **Real-orderbook-depth gate** — scanner still gates on `volume` (scanner/arbitrage.py:482
+   `_early_liq = min(yes_volume, no_volume)`) not real crossable book depth, so it fires on
+   thin/fast live-game books. Now that fills are visible, add a fail-closed live-depth
+   preflight so first real captures happen on deep books, not phantom edges.
+2. **ForecastEx dark ~since 2026-07-10 21:51Z** — IBKR CP SSO session logged out (global
+   401). Root cause = NO keepalive/reauth anywhere. Needs: (code) tickle keepalive +
+   forecastex.py:230 circuit-on-401 bug + ssodh/init storm fix; (HUMAN) operator re-login
+   at https://localhost:5000 (IBKR creds+2FA) — I am barred from entering credentials.
+   Do NOT restart the gateway process (destroys SSO); only the session expired.
