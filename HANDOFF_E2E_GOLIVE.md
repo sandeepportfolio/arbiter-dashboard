@@ -766,3 +766,26 @@ longer falsely pinned).
 **Still-open follow-ups (autonomous):** (1) /tickle keepalive loop to prevent future SOFT
 expiry (needs collector-lifecycle wiring); (2) real-orderbook-depth gate for K↔P;
 (3) `paccc-usse-midterms-2026-11-03-rep` net −2 (~$0.87) untracked short — reconcile/flag.
+
+## 2026-07-13 (cont.) — FX RECOVERED + keepalive; depth-gate misconception corrected
+
+**FX BACK ONLINE:** operator re-logged in at https://localhost:5000 → `authenticated:true,
+connected:true`; positions readable (count=2); prices flowing to Redis again
+(`price:forecastex:DEM_HOUSE_2026`, `GOP_HOUSE_2026`); 0 fetch failures (was ~4034/hr).
+
+**Keepalive shipped (commit adds tickle/reauth):** `ForecastExClient.maybe_keepalive()` —
+rate-limited `/tickle` (FX_KEEPALIVE_INTERVAL_S=55) each poll cycle + auto
+`/iserver/reauthenticate` on a dropped brokerage session (self-heals SOFT drops WITHOUT an
+operator login). Wired into the collector run loop. Prevents a recurrence of the soft-expiry
+outage. IBKR's HARD daily reset still needs the persistent-auth migration (IBeam/OAuth —
+research in flight); that's the true "log in once, never again" fix.
+
+**★ CORRECTION — the "volume-not-depth" claim was WRONG.** Both collectors already populate
+`yes_volume`/`no_volume` with REAL book depth, not 24h volume:
+- kalshi.py:493 `yes_volume = yes_ask_size_fp` (size at the ask)
+- polymarket_us.py:471 `yes_volume = _level_qty(offers)` (sum of top-5 book levels)
+So the scanner's `min(yes_volume,no_volume)` gate (arbitrage.py:482) IS depth-based, AND the
+executor has a second fresh-book depth gate (`check_depth`, both legs, fail-closed,
+auto_executor.py:805). A third depth gate is NOT needed and would risk over-blocking the real
+captures the invisible-fill fix just unlocked. The live-game "failures" were invisible fills
+(now recorded) + harmless fast-book no-fill races (safe aborts, zero naked legs).
