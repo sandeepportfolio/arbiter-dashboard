@@ -11,7 +11,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Awaitable, Callable, Dict, List, Optional
 
 logger = logging.getLogger("arbiter.audit.reconciler")
 
@@ -102,6 +102,18 @@ class PnLReconciler:
     # Minimum balance change to classify as deposit/withdrawal vs noise
     DEPOSIT_DETECTION_THRESHOLD = 1.00  # $1.00
 
+    # 2026-07-15: any discrepancy >= DEPOSIT_DETECTION_THRESHOLD gets
+    # auto-absorbed into a rebaselined "deposit/withdrawal" HERE, before
+    # ``reconcile()``'s own drift-flag check (self.threshold, $100 default)
+    # ever sees the (now-zeroed) discrepancy — making that flag structurally
+    # unreachable for anything under $100. A real -$10.30 ForecastEx balance
+    # drop with zero corroborating trade/deposit activity was silently
+    # swallowed this way, logged only at INFO. Anything at or above this
+    # threshold (well under the noise floor of a legitimate deposit, well
+    # under the unreachable $100 flag) also raises an incident so it
+    # surfaces to the operator instead of only existing as a log line.
+    DEPOSIT_INCIDENT_THRESHOLD = 5.00  # $5.00
+
     # Window during which a deposit event with the same platform +
     # balance_before + balance_after is treated as a duplicate of an earlier
     # event and silently skipped. Guards against the auto-detector and a
@@ -112,7 +124,10 @@ class PnLReconciler:
     def __init__(self, discrepancy_threshold: float = 100.00,
                  check_interval: float = 300.0,
                  log_to_disk: bool = True,
-                 pg_pool=None):
+                 pg_pool=None,
+                 on_large_deposit: Optional[
+                     Callable[[str, float, float, float], Awaitable[None]]
+                 ] = None):
         # Threshold raised in two steps:
         #   $0.50 → $5.00 (after every trade tripped it from fee deltas)
         #   $5.00 → $25.00 (after 2-3 successful unwind wins tripped it)
@@ -132,6 +147,13 @@ class PnLReconciler:
         self.check_interval = check_interval
         self.log_to_disk = log_to_disk
         self._pg_pool = pg_pool  # asyncpg pool for persistence (optional)
+        # Optional async callback invoked for any auto-detected deposit/
+        # withdrawal >= DEPOSIT_INCIDENT_THRESHOLD: (platform, amount,
+        # balance_before, balance_after) -> Awaitable[None]. Wired in
+        # main.py to ExecutionEngine.record_incident so a large unexplained
+        # balance move surfaces on the dashboard + Telegram instead of only
+        # an INFO log line.
+        self._on_large_deposit = on_large_deposit
         self._starting_balances: Dict[str, float] = {}
         self._recorded_pnl: Dict[str, float] = {}  # platform -> cumulative PnL
         self._total_deposits: Dict[str, float] = {}  # platform -> total deposits
@@ -496,6 +518,15 @@ class PnLReconciler:
         if self._pg_pool is not None:
             asyncio.ensure_future(self._persist_deposit_event(event))
             asyncio.ensure_future(self._persist_balance(platform))
+        # Surface anything large enough to plausibly be a real problem
+        # (not fee/rounding noise) as an incident — this auto-absorb path
+        # would otherwise be the ONLY record of it, and the reconcile()
+        # drift-flag threshold never fires on an already-rebaselined
+        # discrepancy (see DEPOSIT_INCIDENT_THRESHOLD docstring above).
+        if self._on_large_deposit is not None and abs(amount) >= self.DEPOSIT_INCIDENT_THRESHOLD:
+            asyncio.ensure_future(
+                self._on_large_deposit(platform, amount, balance_before, balance_after)
+            )
 
     def _detect_deposits(self, current_balances: Dict[str, float]):
         """Check for unexplained balance changes and classify as deposits/withdrawals."""

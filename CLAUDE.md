@@ -64,7 +64,19 @@ A cross-platform prediction market arbitrage system that detects price discrepan
 - Python 3.12 runtime
 ## Supported Markets
 - **Kalshi** - Prediction market with authentication (`py-clob-client` for CLOB orders)
-- **Polymarket** - Ethereum-based AMM via CLOB (`web3` + `py-clob-client`)
+- **Polymarket** - Ethereum-based AMM via CLOB (`web3` + `py-clob-client`); the live
+  US venue is served by `arbiter/collectors/polymarket_us.py` (Ed25519-signed REST)
+- **ForecastEx (IBKR)** - Event-contract venue accessed through Interactive Brokers.
+  Collectors: `arbiter/collectors/forecastex.py` (Client Portal Web API) and
+  `arbiter/collectors/forecastex_tws.py` (TWS socket). Execution:
+  `arbiter/execution/adapters/forecastex.py`. Auth has two paths (see
+  `deploy/ib-gateway/RUNBOOK.md`): Path A = IB Gateway + IBC login with a
+  `/tickle` session-keepalive supervisor (`~/.arbiter/bin/ibkr_session_keepalive.sh`);
+  Path B = zero-touch OAuth 1.0a (`arbiter/auth/ibkr_oauth.py`, keys under
+  `arbiter/keys/ibkr_oauth_*`), pending an IBKR-issued consumer key. Because the SSO
+  session needs a periodic human login/2FA, ForecastEx pairs go dark on session
+  expiry — but per-venue-pair readiness (`arbiter/readiness.py`) keeps
+  Kalshi↔Polymarket trading live independently when only the FX venue is down.
 ## Key Versions
 - Node.js: 18+ (ES2022 target)
 - Python: 3.12
@@ -89,13 +101,16 @@ Conventions not yet established. Will populate as patterns emerge during develop
 - **Fee-aware:** Cross-platform arbitrage math includes venue-specific fee structures (Kalshi quadratic, Polymarket market-specific)
 - **Dual execution modes:** Dry-run simulation (TypeScript) and live trading (Python)
 ## Layers
-- **Purpose:** Fetch live market prices from two platforms (Kalshi, Polymarket)
+- **Purpose:** Fetch live market prices from three platforms (Kalshi, Polymarket, ForecastEx)
 - **Location:** `arbiter/collectors/` (Python), `src/collectors/` (TypeScript)
 - **Contains:** Platform-specific HTTP clients with retry logic and circuit breakers
 - **Depends on:** External market APIs, Redis quote cache
 - **Used by:** Price scanner, portfolio monitor
 - `arbiter/collectors/kalshi.py` - Kalshi market data (authenticated CLOB queries)
 - `arbiter/collectors/polymarket.py` - Polymarket via thegraph.com indexing
+- `arbiter/collectors/polymarket_us.py` - Polymarket US live venue (Ed25519-signed REST)
+- `arbiter/collectors/forecastex.py` - ForecastEx via IBKR Client Portal Web API
+- `arbiter/collectors/forecastex_tws.py` - ForecastEx via IBKR TWS socket
 - `src/collectors/kalshi-client.ts` - TypeScript Kalshi client (CLI only)
 - **Purpose:** Centralized quote cache with subscriptions for state changes
 - **Location:** `arbiter/utils/price_store.py`
@@ -124,6 +139,10 @@ Conventions not yet established. Will populate as patterns emerge during develop
 - `Order` - Order state machine
 - `ArbExecution` - Full arbitrage trade record (buy leg + sell leg)
 - `ExecutionIncident` - Error/warning tracking
+- Per-venue adapters in `arbiter/execution/adapters/` (`kalshi.py`, `polymarket_us.py`,
+  `forecastex.py`) implement the `PlatformAdapter` order-routing interface. ForecastEx
+  routes through IBKR (Client Portal REST or TWS socket per `IBKR_USE_TWS`), gated by the
+  `IBKR_USE_TWS` + `IBKR_TWS_ALLOW_LIVE` live opt-in safety flags.
 - **Purpose:** Track balances, portfolio health, readiness for live trading
 - **Location:** `arbiter/monitor/balance.py`, `arbiter/portfolio/monitor.py`, `arbiter/readiness.py`
 - **Contains:**

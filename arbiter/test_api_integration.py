@@ -1986,3 +1986,27 @@ def test_set_forecastex_conid_returns_404_for_unknown_mapping():
             assert store.upsert.await_count == 0
 
     asyncio.run(_run())
+
+
+def test_drift_guard_active_reflects_reconciler_attachment():
+    """Fix #4: drift_guard_active was hardcoded True regardless of state.
+
+    It must now be the honest "is the PnLReconciler actually attached" signal,
+    so an operator can't be fooled into thinking drift protection is armed when
+    no reconciler is wired.
+    """
+    async def _run():
+        api = await _make_rate_limit_api()
+
+        # No reconciler attached → guard reports inactive.
+        api.reconciler = None
+        resp_off = await api.handle_portfolio_summary(None)
+        assert json.loads(resp_off.text)["drift_guard_active"] is False
+
+        # Attach a real reconciler → guard reports active.
+        from arbiter.audit.pnl_reconciler import PnLReconciler
+        api.reconciler = PnLReconciler(log_to_disk=False)
+        resp_on = await api.handle_portfolio_summary(None)
+        assert json.loads(resp_on.text)["drift_guard_active"] is True
+
+    asyncio.run(_run())

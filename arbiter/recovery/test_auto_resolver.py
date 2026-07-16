@@ -592,3 +592,32 @@ async def test_run_once_returns_aggregated_summary():
     assert any(
         e["outcome"] == "expired" for e in summary["expired_incidents"]
     )
+
+
+@pytest.mark.asyncio
+async def test_expire_skips_stranded_position_incident_even_without_open_legs():
+    """Fix #2: a STRAND-* incident is inherently non-terminal.
+
+    Stranded-position incidents carry a synthetic arb_id (STRAND-{venue}-{hash})
+    that never has a matching execution_orders row, so _has_open_legs is blind
+    to them. Before the fix these auto-expired at the 24h TTL while the naked
+    venue position was still open — zero visibility for the rest of its life.
+    The incident must be skipped (skipped_active_position), not expired, even
+    though it has no open legs, until an operator resolves it explicitly.
+    """
+    pool = _StubPool(
+        open_incidents=[
+            {
+                "incident_id": "INC-STRAND",
+                "arb_id": "STRAND-kalshi-deadbeef",
+                "severity": "warning",
+                "age_s": 7 * 24 * 3600.0,  # very stale — well past the 24h TTL
+            }
+        ],
+        open_legs_by_arb={},  # STRAND-* ids never have execution_orders rows
+    )
+    store = _StubStore(pool)
+    resolver = AutoResolver(store=store)
+    results = await resolver.expire_stale_incidents()
+    assert results[0].outcome == "skipped_active_position"
+    assert pool.expired_incidents == []  # must NOT silently expire

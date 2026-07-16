@@ -518,6 +518,23 @@ async def structural_fast_promote(
             logger.warning(
                 "structural_fast_promote: fx_conid_owner_counts failed: %s", exc,
             )
+    # Duplicate-canonical guard: a Kalshi market / Polymarket slug already
+    # owned by a *confirmed* mapping must not get a SECOND confirmed canonical
+    # (2026-07-15: POL_US_HOUSE_...MAJORITY_REP_72761b7a reached confirmed+auto
+    # independently of the already-quarantined GOP_HOUSE_2026, same Kalshi
+    # market CONTROLH-2026-R — quarantine markers live on the canonical_id, not
+    # the market, so a second discovery escaped the marker). market_owner_counts
+    # is confirmed-only and this pass promotes candidate/review, so any count>=1
+    # is a genuine other owner.
+    market_owner_counts: dict[str, int] = {}
+    _mgetter = getattr(mapping_store, "market_owner_counts", None)
+    if callable(_mgetter):
+        try:
+            market_owner_counts = dict(await _mgetter() or {})
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "structural_fast_promote: market_owner_counts failed: %s", exc,
+            )
     for status in ("candidate", "review"):
         try:
             rows = await mapping_store.all(status=status, limit=limit)
@@ -550,6 +567,18 @@ async def structural_fast_promote(
                 logger.warning(
                     "structural_fast_promote: refusing %s — %s",
                     mapping.canonical_id, conid_conflict,
+                )
+                continue
+            market_conflict = coherence.shared_market_owner_conflict(
+                getattr(mapping, "kalshi_market_id", ""),
+                getattr(mapping, "polymarket_slug", ""),
+                market_owner_counts,
+            )
+            if market_conflict:
+                skipped["duplicate_canonical"] = skipped.get("duplicate_canonical", 0) + 1
+                logger.warning(
+                    "structural_fast_promote: refusing %s — %s",
+                    mapping.canonical_id, market_conflict,
                 )
                 continue
             verdict = evaluate_structural_promotion(mapping, min_score=min_score)

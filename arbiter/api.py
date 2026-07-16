@@ -3154,7 +3154,12 @@ class ArbiterAPI:
             "open_positions": engine_open + stranded_count + paired_count,
             "engine_open_positions": engine_open,
             "dry_run": self.config.scanner.dry_run,
-            "drift_guard_active": True,
+            # 2026-07-15: was hardcoded True regardless of anything.
+            # Reflects whether the PnLReconciler is actually attached and
+            # wired — the honest "is the guard armed" signal. (Not "is
+            # drift currently flagged" — see /api/balances/reconcile for
+            # the live discrepancy state.)
+            "drift_guard_active": self.reconciler is not None,
         })
 
     # ── Auth endpoints ────────────────────────────────────────────────────

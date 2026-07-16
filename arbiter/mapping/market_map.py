@@ -1287,6 +1287,45 @@ class MarketMappingStore:
                     counts[c] = counts.get(c, 0) + 1
         return counts
 
+    async def market_owner_counts(self) -> Dict[str, int]:
+        """Return ``{"kalshi:{market_id}" | "polymarket:{slug}": owner_count}``
+        across confirmed mappings.
+
+        A key with count > 1 means two independently-confirmed canonical ids
+        both claim to own the same underlying Kalshi market / Polymarket
+        market — the duplicate-canonical class of bug (2026-07-15:
+        ``POL_US_HOUSE_20261103_PARTY-CONTROL_MAJORITY_REP_72761b7a`` reached
+        confirmed+allow_auto_trade independently of the already-quarantined
+        ``GOP_HOUSE_2026``, which owns the same ``CONTROLH-2026-R`` Kalshi
+        market — quarantine markers live on the canonical_id, not the
+        underlying market, so they don't stop a second discovery of the same
+        real-world event from reaching confirmed on its own). Mirrors
+        ``fx_conid_owner_counts`` for the FX-conid case; promotion paths
+        should refuse to confirm a mapping whose kalshi_market_id or
+        polymarket_slug is already owned by another confirmed mapping.
+        """
+        conn = await self.acquire()
+        try:
+            rows = await conn.fetch(
+                """
+                SELECT kalshi_market_id AS km, polymarket_slug AS ps
+                FROM market_mappings WHERE status = 'confirmed'
+                """
+            )
+        finally:
+            await self._pool.release(conn)
+        counts: Dict[str, int] = {}
+        for r in rows:
+            km = str(r["km"] or "").strip()
+            if km:
+                key = f"kalshi:{km}"
+                counts[key] = counts.get(key, 0) + 1
+            ps = str(r["ps"] or "").strip()
+            if ps:
+                key = f"polymarket:{ps}"
+                counts[key] = counts.get(key, 0) + 1
+        return counts
+
     async def refresh_runtime_cache(self) -> int:
         """Mirror all durable mappings into the legacy in-process MARKET_MAP.
 

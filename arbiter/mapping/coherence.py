@@ -103,6 +103,42 @@ def shared_fx_conid_conflict(
     return None
 
 
+def shared_market_owner_conflict(
+    kalshi_market_id: object,
+    polymarket_slug: object,
+    owner_counts: Dict[str, int],
+) -> Optional[str]:
+    """Conflict when this mapping's underlying Kalshi market or Polymarket
+    slug is already owned by another confirmed mapping.
+
+    Unlike a shared FX conid (which can legitimately need a live-quote
+    coherence check to resolve), two different confirmed canonical_ids
+    pointing at the SAME Kalshi market or Polymarket slug is never
+    legitimate — exactly one canonical id should own a given real-world
+    market. 2026-07-15: ``POL_US_HOUSE_20261103_PARTY-CONTROL_MAJORITY_REP_
+    72761b7a`` reached confirmed+allow_auto_trade independently of the
+    already-quarantined ``GOP_HOUSE_2026``, both owning Kalshi market
+    ``CONTROLH-2026-R`` — quarantine markers live on the canonical_id, not
+    the market, so they didn't stop the second discovery. Promotion paths
+    should refuse (not just flag) when ``owner_counts`` shows an existing
+    confirmed owner for either leg.
+    """
+    for label, key in (
+        ("Kalshi market", f"kalshi:{str(kalshi_market_id or '').strip()}"),
+        ("Polymarket slug", f"polymarket:{str(polymarket_slug or '').strip()}"),
+    ):
+        ident = key.split(":", 1)[1]
+        if not ident:
+            continue
+        n = int(owner_counts.get(key, 0) or 0)
+        if n >= 1:
+            return (
+                f"{label} {ident!r} is already owned by {n} other confirmed "
+                "mapping(s) — refusing duplicate-canonical promotion"
+            )
+    return None
+
+
 def party_conflict(canonical_text: str, fx_local_symbol: str) -> Optional[str]:
     """Conflict description when the canonical's party contradicts the FX
     contract symbol's party; None when clean or undeterminable.

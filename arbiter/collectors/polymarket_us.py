@@ -73,7 +73,18 @@ def _request_path_for_base(base_url: str, path: str) -> str:
 
 
 def _signature_path(path: str) -> str:
+    """Return the path Polymarket-US expects in the signature payload.
+
+    2026-07-15: verified empirically against the live API that the
+    signature covers the path WITHOUT any query string — an identical
+    signed GET 401s when the querystring is included in the signature and
+    200s when it's excluded. No production call site currently passes a
+    query string here, so this was latent, but any future paginated
+    signed GET (e.g. /portfolio/activities?limit=...&cursor=...) would
+    silently 401 without this fix.
+    """
     normalized = _normalize_path(path)
+    normalized = normalized.split("?", 1)[0]
     if normalized.startswith("/v1/"):
         return normalized
     return f"/v1{normalized}"

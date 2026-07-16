@@ -770,7 +770,22 @@ class AutoResolver:
                     )
                 )
                 continue
-            if arb_id and await self._has_open_legs(arb_id):
+            # Stranded-position incidents use a synthetic arb_id
+            # (``STRAND-{venue}-{hash}``, stranded_reconciler.py) that never
+            # has a matching execution_orders row, so ``_has_open_legs``
+            # below is always blind to them — the exact incident type that
+            # represents real, still-open naked risk. 2026-07-15: this let
+            # incidents for 8 real stranded positions auto-expire at the 24h
+            # TTL and then never re-alert (the reconciler only emits on a
+            # *new* tracked key, not on TTL re-expiry), leaving a ~24h
+            # window with zero visibility into live venue exposure. Treat
+            # any STRAND-* incident as inherently non-terminal — require
+            # explicit operator resolution via the dashboard resolve
+            # endpoint instead of a silent TTL expiry.
+            has_open = (arb_id or "").startswith("STRAND-") or (
+                arb_id and await self._has_open_legs(arb_id)
+            )
+            if has_open:
                 logger.warning(
                     "auto_resolver: skipping stale-incident expiry — "
                     "arb=%s has open legs (incident=%s)",

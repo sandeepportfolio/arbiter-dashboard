@@ -682,6 +682,39 @@ class ExecutionEngine:
         async with canonical_lock:
             return await self._execute_opportunity_locked(opp)
 
+    async def _next_arb_id(self) -> str:
+        """Mint the next ``ARB-NNNNNN`` id.
+
+        Prefers a durable Postgres SEQUENCE (``arb_id_seq``) so ids only ever
+        move forward and survive an ``execution_arbs`` TRUNCATE/reset — the
+        historical ID-reuse bug (Fix #8): ``execution_incidents`` held
+        ARB-001043..001051 from May while a July table reset let the old
+        ``MAX(execution_arbs.arb_id)`` seed re-mint those exact ids for
+        different trades, corrupting incident↔arb joins.
+
+        Falls back to the in-process counter when no store/pool is available
+        (unit tests, DB-less runs) or on any DB error, so the hot path can
+        never break on the sequence — worst case it degrades to the prior
+        behavior. The in-memory counter is kept in lockstep with the sequence
+        so the two paths stay monotonic if they ever interleave.
+        """
+        store = getattr(self, "store", None)
+        pool = getattr(store, "_pool", None) if store is not None else None
+        if pool is not None:
+            try:
+                async with pool.acquire() as conn:
+                    n = int(await conn.fetchval("SELECT nextval('arb_id_seq')"))
+                if n > self._execution_count:
+                    self._execution_count = n
+                return f"ARB-{n:06d}"
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "nextval(arb_id_seq) failed (%s); falling back to in-memory counter",
+                    exc,
+                )
+        self._execution_count += 1
+        return f"ARB-{self._execution_count:06d}"
+
     async def _execute_opportunity_locked(self, opp: ArbitrageOpportunity) -> Optional[ArbExecution]:
         approved, reason = self.risk.check_trade(opp)
         if not approved:
@@ -708,11 +741,10 @@ class ExecutionEngine:
             }
             self._signatures_last_pruned = now_ts
 
-        # Bump counter + bind contextvars early (OPS-01 / Pitfall 6) — every
-        # downstream log line will carry arb_id + canonical_id until the finally
-        # block clears them.
-        self._execution_count += 1
-        arb_id = f"ARB-{self._execution_count:06d}"
+        # Mint the next id + bind contextvars early (OPS-01 / Pitfall 6) —
+        # every downstream log line will carry arb_id + canonical_id until the
+        # finally block clears them.
+        arb_id = await self._next_arb_id()
 
         clear_contextvars()
         bind_contextvars(
@@ -3722,7 +3754,17 @@ class ExecutionEngine:
                     # Dedup on canonical+event so a flapping reconciler/db
                     # doesn't blast Telegram every loop.
                     dedup_key = f"incident:{event_type or severity}:{canonical_id}"
-                    await notifier.send(msg, dedup_key=dedup_key)
+                    # stranded_position alerts are each a distinct, already-
+                    # deduplicated condition (one per lot, emitted once by
+                    # the reconciler's new-key logic, never a repeat) — a
+                    # cold-start batch of N of them isn't the alert storm
+                    # the burst guard exists to stop, and silently dropping
+                    # some is exactly the outage the incident is meant to
+                    # prevent. See TelegramNotifier.send docstring.
+                    bypass_burst = event_type == "stranded_position"
+                    await notifier.send(
+                        msg, dedup_key=dedup_key, bypass_burst=bypass_burst
+                    )
             except Exception as exc:
                 logger.warning(
                     "record_incident: telegram send failed (severity=%s event_type=%s): %s",

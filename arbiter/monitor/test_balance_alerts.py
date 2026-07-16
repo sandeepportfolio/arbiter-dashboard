@@ -529,3 +529,48 @@ def test_gate_passes_when_estimated_net_after_fallback_fees_is_positive():
     # to isolate the BUG #5 check:
     opp.net_edge_cents = 3.0
     assert _alert_is_safe_to_send(opp) is True
+
+
+# ── Fix #3: burst-guard bypass for already-deduplicated alert classes ────────
+
+def _saturated_notifier():
+    from arbiter.monitor.balance import TelegramNotifier
+    n = TelegramNotifier(bot_token="x", chat_id="y",
+                         burst_window_sec=10.0, burst_max=2)
+    now = time.time()
+    n._burst_history = [now, now]  # window already saturated
+    return n
+
+
+class _ReachedSession(Exception):
+    """Raised by the stubbed _get_session to prove the guard was passed."""
+
+
+@pytest.mark.asyncio
+async def test_saturated_burst_guard_drops_normal_send():
+    n = _saturated_notifier()
+
+    async def boom():
+        raise _ReachedSession()
+
+    n._get_session = boom  # type: ignore[assignment]
+    # Not bypassing: the saturated guard must drop the send BEFORE any HTTP
+    # session is acquired (returns False, never raises _ReachedSession).
+    assert await n.send("distinct message A") is False
+    assert n._burst_dropped == 1
+
+
+@pytest.mark.asyncio
+async def test_bypass_burst_passes_saturated_guard():
+    n = _saturated_notifier()
+
+    async def boom():
+        raise _ReachedSession()
+
+    n._get_session = boom  # type: ignore[assignment]
+    # bypass_burst=True must skip the guard even when saturated and proceed to
+    # acquire the session — proven by the sentinel propagating out of send().
+    with pytest.raises(_ReachedSession):
+        await n.send("distinct message B", bypass_burst=True)
+    # The guard was bypassed, so no drop was counted.
+    assert n._burst_dropped == 0

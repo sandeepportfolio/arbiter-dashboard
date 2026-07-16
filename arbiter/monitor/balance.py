@@ -415,8 +415,20 @@ class TelegramNotifier:
         parse_mode: str = "HTML",
         *,
         dedup_key: Optional[str] = None,
+        bypass_burst: bool = False,
     ) -> bool:
         """Send a Telegram message with retry + optional dedup.
+
+        ``bypass_burst``: skip the global burst-guard cap for this send.
+        Reserved for alert classes that are already deduplicated upstream
+        (one row per distinct condition, never a repeat) where the burst
+        guard's own purpose — protecting against a *repeat* alert storm —
+        doesn't apply, and silently dropping them defeats their point.
+        2026-07-15: a cold-start stranded-position sweep emitting all N
+        distinct positions at once was 4-of-8 burst-dropped exactly when
+        the operator most needed the full picture. See
+        ``StrandedPositionReconciler`` / ``ExecutionEngine.record_incident``
+        (``event_type == "stranded_position"``).
 
         Returns True on HTTP 200 from Telegram, False on any other outcome
         (disabled, deduped, retries exhausted, non-200 response).
@@ -432,7 +444,7 @@ class TelegramNotifier:
         # Global burst guard: drop the send (after dedup) when the rolling
         # window has already saturated. Prevents a cross-source storm from
         # turning the channel into noise during an incident cascade.
-        if self._burst_window_sec > 0:
+        if self._burst_window_sec > 0 and not bypass_burst:
             now_burst = time.time()
             cutoff = now_burst - self._burst_window_sec
             self._burst_history = [t for t in self._burst_history if t >= cutoff]

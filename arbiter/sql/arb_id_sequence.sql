@@ -1,0 +1,15 @@
+-- Durable ARB-NNNNNN identifier sequence (Fix #8, 2026-07-16).
+--
+-- Root cause it fixes: engine._execution_count was seeded from
+--   SELECT MAX(arb_id) FROM execution_arbs
+-- on every boot. execution_incidents.arb_id has no FK to execution_arbs, so a
+-- past reset/deletion of execution_arbs rows (incidents held ARB-001043..001051
+-- dated 2026-05-17/05-28 while execution_arbs re-minted those exact ids on
+-- 2026-07-11/12 for entirely different trades) let the counter re-mint historical
+-- ids and corrupt any incident<->arb join built on arb_id string equality.
+--
+-- A SEQUENCE only ever moves forward and survives TRUNCATE of execution_arbs, so
+-- ids can never be reused once the sequence has passed them. Startup setval seeds
+-- it to the high-water mark across BOTH execution_arbs and execution_incidents.
+-- Idempotent: IF NOT EXISTS makes reruns (init.sql-style) safe.
+CREATE SEQUENCE IF NOT EXISTS arb_id_seq AS BIGINT START WITH 1 MINVALUE 1;

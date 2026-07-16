@@ -771,7 +771,7 @@ def test_record_incident_sends_telegram_for_critical():
         engine = make_engine(store)
         sent: list[tuple[str, str]] = []
 
-        async def fake_send(msg, parse_mode="HTML", *, dedup_key=None):
+        async def fake_send(msg, parse_mode="HTML", *, dedup_key=None, bypass_burst=False):
             sent.append((msg, dedup_key or ""))
             return True
 
@@ -796,10 +796,10 @@ def test_record_incident_sends_telegram_for_stranded_position():
     async def runner():
         store = PriceStore(ttl=60)
         engine = make_engine(store)
-        sent: list[tuple[str, str]] = []
+        sent: list[tuple[str, str, bool]] = []
 
-        async def fake_send(msg, parse_mode="HTML", *, dedup_key=None):
-            sent.append((msg, dedup_key or ""))
+        async def fake_send(msg, parse_mode="HTML", *, dedup_key=None, bypass_burst=False):
+            sent.append((msg, dedup_key or "", bypass_burst))
             return True
 
         engine.balance_monitor.notifier.send = fake_send  # type: ignore[assignment]
@@ -820,10 +820,15 @@ def test_record_incident_sends_telegram_for_stranded_position():
             },
         )
         assert sent, "Stranded position must trigger Telegram even at warning severity"
-        body, _ = sent[0]
+        body, _, bypass_burst = sent[0]
         assert "STRANDED POSITION" in body
         assert "7" in body and "YES" in body and "KALSHI" in body
         assert "+3.50" in body
+        # Fix #3: stranded-position alerts must bypass the global burst guard so
+        # a cold-start sweep of N distinct positions is never partially dropped.
+        assert bypass_burst is True, (
+            "stranded_position alerts must set bypass_burst=True"
+        )
 
     asyncio.run(runner())
 
@@ -834,7 +839,7 @@ def test_record_incident_skips_telegram_for_one_leg_exposure():
         engine = make_engine(store)
         sent: list[str] = []
 
-        async def fake_send(msg, parse_mode="HTML", *, dedup_key=None):
+        async def fake_send(msg, parse_mode="HTML", *, dedup_key=None, bypass_burst=False):
             sent.append(msg)
             return True
 
@@ -857,7 +862,7 @@ def test_record_incident_no_telegram_for_routine_warning():
         engine = make_engine(store)
         sent: list[str] = []
 
-        async def fake_send(msg, parse_mode="HTML", *, dedup_key=None):
+        async def fake_send(msg, parse_mode="HTML", *, dedup_key=None, bypass_burst=False):
             sent.append(msg)
             return True
 
@@ -4640,5 +4645,26 @@ def test_post_submit_poll_honors_wall_clock_not_sleep_count():
         # With sleep-only accounting this ran ~0.6s+ (2x). Wall-clock bound
         # keeps it within a small margin of the 0.3s timeout.
         assert wall < 0.5, f"poll ran {wall:.3f}s, expected <0.5s (wall-clock bound)"
+
+    asyncio.run(runner())
+
+
+def test_next_arb_id_falls_back_to_in_memory_counter_without_store():
+    """Fix #8: _next_arb_id must degrade to the in-memory counter when no DB
+    pool is available (tests, DB-less runs) so the hot path can never break on
+    the durable sequence — worst case it behaves like the pre-sequence code.
+    """
+    async def runner():
+        store = PriceStore(ttl=60)
+        engine = make_engine(store)  # make_engine passes no ExecutionStore
+        assert engine.store is None
+        first = await engine._next_arb_id()
+        second = await engine._next_arb_id()
+        assert first.startswith("ARB-") and second.startswith("ARB-")
+        # Strictly monotonic, zero-padded, six digits.
+        n1 = int(first.split("-")[1])
+        n2 = int(second.split("-")[1])
+        assert n2 == n1 + 1
+        assert len(first.split("-")[1]) == 6
 
     asyncio.run(runner())

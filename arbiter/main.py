@@ -1096,9 +1096,40 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
         monitor,
     )
     profitability = ProfitabilityValidator(ProfitabilityConfig(), scanner, engine)
+
+    async def _on_large_reconciler_deposit(
+        platform: str, amount: float, balance_before: float, balance_after: float
+    ) -> None:
+        """Surface a large auto-detected deposit/withdrawal as an incident.
+
+        Without this, PnLReconciler._detect_deposits silently absorbs any
+        discrepancy >= $1 as a rebaselined "deposit" with only an INFO log
+        line — the operator never sees it. See DEPOSIT_INCIDENT_THRESHOLD.
+        """
+        kind = "increase" if amount > 0 else "decrease"
+        await engine.record_incident(
+            arb_id=f"RECON-DEPOSIT-{platform}-{int(time.time())}",
+            canonical_id=platform,
+            severity="warning",
+            message=(
+                f"Unexplained balance {kind} on {platform}: ${abs(amount):.2f} "
+                f"(${balance_before:.2f} -> ${balance_after:.2f}), auto-classified "
+                f"as a deposit/withdrawal by PnLReconciler. Verify this was a "
+                f"legitimate external transaction."
+            ),
+            metadata={
+                "event_type": "reconciler_large_deposit",
+                "platform": platform,
+                "amount": amount,
+                "balance_before": balance_before,
+                "balance_after": balance_after,
+            },
+        )
+
     reconciler = PnLReconciler(
         log_to_disk=not api_only,
         pg_pool=store._pool if store is not None else None,
+        on_large_deposit=_on_large_reconciler_deposit,
     )
     # Restore persisted starting balances and deposit history from PostgreSQL
     # so P&L tracking survives container restarts.
@@ -1156,7 +1187,7 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     # market_mappings columns, etc.) land on restart. Every statement in
     # init.sql uses IF NOT EXISTS / IF NOT EXISTS forms so reruns are safe.
     if store is not None and getattr(store, "_pool", None) is not None:
-        for sql_name in ("safety_events.sql", "init.sql"):
+        for sql_name in ("safety_events.sql", "init.sql", "arb_id_sequence.sql"):
             try:
                 sql_path = Path(__file__).parent / "sql" / sql_name
                 ddl = sql_path.read_text()
@@ -1343,31 +1374,45 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
     if store is not None:
         await rehydrate_open_incidents(store, engine, logger)
 
-    # Seed engine._execution_count from the highest arb_id in the DB so
-    # newly-minted ARB-NNN identifiers don't collide with persisted rows
-    # from prior container sessions.  Without this, every restart re-uses
-    # the same low ARB-000001..ARB-000020 ids, and execution_orders ends
-    # up with multiple rows for the same arb_id from different trades
-    # entirely.  Rehydration then mis-attributes leg statuses, which
-    # poisoned the reconciler's survivor-credit logic and re-introduced
-    # the drift block this fix is meant to resolve.
+    # Seed the durable arb_id sequence (Fix #8) to the high-water mark across
+    # BOTH execution_arbs AND execution_incidents so newly-minted ARB-NNNNNN
+    # ids can never collide with a persisted row from any prior session.
+    #
+    # The old logic seeded engine._execution_count from MAX(execution_arbs)
+    # ONLY. execution_incidents.arb_id has no FK to execution_arbs, so after a
+    # reset/deletion of execution_arbs rows (incidents held ARB-001043..001051
+    # from 2026-05 while execution_arbs re-minted those exact ids in 2026-07 for
+    # different trades) the counter re-minted historical ids and corrupted every
+    # incident↔arb join. A SEQUENCE only moves forward and survives TRUNCATE, so
+    # once seeded past both tables' max it will never reuse an id. The engine
+    # mints via nextval('arb_id_seq') with an in-memory fallback; we also seed
+    # _execution_count so that fallback path starts from the same high-water
+    # mark when the DB is briefly unavailable.
     if store is not None:
         try:
             async with store._pool.acquire() as conn:
-                row = await conn.fetchrow(
-                    "SELECT MAX(arb_id) AS max_id FROM execution_arbs WHERE arb_id LIKE 'ARB-%'"
-                )
-                max_id = (row["max_id"] if row else None) or "ARB-000000"
-                try:
-                    engine._execution_count = int(max_id.split("-")[1])
-                    logger.info(
-                        "Seeded engine._execution_count=%d from DB max %s",
-                        engine._execution_count, max_id,
+                hwm = await conn.fetchval(
+                    """
+                    SELECT GREATEST(
+                        COALESCE((SELECT MAX(CAST(SPLIT_PART(arb_id,'-',2) AS BIGINT))
+                                  FROM execution_arbs WHERE arb_id ~ '^ARB-[0-9]+$'), 0),
+                        COALESCE((SELECT MAX(CAST(SPLIT_PART(arb_id,'-',2) AS BIGINT))
+                                  FROM execution_incidents WHERE arb_id ~ '^ARB-[0-9]+$'), 0),
+                        COALESCE((SELECT last_value FROM arb_id_seq), 0)
                     )
-                except (IndexError, ValueError):
-                    pass
+                    """
+                )
+                hwm = int(hwm or 0)
+                # is_called=true so the NEXT nextval returns hwm+1 (never reissues hwm).
+                await conn.execute("SELECT setval('arb_id_seq', $1, true)", max(hwm, 1))
+                engine._execution_count = hwm
+                logger.info(
+                    "Seeded arb_id_seq + engine._execution_count=%d "
+                    "(high-water across execution_arbs + execution_incidents)",
+                    hwm,
+                )
         except Exception as exc:
-            logger.warning("Failed to seed _execution_count from DB: %s", exc)
+            logger.warning("Failed to seed arb_id sequence from DB: %s", exc)
 
     # ── AutoExecutor (Phase 6 Plan 06-01) ──────────────────────
     # Subscribes to scanner, executes on opportunities that pass all 7 policy

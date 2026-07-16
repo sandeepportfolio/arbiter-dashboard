@@ -595,6 +595,23 @@ class MappingAutoValidator:
             results = results_candidates + results_review
 
         promoted_ids: List[str] = []
+        # Duplicate-canonical guard (2026-07-15): a Kalshi market / Polymarket
+        # slug already owned by a confirmed mapping must not get a SECOND
+        # confirmed canonical. Quarantine markers live on the canonical_id, not
+        # the underlying market, so an independently-discovered second canonical
+        # for the same real-world market (e.g. POL_US_HOUSE_...MAJORITY_REP vs
+        # the quarantined GOP_HOUSE_2026, both CONTROLH-2026-R) escapes the
+        # marker. market_owner_counts is confirmed-only; this loop promotes
+        # candidate/review, so any count>=1 is a genuine other owner.
+        market_owner_counts: dict = {}
+        _mgetter = getattr(self.store, "market_owner_counts", None)
+        if callable(_mgetter):
+            try:
+                market_owner_counts = dict(await _mgetter() or {})
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "auto_promote_validated: market_owner_counts failed: %s", exc,
+                )
         for vr in results:
             if vr.recommendation not in (
                 ValidationRecommendation.CONFIRM,
@@ -640,6 +657,32 @@ class MappingAutoValidator:
                     "Skipping promotion of %s: [no-auto-promote] marker set",
                     vr.canonical_id,
                 )
+                continue
+
+            # Duplicate-canonical: refuse (and quarantine) if another confirmed
+            # mapping already owns this Kalshi market / Polymarket slug.
+            market_conflict = coherence.shared_market_owner_conflict(
+                getattr(mapping, "kalshi_market_id", ""),
+                getattr(mapping, "polymarket_slug", ""),
+                market_owner_counts,
+            )
+            if market_conflict:
+                logger.critical(
+                    "Refusing promotion of %s and quarantining: %s",
+                    vr.canonical_id, market_conflict,
+                )
+                try:
+                    await self.store.update_status(
+                        vr.canonical_id,
+                        mapping.status,
+                        review_note=f"[no-auto-promote] {market_conflict}",
+                        allow_auto_trade=False,
+                    )
+                except Exception as q_exc:  # noqa: BLE001
+                    logger.warning(
+                        "Failed to write duplicate-canonical quarantine note "
+                        "for %s: %s", vr.canonical_id, q_exc,
+                    )
                 continue
 
             # Cross-venue price coherence: venues quoting the same outcome

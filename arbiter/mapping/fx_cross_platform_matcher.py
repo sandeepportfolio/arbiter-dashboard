@@ -916,6 +916,24 @@ async def insert_verified_mappings(
     Returns the count of mappings inserted.
     """
     from .market_map import MarketMapping, MappingStatus
+    from . import coherence
+
+    # Duplicate-canonical guard (2026-07-15): refuse to insert a SECOND
+    # confirmed canonical for a Kalshi market already owned by a confirmed
+    # mapping. Quarantine markers live on the canonical_id, not the underlying
+    # market, so an independently-discovered second canonical for the same
+    # real-world market escapes the marker (party-swap bug class). Confirmed-
+    # only counts; a fresh match is not yet confirmed, so any count>=1 is a
+    # genuine other owner.
+    market_owner_counts: dict = {}
+    _mgetter = getattr(mapping_store, "market_owner_counts", None)
+    if callable(_mgetter):
+        try:
+            market_owner_counts = dict(await _mgetter() or {})
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "fx_matcher: market_owner_counts failed: %s", exc,
+            )
 
     inserted = 0
     for match in matches:
@@ -926,6 +944,20 @@ async def insert_verified_mappings(
             logger.info(
                 "fx_matcher: skip existing confirmed mapping %s",
                 match.canonical_id,
+            )
+            continue
+
+        # Duplicate-canonical: another confirmed mapping already owns this
+        # Kalshi ticker — refuse (party-swap escape class).
+        market_conflict = coherence.shared_market_owner_conflict(
+            match.kalshi_ticker,
+            "",
+            market_owner_counts,
+        )
+        if market_conflict:
+            logger.critical(
+                "fx_matcher: refusing insert of %s — %s",
+                match.canonical_id, market_conflict,
             )
             continue
 
