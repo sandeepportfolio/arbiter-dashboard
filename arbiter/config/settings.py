@@ -621,6 +621,13 @@ class ForecastExConfig:
     # gateway, no browser login, no 2FA. Left blank until IBKR activates the
     # self-service registration (~1-2 weeks). See deploy/ib-gateway/RUNBOOK.md
     # § Path B. Falls back to the gateway path when unset.
+    # Explicit transport switch: key material alone never flips the transport
+    # — the operator sets IBKR_OAUTH_ENABLED=true only after the live
+    # validation (scripts/validate_ibkr_oauth.py) passes. The gateway path
+    # stays available as fallback by simply flipping this back off.
+    oauth_enabled: bool = field(
+        default_factory=lambda: _env_bool("IBKR_OAUTH_ENABLED", False)
+    )
     oauth_consumer_key: str = field(
         default_factory=lambda: os.getenv("IBKR_OAUTH_CONSUMER_KEY", "")
     )

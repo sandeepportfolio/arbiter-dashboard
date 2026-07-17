@@ -27,6 +27,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import json
 import os
 import random
 import time
@@ -185,9 +186,20 @@ class IbkrOAuth1a:
         return hmac.compare_digest(expected, lst_signature_hex)
 
     # ── per-request signing ─────────────────────────────────────────
-    def auth_header(self, method: str, url: str, extra_oauth: Optional[dict] = None) -> str:
+    def auth_header(
+        self,
+        method: str,
+        url: str,
+        extra_oauth: Optional[dict] = None,
+        query_params: Optional[dict] = None,
+    ) -> str:
         """Build the OAuth 1.0a Authorization header for a live request.
-        Requires a valid cached LST (compute_lst must have run)."""
+        Requires a valid cached LST (compute_lst must have run).
+
+        ``query_params`` are the request's URL query parameters: OAuth 1.0a
+        requires them in the signature base string, but they must NOT appear
+        in the Authorization header itself (they travel in the URL).
+        """
         if not self._lst_b64:
             raise RuntimeError("no live session token — call get_live_session_token first")
         params = {
@@ -199,10 +211,55 @@ class IbkrOAuth1a:
         }
         if extra_oauth:
             params.update(extra_oauth)
-        base = self.signature_base_string(method, url, params)
+        base_params = dict(params)
+        if query_params:
+            base_params.update({k: str(v) for k, v in query_params.items()})
+        base = self.signature_base_string(method, url, base_params)
         params["oauth_signature"] = self._hmac_sha256_sign(base, self._lst_b64)
         return self._oauth_header(self.realm, params)
 
     @property
     def lst_valid(self) -> bool:
         return bool(self._lst_b64) and time.time() < self._lst_expires
+
+    def invalidate(self) -> None:
+        """Drop the cached LST (e.g. after a 401) so the next
+        ensure_live_session_token performs a fresh handshake."""
+        self._lst_b64 = None
+        self._lst_expires = 0.0
+
+    async def ensure_live_session_token(self, session) -> str:
+        """Return a valid Live Session Token, performing the DH handshake
+        against IBKR when the cached one is missing/expired.
+
+        ``session`` is an ``aiohttp.ClientSession``. Raises ``RuntimeError``
+        when the request fails or the server's LST signature does not verify
+        (a non-verifying LST means the handshake was corrupted or the key
+        material is wrong — never sign requests with it).
+        """
+        if self.lst_valid:
+            return self._lst_b64  # type: ignore[return-value]
+        url, headers, a = self.build_lst_request()
+        async with session.post(url, headers=headers) as resp:
+            text = await resp.text()
+            if resp.status != 200:
+                raise RuntimeError(
+                    f"IBKR live_session_token request failed "
+                    f"{resp.status}: {text[:200]}"
+                )
+        try:
+            payload = json.loads(text)
+            dh_response = payload["diffie_hellman_response"]
+            lst_signature = payload["live_session_token_signature"]
+        except (ValueError, KeyError) as exc:
+            raise RuntimeError(
+                f"IBKR live_session_token response malformed: {text[:200]}"
+            ) from exc
+        lst = self.compute_lst(dh_response, a)
+        if not self.validate_lst(lst_signature):
+            self.invalidate()
+            raise RuntimeError(
+                "IBKR live session token failed signature validation — "
+                "refusing to sign requests with an unverified LST"
+            )
+        return lst

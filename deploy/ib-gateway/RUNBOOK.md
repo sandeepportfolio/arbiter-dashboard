@@ -157,15 +157,24 @@ a 9-char consumer key, upload `public_signature.pem`, `public_encryption.pem`,
 `dhparam.pem`; Save Key → Generate Token → Enable OAuth Access. IBKR activates
 in ~1-2 weeks and issues the consumer key + access token/secret.
 
-**Remaining cutover (do when the consumer key arrives — it's live-testable then):**
+**Update 2026-07-17 — client wiring DONE (was step 2 below).** `IbkrOAuth1a` is
+wired into `ForecastExClient` (`oauth` field): api.ibkr.com base, per-attempt
+`auth_header` with query params in the signature base, auto
+`ensure_live_session_token()` (async DH handshake + signature validation),
+signed `ssodh/init` bridge, LST invalidation on 401, verified TLS in OAuth
+mode. Gated by `IBKR_OAUTH_ENABLED` (explicit switch) AND `oauth_configured`
+(all material present) — attached in `build_forecastex_collector`
+(`arbiter/main.py`). Tests: `arbiter/auth/test_ibkr_oauth.py` +
+`arbiter/collectors/test_forecastex_oauth.py`.
+
+**Remaining cutover (config-only, when the consumer key arrives):**
 1. Set `IBKR_OAUTH_CONSUMER_KEY` / `IBKR_OAUTH_ACCESS_TOKEN` /
    `IBKR_OAUTH_ACCESS_TOKEN_SECRET` in `.env.production`.
-2. Wire `IbkrOAuth1a` into `ForecastExClient._request` (OAuth branch: `api.ibkr.com`
-   base + `auth_header`; add `ensure_live_session_token()`), behind the
-   `oauth_configured` gate. ~1hr, straightforward.
-3. Validate live: LST fetch succeeds + `validate_lst()` True + a read call
-   (`/portfolio/accounts`) returns 200 signed. THEN flip FX to OAuth transport.
-   Gateway path stays as fallback.
+2. Validate live: `set -a; source .env.production; set +a &&
+   python3 scripts/validate_ibkr_oauth.py` — proves LST handshake +
+   signature verification + a signed 200 read against the real api.ibkr.com.
+3. Set `IBKR_OAUTH_ENABLED=true`, rebuild + redeploy. Gateway path stays as
+   fallback (flip the flag back off to return to it).
 
 Until then: the `/tickle` keepalive (already live) removes the frequent
 soft-expiry logins; only IBKR's ~daily hard reset needs a browser re-login.

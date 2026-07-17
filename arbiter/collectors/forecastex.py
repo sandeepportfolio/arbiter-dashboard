@@ -28,6 +28,7 @@ from typing import Callable, Optional
 
 import aiohttp
 
+from arbiter.auth.ibkr_oauth import IbkrOAuth1a
 from arbiter.config.settings import (
     FORECASTEX_TAKER_FEE_PER_CONTRACT,
     ForecastExConfig,
@@ -75,6 +76,11 @@ class ForecastExClient:
     verify_ssl: bool = False
     paper_trading: bool = True
     session: Optional[aiohttp.ClientSession] = field(default=None, repr=False)
+    # Path B (zero-login) transport: when set, every request goes straight to
+    # api.ibkr.com signed with OAuth 1.0a — no local gateway, no SSO session,
+    # no browser login. Attached by build_forecastex_collector when
+    # IBKR_OAUTH_ENABLED is true and the full key material is configured.
+    oauth: Optional[IbkrOAuth1a] = field(default=None, repr=False)
 
     circuit: CircuitBreaker = field(init=False, repr=False)
     live_rate_limiter: RateLimiter = field(init=False, repr=False)
@@ -122,14 +128,20 @@ class ForecastExClient:
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
         if self.session is None or self.session.closed:
-            connector = aiohttp.TCPConnector(ssl=_build_ssl_context(self.verify_ssl))
+            # verify_ssl only exists to accept the LOCAL gateway's self-signed
+            # cert; OAuth mode talks to the public api.ibkr.com, where TLS must
+            # always be verified.
+            verify = True if self.oauth is not None else self.verify_ssl
+            connector = aiohttp.TCPConnector(ssl=_build_ssl_context(verify))
             self.session = aiohttp.ClientSession(
                 timeout=_DEFAULT_TIMEOUT, connector=connector,
             )
         return self.session
 
     def _url(self, path: str) -> str:
-        base = self.gateway_url.rstrip("/")
+        base = (
+            self.oauth.api_base if self.oauth is not None else self.gateway_url
+        ).rstrip("/")
         suffix = path if path.startswith("/") else f"/{path}"
         return f"{base}{suffix}"
 
@@ -161,13 +173,23 @@ class ForecastExClient:
                 return
         self._bridge_init_last_attempt = now
         session = await self._ensure_session()
+        init_url = self._url("/iserver/auth/ssodh/init")
+        headers = {"Accept": "application/json"}
+        if self.oauth is not None:
+            try:
+                await self.oauth.ensure_live_session_token(session)
+            except Exception as exc:  # noqa: BLE001 — best-effort, like the init
+                logger.warning("forecastex: LST for bridge init failed: %s", exc)
+                return
+            headers["Authorization"] = self.oauth.auth_header("POST", init_url)
+            headers["User-Agent"] = "arbiter-ibkr-oauth/1.0"
         # Best-effort — if init fails the next iserver call will surface
         # the underlying error.  Don't block startup on bridge issues.
         try:
             async with session.post(
-                self._url("/iserver/auth/ssodh/init"),
+                init_url,
                 json={"publish": True, "compete": True},
-                headers={"Accept": "application/json"},
+                headers=headers,
             ) as resp:
                 if resp.status == 200:
                     self._bridge_ready = True
@@ -216,13 +238,23 @@ class ForecastExClient:
 
             await self.live_rate_limiter.acquire()
 
+            headers = {"Accept": "application/json"}
+            if self.oauth is not None:
+                # Sign per attempt: OAuth nonce/timestamp must be fresh on
+                # every wire request, including 429/no-bridge retries.
+                await self.oauth.ensure_live_session_token(session)
+                headers["Authorization"] = self.oauth.auth_header(
+                    method, url, query_params=params
+                )
+                headers["User-Agent"] = "arbiter-ibkr-oauth/1.0"
+
             try:
                 async with session.request(
                     method,
                     url,
                     json=json_body,
                     params=params,
-                    headers={"Accept": "application/json"},
+                    headers=headers,
                 ) as resp:
                     logger.debug("forecastex %s %s -> %s", method, path, resp.status)
 
@@ -266,9 +298,17 @@ class ForecastExClient:
                         # the 24h SSO outage. Honor use_circuit here.
                         if use_circuit:
                             self.circuit.record_failure()
+                        if self.oauth is not None:
+                            # A 401 under OAuth means the LST went stale
+                            # server-side; drop it so the next request
+                            # re-handshakes instead of re-signing with a
+                            # dead token forever.
+                            self.oauth.invalidate()
+                            hint = "live session token invalidated — next request re-handshakes"
+                        else:
+                            hint = "gateway session expired — re-authenticate via /sso"
                         raise RuntimeError(
-                            f"forecastex auth error {resp.status}: "
-                            f"gateway session expired — re-authenticate via /sso. "
+                            f"forecastex auth error {resp.status}: {hint}. "
                             f"Body: {text[:200]}"
                         )
 

@@ -124,3 +124,142 @@ def test_auth_header_requires_lst():
     import pytest
     with pytest.raises(RuntimeError, match="no live session token"):
         auth.auth_header("GET", "https://x")
+
+
+def test_auth_header_signs_query_params_but_keeps_them_out_of_header(monkeypatch):
+    """OAuth 1.0a: URL query params belong in the signature base string but
+    must NOT appear in the Authorization header (they travel in the URL)."""
+    auth, _, _ = _make_auth()
+    auth._lst_b64 = base64.b64encode(b"0123456789abcdef0123456789abcdef").decode()
+    auth._lst_expires = 9e18
+    seen: dict = {}
+    orig = auth.signature_base_string
+
+    def spy(method, url, params, **kw):
+        seen.update(params)
+        return orig(method, url, params, **kw)
+
+    monkeypatch.setattr(auth, "signature_base_string", spy)
+    hdr = auth.auth_header(
+        "GET", "https://api.ibkr.com/v1/api/iserver/secdef/search",
+        query_params={"symbol": "FF", "conid": 42},
+    )
+    assert seen["symbol"] == "FF"
+    assert seen["conid"] == "42"  # coerced to str for signing
+    assert "symbol" not in hdr
+    assert "conid" not in hdr
+    assert "oauth_signature=" in hdr
+
+
+def test_invalidate_drops_cached_lst():
+    auth, _, _ = _make_auth()
+    auth._lst_b64 = "abc"
+    auth._lst_expires = 9e18
+    assert auth.lst_valid is True
+    auth.invalidate()
+    assert auth.lst_valid is False
+
+
+# ── async LST fetch (ensure_live_session_token) ─────────────────────────────
+
+import json as _json
+import re as _re
+
+
+class _FakeResp:
+    def __init__(self, status: int, text: str):
+        self.status = status
+        self._text = text
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def text(self):
+        return self._text
+
+
+class _FakeIbkrServer:
+    """Plays the IBKR side of the DH handshake: reads the client's
+    diffie_hellman_challenge out of the Authorization header and answers with
+    a mathematically-consistent (or deliberately corrupted) response."""
+
+    def __init__(self, auth, raw_secret: bytes, status: int = 200,
+                 corrupt_sig: bool = False):
+        self._auth = auth
+        self._raw = raw_secret
+        self._status = status
+        self._corrupt = corrupt_sig
+        self.post_count = 0
+
+    def post(self, url, headers=None, **kw):
+        self.post_count += 1
+        if self._status != 200:
+            return _FakeResp(self._status, "server error")
+        m = _re.search(
+            r'diffie_hellman_challenge="([0-9a-fA-F]+)"', headers["Authorization"]
+        )
+        A = int(m.group(1), 16)
+        b = 0xB0B5EC0DE
+        B = pow(_G, b, _P)
+        K = pow(A, b, _P)
+        lst = hmac.new(_to_byte_array(K), self._raw, hashlib.sha1).digest()
+        sig = hmac.new(
+            lst, self._auth.consumer_key.encode(), hashlib.sha1
+        ).hexdigest()
+        if self._corrupt:
+            sig = "deadbeef" * 5
+        return _FakeResp(200, _json.dumps({
+            "diffie_hellman_response": format(B, "x"),
+            "live_session_token_signature": sig,
+        }))
+
+
+def test_ensure_live_session_token_fetches_and_validates():
+    import asyncio
+    auth, _, raw = _make_auth(b"prepend-async-7")
+    server = _FakeIbkrServer(auth, raw)
+    lst = asyncio.run(auth.ensure_live_session_token(server))
+    assert lst == auth._lst_b64
+    assert auth.lst_valid is True
+    assert server.post_count == 1
+
+
+def test_ensure_live_session_token_caches_until_expiry():
+    import asyncio
+    auth, _, raw = _make_auth(b"prepend-cache-8")
+    server = _FakeIbkrServer(auth, raw)
+
+    async def twice():
+        first = await auth.ensure_live_session_token(server)
+        second = await auth.ensure_live_session_token(server)
+        return first, second
+
+    first, second = asyncio.run(twice())
+    assert first == second
+    assert server.post_count == 1, "valid cached LST must not re-handshake"
+
+
+def test_ensure_live_session_token_rejects_bad_signature():
+    import asyncio
+    import pytest
+    auth, _, raw = _make_auth(b"prepend-corrupt-9")
+    server = _FakeIbkrServer(auth, raw, corrupt_sig=True)
+    with pytest.raises(RuntimeError, match="signature validation"):
+        asyncio.run(auth.ensure_live_session_token(server))
+    # The unverified LST must NOT be left signable.
+    assert auth.lst_valid is False
+    with pytest.raises(RuntimeError, match="no live session token"):
+        auth.auth_header("GET", "https://x")
+
+
+def test_ensure_live_session_token_non_200_raises():
+    import asyncio
+    import pytest
+    auth, _, raw = _make_auth()
+    server = _FakeIbkrServer(auth, raw, status=503)
+    with pytest.raises(RuntimeError, match="failed 503"):
+        asyncio.run(auth.ensure_live_session_token(server))
+    assert auth.lst_valid is False

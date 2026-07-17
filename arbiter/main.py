@@ -294,6 +294,21 @@ def build_forecastex_collector(config: ArbiterConfig, price_store: PriceStore):
             verify_ssl=cfg.verify_ssl,
             paper_trading=cfg.paper_trading,
         )
+        if cfg.oauth_enabled and cfg.oauth_configured:
+            from .auth.ibkr_oauth import IbkrOAuth1a
+
+            client.oauth = IbkrOAuth1a.from_config(cfg)
+            logging.getLogger("arbiter.main").info(
+                "ForecastEx: OAuth 1.0a transport enabled (%s) — "
+                "zero-login, local gateway not required",
+                cfg.oauth_api_base,
+            )
+        elif cfg.oauth_enabled:
+            logging.getLogger("arbiter.main").warning(
+                "IBKR_OAUTH_ENABLED is set but OAuth material is incomplete "
+                "(need consumer key + access token + key files) — "
+                "falling back to the gateway transport"
+            )
     return ForecastExCollector(config=cfg, store=price_store, client=client)
 
 
