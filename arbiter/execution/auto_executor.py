@@ -28,6 +28,7 @@ Failures in engine.execute_opportunity are caught + logged; the loop never dies.
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from dataclasses import dataclass, field, replace
 from typing import Awaitable, Callable, Dict, Optional
@@ -198,6 +199,15 @@ class AutoExecutor:
         # Keyed by (canonical_id, reason) to a Unix expiry timestamp.
         self._gate_structural_cooldown: dict[tuple[str, str], float] = {}
         self._gate_structural_cooldown_s: float = 1800.0  # 30 minutes
+        # Floor cooldown after a NAKED round-trip (status="recovering"):
+        # the hedge venue proved untradable, so minute-scale retry has
+        # negative expected value. Env AUTO_EXEC_NAKED_COOLDOWN_S; 2h default.
+        try:
+            self._naked_cooldown_s: float = float(
+                os.getenv("AUTO_EXEC_NAKED_COOLDOWN_S", "7200") or "7200"
+            )
+        except (TypeError, ValueError):
+            self._naked_cooldown_s = 7200.0
         self.stats = AutoExecutorStats()
 
     async def start(self) -> None:
@@ -596,6 +606,16 @@ class AutoExecutor:
             count = self._failed_count.get(opp.canonical_id, 0) + 1
             self._failed_count[opp.canonical_id] = count
             backoff_s = min(300.0 * (2 ** (count - 1)), 3600.0)
+            if result_status == "recovering":
+                # A NAKED round-trip (primary filled, hedge failed) is
+                # qualitatively worse than a clean no-fill: the hedge venue
+                # was untradable at fire time (halted/rejecting/one-sided —
+                # live 2026-07-18: Kalshi rejected every order on an in-play
+                # MLB market while Polymarket kept trading, so the same
+                # phantom edge re-fired 5 minutes later and produced a
+                # second naked leg). Nothing about that venue state changes
+                # in minutes; floor the cooldown at hours scale.
+                backoff_s = max(backoff_s, self._naked_cooldown_s)
             self._failed_cooldown[opp.canonical_id] = time.time() + backoff_s
             log.info(
                 "auto_executor.cooldown.set",

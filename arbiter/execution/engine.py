@@ -3360,6 +3360,37 @@ class ExecutionEngine:
                                 unwound_qty=unwound_qty,
                                 unwind_target=unwind_target,
                             )
+
+                            # Self-reconcile the half-recorded scan: a COMPLETE
+                            # unwind leaves no venue inventory, but store.py's
+                            # mode-2 detection keys on the recovery sentinel,
+                            # not on P&L — even a $0 break-even unwind gets
+                            # re-flagged as a trading-blocking critical on
+                            # every restart until the sentinel is written
+                            # (live: ARB-001362, 2026-07-18).
+                            if (
+                                self.store is not None
+                                and unwound_qty >= unwind_target * 0.99
+                            ):
+                                try:
+                                    await self.store.mark_naked_leg_reconciled(
+                                        arb_id,
+                                        unwind_pnl=unwound_qty
+                                        * (sell_revenue_per - buy_cost_per),
+                                        note=(
+                                            f"auto-unwind closed {unwound_qty:.0f}/"
+                                            f"{unwind_target} {filled_leg.side} on "
+                                            f"{filled_leg.platform} "
+                                            f"(buy={buy_cost_per:.4f} "
+                                            f"sell={sell_revenue_per:.4f})"
+                                        ),
+                                    )
+                                except Exception as exc:
+                                    logger.warning(
+                                        "naked-leg self-reconcile write failed "
+                                        "for %s: %s",
+                                        arb_id, exc,
+                                    )
         return notes, unwind_pnl
 
     async def _auto_resolve_recovery_incidents(

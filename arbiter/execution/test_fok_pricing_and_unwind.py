@@ -299,6 +299,100 @@ def test_recover_one_leg_risk_releases_exposure_on_successful_unwind():
     asyncio.run(runner())
 
 
+def test_complete_unwind_writes_naked_leg_reconciled_sentinel():
+    """A COMPLETE auto-unwind must self-reconcile via
+    store.mark_naked_leg_reconciled — store.py's half-recorded mode-2 scan
+    keys on the recovery sentinel (not on P&L), so without this every
+    restart re-flags the asymmetric-fill arb as a trading-blocking critical
+    (live: ARB-001362, 2026-07-18)."""
+    async def runner():
+        engine = _make_engine()
+
+        kalshi_adapter = MagicMock()
+        kalshi_adapter.platform = "kalshi"
+        kalshi_adapter.cancel_order = AsyncMock(return_value=True)
+        unwind_filled = Order(
+            order_id="ARB-1-UNWIND-YES",
+            platform="kalshi",
+            market_id="K-YES",
+            canonical_id="MKT",
+            side="yes",
+            price=0.01,
+            quantity=10,
+            status=OrderStatus.FILLED,
+            fill_price=0.55,
+            fill_qty=10,
+        )
+        kalshi_adapter.place_unwind_sell = AsyncMock(return_value=unwind_filled)
+        poly_adapter = MagicMock()
+        poly_adapter.platform = "polymarket"
+        poly_adapter.cancel_order = AsyncMock(return_value=True)
+        engine.adapters = {"kalshi": kalshi_adapter, "polymarket": poly_adapter}
+
+        store = MagicMock()
+        store.mark_naked_leg_reconciled = AsyncMock()
+        engine.store = store
+
+        opp = _make_opp()
+        leg_yes = _filled_order("yes", "kalshi", "K-YES", qty=10, price=0.55)
+        leg_no = _submitted_unfilled_order("no", "polymarket", "P-NO")
+
+        await engine._recover_one_leg_risk("ARB-1", opp, leg_yes, leg_no)
+
+        store.mark_naked_leg_reconciled.assert_awaited_once()
+        call = store.mark_naked_leg_reconciled.await_args
+        assert call.args[0] == "ARB-1"
+        # Break-even unwind (buy 0.55 sell 0.55) → unwind_pnl 0, and the
+        # note must describe what the auto-unwind did.
+        assert call.kwargs["unwind_pnl"] == 0.0
+        assert "auto-unwind closed 10/10" in call.kwargs["note"]
+
+    asyncio.run(runner())
+
+
+def test_failed_unwind_does_not_write_reconcile_sentinel():
+    """When the unwind can NOT close the position (adapter returns no fill),
+    the arb must stay unreconciled so the restart scan DOES re-flag it —
+    the sentinel is only for verified-flat outcomes."""
+    async def runner():
+        engine = _make_engine()
+
+        kalshi_adapter = MagicMock()
+        kalshi_adapter.platform = "kalshi"
+        kalshi_adapter.cancel_order = AsyncMock(return_value=True)
+        unwind_unfilled = Order(
+            order_id="ARB-1-UNWIND-YES",
+            platform="kalshi",
+            market_id="K-YES",
+            canonical_id="MKT",
+            side="yes",
+            price=0.01,
+            quantity=10,
+            status=OrderStatus.FAILED,
+            fill_price=0.0,
+            fill_qty=0,
+        )
+        kalshi_adapter.place_unwind_sell = AsyncMock(return_value=unwind_unfilled)
+        poly_adapter = MagicMock()
+        poly_adapter.platform = "polymarket"
+        poly_adapter.cancel_order = AsyncMock(return_value=True)
+        engine.adapters = {"kalshi": kalshi_adapter, "polymarket": poly_adapter}
+
+        store = MagicMock()
+        store.mark_naked_leg_reconciled = AsyncMock()
+        engine.store = store
+
+        opp = _make_opp()
+        leg_yes = _filled_order("yes", "kalshi", "K-YES", qty=10, price=0.55)
+        leg_no = _submitted_unfilled_order("no", "polymarket", "P-NO")
+
+        await engine._recover_one_leg_risk("ARB-1", opp, leg_yes, leg_no)
+
+        store.mark_naked_leg_reconciled.assert_not_awaited()
+
+    asyncio.run(runner())
+
+
 # ─── C1: smart-unwind double-sell race ──────────────────────────────────
 #
 # Bug: after the poll loop times out without seeing a fill, the original

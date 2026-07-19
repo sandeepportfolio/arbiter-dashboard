@@ -14,6 +14,7 @@ Policy-gate coverage:
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -702,6 +703,47 @@ async def test_cooldown_blocks_subsequent_recovering_attempt():
     await ae._consider_opportunity(_make_opportunity())
     assert engine.execute_opportunity.await_count == 1  # still 1, not 2
     assert ae.stats.skipped_failed_cooldown == 1
+
+
+@pytest.mark.asyncio
+async def test_naked_roundtrip_gets_hours_scale_cooldown():
+    """A 'recovering' result means the hedge venue was untradable at fire
+    time (halted / rejecting / one-sided book) — live 2026-07-18 the 5-minute
+    first-step backoff let the same in-play phantom edge re-fire and produce
+    a SECOND naked leg 6 minutes after the first. The naked-round-trip
+    cooldown must be floored at hours scale (AUTO_EXEC_NAKED_COOLDOWN_S,
+    default 7200s)."""
+    ae, engine = _make_components()
+    engine.execute_opportunity = AsyncMock(
+        return_value=SimpleNamespace(
+            arb_id="ARB-1", realized_pnl=0.05, status="recovering"
+        )
+    )
+    before = time.time()
+    await ae._consider_opportunity(_make_opportunity())
+    cooldown_until = ae._failed_cooldown["TEST-MKT"]
+    assert cooldown_until - before >= 7200 - 5, (
+        "naked round-trip must cool down for hours, not minutes"
+    )
+
+
+@pytest.mark.asyncio
+async def test_clean_failure_keeps_minutes_scale_cooldown():
+    """A plain 'failed' result (no fill on either leg, nothing risked) keeps
+    the gentle 5-minute first-step backoff — only NAKED round-trips get the
+    hours-scale floor."""
+    ae, engine = _make_components()
+    engine.execute_opportunity = AsyncMock(
+        return_value=SimpleNamespace(
+            arb_id="ARB-1", realized_pnl=0.0, status="failed"
+        )
+    )
+    before = time.time()
+    await ae._consider_opportunity(_make_opportunity())
+    cooldown_until = ae._failed_cooldown["TEST-MKT"]
+    assert 250 <= cooldown_until - before <= 400, (
+        "clean no-fill failure must keep the 5-minute first step"
+    )
 
 
 # ── Per-canonical loss-streak auto-disable ────────────────────────────────
