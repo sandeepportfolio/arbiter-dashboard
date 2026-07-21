@@ -791,3 +791,82 @@ class TestValidateLiveQuotes:
 
         validated = await validate_live_quotes([match], fx_client, k_collector)
         assert len(validated) == 0
+
+
+class TestFailClosedInserts:
+    """2026-07-21 regression: matches without a resolved YES/NO child pair
+    (parent-conid fallback contracts, right="") were inserted as
+    status=confirmed + allow_auto_trade=true. Parent IND conids never trade
+    — the collector probes them 8×, disables them, the resolver gets
+    no_children 3×, and the mapping lands in forecastex_not_available —
+    burning ~24 rate-limited strikes calls per resolver pass on the way
+    (the FX_PCEY_*/FX_PREMP lifecycle). Such matches must fail closed into
+    operator review with auto-trade off.
+    """
+
+    @staticmethod
+    def _family():
+        return FXFamily(
+            fx_symbol_prefix="PREMP", name="Payroll",
+            kalshi_event_prefixes=(), kalshi_series_prefixes=(),
+            indicator_type="percent", tags=("economics",),
+        )
+
+    def _match(self, *, fx_yes_conid="582530257", fx_no_conid="", right=""):
+        return MatchResult(
+            fx_contract=ParsedContract(
+                raw_text="", threshold=3.0, direction="above",
+                period="2027-03", symbol="PREMP", conid=fx_yes_conid,
+                right=right, family="PREMP",
+            ),
+            kalshi_contract=ParsedContract(
+                raw_text="", threshold=3.0, direction="above",
+                period="2027-03", symbol="KXPAYROLL-27MAR-T3.0",
+            ),
+            family=self._family(),
+            canonical_id="FX_PREMP_202703_3p0",
+            description="Payroll: above 3.0 (2027-03)",
+            match_quality="exact_threshold",
+            fx_yes_conid=fx_yes_conid,
+            fx_no_conid=fx_no_conid,
+            kalshi_ticker="KXPAYROLL-27MAR-T3.0",
+        )
+
+    @pytest.mark.asyncio
+    async def test_parent_conid_without_no_child_inserts_as_review(self):
+        store = AsyncMock()
+        store.get = AsyncMock(return_value=None)
+        store.upsert = AsyncMock()
+
+        count = await insert_verified_mappings([self._match()], store, dry_run=False)
+        assert count == 1
+        mapping_arg = store.upsert.call_args[0][0]
+        assert mapping_arg.status.value == "review"
+        assert mapping_arg.allow_auto_trade is False
+        assert "unresolved YES/NO child pair" in mapping_arg.review_note
+
+    @pytest.mark.asyncio
+    async def test_resolved_child_pair_still_inserts_confirmed(self):
+        store = AsyncMock()
+        store.get = AsyncMock(return_value=None)
+        store.upsert = AsyncMock()
+
+        match = self._match(
+            fx_yes_conid="762089343", fx_no_conid="762089344", right="C",
+        )
+        count = await insert_verified_mappings([match], store, dry_run=False)
+        assert count == 1
+        mapping_arg = store.upsert.call_args[0][0]
+        assert mapping_arg.status.value == "confirmed"
+        assert mapping_arg.allow_auto_trade is True
+
+    @pytest.mark.asyncio
+    async def test_conid_zero_match_is_skipped_entirely(self):
+        store = AsyncMock()
+        store.get = AsyncMock(return_value=None)
+        store.upsert = AsyncMock()
+
+        match = self._match(fx_yes_conid="0", fx_no_conid="", right="C")
+        count = await insert_verified_mappings([match], store, dry_run=False)
+        assert count == 0
+        store.upsert.assert_not_called()

@@ -657,10 +657,17 @@ class ForecastExConfig:
 
     @property
     def oauth_configured(self) -> bool:
-        """True when all OAuth 1.0a material is present (post-activation)."""
+        """True when all OAuth 1.0a material is present (post-activation).
+
+        The access-token SECRET is required too: without it the OAuth
+        transport builds fine but every request then dies decrypting an
+        empty secret — and there is no runtime fallback to the gateway
+        once the collector is built with OAuth attached.
+        """
         return bool(
             self.oauth_consumer_key
             and self.oauth_access_token
+            and self.oauth_access_token_secret
             and self.oauth_signature_key_fp
             and self.oauth_encryption_key_fp
             and self.oauth_dh_param_fp

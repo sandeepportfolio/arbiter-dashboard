@@ -569,8 +569,10 @@ class ForecastExChildResolver:
         # "Dems win House"). For canonical_ids that encode a party hint
         # (DEM_*, GOP_*, etc.) prefer the matching strike.
         yes_child = self._select_yes_child(canonical_id, children)
+        from arbiter.collectors.forecastex import is_valid_conid
+
         child_conid = str(yes_child.get("conid") or "").strip() if yes_child else ""
-        if not child_conid:
+        if not is_valid_conid(child_conid):
             # No Call-right entry in the returned set; mark not-available
             # so the operator can override manually.
             return await self._mark_unavailable(
@@ -785,20 +787,33 @@ class ForecastExChildResolver:
                 detail=f"would have marked not_available: {reason}",
             )
         try:
-            mapping = await self._mapping_store.get(canonical_id)
-            if mapping is None:
+            # MarketMappingStore.upsert deliberately does NOT write the
+            # forecastex_not_available column (it would race with the
+            # single-column negative-cache writes), so the flag MUST go
+            # through mark_forecastex_unavailable — an upsert here bumps
+            # updated_at but silently drops the flag, and the mapping
+            # re-enters the candidate pool on the next refresh_runtime_cache.
+            marked = await self._mapping_store.mark_forecastex_unavailable(
+                canonical_id, unavailable=True,
+            )
+            if not marked:
                 return ResolveAttempt(
                     canonical_id=canonical_id, parent_conid=parent_conid,
                     ts=now, outcome="exception",
                     detail="mapping disappeared during not_available mark",
                 )
-            mapping.forecastex_not_available = True
-            await self._mapping_store.upsert(mapping)
+            # Mirror into the in-process MARKET_MAP so the candidate filter
+            # honors the quarantine before the next DB→memory refresh.
+            from arbiter.config.settings import upsert_runtime_market_mapping
+
+            upsert_runtime_market_mapping(
+                canonical_id, {"forecastex_not_available": True},
+            )
         except Exception as exc:
             return ResolveAttempt(
                 canonical_id=canonical_id, parent_conid=parent_conid,
                 ts=now, outcome="exception",
-                detail=f"mark_unavailable upsert failed: {exc}",
+                detail=f"mark_unavailable write failed: {exc}",
             )
         # Drop the conid from the collector's inactive set so it stops
         # being a resolver candidate next cycle (the candidate filter

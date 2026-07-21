@@ -204,16 +204,19 @@ async def test_marks_unavailable_when_child_not_tradeable():
     store = MagicMock()
     store.get = AsyncMock(return_value=_stub_mapping("FED_RATE_HIKE_X", "831072197"))
     store.upsert = AsyncMock()
+    store.mark_forecastex_unavailable = AsyncMock(return_value=True)
 
     res = ForecastExChildResolver(
         forecastex_client=client, forecastex_collector=collector, mapping_store=store,
     )
     snap = await res.run_once()
     assert snap.attempts[0]["outcome"] == "marked_unavailable"
-    # mapping_store.upsert was called with forecastex_not_available=True
-    assert store.upsert.await_count == 1
-    upserted = store.upsert.await_args.args[0]
-    assert upserted.forecastex_not_available is True
+    # The flag goes through the durable single-column write — never
+    # upsert, which silently drops the column (2026-07-21 regression).
+    store.mark_forecastex_unavailable.assert_awaited_once_with(
+        "FED_RATE_HIKE_X", unavailable=True,
+    )
+    store.upsert.assert_not_awaited()
 
 
 async def test_quarantines_sports_tagged_candidates():
@@ -240,6 +243,7 @@ async def test_quarantines_sports_tagged_candidates():
     store = MagicMock()
     store.get = AsyncMock(return_value=_stub_mapping("KX_MLB_NYY_LAD", "999000111"))
     store.upsert = AsyncMock()
+    store.mark_forecastex_unavailable = AsyncMock(return_value=True)
 
     res = ForecastExChildResolver(
         forecastex_client=client, forecastex_collector=collector, mapping_store=store,
@@ -247,10 +251,12 @@ async def test_quarantines_sports_tagged_candidates():
     snap = await res.run_once()
     # No IBKR strikes/info call — that's the whole point of the filter.
     assert client.resolve_event_children.await_count == 0
-    # Mapping was marked unavailable so it stops re-appearing.
-    assert store.upsert.await_count == 1
-    upserted = store.upsert.await_args.args[0]
-    assert upserted.forecastex_not_available is True
+    # Mapping was marked unavailable (durable single-column write) so it
+    # stops re-appearing; upsert would silently drop the flag.
+    store.mark_forecastex_unavailable.assert_awaited_once_with(
+        "KX_MLB_NYY_LAD", unavailable=True,
+    )
+    store.upsert.assert_not_awaited()
     # Cycle had zero remaining candidates after the quarantine.
     assert snap.candidates_count == 0
 
@@ -293,6 +299,7 @@ async def test_no_call_in_children_marks_unavailable():
     store = MagicMock()
     store.get = AsyncMock(return_value=_stub_mapping("A", "111"))
     store.upsert = AsyncMock()
+    store.mark_forecastex_unavailable = AsyncMock(return_value=True)
 
     res = ForecastExChildResolver(
         forecastex_client=client, forecastex_collector=collector, mapping_store=store,
@@ -376,23 +383,26 @@ async def test_multi_outcome_parent_quarantines_after_threshold_cycles():
     store = MagicMock()
     store.get = AsyncMock(return_value=_stub_mapping("ECON_CPI_2026", "573031126"))
     store.upsert = AsyncMock()
+    store.mark_forecastex_unavailable = AsyncMock(return_value=True)
 
     res = ForecastExChildResolver(
         forecastex_client=client, forecastex_collector=collector, mapping_store=store,
     )
-    # Cycle 1 + 2: records no_children, does NOT upsert.
+    # Cycle 1 + 2: records no_children, does NOT write the flag.
     snap1 = await res.run_once()
     assert snap1.attempts[0]["outcome"] == "no_children"
-    assert store.upsert.await_count == 0
+    assert store.mark_forecastex_unavailable.await_count == 0
     snap2 = await res.run_once()
     assert snap2.attempts[0]["outcome"] == "no_children"
-    assert store.upsert.await_count == 0
-    # Cycle 3: hits the threshold, marks unavailable.
+    assert store.mark_forecastex_unavailable.await_count == 0
+    # Cycle 3: hits the threshold, marks unavailable via the durable
+    # single-column write (upsert would silently drop the flag).
     snap3 = await res.run_once()
     assert snap3.attempts[0]["outcome"] == "marked_unavailable"
-    assert store.upsert.await_count == 1
-    upserted = store.upsert.await_args.args[0]
-    assert upserted.forecastex_not_available is True
+    store.mark_forecastex_unavailable.assert_awaited_once_with(
+        "ECON_CPI_2026", unavailable=True,
+    )
+    store.upsert.assert_not_awaited()
 
 
 async def test_ibkr_503_classified_distinct_from_other_errors():
@@ -756,3 +766,78 @@ def test_trigger_is_idempotent_and_safe_before_loop_start():
     res.trigger()
     res.trigger()
     assert res._wake_event.is_set()
+
+
+async def test_mark_unavailable_uses_durable_single_column_write():
+    """Regression (2026-07-21): _mark_unavailable persisted the flag via
+    mapping_store.upsert(), but upsert deliberately does NOT write the
+    forecastex_not_available column (the single-column
+    mark_forecastex_unavailable exists precisely so generic upserts can't
+    clobber it). The flag therefore never reached the DB; after the next
+    refresh_runtime_cache the mapping became a candidate again and the
+    disable→resolve→mark cycle looped forever — observed live as 11
+    marked_unavailable events for FX_PREMP_202703_3p0 in a single day,
+    each burning 24 rate-limited /iserver/secdef/strikes calls.
+    """
+    settings_module.MARKET_MAP["FX_PREMP_202703_3p0"] = _confirmed(
+        "FX_PREMP_202703_3p0", "582530257",
+    )
+    collector = MagicMock()
+    collector._inactive_conids = {"582530257"}
+    collector.reactivate_conid = MagicMock()
+
+    client = MagicMock()
+    client.market_snapshot = AsyncMock(return_value=_empty_snapshot())
+    client.resolve_event_children = AsyncMock(return_value=[])
+
+    store = MagicMock()
+    store.get = AsyncMock(
+        return_value=_stub_mapping("FX_PREMP_202703_3p0", "582530257"),
+    )
+    store.upsert = AsyncMock()
+    store.mark_forecastex_unavailable = AsyncMock(return_value=True)
+
+    res = ForecastExChildResolver(
+        forecastex_client=client, forecastex_collector=collector, mapping_store=store,
+    )
+    outcome = None
+    for _ in range(res._NO_CHILDREN_MARK_THRESHOLD):
+        snap = await res.run_once()
+        outcome = snap.attempts[0]["outcome"]
+    assert outcome == "marked_unavailable"
+    # Durable write must go through the single-column path…
+    store.mark_forecastex_unavailable.assert_awaited_once_with(
+        "FX_PREMP_202703_3p0", unavailable=True,
+    )
+    # …NOT through upsert, which silently drops the column…
+    store.upsert.assert_not_awaited()
+    # …and the in-process MARKET_MAP must reflect it immediately so the
+    # mapping stops being a candidate before the next DB refresh.
+    assert (
+        settings_module.MARKET_MAP["FX_PREMP_202703_3p0"]["forecastex_not_available"]
+        is True
+    )
+
+
+async def test_mark_unavailable_reports_exception_when_row_missing():
+    """mark_forecastex_unavailable returning False (row gone) must surface
+    as an exception outcome, matching the old mapping-disappeared handling."""
+    settings_module.MARKET_MAP["GHOST"] = _confirmed("GHOST", "424242")
+    collector = MagicMock()
+    collector._inactive_conids = {"424242"}
+    collector.reactivate_conid = MagicMock()
+    client = MagicMock()
+    client.market_snapshot = AsyncMock(return_value=_empty_snapshot())
+    client.resolve_event_children = AsyncMock(return_value=[
+        {"conid": "P1", "right": "P", "strike": 1.0},
+    ])
+    store = MagicMock()
+    store.get = AsyncMock(return_value=_stub_mapping("GHOST", "424242"))
+    store.upsert = AsyncMock()
+    store.mark_forecastex_unavailable = AsyncMock(return_value=False)
+
+    res = ForecastExChildResolver(
+        forecastex_client=client, forecastex_collector=collector, mapping_store=store,
+    )
+    snap = await res.run_once()
+    assert snap.attempts[0]["outcome"] == "exception"

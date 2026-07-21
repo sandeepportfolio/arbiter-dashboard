@@ -1224,3 +1224,31 @@ async def test_resolve_sibling_adjacent_rejects_strike_bearing_neighbor_when_sou
     adapter = ForecastExAdapter(client=client)
 
     assert await adapter._resolve_sibling_conid("500") is None
+
+
+# ── Sibling-cache poisoning (2026-07-21 regression) ────────────────────────
+
+
+async def test_sibling_cache_not_poisoned_by_transient_contract_info_failure():
+    """Regression (2026-07-21): get_contract_info used to swallow auth/429
+    errors into {}, which _resolve_sibling_conid cached as _sibling_cache=""
+    — PERMANENTLY disabling cross-side exits (smart unwind) for that conid
+    after one transient 401. A raising client must leave the cache empty so
+    the next attempt retries."""
+    client = _mock_client()
+    client.get_contract_info = AsyncMock(
+        side_effect=RuntimeError(
+            "forecastex auth error 401: gateway session expired",
+        ),
+    )
+    adapter = ForecastExAdapter(client=client)
+    resolved = await adapter._resolve_sibling_conid("111")
+    assert resolved is None
+    assert "111" not in adapter._sibling_cache
+
+    # Session recovers → the same conid must resolve on retry.
+    client.get_contract_info = AsyncMock(return_value={
+        "underlying_con_id": 999111, "strike": 2.0, "right": "C",
+    })
+    resolved = await adapter._resolve_sibling_conid("111")
+    assert resolved == "777"

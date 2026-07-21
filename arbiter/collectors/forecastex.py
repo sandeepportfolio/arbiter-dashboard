@@ -42,6 +42,18 @@ logger = logging.getLogger("arbiter.collector.forecastex")
 _DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=10)
 
 
+def is_valid_conid(value) -> bool:
+    """True when ``value`` looks like a usable IBKR conid.
+
+    IBKR payloads occasionally carry the literal string ``"0"`` (and
+    serializers produce ``"None"``); both pass plain truthiness checks
+    and have been persisted into mappings as junk conids that the
+    collector then flags as duplicates of each other.
+    """
+    text = str(value or "").strip()
+    return bool(text) and text not in ("0", "None")
+
+
 def _amount_value(value) -> float:
     """Best-effort numeric coercion. IBKR snapshots stringify everything."""
     if isinstance(value, dict):
@@ -512,14 +524,19 @@ class ForecastExClient:
         return []
 
     async def get_contract_info(self, conid: str) -> dict:
-        """Return /iserver/contract/{conid}/info — metadata, no prices."""
-        try:
-            return await self._request(
-                "GET", f"/iserver/contract/{conid}/info",
-                use_circuit=False,
-            )
-        except Exception:
-            return {}
+        """Return /iserver/contract/{conid}/info — metadata, no prices.
+
+        Raises on transport/auth failure instead of returning ``{}``:
+        callers persist an empty result into PERMANENT negative caches
+        (collector ``_no_discovery_failed``, adapter ``_sibling_cache``),
+        so a swallowed 401 must stay distinguishable from a genuine
+        empty payload. Every caller wraps this in its own try/except
+        with transient-failure semantics.
+        """
+        return await self._request(
+            "GET", f"/iserver/contract/{conid}/info",
+            use_circuit=False,
+        )
 
     async def get_trsrv_secdef(self, conid: str) -> dict:
         """Return /trsrv/secdef payload — includes hasOptions, assetClass, type."""
@@ -587,6 +604,8 @@ class ForecastExClient:
         hit_month: Optional[str] = None
         calls: list[float] = []
         puts: list[float] = []
+        months_answered = 0
+        last_probe_error: Optional[Exception] = None
         for month in month_candidates:
             try:
                 payload = await self._request(
@@ -599,10 +618,12 @@ class ForecastExClient:
                     },
                     use_circuit=False,
                 )
-            except Exception:
+            except Exception as exc:
                 # 503 / circuit-open / timeout — try next month rather
                 # than aborting the whole sequence.
+                last_probe_error = exc
                 continue
+            months_answered += 1
             if not isinstance(payload, dict):
                 continue
             month_calls = list(payload.get("call") or [])
@@ -612,6 +633,18 @@ class ForecastExClient:
                 calls = month_calls
                 puts = month_puts
                 break
+
+        if hit_month is None and months_answered == 0 and last_probe_error is not None:
+            # ZERO months answered and at least one probe raised: the
+            # session/gateway is down (auth 401, 429 exhaustion, outage),
+            # not "this event has no children". Returning [] here is what
+            # let the Jul 19-20 SSO outage feed the resolver's permanent
+            # forecastex_not_available quarantine of healthy markets —
+            # callers must see this as a transient failure.
+            raise RuntimeError(
+                f"forecastex: resolve_event_children({parent_conid}) could "
+                f"not complete any month probe: {last_probe_error}"
+            ) from last_probe_error
 
         if hit_month is None:
             # IBKR's ``/iserver/secdef/strikes`` returns
@@ -675,7 +708,7 @@ class ForecastExClient:
                             if not isinstance(item, dict):
                                 continue
                             conid = str(item.get("conid") or "").strip()
-                            if not conid:
+                            if not is_valid_conid(conid):
                                 continue
                             children.append({
                                 "conid": conid,
@@ -722,7 +755,7 @@ class ForecastExClient:
                 if not isinstance(item, dict):
                     continue
                 conid = str(item.get("conid") or "").strip()
-                if not conid:
+                if not is_valid_conid(conid):
                     continue
                 children.append({
                     "conid": conid,
@@ -1027,9 +1060,14 @@ class ForecastExCollector:
             if bool(mapping.get("forecastex_not_available")):
                 continue
             yes_conid = str(mapping.get("forecastex", "") or "").strip()
-            if not yes_conid:
+            if not is_valid_conid(yes_conid):
+                # "0"/"None" junk conids are unmapped, not duplicates of
+                # each other — keep them out of tracking AND the
+                # duplicate-owner accounting.
                 continue
             no_conid = str(mapping.get("forecastex_no", "") or "").strip()
+            if not is_valid_conid(no_conid):
+                no_conid = ""
             candidates.append((canonical_id, yes_conid, no_conid))
             owners_by_yes_conid.setdefault(yes_conid, []).append(canonical_id)
         self._duplicate_conids = {

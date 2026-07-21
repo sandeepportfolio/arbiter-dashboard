@@ -2111,10 +2111,15 @@ class ArbiterAPI:
                     break
                 except Exception:
                     pass
+        from arbiter.collectors.forecastex import is_valid_conid
+
         conid_counts: dict[str, int] = {}
         for mapping in MARKET_MAP.values():
             conid = str(mapping.get("forecastex") or "").strip()
-            if conid:
+            # Junk conids ("0"/"None") are unmapped, not duplicates of each
+            # other — counting them filled the diagnostics with dozens of
+            # false duplicate_conid rows.
+            if is_valid_conid(conid):
                 conid_counts[conid] = conid_counts.get(conid, 0) + 1
         rows = []
         for canonical_id, mapping in MARKET_MAP.items():

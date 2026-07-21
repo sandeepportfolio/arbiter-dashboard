@@ -26,6 +26,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from arbiter.collectors.forecastex import is_valid_conid
+
 logger = logging.getLogger("arbiter.mapping.fx_cross_platform_matcher")
 
 
@@ -592,7 +594,7 @@ async def discover_fx_contracts(
 
             parent_conid = str(item.get("conid") or "").strip()
             symbol = str(item.get("symbol") or "")
-            if not parent_conid:
+            if not is_valid_conid(parent_conid):
                 continue
 
             # Try to resolve children (YES/NO contracts)
@@ -987,11 +989,41 @@ async def insert_verified_mappings(
             ),
         }
 
+        if not is_valid_conid(match.fx_yes_conid):
+            logger.warning(
+                "fx_matcher: refusing insert of %s — junk YES conid %r",
+                match.canonical_id, match.fx_yes_conid,
+            )
+            continue
+
+        # Fail closed when the YES/NO CHILD pair is unresolved: a match
+        # built from the parent-conid fallback (right="") or without a NO
+        # sibling points at an untradeable IND event conid. Confirmed
+        # auto-trade parents just cycle collector-disable → resolver
+        # no_children → forecastex_not_available while burning the
+        # rate-limited strikes budget (the FX_PCEY_*/FX_PREMP lifecycle).
+        child_pair_resolved = (
+            str(match.fx_contract.right or "").upper() in ("C", "CALL")
+            and is_valid_conid(match.fx_no_conid)
+        )
+        review_note = ""
+        if child_pair_resolved:
+            insert_status = MappingStatus.CONFIRMED
+            insert_auto_trade = True
+        else:
+            insert_status = MappingStatus.REVIEW
+            insert_auto_trade = False
+            review_note = (
+                "unresolved YES/NO child pair (parent-conid match or missing "
+                "NO sibling) — untradeable as mapped; operator must attach "
+                "child conids before promotion"
+            )
+
         mapping = MarketMapping(
             canonical_id=match.canonical_id,
             description=match.description,
-            status=MappingStatus.CONFIRMED,
-            allow_auto_trade=True,
+            status=insert_status,
+            allow_auto_trade=insert_auto_trade,
             aliases=(),
             tags=match.family.tags,
             kalshi_market_id=match.kalshi_ticker,
@@ -1004,6 +1036,7 @@ async def insert_verified_mappings(
                 f"threshold={match.fx_contract.threshold_key} "
                 f"quality={match.match_quality}"
             ),
+            review_note=review_note,
             resolution_criteria_json=json.dumps(resolution_criteria),
             resolution_match_status="identical",
         )
@@ -1020,8 +1053,9 @@ async def insert_verified_mappings(
             await mapping_store.upsert(mapping)
             inserted += 1
             logger.info(
-                "fx_matcher: INSERTED %s: FX=%s K=%s (score=1.0, auto_trade=true)",
+                "fx_matcher: INSERTED %s: FX=%s K=%s (score=1.0, status=%s)",
                 match.canonical_id, match.fx_yes_conid, match.kalshi_ticker,
+                mapping.status.value,
             )
         except Exception as exc:
             logger.error(

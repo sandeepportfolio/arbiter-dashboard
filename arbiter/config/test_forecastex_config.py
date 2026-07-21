@@ -151,3 +151,27 @@ def test_load_config_keeps_enabled_config(monkeypatch):
     assert cfg.forecastex is not None
     assert cfg.forecastex.enabled is True
     assert cfg.forecastex.account_id == "DU1234567"
+
+
+# ── OAuth cutover gate (2026-07-21 regression) ─────────────────────────────
+
+
+def test_oauth_configured_requires_access_token_secret(monkeypatch):
+    """Regression (2026-07-21): oauth_configured did not check the access
+    token SECRET. Flipping IBKR_OAUTH_ENABLED with the secret unset would
+    build the OAuth transport and then fail on every request (RSA-decrypt of
+    an empty secret) with no runtime fallback to the gateway — taking the FX
+    venue fully dark. The gate must refuse until all three credentials are
+    present."""
+    monkeypatch.setenv("IBKR_OAUTH_CONSUMER_KEY", "ABCDEFGHI")
+    monkeypatch.setenv("IBKR_OAUTH_ACCESS_TOKEN", "token-value")
+    monkeypatch.setenv("IBKR_OAUTH_SIGNATURE_KEY", "/tmp/sig.pem")
+    monkeypatch.setenv("IBKR_OAUTH_ENCRYPTION_KEY", "/tmp/enc.pem")
+    monkeypatch.setenv("IBKR_OAUTH_DH_PARAM", "/tmp/dh.pem")
+    monkeypatch.delenv("IBKR_OAUTH_ACCESS_TOKEN_SECRET", raising=False)
+    cfg = ForecastExConfig()
+    assert cfg.oauth_configured is False
+
+    monkeypatch.setenv("IBKR_OAUTH_ACCESS_TOKEN_SECRET", "secret-value")
+    cfg = ForecastExConfig()
+    assert cfg.oauth_configured is True

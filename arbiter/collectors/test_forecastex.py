@@ -1319,17 +1319,21 @@ async def test_collector_clears_probe_count_on_tradeable_snapshot(patched_market
     await client.close()
 
 
-async def test_resolve_event_children_returns_empty_when_all_endpoints_fail(client):
-    """IBKR returns 503 for FORECASTX strikes on weekends; the resolver
-    must swallow those failures across all probed months and return []
-    rather than raising. This is the candidate-not-resolvable signal
-    the upstream service uses to bucket attempts as ibkr_503.
+async def test_resolve_event_children_raises_when_all_endpoints_fail(client):
+    """CONTRACT CHANGE (2026-07-21): when EVERY probed month errors (503
+    weekend outage, auth 401, 429 exhaustion), resolve_event_children now
+    raises instead of returning []. Returning [] made an outage
+    indistinguishable from a childless event, and the resolver's
+    no_children counter then permanently quarantined healthy markets
+    (forecastex_not_available) during the Jul 19-20 SSO outage. The
+    resolver buckets the raised error as ibkr_503/exception — a transient
+    outcome that never counts toward mark_unavailable.
     """
     with aioresponses() as m:
         # Every /iserver/secdef/strikes call returns 503.
         m.get(re.compile(r".*/iserver/secdef/strikes.*"), status=503, body="", repeat=True)
-        children = await client.resolve_event_children("733131966", months=("NOV26",))
-    assert children == []
+        with pytest.raises(RuntimeError, match="could not complete any month probe"):
+            await client.resolve_event_children("733131966", months=("NOV26",))
     await client.close()
 
 
@@ -1754,4 +1758,153 @@ async def test_maybe_keepalive_reauths_on_soft_drop(client, monkeypatch):
         reauth = len(m.requests.get(("POST", yarl.URL(
             "https://localhost:5000/v1/api/iserver/reauthenticate")), []))
     assert reauth == 1, "a dropped brokerage session must auto-trigger reauthenticate"
+    await client.close()
+
+
+# ── Outage-vs-empty discrimination in discovery (2026-07-21 regression) ────
+
+
+async def test_resolve_event_children_raises_when_all_month_probes_fail(
+    client, monkeypatch,
+):
+    """Regression (2026-07-21): during a CP-session outage every
+    /iserver/secdef/strikes probe raises (auth 401 / 429 exhaustion), and
+    the old code swallowed each error and returned [] — indistinguishable
+    from a genuinely childless event. The resolver then counted no_children
+    and permanently quarantined healthy markets (forecastex_not_available)
+    during the Jul 19-20 23h SSO outage."""
+    calls = []
+
+    async def _always_auth_error(method, path, **kwargs):
+        calls.append(path)
+        raise RuntimeError(
+            "forecastex auth error 401: gateway session expired — "
+            "re-authenticate via /sso."
+        )
+
+    monkeypatch.setattr(client, "_request", _always_auth_error)
+    with pytest.raises(RuntimeError, match="could not complete any month probe"):
+        await client.resolve_event_children("582530257")
+    # Every probe was the strikes endpoint; the political secdef/info
+    # fallback must NOT run once we know the session is down.
+    assert set(calls) == {"/iserver/secdef/strikes"}
+    await client.close()
+
+
+async def test_resolve_event_children_returns_empty_when_months_answer_empty(
+    client, monkeypatch,
+):
+    """A genuinely childless parent (IBKR answers {call:[],put:[]} for every
+    month) must still return [] — only *unanswered* probes may raise."""
+    async def _empty_strikes(method, path, **kwargs):
+        if path == "/iserver/secdef/strikes":
+            return {"call": [], "put": []}
+        return {}
+
+    monkeypatch.setattr(client, "_request", _empty_strikes)
+    children = await client.resolve_event_children("582530257")
+    assert children == []
+    await client.close()
+
+
+async def test_resolve_event_children_tolerates_partial_month_failures(
+    client, monkeypatch,
+):
+    """Some months erroring while another answers must keep the current
+    lenient behavior (use the month that answered)."""
+    state = {"n": 0}
+
+    async def _flaky(method, path, params=None, **kwargs):
+        if path == "/iserver/secdef/strikes":
+            state["n"] += 1
+            if state["n"] == 1:
+                raise RuntimeError("503 blip")
+            return {"call": [1.0], "put": [1.0]}
+        if path == "/iserver/secdef/info":
+            return {"items": [
+                {"conid": "111", "right": "C", "strike": 1.0},
+                {"conid": "222", "right": "P", "strike": 1.0},
+            ]}
+        return {}
+
+    monkeypatch.setattr(client, "_request", _flaky)
+    children = await client.resolve_event_children("582530257")
+    assert {c["conid"] for c in children} == {"111", "222"}
+    await client.close()
+
+
+async def test_get_contract_info_propagates_transport_errors(client, monkeypatch):
+    """Regression (2026-07-21): get_contract_info swallowed every exception
+    into {}, and two callers persist an empty result into PERMANENT negative
+    caches (collector _no_discovery_failed, adapter _sibling_cache). A
+    transient 401 must raise so callers' transient paths engage."""
+    async def _boom(method, path, **kwargs):
+        raise RuntimeError("forecastex auth error 401: gateway session expired")
+
+    monkeypatch.setattr(client, "_request", _boom)
+    with pytest.raises(RuntimeError, match="auth error 401"):
+        await client.get_contract_info("123")
+    await client.close()
+
+
+# ── conid "0" hygiene (2026-07-21 regression) ──────────────────────────────
+
+
+def test_is_valid_conid_rejects_zero_none_and_blank():
+    from arbiter.collectors.forecastex import is_valid_conid
+
+    assert is_valid_conid("762089343")
+    assert is_valid_conid(762089343)
+    assert not is_valid_conid("0")
+    assert not is_valid_conid(0)
+    assert not is_valid_conid("None")
+    assert not is_valid_conid("")
+    assert not is_valid_conid(None)
+    assert not is_valid_conid("  ")
+
+
+async def test_resolve_event_children_skips_conid_zero_children(client, monkeypatch):
+    """IBKR payloads have carried the literal string "0" as a conid; it
+    passed the truthiness filter and was persisted into mappings (the
+    FX_PCEY_* junk-row family). Filter it at the source."""
+    async def _fake(method, path, params=None, **kwargs):
+        if path == "/iserver/secdef/strikes":
+            return {"call": [1.0], "put": [1.0]}
+        if path == "/iserver/secdef/info":
+            return {"items": [
+                {"conid": "0", "right": "C", "strike": 1.0},
+                {"conid": "111", "right": "P", "strike": 1.0},
+            ]}
+        return {}
+
+    monkeypatch.setattr(client, "_request", _fake)
+    children = await client.resolve_event_children("582530257")
+    assert [c["conid"] for c in children] == ["111"]
+    await client.close()
+
+
+async def test_collector_ignores_conid_zero_mappings(monkeypatch):
+    """Mappings whose forecastex conid is the literal "0" must be treated
+    as unmapped: not tracked, and not dragged into duplicate-conid
+    accounting (43 live rows shared conid "0" and all flagged each other
+    as duplicates)."""
+    fake = {
+        "FX_JUNK_A": {"kalshi": "K-A", "forecastex": "0", "status": "confirmed"},
+        "FX_JUNK_B": {"kalshi": "K-B", "forecastex": "0", "status": "confirmed"},
+        "FX_GOOD": {"kalshi": "K-G", "forecastex": "333444", "status": "confirmed"},
+    }
+    monkeypatch.setattr(settings_mod, "MARKET_MAP", fake)
+    import arbiter.collectors.forecastex as fcst_mod
+
+    monkeypatch.setattr(fcst_mod, "MARKET_MAP", fake)
+
+    store = PriceStore()
+    client = ForecastExClient(gateway_url=GATEWAY, account_id=ACCOUNT)
+    collector = ForecastExCollector(
+        config=ForecastExConfig(), store=store, client=client,
+    )
+    assert "FX_JUNK_A" not in collector._conid_map
+    assert "FX_JUNK_B" not in collector._conid_map
+    assert collector._conid_map["FX_GOOD"] == ("333444", "")
+    assert collector._duplicate_conids == {}
     await client.close()
