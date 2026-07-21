@@ -178,3 +178,41 @@ mode. Gated by `IBKR_OAUTH_ENABLED` (explicit switch) AND `oauth_configured`
 
 Until then: the `/tickle` keepalive (already live) removes the frequent
 soft-expiry logins; only IBKR's ~daily hard reset needs a browser re-login.
+
+---
+
+## Path B — STATUS 2026-07-21 (incident follow-up)
+
+**Runtime today:** CP gateway transport, healthy (authenticated, keepalive ok).
+The Jul 19-20 outage was ~23h of dead SSO after the keepalive restarted the
+gateway at 23:10 PT and nobody performed the fresh browser login until 22:18 PT
+next day. Until Path B activates, every gateway restart repeats this exposure.
+
+**Fixes deployed (commit 574a75f):** an SSO outage can no longer permanently
+quarantine healthy mappings (resolve_event_children now raises when zero month
+probes complete; the resolver's forecastex_not_available mark now uses the
+durable single-column write instead of upsert, which silently dropped it), the
+conid-"0" junk rows are filtered everywhere, matcher inserts without a resolved
+YES/NO child pair fail closed to review, and `oauth_configured` now requires
+IBKR_OAUTH_ACCESS_TOKEN_SECRET so a partial cutover cannot take FX dark.
+
+**★ OPERATOR ACTION (unchanged, still the only blocker):** the IBKR portal
+(www.interactivebrokers.com) is NOT logged in on this machine, so the B2
+registration state could not be verified autonomously — the last recorded step
+is "registration page opened" on 2026-07-13, with NO record that the upload was
+submitted. Log in (credentials + 2FA) and check Settings → User Settings → API
+→ Third-Party Self-Service OAuth:
+1. If no registration exists: upload `deploy/ib-gateway/oauth/public_signature.pem`,
+   `public_encryption.pem`, `dhparam.pem` (all three verified valid and ready);
+   pick a 9-char consumer key; Save Key → Generate Token → Enable OAuth Access.
+   NEVER upload/regenerate the private keys; do not re-run the keygen with
+   --force (it would invalidate the registration).
+2. If pending: nothing to do — IBKR activates on a weekend (~1-2 weeks).
+3. If active (consumer key + access token/secret issued): run
+   `scripts/complete_oauth_cutover.sh <consumer_key> <access_token> <secret>` —
+   it validates the live LST handshake + a signed 200 read BEFORE flipping
+   IBKR_OAUTH_ENABLED, and auto-rolls back to the gateway transport on failure.
+
+**Path A note:** `arbiter-ib-gateway-prod` remains stopped (SIGTERMed during
+the Jul 20 deploy). It can never log in until A1-A4 are done — IBKR_USERNAME /
+IBKR_PASSWORD are still empty in `.env.production`. Leave it stopped until then.
