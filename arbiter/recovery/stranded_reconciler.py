@@ -1131,11 +1131,40 @@ class StrandedPositionReconciler:
                 platform=pos.platform, market_id=pos.market_id, err=str(exc),
             )
 
+    async def _has_open_strand_incident(self, arb_id: str) -> bool:
+        """True when an unresolved incident already exists for this lot.
+
+        The strand arb_id is deterministic, but the only dedup used to be
+        in-process — so every container restart re-emitted a duplicate
+        warning for the SAME position. Those duplicates accumulate in
+        execution_incidents and inflate the profitability validator's
+        incident_rate (it counts unresolved non-info incidents), which has
+        previously tripped the live-trading gate on volume alone. Checking
+        the durable store makes the dedup survive restarts.
+        """
+        store = self._store
+        if store is None or not hasattr(store, "list_incidents"):
+            return False
+        try:
+            open_incidents = await store.list_incidents(status="open", limit=500)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("stranded_reconciler.incident_dedup_check_failed", err=str(exc))
+            return False
+        return any(getattr(i, "arb_id", None) == arb_id for i in open_incidents)
+
     async def _emit_stranded_incident(self, pos: StrandedPosition) -> None:
         """Surface a new stranded lot as a warning incident the engine
         already knows how to route to Telegram + the ops UI."""
         engine = self._engine
         if engine is None or not hasattr(engine, "_record_incident"):
+            return
+        if await self._has_open_strand_incident(
+            self._strand_arb_id(pos.platform, pos.market_id)
+        ):
+            logger.debug(
+                "stranded_reconciler.incident_already_open",
+                platform=pos.platform, market_id=pos.market_id,
+            )
             return
         try:
             # _record_incident wants an opportunity; we don't have one

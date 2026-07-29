@@ -575,3 +575,110 @@ async def test_discover_falls_back_to_next_best_when_top_score_is_blocklisted():
     assert matched == 1
     assert len(store.upserts) == 1
     assert store.upserts[0].forecastex_contract_id == "733131966"
+
+
+# ── /iserver/secdef/strikes 429-burst regression (2026-07-25 ops audit) ───
+#
+# Live root cause: discover()'s NO-backfill pass was calling
+# resolve_event_children() — which fans out to up to 24 rate-limited
+# /iserver/secdef/strikes month probes per conid — for 31 confirmed
+# mappings that could never resolve:
+#
+#   * 30 rows persisted the literal junk conid "0". bool("0") is True, so
+#     the old `has_yes = bool(...)` check classified them as "YES already
+#     bound" and sent them to the backfill pass.
+#   * 1 row (FX_PREMP_202703_3p0, conid 582530257) was durably quarantined
+#     via forecastex_not_available, but the quarantine check sat AFTER the
+#     `if has_yes: ... continue` branch, making it unreachable for any row
+#     that had a YES conid.
+#
+# 31 mappings x 24 months = ~744 wasted strikes calls per discovery cycle.
+
+
+class _ProbeRecordingClient(_ClientWithChildren):
+    """Records every resolve_event_children() call so a test can assert
+    that a mapping was never probed against /iserver/secdef/strikes."""
+
+    def __init__(self, search_results=None, children=None):
+        super().__init__(search_results or {}, children or {})
+        self.probes: list[str] = []
+
+    async def resolve_event_children(self, parent_conid):
+        self.probes.append(str(parent_conid))
+        return await super().resolve_event_children(parent_conid)
+
+
+@pytest.mark.asyncio
+async def test_discover_never_probes_strikes_for_quarantined_mapping_with_yes_conid():
+    """A forecastex_not_available row that still carries a YES conid must be
+    skipped BEFORE the NO-backfill pass.
+
+    Regression: the quarantine check used to sit after `if has_yes: continue`,
+    so it was unreachable and the row was probed every cycle. Shape taken
+    from live row FX_PREMP_202703_3p0 (YES=582530257, NO empty, quarantined).
+    """
+    client = _ProbeRecordingClient(
+        children={"582530257": [{"conid": "582530257", "right": "C", "strike": 3.0}]},
+    )
+    quarantined = _make_mapping(
+        "FX_PREMP_202703_3p0", "Nonfarm payrolls March 2027 above 3.0",
+        forecastex="582530257",
+    )
+    quarantined.forecastex_not_available = True
+    store = _FakeStore([quarantined])
+
+    await discover(client, store, keywords=("payrolls",), min_score=0.3)
+
+    assert client.probes == [], (
+        "quarantined mapping must never reach resolve_event_children / "
+        f"secdef/strikes; got probes={client.probes}"
+    )
+    assert store.upserts == []
+
+
+@pytest.mark.asyncio
+async def test_discover_never_probes_strikes_for_junk_zero_conid():
+    """forecastex_contract_id == "0" is junk, not a bound YES.
+
+    Regression: `has_yes = bool("0")` is True, which routed 30 live rows
+    into the NO-backfill pass and called resolve_event_children("0").
+    """
+    client = _ProbeRecordingClient(children={})
+    junk = _make_mapping("JUNK_ZERO_CONID", "Some Market", forecastex="0")
+    store = _FakeStore([junk])
+
+    await discover(client, store, keywords=("house",), min_score=0.3)
+
+    assert "0" not in client.probes, (
+        f'resolve_event_children("0") must never be issued; got {client.probes}'
+    )
+    assert client.probes == []
+
+
+@pytest.mark.asyncio
+async def test_discover_still_backfills_healthy_mapping():
+    """Guard against over-correction: a healthy, non-quarantined mapping with
+    a real YES conid and no NO must STILL be probed and backfilled."""
+    client = _ProbeRecordingClient(
+        children={
+            "762089343": [
+                {"conid": "762089343", "right": "C", "strike": 1.0},
+                {"conid": "762089344", "right": "P", "strike": 1.0},
+            ],
+        },
+    )
+    healthy = _make_mapping(
+        "POL_US_HOUSE_DEM", "US House Control Democratic", forecastex="762089343",
+    )
+    store = _FakeStore([healthy])
+
+    await discover(client, store, keywords=("house",), min_score=0.3)
+
+    assert client.probes == ["762089343"], (
+        f"healthy mapping must still be probed exactly once; got {client.probes}"
+    )
+    assert any(
+        u.canonical_id == "POL_US_HOUSE_DEM"
+        and u.forecastex_no_contract_id == "762089344"
+        for u in store.upserts
+    ), "healthy mapping must still get its NO conid backfilled"

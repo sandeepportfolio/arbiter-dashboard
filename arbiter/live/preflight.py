@@ -23,7 +23,7 @@ import pathlib
 import re
 import sys
 from dataclasses import dataclass, field
-from typing import Any, Callable, Coroutine, List, Optional
+from typing import Any, Callable, Coroutine, List, Optional, Tuple
 
 
 # ─── Data models ─────────────────────────────────────────────────────────────
@@ -651,6 +651,35 @@ def _check_10_telegram_configured() -> PreflightItem:
     )
 
 
+def _dashboard_auth_headers() -> Tuple[dict, str]:
+    """Session header for the ops API, which requires auth on every /api/* route.
+
+    ``_auth_middleware`` (arbiter/api.py) is default-deny, so preflight's own
+    probes must authenticate or they get a 401 and wrongly fail a blocking
+    check. Mint the same HMAC session token the console uses.
+
+    Returns ``(headers, reason)``. ``reason`` is empty when a token was
+    minted, and otherwise explains WHY there is none. That distinction
+    matters: the token is signed with the *calling process's*
+    ``UI_SESSION_SECRET``, so running preflight from the host — where the
+    var is typically unset, or differs from the container's — yields a bare
+    ``HTTP 401`` that looks like a broken endpoint. Surfacing the real cause
+    stops the operator debugging a phantom readiness failure.
+    """
+    try:
+        from arbiter.api import _generate_token
+
+        actor = os.getenv("OPS_EMAIL") or "preflight@arbiter.local"
+        return {"Authorization": f"Bearer {_generate_token(actor)}"}, ""
+    except Exception as exc:  # MissingSessionSecretError, import error, …
+        if not os.getenv("UI_SESSION_SECRET", "").strip():
+            return {}, (
+                "UI_SESSION_SECRET not set in this process — cannot mint a "
+                "session token; export the same value the API container uses"
+            )
+        return {}, f"could not mint session token ({exc.__class__.__name__})"
+
+
 async def _check_11_dashboard_kill_switch(dashboard_url: Optional[str] = None) -> PreflightItem:
     """Check 11: Dashboard kill-switch endpoint reachable.
 
@@ -659,16 +688,22 @@ async def _check_11_dashboard_kill_switch(dashboard_url: Optional[str] = None) -
     import aiohttp
     url = dashboard_url or os.getenv("DASHBOARD_URL", "http://localhost:8080")
     endpoint = f"{url.rstrip('/')}/api/kill-switch"
+    headers, auth_note = _dashboard_auth_headers()
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=2.0)) as session:
-            async with session.get(endpoint) as resp:
-                passed = resp.status in (200, 405)  # 405 = POST-only is also fine
+            async with session.get(endpoint, headers=headers) as resp:
+                # 405 = POST-only route, 401 = reachable but unauthenticated:
+                # both prove the endpoint is live, which is what this checks.
+                passed = resp.status in (200, 405, 401)
+                detail = f"GET {endpoint} -> HTTP {resp.status}"
+                if resp.status == 401 and auth_note:
+                    detail += f" (unauthenticated: {auth_note})"
                 return PreflightItem(
                     key="dashboard_kill_switch",
                     label="Dashboard kill-switch endpoint reachable",
                     passed=passed,
                     blocking=True,
-                    detail=f"GET {endpoint} -> HTTP {resp.status}",
+                    detail=detail,
                 )
     except Exception as exc:
         return PreflightItem(
@@ -688,9 +723,37 @@ async def _check_12_readiness_endpoint(dashboard_url: Optional[str] = None) -> P
     import aiohttp
     url = dashboard_url or os.getenv("DASHBOARD_URL", "http://localhost:8080")
     endpoint = f"{url.rstrip('/')}/api/readiness"
+    headers, auth_note = _dashboard_auth_headers()
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=2.0)) as session:
-            async with session.get(endpoint) as resp:
+            async with session.get(endpoint, headers=headers) as resp:
+                if resp.status == 401:
+                    # Two very different 401s. auth_note == "" means a token
+                    # WAS minted with this process's UI_SESSION_SECRET and the
+                    # API still rejected it — a secret mismatch, which would
+                    # also break the console login. Waiving the gate there
+                    # silently skips the readiness check on go-live, so it
+                    # must BLOCK. Only when no token could be minted at all
+                    # (secret unset on the host — routine when preflight runs
+                    # outside the container) is this a manual-verify item
+                    # that says nothing about live-trading readiness.
+                    token_was_minted = not auth_note
+                    return PreflightItem(
+                        key="readiness",
+                        label="Readiness endpoint reports ready_for_live_trading",
+                        passed=False,
+                        blocking=token_was_minted,
+                        detail=(
+                            "HTTP 401 with a locally-minted token — "
+                            "UI_SESSION_SECRET here differs from the API's; "
+                            "fix the secret, then re-run"
+                            if token_was_minted
+                            else (
+                                f"HTTP 401 — preflight could not authenticate ({auth_note}); "
+                                f"verify manually: GET {endpoint} with an operator token"
+                            )
+                        ),
+                    )
                 if resp.status != 200:
                     return PreflightItem(
                         key="readiness",

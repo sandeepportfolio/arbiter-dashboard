@@ -22,6 +22,7 @@ import asyncio
 import logging
 from typing import Any, Iterable, Optional
 
+from ..collectors.forecastex import is_valid_conid
 from ..config.settings import normalize_market_text, similarity_score
 from .market_map import MarketMapping, MarketMappingStore
 
@@ -526,7 +527,11 @@ async def _search_forecastx_events(
         if FORECASTX_MARKER not in header.upper():
             continue
         conid = str(item.get("conid") or "").strip()
-        if not conid:
+        # is_valid_conid, not truthiness: IBKR search payloads carry the
+        # literal "0" (and serializers "None"), which are truthy strings —
+        # filtering only at read time let them persist and be re-probed
+        # forever (the 2026-07 /iserver/secdef/strikes 429 storm).
+        if not is_valid_conid(conid):
             continue
         hits.append(
             {
@@ -594,14 +599,23 @@ async def discover(
     no_backfill_targets: list[MarketMapping] = []
     skipped_negative_cache = 0
     async for _canonical_id, mapping in mapping_store.iter_confirmed():
-        has_yes = bool((mapping.forecastex_contract_id or "").strip())
-        has_no = bool((getattr(mapping, "forecastex_no_contract_id", "") or "").strip())
+        # The quarantine check MUST come first. It used to sit after the
+        # `has_yes` branch below, whose `continue` made it unreachable for
+        # any row with a YES conid — so quarantined rows kept getting probed
+        # on the NO-backfill path every cycle.
+        if getattr(mapping, "forecastex_not_available", False):
+            skipped_negative_cache += 1
+            continue
+        # Use is_valid_conid, not plain truthiness: IBKR payloads persist the
+        # literal strings "0" and "None" as conids, and bool("0") is True.
+        # Treating those as "YES already bound" sent them to the NO-backfill
+        # pass, which called resolve_event_children("0") and burned the
+        # /iserver/secdef/strikes 429 budget on every discovery cycle.
+        has_yes = is_valid_conid(mapping.forecastex_contract_id)
+        has_no = is_valid_conid(getattr(mapping, "forecastex_no_contract_id", ""))
         if has_yes:
             if not has_no:
                 no_backfill_targets.append(mapping)
-            continue
-        if getattr(mapping, "forecastex_not_available", False):
-            skipped_negative_cache += 1
             continue
         targets.append(mapping)
 
