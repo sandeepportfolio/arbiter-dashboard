@@ -54,6 +54,37 @@ def _make_auth(raw_secret: bytes = b"super-secret-token-material-xyz"):
     return auth, sig, raw_secret
 
 
+def _der_int(n: int) -> bytes:
+    body = n.to_bytes((n.bit_length() + 7) // 8 or 1, "big")
+    if body[0] & 0x80:
+        body = b"\x00" + body
+    return b"\x02" + _der_len(len(body)) + body
+
+
+def _der_len(n: int) -> bytes:
+    if n < 0x80:
+        return bytes([n])
+    body = n.to_bytes((n.bit_length() + 7) // 8, "big")
+    return bytes([0x80 | len(body)]) + body
+
+
+def test_read_dh_params_parses_pkcs3_pem_without_openssl(tmp_path):
+    """cryptography >= 49 raises 'Invalid DH parameters' on the exact PKCS#3
+    file registered with IBKR (which therefore can never be regenerated), so
+    the loader must decode the ASN.1 SEQUENCE itself. Seen live 2026-07-29:
+    host cryptography 46 parsed dhparam.pem, the container's 49.0.0 crash-
+    looped the whole API on boot."""
+    seq_body = _der_int(_P) + _der_int(2)
+    der = b"\x30" + _der_len(len(seq_body)) + seq_body
+    b64 = base64.encodebytes(der).decode()
+    pem = f"-----BEGIN DH PARAMETERS-----\n{b64}-----END DH PARAMETERS-----\n"
+    path = tmp_path / "dhparam.pem"
+    path.write_text(pem)
+    p, g = IbkrOAuth1a._read_dh_params(str(path))
+    assert p == _P
+    assert g == 2
+
+
 def test_signature_base_string_is_sorted_and_encoded():
     auth, _, _ = _make_auth()
     base = auth.signature_base_string(
@@ -106,6 +137,40 @@ def test_live_session_token_handshake_end_to_end():
     assert auth.validate_lst(server_lst_sig) is True, "LST must validate against server sig"
     assert auth.validate_lst("deadbeef") is False, "a bad signature must fail validation"
     assert auth.lst_valid is True
+
+
+def test_lst_header_signature_is_percent_encoded_exactly_once():
+    """The signature IBKR receives must decode with a single unquote — this is
+    the wire format their server validates against (see ibind / IBKR's own
+    sample: the header inserts the once-quoted signature verbatim). A doubly
+    encoded signature fails live with error 23804 'Error validating signature'
+    even though every local crypto test passes."""
+    from urllib.parse import unquote
+    from cryptography.hazmat.primitives import hashes
+
+    auth, sig_key, _ = _make_auth()
+    _url, headers, _a = auth.build_lst_request()
+    header = headers["Authorization"]
+    sig_field = next(
+        part for part in header.split(", ") if part.startswith("oauth_signature=")
+    )
+    wire_sig = sig_field.split('"')[1]
+    decoded_once = unquote(wire_sig)
+    # A 2048-bit RSA signature is 256 bytes -> base64 always pads with '=='.
+    assert decoded_once.endswith("=="), (
+        "single unquote must yield raw base64 (double encoding leaves %3D)"
+    )
+    raw = base64.b64decode(decoded_once, validate=True)
+    # Rebuild the base string exactly as signed: header params minus the sig.
+    from arbiter.auth import ibkr_oauth as mod
+    params = {}
+    for part in header.replace('OAuth realm="limited_poa", ', "").split(", "):
+        k, _, v = part.partition("=")
+        if k != "oauth_signature":
+            params[unquote(k)] = unquote(v.strip('"'))
+    prepend = auth._decrypt_access_token_secret().hex()
+    base = auth.signature_base_string("POST", _url, params, prepend=prepend)
+    sig_key.public_key().verify(raw, base.encode(), padding.PKCS1v15(), hashes.SHA256())
 
 
 def test_auth_header_signs_with_lst_hmac_sha256():

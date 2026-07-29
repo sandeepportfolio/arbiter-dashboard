@@ -73,8 +73,10 @@ docker compose -f docker-compose.prod.yml --env-file .env.production \
 echo "── 4/4 waiting for readiness (5 min max)"
 deadline=$(( $(date +%s) + 300 ))
 while [ "$(date +%s)" -lt "$deadline" ]; do
-    if curl -s http://localhost:8080/api/readiness \
-        | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get('ready_for_live_trading') else 1)" \
+    # /ready is the public probe; /api/readiness now requires a session token
+    # and would read as perpetually-unready here, forcing a bogus rollback.
+    if curl -s http://localhost:8080/ready \
+        | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get('live_trading_ready') else 1)" \
         2>/dev/null; then
         echo "✓ CUTOVER COMPLETE — ForecastEx now runs on OAuth (api.ibkr.com)."
         echo "  No local gateway, no browser login, ever. The keepalive"

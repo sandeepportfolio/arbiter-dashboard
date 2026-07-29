@@ -30,6 +30,7 @@ import hmac
 import json
 import os
 import random
+import re
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -103,10 +104,44 @@ class IbkrOAuth1a:
 
     @staticmethod
     def _read_dh_params(path: str) -> tuple[int, int]:
+        # cryptography >= 49 rejects this PKCS#3 file ("Invalid DH
+        # parameters") that release 46 accepted — and the file is the one
+        # registered with IBKR, so it can never be regenerated to appease
+        # the library. Only the integers p and g are needed here; decode
+        # the ASN.1 SEQUENCE ourselves so a dependency bump can never take
+        # the whole API down at boot again (crash loop seen 2026-07-29).
         with open(path, "rb") as fh:
-            params = serialization.load_pem_parameters(fh.read())
-        nums = params.parameter_numbers()
-        return nums.p, nums.g
+            pem = fh.read()
+        m = re.search(
+            rb"-----BEGIN DH PARAMETERS-----(.+?)-----END DH PARAMETERS-----",
+            pem, re.S,
+        )
+        if not m:  # X9.42 or other container — fall back to the library.
+            params = serialization.load_pem_parameters(pem)
+            nums = params.parameter_numbers()
+            return nums.p, nums.g
+        der = base64.b64decode(b"".join(m.group(1).split()))
+
+        def _read_len(i: int) -> tuple[int, int]:
+            n = der[i]
+            i += 1
+            if n & 0x80:
+                k = n & 0x7F
+                n = int.from_bytes(der[i:i + k], "big")
+                i += k
+            return n, i
+
+        if der[0] != 0x30:
+            raise ValueError(f"{path}: expected DER SEQUENCE in DH PARAMETERS")
+        _, i = _read_len(1)
+        ints = []
+        for _ in range(2):  # DHParameter ::= SEQUENCE { prime, base, ... }
+            if der[i] != 0x02:
+                raise ValueError(f"{path}: expected DER INTEGER in DH PARAMETERS")
+            length, i = _read_len(i + 1)
+            ints.append(int.from_bytes(der[i:i + length], "big"))
+            i += length
+        return ints[0], ints[1]
 
     # ── testable primitives ─────────────────────────────────────────
     @staticmethod
@@ -121,15 +156,19 @@ class IbkrOAuth1a:
         return f"{prepend}{method.upper()}&{_rfc3986(url)}&{_rfc3986(norm)}"
 
     def _rsa_sha256_sign(self, base_string: str) -> str:
+        # Returns RAW base64 — _oauth_header percent-encodes header values
+        # exactly once; encoding here too double-encodes the signature, which
+        # IBKR rejects live as error 23804 "Error validating signature".
         key = serialization.load_pem_private_key(self.signature_key_pem, password=None)
         sig = key.sign(base_string.encode("utf-8"), padding.PKCS1v15(), hashes.SHA256())
-        return _rfc3986(base64.b64encode(sig).decode("utf-8"))
+        return base64.b64encode(sig).decode("utf-8")
 
     @staticmethod
     def _hmac_sha256_sign(base_string: str, lst_b64: str) -> str:
+        # Raw base64, same single-encoding contract as _rsa_sha256_sign.
         key = base64.b64decode(lst_b64)
         digest = hmac.new(key, base_string.encode("utf-8"), hashlib.sha256).digest()
-        return _rfc3986(base64.b64encode(digest).decode("utf-8"))
+        return base64.b64encode(digest).decode("utf-8")
 
     @staticmethod
     def _oauth_header(realm: str, params: dict) -> str:

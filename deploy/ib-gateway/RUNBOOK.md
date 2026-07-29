@@ -216,3 +216,34 @@ submitted. Log in (credentials + 2FA) and check Settings → User Settings → A
 **Path A note:** `arbiter-ib-gateway-prod` remains stopped (SIGTERMed during
 the Jul 20 deploy). It can never log in until A1-A4 are done — IBKR_USERNAME /
 IBKR_PASSWORD are still empty in `.env.production`. Leave it stopped until then.
+
+---
+
+## Path B — STATUS 2026-07-29 ✅ CUTOVER COMPLETE
+
+**ForecastEx now runs on OAuth 1.0a against api.ibkr.com — zero-login, permanent.**
+`live_trading_ready: true`, FX collector 0 errors, no gateway session required.
+
+The registration was NEVER the blocker — the three PEMs were uploaded and IBKR
+had already issued the `ARBITERFX` consumer key + access token (present in
+`.env.production` all along). Two code bugs blocked activation:
+
+1. **Double percent-encoded OAuth signature** (`arbiter/auth/ibkr_oauth.py`):
+   `_rsa_sha256_sign`/`_hmac_sha256_sign` returned an already-quoted signature
+   and `_oauth_header` quoted every value again → IBKR error 23804
+   "Error validating signature" on every LST handshake. Signatures now return
+   raw base64; the header quotes exactly once (matches ibind + IBKR sample).
+   Regression test: `test_lst_header_signature_is_percent_encoded_exactly_once`.
+2. **cryptography 49 rejects the registered dhparam.pem** ("Invalid DH
+   parameters") which cryptography 46 accepted — the container crash-looped
+   the entire API at boot the moment `IBKR_OAUTH_ENABLED=true` (this is why
+   the first cutover attempt auto-rolled back). `_read_dh_params` now decodes
+   the PKCS#3 ASN.1 itself; the IBKR-registered file must never be regenerated.
+
+Also fixed: `complete_oauth_cutover.sh` polled the authenticated
+`/api/readiness` (401 since the 2026-07-25 auth lockdown) and would roll back
+every good cutover; it now polls the public `/ready` probe.
+
+**The local CP gateway (`arbiter-ib-gateway-prod`), keepalive supervisor and
+daily browser re-login are now OPTIONAL.** Flip `IBKR_OAUTH_ENABLED` off to
+return to the gateway transport. LST auto-refreshes ~every 22h in-process.
