@@ -76,7 +76,15 @@ services:
       - ./keys:/app/keys:ro
       - ./logs:/app/logs
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:${ARBITER_PORT:-8090}/api/health || exit 1"]
+      # Must match docker-compose.prod.yml. Two things are load-bearing here:
+      #   1. /health (not /api/health) — every /api/* route is auth-gated by
+      #      _auth_middleware (arbiter/api.py), so /api/health now answers 401
+      #      and the probe fails. /health is in _PUBLIC_PATHS.
+      #   2. python urllib (not curl) — the image is python:3.12-slim and the
+      #      Dockerfile installs only gcc/libffi-dev, so curl is NOT present.
+      #      `curl ...` exits 127 ("not found") and the container is marked
+      #      unhealthy regardless of which path is probed.
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:${ARBITER_PORT:-8090}/health').read()\" || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3

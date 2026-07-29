@@ -19,8 +19,11 @@
 #
 # Bring up:
 #   docker compose -f docker-compose.prod.yml --env-file .env.production up -d
-#   curl http://localhost:8080/api/health   # expect {"status":"ok"}
-#   curl http://localhost:8080/api/readiness  # expect "ready": true
+#   curl http://localhost:8080/health   # expect {"status":"ok"} — public probe
+#   # Every /api/* route is auth-gated (_auth_middleware). Mint a token first:
+#   TOK=$(docker exec arbiter-api-prod python -c \
+#     "from arbiter.api import _generate_token; print(_generate_token('$OPS_EMAIL'))")
+#   curl -H "Authorization: Bearer $TOK" http://localhost:8080/api/readiness  # expect "ready": true
 #
 # Tear down (graceful, SAFE-05 shutdown runs):
 #   docker compose -f docker-compose.prod.yml down
@@ -191,12 +194,21 @@ services:
       # Claude Code CLI verifier service runs on the host (port 8079)
       # No need to mount auth config — the service handles Claude CLI auth natively
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/api/health').read()\" || exit 1"]
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/health').read()\" || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 30s
     restart: always
+    # Cap the API's memory. Without a limit this container grew unbounded
+    # (~1.9 GiB after 2h) until the KERNEL OOM-killer fired VM-wide, which can
+    # take down arbiter-postgres-prod/redis alongside it and reports
+    # OOMKilled=false (global OOM, not cgroup OOM) so it looks like a clean
+    # exit. A cgroup limit contains the blast radius to this container, makes
+    # the kill observable, and lets `restart: always` recover it.
+    # NOTE: this bounds the damage, it does not fix the underlying growth.
+    mem_limit: 2560m
+    memswap_limit: 2560m       # no swap spill — fail fast rather than thrash
     stop_grace_period: 35s   # covers the 5s trip_kill budget + 30s cleanup
     stop_signal: SIGTERM      # triggers arbiter.main SAFE-05 graceful-shutdown
     logging:
