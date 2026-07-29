@@ -70,11 +70,17 @@ def _build_allowed_users() -> Dict[str, str]:
         if email and password:
             users[email] = _hash_password(password.casefold())
 
-    # Operator console credential (case-insensitive username + password).
-    # Kept as a guaranteed login so a restart with missing/rotated OPS_* env
-    # can never lock the operator out of the live desk. setdefault means an
-    # explicit OPS_EMAIL of the same name still wins.
-    users.setdefault("sandeep", _hash_password("saibaba".casefold()))
+    # NO hardcoded fallback credential. The console is served over a public
+    # Cloudflare tunnel and this source is on GitHub — a baked-in login is a
+    # backdoor for anyone who reads the repo, and it can never be rotated.
+    # A lockout from missing OPS_* env is recoverable (fix env, restart); a
+    # public backdoor on a live-money desk is not.
+    if not users:
+        logger.critical(
+            "No operator credentials configured (OPS_EMAIL/OPS_PASSWORD or "
+            "UI_USER_EMAIL/UI_USER_PASSWORD) — every login will be rejected "
+            "until they are set and the API restarts."
+        )
 
     return users
 
@@ -152,13 +158,28 @@ _ACTIVE_SESSIONS: Dict[str, str] = {}
 _REVOKED_SESSIONS: set[str] = set()
 
 
-async def get_current_user(request: web.Request) -> Optional[str]:
-    """Get logged-in user from cookie or Authorization header."""
+async def get_current_user(
+    request: web.Request, *, allow_query_token: bool = False
+) -> Optional[str]:
+    """Get logged-in user from cookie or Authorization header.
+
+    ``allow_query_token`` additionally accepts ``?token=`` (or
+    ``?access_token=``) from the query string. It is opt-in and is used ONLY
+    for the WebSocket upgrade at ``/ws``: the browser WebSocket API cannot
+    set an Authorization header, so a same-origin cookie or a query token are
+    the only credentials it can present. Do NOT enable it for ``/api/*`` —
+    tokens in URLs leak into proxy logs, browser history and Referer headers.
+    """
     auth = request.headers.get("Authorization", "")
     if auth.startswith("Bearer "):
         token = auth[7:]
     else:
         token = request.cookies.get("arbiter_session", "")
+    if not token and allow_query_token:
+        token = (
+            request.query.get("token", "")
+            or request.query.get("access_token", "")
+        ).strip()
     email = _verify_token(token)
     if email and token not in _REVOKED_SESSIONS:
         _ACTIVE_SESSIONS.setdefault(token, email)
@@ -186,6 +207,59 @@ async def logout_user(token: str) -> None:
     _ACTIVE_SESSIONS.pop(token, None)
     if token:
         _REVOKED_SESSIONS.add(token)
+
+
+# ── Login throttling ─────────────────────────────────────────────────────
+# The login route is deliberately public (it's how you get a session) and the
+# console rides a public Cloudflare tunnel, so it WILL see credential
+# guessing. Sliding-window failure counts, in-memory: per (client_ip, email)
+# to stop targeted guessing, plus a coarse global cap so a distributed sweep
+# can't sidestep the per-key limit. All tunnel traffic shares cloudflared's
+# source IP, so honor CF-Connecting-IP when present.
+_LOGIN_FAIL_WINDOW_S = 900.0
+_LOGIN_FAIL_MAX_PER_KEY = 5
+_LOGIN_FAIL_GLOBAL_WINDOW_S = 300.0
+_LOGIN_FAIL_GLOBAL_MAX = 30
+_login_failures: Dict[str, list] = {}
+_login_failures_global: list = []
+
+
+def _login_client_ip(request: web.Request) -> str:
+    return (
+        request.headers.get("CF-Connecting-IP", "").strip()
+        or (request.remote or "unknown")
+    )
+
+
+def _login_throttled(client_ip: str, email: str) -> bool:
+    now = time.time()
+    global _login_failures_global
+    _login_failures_global = [
+        t for t in _login_failures_global if now - t < _LOGIN_FAIL_GLOBAL_WINDOW_S
+    ]
+    if len(_login_failures_global) >= _LOGIN_FAIL_GLOBAL_MAX:
+        return True
+    key = f"{client_ip}:{email}"
+    attempts = [
+        t for t in _login_failures.get(key, []) if now - t < _LOGIN_FAIL_WINDOW_S
+    ]
+    _login_failures[key] = attempts
+    return len(attempts) >= _LOGIN_FAIL_MAX_PER_KEY
+
+
+def _login_record_failure(client_ip: str, email: str) -> None:
+    now = time.time()
+    _login_failures.setdefault(f"{client_ip}:{email}", []).append(now)
+    _login_failures_global.append(now)
+    # Bound memory: drop empty/expired keys opportunistically.
+    if len(_login_failures) > 1000:
+        for k in list(_login_failures):
+            if all(now - t >= _LOGIN_FAIL_WINDOW_S for t in _login_failures[k]):
+                del _login_failures[k]
+
+
+def _login_clear_failures(client_ip: str, email: str) -> None:
+    _login_failures.pop(f"{client_ip}:{email}", None)
 
 async def require_auth(request: web.Request) -> str:
     """Raise 401 if not authenticated."""
@@ -430,7 +504,9 @@ class ArbiterAPI:
         # Fail loudly at startup if the session secret is missing — a
         # silent insecure default would let anyone forge auth cookies.
         _get_secret()
-        app = web.Application(middlewares=[self._cors_middleware])
+        app = web.Application(
+            middlewares=[self._cors_middleware, self._auth_middleware]
+        )
         app.router.add_get("/", self.handle_site_index)
         app.router.add_get("/health", self.handle_liveness)
         app.router.add_get("/ready", self.handle_service_ready)
@@ -470,11 +546,25 @@ class ArbiterAPI:
         # /iserver/secdef/* endpoints aren't returning children (e.g.
         # weekend 503s). Trips the FX collector to re-probe immediately.
         app.router.add_post("/api/market-mappings/{canonical_id}/forecastex_conid", self.handle_set_forecastex_conid)
+        # Same override for the NO leg. Previously only settable by hand-
+        # editing market_mappings in the live database.
+        app.router.add_post("/api/market-mappings/{canonical_id}/forecastex_no_conid", self.handle_set_forecastex_no_conid)
         # ForecastEx wiring diagnostic — surfaces per-mapping conid state
         # (tracked / inactive / resolved / quarantined) and the collector's
         # live probe counts. Lets the operator see at a glance which
         # mappings are blocked on what.
         app.router.add_get("/api/forecastex/diagnostics", self.handle_forecastex_diagnostics)
+        # IBKR/ForecastEx gateway session health (auth, circuit, quote
+        # freshness). Local state only — issues no outbound IBKR call.
+        app.router.add_get("/api/forecastex/session", self.handle_forecastex_session)
+        # IBKR OAuth Path-B activation state. Presence flags only, never
+        # token or key material.
+        app.router.add_get("/api/oauth/status", self.handle_oauth_status)
+        # Per-venue funding readiness + which venue pairs a shortfall blocks.
+        app.router.add_get("/api/funding-gate", self.handle_funding_gate)
+        # Open "arbs" whose legs pay in the SAME settlement state — i.e. are
+        # directional exposure, not a hedge.
+        app.router.add_get("/api/directional-exposure", self.handle_directional_exposure)
         app.router.add_get("/api/settings", self.handle_settings)
         app.router.add_post("/api/settings", self.handle_settings_update)
         app.router.add_get("/api/errors", self.handle_errors)
@@ -583,6 +673,50 @@ class ArbiterAPI:
             await task
         except (asyncio.CancelledError, BaseException):
             pass
+
+    # Paths reachable without a session. Everything else under /api/ is
+    # authenticated. Keep this list minimal: it is the public attack surface.
+    _PUBLIC_PATHS = frozenset(
+        {
+            "/",
+            "/health",  # container liveness probe
+            "/ready",  # container readiness probe
+            "/ops",
+            "/ops.html",
+            "/ops-legacy",
+            "/favicon.ico",
+            "/api/auth/login",
+        }
+    )
+    _PUBLIC_PREFIXES = ("/static/",)
+
+    @web.middleware
+    async def _auth_middleware(self, request, handler):
+        """Require a valid session for every /api/* route.
+
+        The ops console is served over a public Cloudflare tunnel, so an
+        unauthenticated GET here leaks live balances, positions and P&L to
+        anyone holding the URL. Auth is enforced centrally rather than
+        per-handler so a newly added route is closed by default.
+        """
+        if request.method == "OPTIONS":
+            return await handler(request)
+
+        path = request.path
+        if path in self._PUBLIC_PATHS or path.startswith(self._PUBLIC_PREFIXES):
+            return await handler(request)
+
+        if path.startswith("/api/") or path == "/ws":
+            # /ws is the sole route permitted to carry its token in the query
+            # string: a browser WebSocket cannot send an Authorization header,
+            # so cookie-or-query is all it has. See get_current_user().
+            is_ws = path == "/ws"
+            if not await get_current_user(request, allow_query_token=is_ws):
+                return web.json_response(
+                    {"error": "Authentication required"}, status=401
+                )
+
+        return await handler(request)
 
     @web.middleware
     async def _cors_middleware(self, request, handler):
@@ -776,6 +910,42 @@ class ArbiterAPI:
             "force_refresh": force,
             "served_at": now_after,
         }
+
+        # Per-venue funding gate: the configured minimum, the live balance,
+        # and whether that venue is currently BLOCKING trading. Built from the
+        # same helper /api/funding-gate uses, which reads the balance
+        # monitor's live thresholds — so a threshold change cannot leave this
+        # panel reporting a stale gate. Purely additive: the legacy top-level
+        # per-platform keys and `platforms`/`errors`/`cache` are unchanged.
+        #
+        # `blocking` is derived, never assumed. A venue whose balance could
+        # not be read (balance_known=false) blocks, because we cannot vouch
+        # for funding we failed to fetch.
+        try:
+            gate_rows = self._build_funding_gate_rows()
+        except Exception as exc:  # noqa: BLE001 — never break /api/balances
+            logger.warning("handle_balances: funding gate build failed: %s", exc)
+            gate_rows = {}
+        response["gates"] = {
+            venue: {
+                "venue": venue,
+                "balance": row.get("balance"),
+                # `threshold` and `minimum` are the same number under both
+                # spellings the console binds to.
+                "threshold": row.get("threshold"),
+                "minimum": row.get("minimum"),
+                "passes": bool(row.get("passes")),
+                "blocking": not bool(row.get("passes")),
+                "shortfall": row.get("shortfall"),
+                "headroom": row.get("headroom"),
+                "balance_known": row.get("balance_known"),
+                "stale": row.get("stale"),
+            }
+            for venue, row in gate_rows.items()
+        }
+        response["gates_blocking"] = sorted(
+            venue for venue, row in gate_rows.items() if not row.get("passes")
+        )
         return web.json_response(response)
 
     async def handle_trades(self, request):
@@ -2017,19 +2187,35 @@ class ArbiterAPI:
     async def handle_set_forecastex_conid(self, request):
         """POST a manual ForecastEx child conid for a canonical mapping.
 
-        Body: {"conid": "<numeric_string>"}
-        Empty string clears the conid (back to auto-discovery candidate).
+        Body: ``{"conid": "<digits>"}`` to set; ``{"conid": null}`` or
+        ``{"conid": ""}`` to clear (back to auto-discovery candidate).
 
         Use case: IBKR's auto-resolver (forecastex_resolver) is the
         primary path. When IBKR's /iserver/secdef/* endpoints are 503
         (weekends) or the contract chain is unexposed, the operator
         can paste the child conid (e.g. from the IBKR Portal) and the
         FX collector picks it up on the next poll cycle.
+
+        Validates through ``is_valid_conid`` exactly as the NO sibling
+        does. Without the null-guard, ``str(None)`` yields the literal
+        ``"None"`` — junk that is_valid_conid rejects, so the mapping
+        would stop resolving its ForecastEx leg while this endpoint
+        returned 200 and the console reported success.
         """
+        from arbiter.collectors.forecastex import is_valid_conid
+
         actor = await require_auth(request)
         canonical_id = request.match_info["canonical_id"]
         payload = await self._read_json_body(request)
-        new_conid = str(payload.get("conid", "")).strip()
+
+        # ``{"conid": null}`` must clear, not stringify to "None".
+        raw = payload.get("conid", "")
+        new_conid = "" if raw is None else str(raw).strip()
+        clearing = new_conid == ""
+        if not clearing and not (is_valid_conid(new_conid) and new_conid.isdigit()):
+            return web.json_response(
+                {"error": f"invalid conid: {new_conid!r}"}, status=400,
+            )
 
         if self.mapping_store is None:
             return web.json_response(
@@ -2050,7 +2236,14 @@ class ArbiterAPI:
         prior_conid = str(getattr(mapping, "forecastex_contract_id", "") or "")
         mapping.forecastex_contract_id = new_conid
         try:
-            await self.mapping_store.upsert(mapping)
+            # Prefer the targeted single-column write: a full-row upsert here
+            # resurrects every other column as read above — including
+            # allow_auto_trade over a concurrent loss-streak disable.
+            setter = getattr(self.mapping_store, "set_forecastex_conid", None)
+            if callable(setter):
+                await setter(canonical_id, new_conid, side="yes")
+            else:
+                await self.mapping_store.upsert(mapping)
         except Exception as exc:
             return web.json_response(
                 {"error": f"mapping_store.upsert failed: {exc}"}, status=500,
@@ -2076,6 +2269,105 @@ class ArbiterAPI:
             "canonical_id": canonical_id,
             "prior_conid": prior_conid,
             "new_conid": new_conid,
+            "actor": actor,
+        })
+
+    async def handle_set_forecastex_no_conid(self, request):
+        """POST a manual ForecastEx **NO** child conid for a mapping.
+
+        Body: ``{"conid": "<digits>"}`` to set; ``{"conid": null}`` or
+        ``{"conid": ""}`` to clear (back to auto-discovery).
+
+        Sibling of :meth:`handle_set_forecastex_conid`, which owns the YES
+        leg. Until this existed the only way to attach a NO conid was a
+        hand-written ``UPDATE market_mappings`` against the live database.
+        The NO leg is half the tradeable FX surface — a canonical with a
+        YES conid but no NO conid can only ever be one side of a pair — so
+        leaving it to manual SQL was a standing operational hazard.
+
+        Unlike the YES handler this validates through ``is_valid_conid``:
+        the literal strings ``"0"`` / ``"None"`` pass a plain truthiness
+        check and have previously been persisted as junk conids, which then
+        surface as duplicates of each other in
+        ``/api/forecastex/diagnostics``.
+        """
+        from arbiter.collectors.forecastex import is_valid_conid
+
+        actor = await require_auth(request)
+        canonical_id = request.match_info["canonical_id"]
+        payload = await self._read_json_body(request)
+
+        # ``{"conid": null}`` must clear, not stringify to "None".
+        raw = payload.get("conid", "")
+        new_conid = "" if raw is None else str(raw).strip()
+        clearing = new_conid == ""
+        if not clearing and not (is_valid_conid(new_conid) and new_conid.isdigit()):
+            return web.json_response(
+                {"error": f"invalid conid: {new_conid!r}"}, status=400,
+            )
+
+        if self.mapping_store is None:
+            return web.json_response(
+                {"error": "mapping store unavailable"}, status=503,
+            )
+        try:
+            getter = getattr(self.mapping_store, "get", None)
+            mapping = await getter(canonical_id) if callable(getter) else None
+        except Exception as exc:
+            return web.json_response(
+                {"error": f"mapping_store.get failed: {exc}"}, status=500,
+            )
+        if mapping is None:
+            return web.json_response(
+                {"error": f"Unknown mapping: {canonical_id}"}, status=404,
+            )
+
+        prior_conid = str(getattr(mapping, "forecastex_no_contract_id", "") or "")
+        mapping.forecastex_no_contract_id = new_conid
+        try:
+            # Targeted write for the same reason as the YES sibling: a
+            # full-row upsert can revive stale columns (allow_auto_trade)
+            # against a concurrent single-column disable.
+            setter = getattr(self.mapping_store, "set_forecastex_conid", None)
+            if callable(setter):
+                await setter(canonical_id, new_conid, side="no")
+            else:
+                await self.mapping_store.upsert(mapping)
+        except Exception as exc:
+            return web.json_response(
+                {"error": f"mapping_store.upsert failed: {exc}"}, status=500,
+            )
+
+        # Keep the in-process MARKET_MAP in step with the store so
+        # /api/forecastex/diagnostics (which reads MARKET_MAP, not the DB)
+        # reflects the change on the very next request rather than after a
+        # reload. Best-effort: a canonical absent from MARKET_MAP is not an
+        # error here, the store write above is the source of truth.
+        live_mapping = MARKET_MAP.get(canonical_id)
+        if isinstance(live_mapping, dict):
+            live_mapping["forecastex_no"] = new_conid
+
+        # Drop any in-memory inactive flag on both the old and new conids so
+        # the collector's next poll re-probes them cleanly. Mirrors the YES
+        # handler; collector may be absent in dev.
+        for adapter_attr in ("forecastex_collector", "collectors"):
+            collectors = getattr(self, adapter_attr, None) or {}
+            fx = collectors.get("forecastex") if isinstance(collectors, dict) else None
+            if fx and hasattr(fx, "reactivate_conid"):
+                if prior_conid:
+                    fx.reactivate_conid(prior_conid)
+                if new_conid:
+                    fx.reactivate_conid(new_conid)
+
+        logger.info(
+            "operator_attach_forecastex_no_conid actor=%s canonical_id=%s prior=%r new=%r",
+            actor, canonical_id, prior_conid, new_conid,
+        )
+        return web.json_response({
+            "canonical_id": canonical_id,
+            "prior_conid": prior_conid,
+            "new_conid": new_conid,
+            "cleared": clearing,
             "actor": actor,
         })
 
@@ -2145,23 +2437,472 @@ class ArbiterAPI:
                 "last_attempt": attempt.to_dict() if attempt is not None and hasattr(attempt, "to_dict") else None,
             }
             rows.append(row)
+
+        # OAuth activation state and live gateway-session state are folded in
+        # here so the console can answer "why is FX not trading?" from ONE
+        # request. Both are also served standalone (/api/oauth/status,
+        # /api/forecastex/session) and are built by the same helpers, so the
+        # embedded copies cannot drift from the dedicated routes.
+        #
+        # `oauth` is presence-booleans + timestamps only — no key material.
+        # Each is guarded: a failure in either must not take out the
+        # diagnostics table, which is the part operators rely on most.
+        try:
+            oauth_status = self._build_oauth_status()
+        except Exception as exc:  # noqa: BLE001 — diagnostics must still render
+            logger.warning("diagnostics: oauth status build failed: %s", exc)
+            oauth_status = {"error": "oauth status unavailable"}
+        try:
+            session_status = await self._build_forecastex_session()
+        except Exception as exc:  # noqa: BLE001 — diagnostics must still render
+            logger.warning("diagnostics: session build failed: %s", exc)
+            session_status = {"error": "session status unavailable"}
+
         return web.json_response({
             "rows": rows,
             "resolver_running": resolver is not None,
             "inactive_conid_count": len(inactive),
             "total_confirmed_fx_mappings": len(rows),
+            "oauth": {
+                "enabled": oauth_status.get("oauth_enabled"),
+                "configured": oauth_status.get("oauth_configured"),
+                "consumer_key_present": oauth_status.get("consumer_key_present"),
+                "transport_attached": oauth_status.get("transport_attached"),
+                "active": oauth_status.get("active"),
+                "effective_transport": oauth_status.get("effective_transport"),
+                "missing": oauth_status.get("missing"),
+                "last_validation": oauth_status.get("last_validation"),
+            },
+            "session": session_status,
         })
 
-    async def handle_errors(self, request):
-        incidents = {
-            incident.incident_id: incident.to_dict()
-            for incident in self.engine.incidents
+    def _forecastex_collector(self):
+        """Best-effort handle on the live FX collector (dev may have none).
+
+        Same lookup the diagnostics handler uses, factored out so the
+        session endpoint cannot drift from it.
+        """
+        for attr in ("forecastex_collector", "collectors"):
+            holder = getattr(self, attr, None)
+            fx = holder.get("forecastex") if isinstance(holder, dict) else holder
+            if fx is not None:
+                return fx
+        return None
+
+    async def handle_forecastex_session(self, request):
+        """GET /api/forecastex/session — IBKR/ForecastEx gateway session health.
+
+        Read-only and strictly local: every field is derived from state the
+        collector already holds in memory, or from the price store. This
+        endpoint issues NO outbound IBKR calls — the /iserver/secdef/*
+        request budget is already stressed, and a health probe must never be
+        the thing that trips the rate limiter it exists to report on.
+
+        Consequence worth reading before wiring a green light to this: the
+        fields IBKR only reports inside a live ``/tickle`` response —
+        ``iserver.authStatus.competing`` and ``ssoExpires`` — are parsed by
+        the collector's keepalive but never persisted, so nothing in this
+        process knows them between ticks. They are returned as ``null`` and
+        named in ``unavailable_fields``. A null there means NOT TRACKED, not
+        healthy; the console must not render it as a pass.
+        """
+        return web.json_response(await self._build_forecastex_session())
+
+    async def _build_forecastex_session(self) -> dict:
+        """Build the FX/IBKR gateway session payload.
+
+        Shared by /api/forecastex/session and the ``session`` block on
+        /api/forecastex/diagnostics. Issues NO outbound IBKR call — every
+        field is read from in-process collector state or the price store.
+        """
+        now = time.time()
+        fx = self._forecastex_collector()
+        client = getattr(fx, "client", None) if fx is not None else None
+
+        unavailable: List[str] = []
+        circuit = getattr(fx, "circuit", None) or getattr(client, "circuit", None)
+        circuit_stats = {}
+        if circuit is not None:
+            try:
+                circuit_stats = dict(circuit.stats)
+            except Exception:
+                circuit_stats = {}
+        circuit_state = str(circuit_stats.get("state") or "unknown")
+
+        # The brokerage bridge flag is the only in-process signal of session
+        # liveness: /iserver/* returns "no bridge" until ssodh/init succeeds,
+        # and a dropped session resets it. It is a proxy for `authenticated`,
+        # not IBKR's own answer — hence the explicit source field.
+        bridge_ready = getattr(client, "_bridge_ready", None)
+        authenticated = bool(bridge_ready) if bridge_ready is not None else None
+        if authenticated is None:
+            unavailable.append("authenticated")
+        unavailable.extend([
+            "competing", "competing_session", "expires_in_seconds", "sso_expires",
+        ])
+
+        # _last_tickle is a monotonic stamp; convert to wall clock for the UI.
+        last_tickle_mono = float(getattr(client, "_last_tickle", 0.0) or 0.0)
+        if last_tickle_mono > 0.0:
+            keepalive_age = max(0.0, time.monotonic() - last_tickle_mono)
+            last_keepalive_ts = now - keepalive_age
+        else:
+            keepalive_age = None
+            last_keepalive_ts = None
+
+        # Quote freshness. Read the raw in-memory map (not get_all_prices,
+        # which filters stale entries out — a vanished quote is exactly the
+        # condition we need to *report*, so filtering would hide it).
+        # NB: the PriceStore is held as ``self.store`` (see __init__), not
+        # ``self.price_store``.
+        ttl = float(getattr(self.store, "_ttl", 0) or 0)
+        ages: List[float] = []
+        try:
+            async with self.store._lock:
+                snapshot = list(self.store._mem.values())
+        except Exception:
+            snapshot = []
+        for point in snapshot:
+            if str(getattr(point, "platform", "")).lower() != "forecastex":
+                continue
+            ages.append(max(0.0, now - float(getattr(point, "timestamp", now) or now)))
+        fresh = [a for a in ages if ttl and a < ttl]
+
+        # Newest quote doubles as the last provably-successful FX call: a
+        # price point can only land after a call returned data.
+        newest_age = min(ages) if ages else None
+        last_success_ts = (now - newest_age) if newest_age is not None else None
+        if last_success_ts is None:
+            unavailable.append("last_success_ts")
+
+        oauth = getattr(client, "oauth", None) if client is not None else None
+        return {
+            "timestamp": now,
+            "collector_present": fx is not None,
+            "client_present": client is not None,
+            "transport": "oauth" if oauth is not None else "gateway",
+            "authenticated": authenticated,
+            "authenticated_source": (
+                "brokerage_bridge_ready" if authenticated is not None else None
+            ),
+            "bridge_ready": bool(bridge_ready) if bridge_ready is not None else None,
+            # ── Console contract fields ──────────────────────────────────
+            # `competing`, `expires_in_seconds` and `quote_age_seconds` are
+            # the names the ops console binds to. The first two are ALWAYS
+            # null: IBKR reports competing-session and ssoExpires only in a
+            # live /tickle body, which the collector parses but never
+            # persists, and this endpoint is forbidden from issuing its own
+            # IBKR call. Render them as "unknown", never as a pass.
+            "competing": None,
+            "competing_session": None,
+            "expires_in_seconds": None,
+            "sso_expires": None,
+            "quote_age_seconds": (
+                round(newest_age, 2) if newest_age is not None else None
+            ),
+            "circuit_state": circuit_state,
+            "circuit_open": circuit_state.lower() == "open",
+            "circuit": circuit_stats,
+            "consecutive_errors": int(getattr(fx, "consecutive_errors", 0) or 0),
+            "total_errors": int(getattr(fx, "total_errors", 0) or 0),
+            "total_fetches": int(getattr(fx, "total_fetches", 0) or 0),
+            "last_success_ts": last_success_ts,
+            "last_success_age_seconds": (
+                round(newest_age, 2) if newest_age is not None else None
+            ),
+            "last_keepalive_ts": last_keepalive_ts,
+            "last_keepalive_age_seconds": (
+                round(keepalive_age, 2) if keepalive_age is not None else None
+            ),
+            "quotes": {
+                "tracked": len(ages),
+                "fresh": len(fresh),
+                "stale": len(ages) - len(fresh),
+                "ttl_seconds": ttl,
+                "newest_age_seconds": (
+                    round(newest_age, 2) if newest_age is not None else None
+                ),
+                "oldest_age_seconds": round(max(ages), 2) if ages else None,
+            },
+            "unavailable_fields": unavailable,
+            "note": (
+                "Fields in unavailable_fields are not tracked in-process; "
+                "null means unknown, not healthy. No IBKR call is made by "
+                "this endpoint."
+            ),
         }
+
+    async def handle_oauth_status(self, request):
+        """GET /api/oauth/status — IBKR OAuth (Path B) activation state.
+
+        Reports only whether each piece of credential material is PRESENT.
+        No token, token secret, or key material is ever read or emitted, and
+        the .pem files are never opened — only their existence on disk is
+        stat()'d. The consumer key is echoed back only when it matches the
+        known non-secret public identifier; anything else is reported as a
+        bare boolean so an unexpected value cannot leak through this route.
+        """
+        return web.json_response(self._build_oauth_status())
+
+    def _build_oauth_status(self) -> dict:
+        """Build the OAuth activation payload.
+
+        Shared by /api/oauth/status and the ``oauth`` block on
+        /api/forecastex/diagnostics so the two cannot drift. Emits presence
+        booleans, paths-configured flags and timestamps ONLY — never a token,
+        token secret, or key value, and never the contents of a .pem.
+        """
+        # ForecastExConfig owns the IBKR OAuth block. It is Optional on
+        # ArbiterConfig, so every read below is a defaulted getattr.
+        ibkr = getattr(self.config, "forecastex", None)
+
+        def _present(attr: str) -> bool:
+            return bool(str(getattr(ibkr, attr, "") or "").strip())
+
+        def _key_file_present(attr: str) -> bool:
+            """True when the configured path exists. Never opens the file."""
+            path = str(getattr(ibkr, attr, "") or "").strip()
+            if not path:
+                return False
+            try:
+                return Path(path).is_file()
+            except OSError:
+                return False
+
+        oauth_enabled = bool(getattr(ibkr, "oauth_enabled", False))
+        try:
+            oauth_configured = bool(getattr(ibkr, "oauth_configured", False))
+        except Exception:
+            oauth_configured = False
+
+        consumer_key = str(getattr(ibkr, "oauth_consumer_key", "") or "").strip()
+        # ARBITERFX is IBKR's public consumer-key identifier for this desk —
+        # not a secret. Any other value is withheld on principle.
+        consumer_key_name = consumer_key if consumer_key == "ARBITERFX" else None
+
+        requirements = {
+            "consumer_key": _present("oauth_consumer_key"),
+            "access_token": _present("oauth_access_token"),
+            "access_token_secret": _present("oauth_access_token_secret"),
+            "signature_key": _present("oauth_signature_key_fp"),
+            "encryption_key": _present("oauth_encryption_key_fp"),
+            "dh_param": _present("oauth_dh_param_fp"),
+        }
+        missing = sorted(name for name, ok in requirements.items() if not ok)
+
+        # Whether the OAuth transport is actually attached to the live
+        # collector — config can say enabled while the collector was built
+        # before the flag flipped, and that difference is the whole question
+        # an operator is asking when they open this panel.
+        fx = self._forecastex_collector()
+        client = getattr(fx, "client", None) if fx is not None else None
+        transport_attached = getattr(client, "oauth", None) is not None
+
+        # Optional validation artifact (scripts/validate_ibkr_oauth.py does
+        # not currently write one; the path is honoured if a cron ever does).
+        last_validation = None
+        state_path = os.getenv("IBKR_OAUTH_VALIDATION_STATE", "").strip()
+        if state_path:
+            try:
+                candidate = Path(state_path).expanduser()
+                # Guard rails so a mis-set env var can never turn this route
+                # into an arbitrary file reader on a live-money host: JSON
+                # suffix only, and a small size cap. A key file fails both.
+                if candidate.suffix.lower() != ".json":
+                    last_validation = {
+                        "error": "validation state path must be a .json file"
+                    }
+                elif candidate.is_file():
+                    if candidate.stat().st_size > 65536:
+                        last_validation = {"error": "validation state too large"}
+                    else:
+                        last_validation = json.loads(candidate.read_text())
+            except Exception as exc:
+                last_validation = {"error": f"unreadable validation state: {exc}"}
+
+        return {
+            "timestamp": time.time(),
+            "oauth_enabled": oauth_enabled,
+            "oauth_configured": oauth_configured,
+            "transport_attached": transport_attached,
+            "active": bool(oauth_enabled and oauth_configured and transport_attached),
+            "effective_transport": "oauth" if transport_attached else "gateway",
+            "consumer_key_present": requirements["consumer_key"],
+            "consumer_key_name": consumer_key_name,
+            "access_token_present": requirements["access_token"],
+            "access_token_secret_present": requirements["access_token_secret"],
+            "signature_key_configured": requirements["signature_key"],
+            "signature_key_file_present": _key_file_present("oauth_signature_key_fp"),
+            "encryption_key_configured": requirements["encryption_key"],
+            "encryption_key_file_present": _key_file_present("oauth_encryption_key_fp"),
+            "dh_param_configured": requirements["dh_param"],
+            "dh_param_file_present": _key_file_present("oauth_dh_param_fp"),
+            "realm": str(getattr(ibkr, "oauth_realm", "") or ""),
+            "api_base": str(getattr(ibkr, "oauth_api_base", "") or ""),
+            "missing": missing,
+            "last_validation": last_validation,
+            "last_validation_source": state_path or None,
+            "note": (
+                "Presence flags only — no token, secret, or key material is "
+                "read or returned by this endpoint."
+            ),
+        }
+
+    _FUNDING_GATE_VENUES = ("kalshi", "polymarket", "forecastex")
+
+    def _build_funding_gate_rows(self) -> Dict[str, dict]:
+        """Per-venue funding-gate rows, read from the monitor's LIVE
+        thresholds (``monitor._thresholds``) and current balances.
+
+        Shared by /api/funding-gate and the ``gates`` block on /api/balances
+        so the two can never disagree. Returns a freshly built dict on every
+        call — callers mutate ``blocks_pairs`` in place.
+        """
+        venues = self._FUNDING_GATE_VENUES
+        thresholds = dict(getattr(self.monitor, "_thresholds", {}) or {})
+        snapshots = getattr(self.monitor, "current_balances", {}) or {}
+        now = time.time()
+
+        rows: Dict[str, dict] = {}
+        for venue in venues:
+            snapshot = snapshots.get(venue)
+            balance = (
+                float(getattr(snapshot, "balance", 0.0) or 0.0)
+                if snapshot is not None else None
+            )
+            minimum = float(thresholds.get(venue, 0.0) or 0.0)
+            # An unknown balance is not a pass. We cannot vouch for funding
+            # we could not read, so it blocks like a shortfall does.
+            passes = balance is not None and balance >= minimum
+            age = (
+                max(0.0, now - float(getattr(snapshot, "timestamp", now) or now))
+                if snapshot is not None else None
+            )
+            rows[venue] = {
+                "venue": venue,
+                "balance": round(balance, 2) if balance is not None else None,
+                # `threshold` is the name the console binds to; `minimum` is
+                # kept as an alias so both spellings resolve.
+                "threshold": round(minimum, 2),
+                "minimum": round(minimum, 2),
+                "passes": passes,
+                "blocks_pairs": [],
+                "shortfall_blocks_pairs": [],
+                "shortfall": (
+                    round(max(0.0, minimum - balance), 2)
+                    if balance is not None else None
+                ),
+                "headroom": (
+                    round(balance - minimum, 2) if balance is not None else None
+                ),
+                "balance_known": balance is not None,
+                "stale": bool(getattr(snapshot, "stale", False)) if snapshot else None,
+                "age_seconds": round(age, 2) if age is not None else None,
+            }
+        return rows
+
+    async def handle_funding_gate(self, request):
+        """GET /api/funding-gate — per-venue funding readiness and the venue
+        PAIRS blocked by any shortfall.
+
+        A pair is tradeable only when BOTH its venues clear their minimum,
+        so one short venue takes out every pair it participates in. Uses the
+        balance monitor's live thresholds (not a copy) so this cannot drift
+        from the thresholds the alerting path actually enforces.
+        """
+        venues = self._FUNDING_GATE_VENUES
+        rows = self._build_funding_gate_rows()
+        now = time.time()
+
+        pairs = []
+        blocked_pairs = []
+        for i in range(len(venues)):
+            for j in range(i + 1, len(venues)):
+                a, b = venues[i], venues[j]
+                blockers = [v for v in (a, b) if not rows[v]["passes"]]
+                pair_id = f"{a}<->{b}"
+                pairs.append({
+                    "pair": pair_id,
+                    "venues": [a, b],
+                    "tradeable": not blockers,
+                    "blocked_by": blockers,
+                })
+                if blockers:
+                    blocked_pairs.append(pair_id)
+                    # Attribute the blocked pair to each venue that caused
+                    # it, so the console can render "this venue is holding
+                    # up these pairs" without re-deriving it.
+                    for blocker in blockers:
+                        rows[blocker]["blocks_pairs"].append(pair_id)
+                        rows[blocker]["shortfall_blocks_pairs"].append(pair_id)
+
+        failing = sorted(v for v in venues if not rows[v]["passes"])
+        return web.json_response({
+            "timestamp": now,
+            # `venues` is a LIST (console contract), ordered kalshi,
+            # polymarket, forecastex. `venues_by_name` keeps O(1) lookup.
+            "venues": [rows[v] for v in venues],
+            "venues_by_name": rows,
+            "pairs": pairs,
+            "blocked_pairs": blocked_pairs,
+            "failing_venues": failing,
+            "all_clear": not failing,
+        })
+
+    _INCIDENT_STATUSES = ("open", "resolved", "expired", "all")
+
+    async def handle_errors(self, request):
+        """GET /api/errors — incidents, defaulting to the open ones.
+
+        Query params:
+          status — "open" (default) | "resolved" | "expired" | "all"
+          limit  — int, 1..1000, default 500
+
+        Before this, ``status="open"`` was hardcoded, so the resolved and
+        expired history in ``execution_incidents`` was unreachable through
+        this route. The response stays a bare JSON list in every case, so
+        existing callers need no change.
+
+        Backwards compatibility, deliberately preserved: with NO query
+        params the result is exactly what it was — every in-memory incident
+        plus the 500 most recent persisted OPEN ones. There is a wrinkle in
+        that legacy behaviour worth knowing about. The engine resolves
+        incidents in place inside its in-memory deque (engine.py ~969), so
+        the bare default can include an in-memory incident that is actually
+        resolved. Passing ``status`` EXPLICITLY filters the in-memory rows
+        too, which makes ``?status=open`` stricter than passing nothing.
+        Left as-is rather than silently tightening what a live ops console
+        already renders.
+        """
+        raw_status = request.query.get("status")
+        explicit = raw_status is not None
+        status = (raw_status or "open").strip().lower() or "open"
+        if status not in self._INCIDENT_STATUSES:
+            return web.json_response(
+                {
+                    "error": f"invalid status: {raw_status!r}",
+                    "expected": list(self._INCIDENT_STATUSES),
+                },
+                status=400,
+            )
+        try:
+            limit = int(request.query.get("limit", "500"))
+        except (TypeError, ValueError):
+            limit = 500
+        limit = min(max(limit, 1), 1000)
+
+        incidents = {}
+        for incident in self.engine.incidents:
+            if explicit and status != "all":
+                if str(getattr(incident, "status", "") or "").lower() != status:
+                    continue
+            incidents[incident.incident_id] = incident.to_dict()
+
         if self.execution_store is not None:
             try:
                 persisted = await self.execution_store.list_incidents(
-                    status="open",
-                    limit=500,
+                    status=None if status == "all" else status,
+                    limit=limit,
                 )
                 for incident in persisted:
                     incidents.setdefault(incident.incident_id, incident.to_dict())
@@ -2957,7 +3698,401 @@ class ArbiterAPI:
             return web.json_response({"error": f"Unknown manual position: {position_id}"}, status=404)
         return web.json_response(position.to_dict())
 
+    # ── Directional-book detection ────────────────────────────────────────
+    #
+    # A cross-venue "arb" is a hedge only when its two legs pay in OPPOSITE
+    # settlement states. The 2026-07-10 Senate party-swap incident produced
+    # executed ForecastEx legs whose conids belonged to the OTHER party's
+    # canonical, so both legs of each "pair" paid in the SAME state — one-way
+    # directional exposure that /api/portfolio was reporting as
+    # status="hedged" / hedge_status="complete".
+    #
+    # Detection is derived from live data, not a hardcoded position list.
+    # On ForecastEx the conid IS the contract (the adapter buys the supplied
+    # conid as-is — see execution/adapters/forecastex.py "_submit"), so a leg's
+    # payoff is fully determined by which canonical+slot that conid belongs to
+    # in MARKET_MAP. A leg is "verified" only when its conid is the conid
+    # recorded for THIS canonical in THIS slot; a conid owned by a DIFFERENT
+    # canonical is a confirmed mis-binding, and a conid absent from
+    # MARKET_MAP entirely is recorded as "unresolved".
+    #
+    # A position is flagged only when BOTH conditions hold: at least one leg
+    # is mis-bound/unresolved AND every leg pays in the same settlement
+    # state. That keeps false positives near zero, which is what makes the
+    # flag worth trusting — but it also means an "unresolved" leg alone does
+    # NOT downgrade the hedge label. If MARKET_MAP is stale or unloaded, such
+    # a position keeps whatever label PortfolioMonitor gave it. Widening this
+    # to flag every unresolved leg is a deliberate future call, not an
+    # oversight: it would light up the whole book on a cold start.
+    #
+    # This is a LABELLING path only. It never places, cancels, or unwinds
+    # anything.
+
+    _PARTY_STATE_LABELS = {
+        "democratic": "DEMOCRATS_WIN",
+        "republican": "REPUBLICANS_WIN",
+    }
+
+    @staticmethod
+    def _canonical_party(canonical_id: str) -> Optional[str]:
+        """Party token carried by a canonical id, or None.
+
+        Reuses the mapping layer's token table so this cannot drift from the
+        coherence checks that guard promotion.
+        """
+        try:
+            from arbiter.mapping.coherence import _PARTY_TOKENS
+        except Exception:
+            return None
+        text = "".join(
+            c if c.isalnum() else " " for c in str(canonical_id or "").lower()
+        )
+        tokens = set(text.split())
+        for party, words in _PARTY_TOKENS.items():
+            if tokens & set(words):
+                return party
+        return None
+
+    @classmethod
+    def _settlement_state(cls, canonical_id: str, slot: str) -> str:
+        """The world-state in which (canonical, slot) pays $1.
+
+        For a two-party binary, NO on the Democratic contract is the same
+        state as YES on the Republican one — which is precisely how a
+        party-swapped "hedge" ends up with both legs on the same side.
+        """
+        party = cls._canonical_party(canonical_id)
+        if party is None:
+            # Unknown domain: keep an opaque but still comparable key so
+            # same-state detection works without inventing a party.
+            return f"{canonical_id}:{str(slot).upper()}"
+        if str(slot).lower() != "yes":
+            party = (
+                "republican" if party == "democratic" else "democratic"
+            )
+        return cls._PARTY_STATE_LABELS[party]
+
+    @staticmethod
+    def _complement_state(state: str) -> str:
+        if state == "DEMOCRATS_WIN":
+            return "REPUBLICANS_WIN"
+        if state == "REPUBLICANS_WIN":
+            return "DEMOCRATS_WIN"
+        if state.endswith(":YES"):
+            return state[:-4] + ":NO"
+        if state.endswith(":NO"):
+            return state[:-3] + ":YES"
+        return f"NOT[{state}]"
+
+    # Reverse conid index cache. MARKET_MAP carries ~48k mappings in prod and
+    # a full scan measures ~40ms — far too much to spend on the event loop on
+    # every /api/portfolio poll. So the index is built ONLY when a leg fails
+    # the O(1) same-canonical check (a healthy book never builds it at all)
+    # and is then reused for _FX_OWNER_INDEX_TTL_S seconds.
+    _FX_OWNER_INDEX_TTL_S = 30.0
+
+    def _fx_conid_owners(self) -> Dict[str, List[tuple]]:
+        """``{conid: [(canonical_id, slot), ...]}`` from the live MARKET_MAP.
+
+        A conid can appear under more than one canonical (that is itself the
+        duplicate-conid defect the FX diagnostics surface), so ownership is a
+        list, not a single value.
+
+        Cached: a conid repaired via the operator endpoints can take up to
+        ``_FX_OWNER_INDEX_TTL_S`` to clear the label. The cache only ever
+        delays a label; it cannot invent one, because a mis-binding still has
+        to fail the live O(1) check before this index is consulted.
+        """
+        from arbiter.collectors.forecastex import is_valid_conid
+
+        now = time.time()
+        cached = getattr(self, "_fx_owner_index_cache", None)
+        cached_at = getattr(self, "_fx_owner_index_cached_at", 0.0)
+        if cached is not None and (now - cached_at) < self._FX_OWNER_INDEX_TTL_S:
+            return cached
+
+        owners: Dict[str, List[tuple]] = {}
+        for canonical_id, mapping in MARKET_MAP.items():
+            if not isinstance(mapping, dict):
+                continue
+            for slot, key in (("yes", "forecastex"), ("no", "forecastex_no")):
+                conid = str(mapping.get(key) or "").strip()
+                if is_valid_conid(conid):
+                    owners.setdefault(conid, []).append((canonical_id, slot))
+        self._fx_owner_index_cache = owners
+        self._fx_owner_index_cached_at = now
+        return owners
+
+    @staticmethod
+    def _fx_leg_matches_own_canonical(canonical_id: str, slot: str, conid: str) -> bool:
+        """O(1) check: is this conid the one MARKET_MAP records for this
+        canonical in this slot? True means the binding is verified and no
+        reverse index needs building.
+        """
+        mapping = MARKET_MAP.get(canonical_id)
+        if not isinstance(mapping, dict):
+            return False
+        key = "forecastex" if str(slot).lower() == "yes" else "forecastex_no"
+        return bool(conid) and str(mapping.get(key) or "").strip() == conid
+
+    # Statuses PortfolioMonitor._get_open_positions treats as live. Kept
+    # identical so the by_canonical entries patched below are exactly the
+    # ones the monitor produced.
+    _OPEN_EXECUTION_STATUSES = frozenset({
+        "pending", "submitted", "simulated", "filled",
+        "recovering", "manual_pending", "manual_entered",
+    })
+
+    def _directional_book(self) -> dict:
+        """Detect open 'arbs' whose legs pay in the SAME settlement state.
+
+        Read-only. Returns the detected positions, the true one-way exposure
+        in USD, and the payoff in each settlement state.
+        """
+        executions = list(getattr(self.engine, "_executions", []) or [])
+
+        positions: List[dict] = []
+        total_cost = 0.0
+        payout_by_state: Dict[str, float] = {}
+        contracts_at_risk = 0.0
+        state_domains: List[List[str]] = []
+
+        for execution in executions:
+            opp = getattr(execution, "opportunity", None)
+            if opp is None:
+                continue
+            status = str(getattr(execution, "status", "") or "").lower()
+            if status not in self._OPEN_EXECUTION_STATUSES:
+                continue
+            canonical_id = str(getattr(opp, "canonical_id", "") or "")
+
+            leg_specs = (
+                ("yes", getattr(opp, "yes_platform", ""),
+                 getattr(opp, "yes_market_id", ""), getattr(execution, "leg_yes", None)),
+                ("no", getattr(opp, "no_platform", ""),
+                 getattr(opp, "no_market_id", ""), getattr(execution, "leg_no", None)),
+            )
+
+            legs: List[dict] = []
+            anomalies: List[str] = []
+            for side, platform, market_id, order in leg_specs:
+                if order is None:
+                    continue
+                qty = float(getattr(order, "fill_qty", 0.0) or 0.0)
+                if qty <= 0:
+                    continue
+                price = float(getattr(order, "fill_price", 0.0) or 0.0)
+                market_id = str(
+                    getattr(order, "market_id", "") or market_id or ""
+                ).strip()
+                platform = str(platform or getattr(order, "platform", "")).lower()
+
+                owner_canonical = canonical_id
+                owner_slot = side
+                binding = "assumed"
+                if platform == "forecastex":
+                    # Fast path first: the overwhelmingly common case is a
+                    # correctly bound leg, and it costs one dict lookup.
+                    # Only a failure justifies building the reverse index.
+                    if self._fx_leg_matches_own_canonical(
+                        canonical_id, side, market_id
+                    ):
+                        legs.append({
+                            "leg": side,
+                            "platform": platform,
+                            "market_id": market_id,
+                            "quantity": qty,
+                            "price": round(price, 4),
+                            "cost_usd": round(qty * price, 4),
+                            "owner_canonical": canonical_id,
+                            "owner_slot": side,
+                            "binding": "verified",
+                            "settlement_state": self._settlement_state(
+                                canonical_id, side
+                            ),
+                        })
+                        continue
+                    owned = self._fx_conid_owners().get(market_id) or []
+                    if (canonical_id, side) in owned:
+                        binding = "verified"
+                    elif owned:
+                        binding = "foreign"
+                        owner_canonical, owner_slot = owned[0]
+                        anomalies.append(
+                            f"forecastex leg conid {market_id} belongs to "
+                            f"{owner_canonical} ({owner_slot}), not "
+                            f"{canonical_id} ({side})"
+                        )
+                    else:
+                        binding = "unresolved"
+                        anomalies.append(
+                            f"forecastex leg conid {market_id or '(empty)'} is "
+                            f"not recorded against any canonical in MARKET_MAP "
+                            f"— hedge cannot be verified"
+                        )
+                legs.append({
+                    "leg": side,
+                    "platform": platform,
+                    "market_id": market_id,
+                    "quantity": qty,
+                    "price": round(price, 4),
+                    "cost_usd": round(qty * price, 4),
+                    "owner_canonical": owner_canonical,
+                    "owner_slot": owner_slot,
+                    "binding": binding,
+                    "settlement_state": self._settlement_state(
+                        owner_canonical, owner_slot
+                    ),
+                })
+
+            if len(legs) < 2:
+                continue
+
+            states = {leg["settlement_state"] for leg in legs}
+            same_state = len(states) == 1
+            unverified = any(
+                leg["binding"] in ("foreign", "unresolved") for leg in legs
+            )
+            if not (same_state and unverified):
+                # Either the legs genuinely offset, or every binding checks
+                # out. Nothing to flag.
+                continue
+
+            cost = sum(leg["cost_usd"] for leg in legs)
+            total_cost += cost
+            for leg in legs:
+                payout_by_state[leg["settlement_state"]] = (
+                    payout_by_state.get(leg["settlement_state"], 0.0)
+                    + leg["quantity"]
+                )
+                contracts_at_risk += leg["quantity"]
+            for state in states:
+                domain = sorted({state, self._complement_state(state)})
+                if domain not in state_domains:
+                    state_domains.append(domain)
+
+            positions.append({
+                "arb_id": str(getattr(execution, "arb_id", "") or ""),
+                "canonical_id": canonical_id,
+                "description": str(getattr(opp, "description", "") or ""),
+                "status": status,
+                "quantity": max(leg["quantity"] for leg in legs),
+                "cost_usd": round(cost, 4),
+                "legs": legs,
+                "pays_in_same_state": same_state,
+                "settlement_states": sorted(states),
+                "reason": "; ".join(anomalies),
+                "created_at": getattr(execution, "timestamp", None),
+            })
+
+        # Enumerate every state in play plus its complement, so the state
+        # where the book pays NOTHING is visible rather than merely absent.
+        universe = set(payout_by_state)
+        for state in list(universe):
+            universe.add(self._complement_state(state))
+        payoff_by_state = {}
+        for state in sorted(universe):
+            payout = round(payout_by_state.get(state, 0.0), 4)
+            payoff_by_state[state] = {
+                "payout_usd": payout,
+                "cost_usd": round(total_cost, 4),
+                "net_usd": round(payout - total_cost, 4),
+            }
+
+        best_state = worst_state = None
+        if payoff_by_state:
+            best_state = max(
+                payoff_by_state, key=lambda s: payoff_by_state[s]["net_usd"]
+            )
+            worst_state = min(
+                payoff_by_state, key=lambda s: payoff_by_state[s]["net_usd"]
+            )
+
+        canonicals = sorted({p["canonical_id"] for p in positions})
+        summary = ""
+        if positions:
+            summary = (
+                f"{len(positions)} position(s) across {len(canonicals)} "
+                f"canonical(s) have both legs paying in the same settlement "
+                f"state — ${round(total_cost, 2)} of one-way directional "
+                f"exposure reported as hedged. Worst case "
+                f"({worst_state}): ${payoff_by_state[worst_state]['net_usd']}."
+            )
+
+        # Console contract: `positions` is the flat LEG list. The arb-level
+        # grouping (which legs belong to which "arb", and why it was
+        # flagged) is kept alongside as `arbs` — that is where `reason`
+        # lives, and it is what the portfolio labelling below consumes.
+        flat_legs = []
+        for position in positions:
+            for leg in position["legs"]:
+                venue = leg["platform"]
+                flat_legs.append({
+                    "venue": venue,
+                    "conid": leg["market_id"] if venue == "forecastex" else None,
+                    "market_id": leg["market_id"],
+                    "side": leg["leg"],
+                    "quantity": leg["quantity"],
+                    "avg_price": leg["price"],
+                    "cost_usd": leg["cost_usd"],
+                    "arb_id": position["arb_id"],
+                    "canonical_id": position["canonical_id"],
+                    "owner_canonical": leg["owner_canonical"],
+                    "owner_slot": leg["owner_slot"],
+                    "binding": leg["binding"],
+                    "settlement_state": leg["settlement_state"],
+                })
+
+        # Scalar payoffs for the Senate party domain. NET P&L in that state
+        # (payout minus cost), not gross payout. None when the state is not
+        # in play — a non-party directional book has neither.
+        def _net_in(state: str):
+            entry = payoff_by_state.get(state)
+            return entry["net_usd"] if entry else None
+
+        return {
+            "timestamp": time.time(),
+            "detected": bool(positions),
+            "position_count": len(positions),
+            "directional_canonicals": canonicals,
+            "positions": flat_legs,
+            "leg_count": len(flat_legs),
+            "arbs": positions,
+            "net_exposure_usd": round(total_cost, 4),
+            "contracts_at_risk": round(contracts_at_risk, 4),
+            "payoff_dem": _net_in("DEMOCRATS_WIN"),
+            "payoff_gop": _net_in("REPUBLICANS_WIN"),
+            "payoff_by_state": payoff_by_state,
+            "state_domains": state_domains,
+            "best_case_state": best_state,
+            "best_case_net_usd": (
+                payoff_by_state[best_state]["net_usd"] if best_state else 0.0
+            ),
+            "worst_case_state": worst_state,
+            "worst_case_net_usd": (
+                payoff_by_state[worst_state]["net_usd"] if worst_state else 0.0
+            ),
+            "summary": summary,
+            "note": (
+                "`positions` is the flat leg list; `arbs` is the same data "
+                "grouped per arb with the reason it was flagged. payoff_dem/"
+                "payoff_gop are NET P&L (payout minus cost) and assume a "
+                "single settlement domain — check state_domains if more than "
+                "one pair is listed. Detection is labelling only — no "
+                "position is modified."
+            ),
+        }
+
     # ── Portfolio endpoints ───────────────────────────────────────────────
+
+    async def handle_directional_exposure(self, request):
+        """GET /api/directional-exposure — 'arbs' whose legs are NOT opposed.
+
+        Surfaces the true one-way exposure and the payoff in each settlement
+        state for every open position whose legs pay in the same state.
+        Read-only.
+        """
+        return web.json_response(self._directional_book())
 
     async def handle_portfolio(self, request):
         """Return full portfolio snapshot."""
@@ -3178,9 +4313,18 @@ class ArbiterAPI:
         if not email or not password:
             return web.json_response({"error": "email and password required"}, status=400)
 
+        client_ip = _login_client_ip(request)
+        if _login_throttled(client_ip, email):
+            logger.warning("Login throttled for %s (email=%s)", client_ip, email)
+            return web.json_response(
+                {"error": "Too many failed attempts — try again later"}, status=429
+            )
+
         token = await login_user(email, password)
         if not token:
+            _login_record_failure(client_ip, email)
             return web.json_response({"error": "Invalid credentials"}, status=401)
+        _login_clear_failures(client_ip, email)
 
         response = web.json_response({"status": "ok", "email": email, "token": token})
         response.set_cookie(
@@ -4405,6 +5549,66 @@ class ArbiterAPI:
             out["unrealized_pnl"] = round(
                 float(out.get("unrealized_pnl") or 0.0) + stranded_unrealized, 4
             )
+
+        # Correct the hedge labelling before the snapshot leaves the process.
+        # PortfolioMonitor calls a position hedged whenever both legs filled
+        # in equal size — a size test, not a payoff test — so the Senate
+        # party-swap legs were reported as status="hedged" /
+        # hedge_status="complete" while actually being one-way directional
+        # exposure. Anything whose legs pay in the SAME settlement state is
+        # relabelled here, and the hedged/unhedged counters are corrected to
+        # match. Labelling only: no position is touched.
+        try:
+            directional = self._directional_book()
+        except Exception as exc:  # noqa: BLE001 — never break the snapshot
+            logger.warning("directional detection failed: %s", exc)
+            directional = {"detected": False, "positions": []}
+
+        if directional.get("detected"):
+            by_canonical = out.get("by_canonical") or {}
+            reasons: Dict[str, str] = {}
+            # `arbs`, not `positions` — `positions` is the flat leg list for
+            # the console and carries no per-arb `reason`.
+            for position in directional.get("arbs", []):
+                reasons.setdefault(
+                    position["canonical_id"], position.get("reason", "")
+                )
+            patched: List[str] = []
+            for canonical_id, reason in reasons.items():
+                slice_ = by_canonical.get(canonical_id)
+                if not isinstance(slice_, dict):
+                    continue
+                if str(slice_.get("status", "")).lower() == "hedged":
+                    out["total_hedged"] = max(
+                        0, int(out.get("total_hedged") or 0) - 1
+                    )
+                    out["total_unhedged"] = int(out.get("total_unhedged") or 0) + 1
+                slice_["status"] = "directional"
+                slice_["hedge_status"] = "directional_unverified"
+                slice_["directional_review_required"] = True
+                slice_["directional_reason"] = reason or (
+                    "legs pay in the same settlement state — not a hedge"
+                )
+                patched.append(canonical_id)
+
+            out["directional_review_required"] = True
+            out["directional_canonicals"] = directional.get(
+                "directional_canonicals", []
+            )
+            out["directional_exposure_usd"] = directional.get("net_exposure_usd", 0.0)
+            out["directional_worst_case_state"] = directional.get("worst_case_state")
+            out["directional_worst_case_usd"] = directional.get(
+                "worst_case_net_usd", 0.0
+            )
+            out["directional_position_count"] = directional.get("position_count", 0)
+            out["directional_reason"] = directional.get("summary", "")
+            out["directional_patched_canonicals"] = patched
+        else:
+            out["directional_review_required"] = False
+            out["directional_canonicals"] = []
+            out["directional_exposure_usd"] = 0.0
+            out["directional_position_count"] = 0
+
         return out
 
     @staticmethod

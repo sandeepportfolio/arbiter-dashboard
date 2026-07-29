@@ -88,10 +88,21 @@ class TestTokenGeneration:
 
 
 class TestAllowedUsers:
-    def test_default_user_configured(self):
-        """Default user should be configured from env or fallback."""
-        # Should always have at least the fallback user
-        assert len(api_module.UI_ALLOWED_USERS) >= 1
+    def test_no_hardcoded_fallback_user(self, monkeypatch):
+        """With no OPS_*/UI_USER_* env there must be ZERO logins.
+
+        The console rides a public Cloudflare tunnel and this repo is on
+        GitHub — a baked-in credential is a backdoor, not a convenience.
+        (Removed 2026-07-29: users.setdefault("sandeep", ...).)"""
+        for var in ("OPS_EMAIL", "OPS_PASSWORD", "UI_USER_EMAIL", "UI_USER_PASSWORD"):
+            monkeypatch.delenv(var, raising=False)
+        assert api_module._build_allowed_users() == {}
+
+    def test_env_credentials_are_loaded(self, monkeypatch):
+        monkeypatch.setenv("OPS_EMAIL", "ops@example.com")
+        monkeypatch.setenv("OPS_PASSWORD", "hunter2")
+        users = api_module._build_allowed_users()
+        assert list(users) == ["ops@example.com"]
 
     def test_password_must_be_hashed(self):
         """Stored passwords should be hashed, not plaintext."""

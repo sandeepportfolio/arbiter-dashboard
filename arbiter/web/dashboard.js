@@ -561,7 +561,20 @@ function buildApiUrl(path) {
 function buildWebSocketUrl() {
   const base = new URL(state.apiBase || window.location.origin);
   const protocol = base.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${base.host}/ws`;
+  // /ws is auth-gated like every other non-public route, but a browser
+  // WebSocket cannot set an Authorization header — so the middleware accepts
+  // the token in the query string for /ws ONLY (arbiter/api.py,
+  // allow_query_token). The query token is a LAST RESORT: a URL-borne
+  // session token is written into tunnel/proxy/access logs on every
+  // reconnect, and it is a full-privilege 7-day credential. Same-origin the
+  // arbiter_session cookie already authenticates the handshake, so only the
+  // cross-origin case (apiBase pointing elsewhere, where SameSite=Lax means
+  // the cookie is NOT sent) gets the token in the URL.
+  const url = `${protocol}//${base.host}/ws`;
+  const crossOrigin = base.host !== window.location.host;
+  return crossOrigin && state.authToken
+    ? `${url}?token=${encodeURIComponent(state.authToken)}`
+    : url;
 }
 
 function setWsLabel(text, muted = true) {

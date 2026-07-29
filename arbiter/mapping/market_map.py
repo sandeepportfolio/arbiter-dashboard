@@ -572,6 +572,37 @@ class MarketMappingStore:
         finally:
             await self._pool.release(conn)
 
+    async def set_forecastex_conid(
+        self, canonical_id: str, conid: str, *, side: str = "no"
+    ) -> bool:
+        """Single-column write of a ForecastEx conid (YES or NO leg).
+
+        The operator conid endpoints previously did get() → mutate →
+        upsert(), a full-row write that resurrects every OTHER column as
+        read moments earlier — including ``allow_auto_trade`` over a
+        concurrent loss-streak ``disable_auto_trade``. A targeted UPDATE
+        cannot race that way. Returns True when the mapping exists.
+        """
+        column = (
+            "forecastex_no_contract_id" if side == "no" else "forecastex_contract_id"
+        )
+        conn = await self.acquire()
+        try:
+            row = await conn.fetchrow(
+                f"""
+                UPDATE market_mappings
+                   SET {column} = $2,
+                       updated_at = NOW()
+                 WHERE canonical_id = $1
+              RETURNING canonical_id
+                """,
+                canonical_id,
+                conid,
+            )
+            return row is not None
+        finally:
+            await self._pool.release(conn)
+
     async def upsert(self, mapping: MarketMapping) -> MarketMapping:
         """Insert or update a mapping."""
         _enforce_auto_trade_safety(mapping)

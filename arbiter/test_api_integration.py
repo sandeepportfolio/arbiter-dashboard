@@ -23,10 +23,15 @@ def free_port() -> int:
 
 
 def wait_for_server(port: int, timeout: float = 15.0) -> None:
+    # Probe /health, NOT /api/health. Every /api/* route is auth-gated by
+    # _auth_middleware (arbiter/api.py), so /api/health answers 401 —
+    # urlopen raises HTTPError, the except swallows it, and this loop spins
+    # until it times out on a server that actually came up fine. /health is
+    # in _PUBLIC_PATHS precisely to be an unauthenticated liveness probe.
     start = time.time()
     while time.time() - start < timeout:
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=1) as response:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=1) as response:
                 if response.status == 200:
                     return
         except Exception:
@@ -61,15 +66,39 @@ def test_api_and_dashboard_contracts():
     try:
         wait_for_server(port)
 
+        # Every /api/* route is auth-gated by _auth_middleware, so this
+        # contract test must hold a session. Log in through the real public
+        # /api/auth/login rather than minting a token locally: the server
+        # signs with the UI_SESSION_SECRET it loads itself (via .env), which
+        # is not necessarily the one visible to this test process.
+        _login_request = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/auth/login",
+            data=json.dumps({
+                "email": env["OPS_EMAIL"], "password": env["OPS_PASSWORD"],
+            }).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(_login_request, timeout=5) as response:
+            session_token = json.loads(response.read().decode("utf-8"))["token"]
+        auth_header = {"Authorization": f"Bearer {session_token}"}
+
         def get_json(path: str):
-            with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=5) as response:
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{port}{path}", headers=dict(auth_header),
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
                 return json.loads(response.read().decode("utf-8"))
 
         def post_json(path: str, payload: dict, headers: dict | None = None):
             request = urllib.request.Request(
                 f"http://127.0.0.1:{port}{path}",
                 data=json.dumps(payload).encode("utf-8"),
-                headers={"Content-Type": "application/json", **(headers or {})},
+                headers={
+                    "Content-Type": "application/json",
+                    **auth_header,
+                    **(headers or {}),
+                },
                 method="POST",
             )
             with urllib.request.urlopen(request, timeout=5) as response:
@@ -304,8 +333,13 @@ def test_api_and_dashboard_contracts():
         assert auto_trade_enabled["allow_auto_trade"] is True
 
         async def check_ws():
+            # /ws is auth-gated too. A browser WebSocket cannot set an
+            # Authorization header, so the middleware accepts ?token= for
+            # this route ONLY (get_current_user allow_query_token) — exercise
+            # that same path here.
+            ws_url = f"http://127.0.0.1:{port}/ws?token={session_token}"
             async with aiohttp.ClientSession() as session:
-                async with session.ws_connect(f"http://127.0.0.1:{port}/ws") as ws:
+                async with session.ws_connect(ws_url) as ws:
                     message = await ws.receive(timeout=5)
                     assert message.type == aiohttp.WSMsgType.TEXT
                     payload = json.loads(message.data)
@@ -1926,6 +1960,10 @@ def test_set_forecastex_conid_writes_through_to_mapping_store_and_reactivates_co
         store = MagicMock()
         store.get = AsyncMock(return_value=stored)
         store.upsert = AsyncMock()
+        # The handler prefers the race-free single-column write when the
+        # store provides one; MagicMock would auto-create a SYNC mock for
+        # it, so wire an explicit AsyncMock.
+        store.set_forecastex_conid = AsyncMock(return_value=True)
         api.mapping_store = store
 
         fx = MagicMock()
@@ -1948,7 +1986,12 @@ def test_set_forecastex_conid_writes_through_to_mapping_store_and_reactivates_co
             payload = await response.json()
             assert payload["prior_conid"] == "733131966"
             assert payload["new_conid"] == "888888"
-            assert store.upsert.await_count == 1
+            # Race-free single-column write is preferred; the full-row
+            # upsert (which can resurrect stale columns) must NOT run.
+            assert store.upsert.await_count == 0
+            store.set_forecastex_conid.assert_awaited_once_with(
+                "DEM_HOUSE_2026", "888888", side="yes"
+            )
             assert stored.forecastex_contract_id == "888888"
             args = {c.args[0] for c in fx.reactivate_conid.call_args_list}
             assert "733131966" in args
@@ -1969,6 +2012,10 @@ def test_set_forecastex_conid_returns_404_for_unknown_mapping():
         store = MagicMock()
         store.get = AsyncMock(return_value=None)
         store.upsert = AsyncMock()
+        # The handler prefers the race-free single-column write when the
+        # store provides one; MagicMock would auto-create a SYNC mock for
+        # it, so wire an explicit AsyncMock.
+        store.set_forecastex_conid = AsyncMock(return_value=True)
         api.mapping_store = store
         app = web.Application()
         app.router.add_post(

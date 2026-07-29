@@ -409,6 +409,20 @@ window.MOCK = (() => {
     }
   }
 
+  // Funding-gate block carried on /api/balances. Kept out of M.balances so the
+  // legacy {kalshi:{balance,is_low,timestamp}} shape stays byte-identical for
+  // every existing consumer. Absent on an older API build → leave nulled and
+  // let the console fall back to /api/funding-gate.
+  function mergeBalanceGates(M, balances) {
+    if (!balances || typeof balances !== 'object') {
+      M.balanceGates = null; M.balanceGatesBlocking = null;
+      return;
+    }
+    const gates = balances.gates;
+    M.balanceGates = (gates && typeof gates === 'object' && !Array.isArray(gates)) ? gates : null;
+    M.balanceGatesBlocking = Array.isArray(balances.gates_blocking) ? balances.gates_blocking : null;
+  }
+
   function mergePnl(M, pnl) {
     if (!pnl || typeof pnl !== 'object') return;
     if (pnl.starting_balances) M.pnl.starting_balances = Object.assign({}, M.pnl.starting_balances, pnl.starting_balances);
@@ -683,6 +697,21 @@ window.MOCK = (() => {
       total_exposure: asNumber(p.total_exposure, 0),
       unrealized_pnl: asNumber(p.unrealized_pnl, 0),
     };
+    // Directional-book review flag (contract 3). These legs are booked as
+    // paired but BOTH pay in the same settlement state, so the book is
+    // one-way, not hedged. Labelling only — no position is changed by this.
+    // Surfaced globally, because rendering it as "hedged/complete" is the
+    // dangerous failure mode we are correcting.
+    M.portfolioDirectional = {
+      required: !!p.directional_review_required,
+      canonicals: Array.isArray(p.directional_canonicals) ? p.directional_canonicals : [],
+      patched: Array.isArray(p.directional_patched_canonicals) ? p.directional_patched_canonicals : [],
+      exposure_usd: asNumber(p.directional_exposure_usd, 0),
+      worst_case_state: p.directional_worst_case_state || null,
+      worst_case_usd: asNumber(p.directional_worst_case_usd, 0),
+      position_count: asNumber(p.directional_position_count, 0),
+      reason: typeof p.directional_reason === 'string' ? p.directional_reason : '',
+    };
   }
 
   function mergeHalfRecordedRecovery(M, recovery) {
@@ -912,7 +941,8 @@ window.MOCK = (() => {
            confirmedMappings, candidateMappings, reviewMappings, rejectedMappings, expiredMappings,
            mappingMetrics,
            settings, reconciliation, readiness, profitability,
-           failedTrades, errors, portfolio, halfRecordedRecovery, discovery, system] = await Promise.all([
+           failedTrades, errors, portfolio, halfRecordedRecovery, discovery, system,
+           fxSession, oauthStatus, fundingGate, directional] = await Promise.all([
       safeJson('/api/health'),
       safeJson('/api/balances'),
       safeJson('/api/opportunities'),
@@ -935,6 +965,10 @@ window.MOCK = (() => {
       safeJson('/api/recovery/half-recorded'),
       safeJson('/api/discovery/status'),
       safeJson('/api/system'),
+      safeJson('/api/forecastex/session'),
+      safeJson('/api/oauth/status'),
+      safeJson('/api/funding-gate'),
+      safeJson('/api/directional-exposure'),
     ]);
     mergeHealth(M, health);
     mergeBalances(M, balances);
@@ -962,6 +996,17 @@ window.MOCK = (() => {
     if (system && typeof system === 'object') {
       M.system = system;
     }
+    // Operational surfaces: FX gateway session, OAuth activation, per-venue
+    // funding gate, and the directional (non-hedged) book flagged for review.
+    M.fxSession = (fxSession && typeof fxSession === 'object') ? fxSession : null;
+    M.oauthStatus = (oauthStatus && typeof oauthStatus === 'object') ? oauthStatus : null;
+    M.fundingGate = (fundingGate && typeof fundingGate === 'object') ? fundingGate : null;
+    M.directional = (directional && typeof directional === 'object') ? directional : null;
+    // `gates` / `gates_blocking` ride along on /api/balances (contract d) and
+    // are built by the same backend helper as /api/funding-gate, so the two
+    // views cannot disagree. Kept separate from M.balances, whose legacy
+    // shape is relied on elsewhere and must not change.
+    mergeBalanceGates(M, balances);
     // Keep live chart buffers moving between backend series snapshots.
     ensureEquityFallback(M);
     appendScannerHistory(M);
@@ -1105,9 +1150,11 @@ window.MOCK = (() => {
 
   async function discoveryStatus() {
     try {
-      const r = await fetch(API + '/api/discovery/status', {
+      // authFetch (not bare fetch): /api/* requires a bearer token once the
+      // auth middleware is live. A cookie-only session would still work, but
+      // a CLI-minted token in localStorage would 401.
+      const r = await authFetch('/api/discovery/status', {
         method: 'GET',
-        credentials: 'same-origin',
       });
       if (!r.ok) return { ok: false, error: await readError(r) };
       return { ok: true, data: await r.json() };
@@ -1149,6 +1196,49 @@ window.MOCK = (() => {
       });
       if (!r.ok) return { ok: false, error: await readError(r) };
       return { ok: true, data: await r.json() };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  }
+
+  // POST /api/market-mappings/{canonical_id}/forecastex_conid      (YES side)
+  // POST /api/market-mappings/{canonical_id}/forecastex_no_conid   (NO side)
+  // Body {"conid": "745924270"} sets; {"conid": ""} clears.
+  //
+  // Clear MUST send "" and never null. Both handlers coerce with str(), and
+  // str(None) == "None" — a literal junk conid that is_valid_conid()
+  // (arbiter/collectors/forecastex.py) rejects, so the canonical silently
+  // stops resolving its ForecastEx leg while the console reports success.
+  // The empty string is the documented clear sentinel on both routes.
+  //
+  // The backend rejects non-numeric junk ("abc", "0", "None") with a 400, so
+  // pre-validate here and surface the reason rather than firing a doomed call.
+  async function setForecastexConid(canonicalId, side, conid) {
+    const id = String(canonicalId || '').trim();
+    const which = String(side || 'yes').toLowerCase();
+    if (!id) return { ok: false, error: 'canonical_id required' };
+    if (which !== 'yes' && which !== 'no') {
+      return { ok: false, error: `side must be "yes" or "no", got ${side}` };
+    }
+    const raw = conid == null ? '' : String(conid).trim();
+    const clearing = raw === '';
+    if (!clearing && !/^[0-9]+$/.test(raw)) {
+      return { ok: false, error: `invalid conid: '${raw}' — digits only` };
+    }
+    // "0" is the repo's placeholder for "no contract", not a real conid.
+    if (!clearing && /^0+$/.test(raw)) {
+      return { ok: false, error: `invalid conid: '${raw}' — 0 is a placeholder, use Clear instead` };
+    }
+    const path = '/api/market-mappings/' + encodeURIComponent(id)
+      + (which === 'no' ? '/forecastex_no_conid' : '/forecastex_conid');
+    try {
+      const r = await authFetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conid: clearing ? '' : raw }),
+      });
+      if (!r.ok) return { ok: false, error: await readError(r) };
+      return { ok: true, data: await r.json(), cleared: clearing };
     } catch (e) {
       return { ok: false, error: String((e && e.message) || e) };
     }
@@ -1229,6 +1319,8 @@ window.MOCK = (() => {
   }
 
   window.__arbiterRefresh = refresh;
+  window.__arbiterSafeJson = safeJson;
+  window.__arbiterAuthFetch = authFetch;
   window.__arbiterRefreshPublicStatus = refreshPublicStatus;
   window.__arbiterKillSwitch = killSwitch;
   window.__arbiterRetry = retryFailedTrade;
@@ -1239,6 +1331,7 @@ window.MOCK = (() => {
   window.__arbiterDiscoveryStatus = discoveryStatus;
   window.__arbiterBatchDiscover = batchDiscover;
   window.__arbiterMappingAction = mappingAction;
+  window.__arbiterSetForecastexConid = setForecastexConid;
   window.__arbiterMappingValidationHistory = mappingValidationHistory;
   window.__arbiterRunMappingValidation = runMappingValidation;
   window.__arbiterLogin = login;
@@ -1920,7 +2013,10 @@ const AppCtx = createContext(null);
 window.useApp = () => useContext(AppCtx);
 
 const ARB_PAGE_KEY = 'arbiter-current-page';
-const ARB_PAGE_IDS = ['overview', 'opportunities', 'trades', 'pnl', 'markets', 'mappings', 'scanner', 'audit', 'deposits', 'settings'];
+// MUST stay in sync with NAV below. normalizePageId() silently rewrites any id
+// missing here to 'overview', so an omission makes a page unreachable from the
+// sidebar (setPage → normalizePageId) AND un-deep-linkable (#hash → readStoredPage).
+const ARB_PAGE_IDS = ['overview', 'opportunities', 'trades', 'pnl', 'markets', 'mappings', 'scanner', 'audit', 'incidents', 'monitors', 'deposits', 'settings'];
 
 function normalizePageId(value) {
   const raw = String(value || '').replace(/^#\/?/, '').trim();
@@ -2061,14 +2157,30 @@ const NAV = [
   { id: 'mappings',     label: 'Mappings',      icon: '⇄' },
   { id: 'scanner',      label: 'Scanner',       icon: '⚡' },
   { id: 'audit',        label: 'Audit',         icon: '✓' },
+  { id: 'incidents',    label: 'Incidents',     icon: '!', badgeKey: 'incidentCount' },
+  { id: 'monitors',     label: 'Monitors',      icon: '◉' },
   { id: 'deposits',     label: 'Funds',         icon: '◐' },
   { id: 'settings',     label: 'Settings',      icon: '⚙' },
 ];
+
+// Drift guard. A NAV entry missing from ARB_PAGE_IDS is silently rewritten to
+// 'overview' by normalizePageId, so the sidebar item renders but goes nowhere.
+// That failure is invisible in review — make it loud at boot instead.
+(() => {
+  const missing = NAV.map(n => n.id).filter(id => !ARB_PAGE_IDS.includes(id));
+  if (missing.length) {
+    console.error('ops.html routing drift — NAV ids missing from ARB_PAGE_IDS (these pages are unreachable):', missing);
+  }
+})();
 
 function Sidebar() {
   const { t, page, setPage } = window.useApp();
   const opps = Array.isArray(window.MOCK?.opportunities) ? window.MOCK.opportunities : [];
   const tradableCount = opps.filter(o => o.status === 'tradable').length;
+  // Badge counts. Both helpers live in a later script block, so guard them —
+  // Sidebar renders even if that block failed to load.
+  const incidentCount = window.openIncidentCount ? window.openIncidentCount(window.MOCK) : 0;
+  const monitorAlert = !!(window.directionalSummary && window.directionalSummary(window.MOCK));
   return (
     <div style={{ width: 220, background: t.bgCard, borderRight: `1px solid ${t.border}`, padding: '20px 14px', display:'flex', flexDirection:'column', flexShrink: 0 }}>
       <div style={{ display:'flex', alignItems:'center', gap: 10, padding: '4px 8px 22px', cursor:'pointer' }} onClick={() => setPage('overview')}>
@@ -2101,6 +2213,8 @@ function Sidebar() {
             <span style={{ width: 14, fontSize: 13, color: active ? t.accent : t.textMuted, fontFamily: window.FONTS.mono, textAlign:'center' }}>{n.icon}</span>
             <span>{n.label}</span>
             {n.id === 'opportunities' && tradableCount > 0 && <span style={{ marginLeft:'auto', fontSize: 10, padding: '1px 6px', background: t.accent, color: '#fff', borderRadius: 99, fontWeight: 500 }}>{tradableCount}</span>}
+            {n.id === 'incidents' && incidentCount > 0 && <span style={{ marginLeft:'auto', fontSize: 10, padding: '1px 6px', background: t.red, color: '#fff', borderRadius: 99, fontWeight: 500 }}>{incidentCount}</span>}
+            {n.id === 'monitors' && monitorAlert && <span style={{ marginLeft:'auto', fontSize: 10, padding: '1px 6px', background: t.amber, color: '#fff', borderRadius: 99, fontWeight: 500 }}>!</span>}
           </div>
         );
       })}
@@ -2144,7 +2258,11 @@ function TopBar({ title, sub, actions }) {
   }, []);
   useE(() => {
     let cancelled = false;
-    const tick = () => fetch('/api/alerts?limit=50&hours=24')
+    // authFetch: /api/* is token-gated. A bare fetch relies on the session
+    // cookie alone and 401s for a token-only session.
+    const tick = () => (window.__arbiterAuthFetch
+        ? window.__arbiterAuthFetch('/api/alerts?limit=50&hours=24')
+        : fetch('/api/alerts?limit=50&hours=24', { credentials: 'same-origin' }))
       .then(r => r.ok ? r.json() : null)
       .then(d => {
         if (cancelled || !d) return;
@@ -2295,7 +2413,9 @@ function AlertsInbox() {
     if (!alerts) return;
     let cancelled = false;
     setLoading(true); setError('');
-    fetch('/api/alerts?limit=50&hours=24')
+    (window.__arbiterAuthFetch
+        ? window.__arbiterAuthFetch('/api/alerts?limit=50&hours=24')
+        : fetch('/api/alerts?limit=50&hours=24', { credentials: 'same-origin' }))
       .then(r => r.json().then(d => ({ ok: r.ok, d })))
       .then(({ ok, d }) => {
         if (cancelled) return;
@@ -3699,7 +3819,11 @@ function PagePnL() {
           {M.health.reconciliation.flag_count > 0 && (
             <window.Btn variant="secondary" size="sm" hint="Reset starting balances to current actuals — clears all reconciliation drift flags" style={{ marginTop: 12, width: '100%' }} onClick={async () => {
               try {
-                const r = await fetch((window.__arbiterAPI || '') + '/api/reconciliation/rebaseline', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin' });
+                // authFetch adds the bearer token; a bare POST 401s under the
+                // auth middleware when the session is token-only.
+                const r = window.__arbiterAuthFetch
+                  ? await window.__arbiterAuthFetch('/api/reconciliation/rebaseline', { method: 'POST', headers: { 'Content-Type': 'application/json' } })
+                  : await fetch((window.__arbiterAPI || '') + '/api/reconciliation/rebaseline', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin' });
                 const d = await r.json();
                 if (d.status === 'ok') toast('Reconciliation re-baselined', { sub: 'Starting balances reset to current actuals' });
                 else toast('Rebaseline failed: ' + (d.error || 'unknown'), { tone: 'error' });
@@ -3879,6 +4003,237 @@ function PriceCell({ yes }) {
   );
 }
 
+// ── Mapping execution controls ──────────────────────────────────────
+// Auto-trade arming + ForecastEx contract-id wiring. These previously existed
+// ONLY in the unlinked legacy console (dashboard.js), so an operator had no
+// way to reach them from the primary console.
+//
+// Mirrors arbiter/collectors/forecastex.py:is_valid_conid — "0" and "None"
+// pass a plain truthiness check but are junk conids the collector rejects.
+window.isValidConid = function isValidConid(value) {
+  const text = String(value == null ? '' : value).trim();
+  return !!text && text !== '0' && text !== 'None';
+};
+
+// The backend gates enable_auto_trade on status==confirmed AND
+// resolution_match_status==identical (api.py handle_market_mapping_action).
+// Mirror it so the button is disabled with a reason instead of firing a 400.
+window.autoTradeEligibility = function autoTradeEligibility(row) {
+  const status = String((row && (row.s || row.status)) || '').toLowerCase();
+  const match = String((row && (row.match || row.resolution_match_status)) || '').toLowerCase();
+  const reasons = [];
+  if (status !== 'confirmed') reasons.push(`status is "${status || 'unknown'}", must be "confirmed"`);
+  if (match !== 'identical') reasons.push(`resolution criteria are "${match || 'unknown'}", must be "identical"`);
+  return { eligible: reasons.length === 0, reasons };
+};
+
+function AutoTradeControl({ row, onDone, size = 'sm' }) {
+  const { toast, setConfirm } = window.useApp();
+  const [busy, setBusy] = React.useState(false);
+  const id = row.canonical_id || row.k;
+  const on = !!row.auto;
+  const gate = window.autoTradeEligibility(row);
+
+  const run = async () => {
+    if (!window.__arbiterMappingAction) { toast('Mapping action API unavailable', { tone: 'error' }); return; }
+    setBusy(true);
+    const action = on ? 'disable_auto_trade' : 'enable_auto_trade';
+    const res = await window.__arbiterMappingAction(id, action, {
+      note: `${on ? 'Disabled' : 'Enabled'} auto-trade from the operator desk`,
+    });
+    setBusy(false);
+    if (!res.ok) { toast('Auto-trade change failed', { sub: res.error, tone: 'error' }); return; }
+    toast(`Auto-trade ${on ? 'disabled' : 'enabled'}`, { sub: id });
+    if (window.__arbiterRefresh) { try { await window.__arbiterRefresh(); } catch (_) {} }
+    if (onDone) onDone();
+  };
+
+  // Arming a mapping lets it fire live orders, so it gets a confirm step.
+  // Disabling is the safe direction and goes straight through.
+  const onClick = (e) => {
+    if (e && e.stopPropagation) e.stopPropagation();
+    if (on) { run(); return; }
+    if (setConfirm) {
+      setConfirm({
+        title: 'Arm auto-trade?',
+        body: `${id} will be allowed to fire LIVE orders whenever it clears the edge, coherence and notional gates. This does not place an order now.`,
+        confirmLabel: 'Arm auto-trade',
+        tone: 'danger',
+        onConfirm: run,
+      });
+    } else { run(); }
+  };
+
+  if (!on && !gate.eligible) {
+    return (
+      <window.Btn size={size} variant="secondary" disabled
+        disabledHint={`Cannot arm: ${gate.reasons.join('; ')}. The backend rejects this with a 400.`}
+        hint={`Cannot arm: ${gate.reasons.join('; ')}`}>Enable auto-trade</window.Btn>
+    );
+  }
+  return (
+    <window.Btn size={size} variant={on ? 'secondary' : 'primary'} disabled={busy} onClick={onClick}
+      hint={on ? 'Stop this mapping from firing live orders' : 'Allow this mapping to fire live orders'}>
+      {busy ? 'Saving…' : (on ? 'Disable auto-trade' : 'Enable auto-trade')}
+    </window.Btn>
+  );
+}
+window.AutoTradeControl = AutoTradeControl;
+
+// One ForecastEx conid slot (YES or NO): shows the current value, sets a new
+// one, or clears it. Empty conid => cleared. Never places an order.
+function ConidField({ canonicalId, side, value, onDone }) {
+  const { t, toast } = window.useApp();
+  const [draft, setDraft] = React.useState(String(value == null ? '' : value));
+  const [busy, setBusy] = React.useState(false);
+  // Re-sync when a refresh brings a new server value and we're not editing.
+  React.useEffect(() => {
+    if (!busy) setDraft(String(value == null ? '' : value));
+  }, [value, busy]);
+
+  const current = String(value == null ? '' : value).trim();
+  const valid = window.isValidConid(current);
+  const dirty = draft.trim() !== current;
+
+  const save = async (nextRaw) => {
+    if (!window.__arbiterSetForecastexConid) { toast('ForecastEx conid API unavailable', { tone: 'error' }); return; }
+    setBusy(true);
+    const res = await window.__arbiterSetForecastexConid(canonicalId, side, nextRaw);
+    setBusy(false);
+    if (!res.ok) { toast(`${side.toUpperCase()} conid update failed`, { sub: res.error, tone: 'error' }); return; }
+    toast(`ForecastEx ${side.toUpperCase()} conid ${res.cleared ? 'cleared' : 'set'}`, { sub: canonicalId });
+    if (window.__arbiterRefresh) { try { await window.__arbiterRefresh(); } catch (_) {} }
+    if (onDone) onDone();
+  };
+
+  return (
+    <div>
+      <div style={{ fontSize: 10.5, color: t.textMuted, marginBottom: 4, letterSpacing:'0.05em', textTransform:'uppercase', display:'flex', alignItems:'center', gap: 6 }}>
+        <span>ForecastEx {side.toUpperCase()}</span>
+        {current && !valid ? <window.Pill tone="red">junk “{current}”</window.Pill>
+          : valid ? <window.Pill tone="green">set</window.Pill>
+          : <window.Pill tone="default">unset</window.Pill>}
+      </div>
+      <div style={{ display:'flex', gap: 6 }}>
+        <input value={draft} onChange={e => setDraft(e.target.value)} placeholder="e.g. 745924270"
+          inputMode="numeric" aria-label={`ForecastEx ${side} contract id for ${canonicalId}`}
+          onClick={e => e.stopPropagation()}
+          style={{ flex: 1, minWidth: 0, background: t.bgCard, color: t.text, border: `1px solid ${dirty ? t.accent : t.border}`, borderRadius: 7, padding: '6px 9px', fontSize: 12, fontFamily: window.FONTS.mono }} />
+        <window.Btn size="sm" variant="secondary" disabled={busy || !dirty || !draft.trim()}
+          hint="Attach this contract id to the mapping"
+          onClick={(e) => { if (e && e.stopPropagation) e.stopPropagation(); save(draft); }}>
+          {busy ? '…' : 'Save'}
+        </window.Btn>
+        <window.Btn size="sm" variant="ghost" disabled={busy || !current}
+          hint="Detach the contract id from this side"
+          onClick={(e) => { if (e && e.stopPropagation) e.stopPropagation(); setDraft(''); save(''); }}>Clear</window.Btn>
+      </div>
+    </div>
+  );
+}
+window.ConidField = ConidField;
+
+// The three ForecastEx-bearing canonicals the operator actually works with.
+window.FX_KEY_CANONICALS = [
+  'DEM_SENATE_2026',
+  'GOP_SENATE_2026',
+  'POL_US_HOUSE_20261103_PARTY-CONTROL_MAJORITY_DEM_96fb4be7',
+];
+
+// ForecastEx execution desk: conid wiring + auto-trade arming, with the three
+// key canonicals pinned so they never have to be hunted for in 5k rows.
+function ForecastExControls({ candidates }) {
+  const { t } = window.useApp();
+  const [scope, setScope] = React.useState('key');
+  const [q, setQ] = React.useState('');
+
+  const rows = Array.isArray(candidates) ? candidates : [];
+  const byId = new Map(rows.map(r => [r.canonical_id, r]));
+  const keyRows = window.FX_KEY_CANONICALS.map(id => byId.get(id)).filter(Boolean);
+  const wired = rows.filter(r => window.isValidConid(r.f) || window.isValidConid(r.fno) || r.fna);
+  const armed = rows.filter(r => r.auto);
+
+  let visible = scope === 'key' ? keyRows : scope === 'armed' ? armed : wired;
+  const needle = q.trim().toLowerCase();
+  if (needle) {
+    visible = visible.filter(r =>
+      String(r.canonical_id || '').toLowerCase().includes(needle)
+      || String(r.desc || '').toLowerCase().includes(needle)
+      || String(r.f || '').includes(needle)
+      || String(r.fno || '').includes(needle));
+  }
+  const SCOPES = [
+    ['key', `Key canonicals (${keyRows.length})`],
+    ['wired', `All ForecastEx (${wired.length})`],
+    ['armed', `Auto-trade armed (${armed.length})`],
+  ];
+
+  return (
+    <window.Card title="ForecastEx execution controls" padding={18}
+      action={<span style={{ fontSize: 11, color: t.textMuted }}>conid wiring · auto-trade arming</span>}>
+      <div style={{ display:'flex', gap: 8, alignItems:'center', flexWrap:'wrap', marginBottom: 12 }}>
+        {SCOPES.map(([k, label]) => (
+          <button key={k} type="button" aria-pressed={scope === k} onClick={() => setScope(k)}
+            style={{ padding:'6px 10px', border:`1px solid ${scope === k ? t.accent : t.border}`, background: scope === k ? t.bgSubtle : 'transparent', borderRadius: 8, color: scope === k ? t.text : t.textDim, fontSize: 11.5, fontWeight: scope === k ? 600 : 500, cursor:'pointer' }}>{label}</button>
+        ))}
+        <div style={{ flex: 1 }} />
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Filter by canonical, description or conid"
+          style={{ background: t.bgSubtle, color: t.text, border: `1px solid ${t.border}`, borderRadius: 8, padding: '6px 10px', fontSize: 11.5, minWidth: 260 }} />
+      </div>
+
+      {!visible.length ? (
+        <div style={{ padding: 20, textAlign:'center', color: t.textDim, fontSize: 12.5 }}>
+          {rows.length
+            ? 'No mappings match this scope/filter.'
+            : 'No mapping rows loaded yet — /api/mappings has not returned.'}
+        </div>
+      ) : (
+        <div style={{ display:'grid', gap: 12 }}>
+          {visible.slice(0, 40).map(r => {
+            const gate = window.autoTradeEligibility(r);
+            const twoSided = window.isValidConid(r.f) && window.isValidConid(r.fno);
+            return (
+              <div key={r.canonical_id} style={{ border: `1px solid ${t.border}`, borderRadius: 10, padding: 14, background: t.bgSubtle }}>
+                <div style={{ display:'flex', gap: 10, alignItems:'flex-start', flexWrap:'wrap', marginBottom: 10 }}>
+                  <div style={{ flex: 1, minWidth: 220 }}>
+                    <div style={{ fontSize: 12.5, color: t.text, fontWeight: 600, overflowWrap:'anywhere' }}>{r.canonical_id}</div>
+                    {r.desc ? <div style={{ fontSize: 11, color: t.textDim, marginTop: 2, lineHeight: 1.45 }}>{r.desc}</div> : null}
+                  </div>
+                  <div style={{ display:'flex', gap: 6, alignItems:'center', flexWrap:'wrap' }}>
+                    <window.StatusBadge status={r.s}/>
+                    <window.Pill tone={r.match === 'identical' ? 'green' : r.match === 'divergent' ? 'red' : 'amber'}>{String(r.match || '').replace(/_/g, ' ')}</window.Pill>
+                    <window.Pill tone={r.auto ? 'green' : 'default'}>{r.auto ? 'auto-trade ON' : 'auto-trade off'}</window.Pill>
+                    {r.fna ? <window.Pill tone="red" hint="Mapping is flagged forecastex_not_available — the resolver will not quote it.">not available on FX</window.Pill> : null}
+                  </div>
+                </div>
+
+                <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(240px, 1fr))', gap: 12 }}>
+                  <window.ConidField canonicalId={r.canonical_id} side="yes" value={r.f}/>
+                  <window.ConidField canonicalId={r.canonical_id} side="no" value={r.fno}/>
+                </div>
+
+                <div style={{ display:'flex', alignItems:'center', gap: 10, marginTop: 12, flexWrap:'wrap' }}>
+                  <div style={{ flex: 1, minWidth: 200, fontSize: 11, color: twoSided ? t.textDim : t.amber, lineHeight: 1.45 }}>
+                    {twoSided
+                      ? 'Both sides wired — this mapping can publish a two-sided ForecastEx quote.'
+                      : 'A mapping needs BOTH a YES and a NO conid to publish a two-sided quote. With one side it can never produce an edge.'}
+                    {!r.auto && !gate.eligible ? ` · Cannot arm: ${gate.reasons.join('; ')}.` : ''}
+                  </div>
+                  <window.AutoTradeControl row={r}/>
+                </div>
+              </div>
+            );
+          })}
+          {visible.length > 40 ? (
+            <div style={{ fontSize: 11.5, color: t.textMuted, textAlign:'center' }}>Showing first 40 of {visible.length} — narrow the filter to see the rest.</div>
+          ) : null}
+        </div>
+      )}
+    </window.Card>
+  );
+}
+window.ForecastExControls = ForecastExControls;
+
 // ── Mappings ────────────────────────────────────────────────────────
 function PageMappings() {
   const { t, setModal, setDrawer, toast } = window.useApp();
@@ -3903,10 +4258,13 @@ function PageMappings() {
     k: r.kalshi_market_id || r.kalshi_ticker || r.kalshi || '',
     p: r.polymarket_slug || r.poly_slug || r.polymarket || '',
     f: r.forecastex || r.forecastex_contract_id || r.forecastex_contract || '',
+    fno: r.forecastex_no || r.forecastex_no_contract_id || '',
+    fna: !!r.forecastex_not_available,
     s: r.status || 'candidate',
     auto: !!r.allow_auto_trade,
     match: r.resolution_match_status || 'pending_operator_review',
     reason: r.auto_promote_reason || '',
+    desc: r.description || r.polymarket_question || '',
   }));
   const statusOf = c => String(c.s || '').toLowerCase();
   const matchOf = c => String(c.match || '').toLowerCase();
@@ -4112,6 +4470,10 @@ function PageMappings() {
         </window.Card>
       </div>
 
+      <div style={{ marginBottom: 14 }}>
+        <window.ForecastExControls candidates={candidates}/>
+      </div>
+
       <div style={{ display:'flex', alignItems:'center', gap: 8, flexWrap:'wrap', marginBottom: 14 }}>
         {MAPPING_FILTERS.map(f => (
           <button key={f.key} type="button" aria-pressed={mappingFilter === f.key} onClick={() => setMappingFilter(f.key)} style={{ padding:'7px 10px', border:`1px solid ${mappingFilter === f.key ? t.accent : t.border}`, background: mappingFilter === f.key ? t.bgSubtle : 'transparent', borderRadius: 8, color: mappingFilter === f.key ? t.text : t.textDim, fontSize: 12, fontWeight: mappingFilter === f.key ? 600 : 500, cursor:'pointer', display:'flex', alignItems:'center', gap: 7 }}>
@@ -4133,6 +4495,11 @@ function PageMappings() {
           { label: 'ForecastEx', w: '140px', render: r => <span style={{ fontFamily: window.FONTS.mono, fontSize: 11.5, color: r.f ? t.text : t.textMuted }}>{r.f || '—'}</span> },
           { label: 'Status', w: '110px', render: r => <window.StatusBadge status={r.s}/> },
           { label: 'Criteria', w: '150px', render: r => <span style={{ fontSize: 11, color: r.match === 'identical' ? t.green : r.match === 'divergent' ? t.red : t.textDim }}>{r.match}</span> },
+          { label: 'Auto-trade', w: '175px', render: r => (
+            <div onClick={e => e.stopPropagation()}>
+              <window.AutoTradeControl row={r}/>
+            </div>
+          )},
           { label: '', w: '230px', align:'right', render: r => {
             if (r.s === 'confirmed') return <span style={{ fontSize: 11, color: t.textMuted }}>Active · scanned every 5s</span>;
             if (r.s === 'rejected') return <window.Btn variant="ghost" size="sm" onClick={async (e) => {
@@ -4519,6 +4886,21 @@ function PageSettings() {
           <window.Btn variant="secondary" size="sm" onClick={() => setModal({ kind:'billing' })}>Manage billing</window.Btn>
         </window.Card>
       </div>
+
+      {/* Legacy console. Everything it offers now exists in this console
+          (Incidents page, Mappings auto-trade + ForecastEx conid controls);
+          the link stays until /ops-legacy is retired. */}
+      <div style={{ marginTop: 14, padding: '12px 16px', background: t.bgSubtle, border: `1px dashed ${t.border}`, borderRadius: 8, display:'flex', alignItems:'center', gap: 12, flexWrap:'wrap' }}>
+        <div style={{ flex: 1, minWidth: 240, fontSize: 11.5, color: t.textDim, lineHeight: 1.5 }}>
+          <span style={{ color: t.text, fontWeight: 600 }}>Legacy console</span> — the original dashboard at{' '}
+          <span style={{ fontFamily: window.FONTS.mono }}>/ops-legacy</span>. Kept reachable during consolidation; its
+          incident-resolve and per-mapping auto-trade controls are now available here.
+        </div>
+        <a href="/ops-legacy" target="_blank" rel="noopener noreferrer"
+          style={{ fontSize: 11.5, fontWeight: 600, color: t.accent, textDecoration:'none', border:`1px solid ${t.border}`, borderRadius: 7, padding:'6px 11px', whiteSpace:'nowrap' }}>
+          Open /ops-legacy ↗
+        </a>
+      </div>
     </div>
   );
 }
@@ -4540,6 +4922,556 @@ function SettingRow({ label, value, desc, mono, pill, last, onEdit, editLabel })
   );
 }
 
+// ── Incidents ──────────────────────────────────────────────────────────────
+// GET /api/errors?status=open|resolved|expired|all&limit=… returns a BARE JSON
+// LIST of incident dicts. Resolve posts to POST /api/errors/{incident_id} with
+// {"action":"resolve"} (ported from the legacy console, dashboard.js).
+//
+// Backend quirk that drives the design here: with NO status param the engine
+// returns its in-memory incidents *plus* persisted open ones — and the engine
+// resolves incidents in place, so that legacy set MIXES resolved rows in. The
+// console's shared M.errors comes from that no-param call, which is why the
+// open tab must re-filter on `status` client-side instead of trusting length.
+window.incidentIsOpen = function incidentIsOpen(row) {
+  // Absent status means the row predates lifecycle tracking → treat as open,
+  // matching the backend's own default.
+  const s = String((row && row.status) || 'open').toLowerCase();
+  return s === 'open' || s === '';
+};
+
+// Count of genuinely-unresolved incidents. Must not be `M.errors.length` —
+// that payload mixes in rows the engine already resolved in place.
+window.openIncidentCount = function openIncidentCount(M) {
+  const rows = M && Array.isArray(M.errors) ? M.errors : [];
+  return rows.filter(window.incidentIsOpen).length;
+};
+
+function PageIncidents() {
+  const { t, toast } = window.useApp();
+  const [filter, setFilter] = React.useState('open');
+  const [busy, setBusy] = React.useState(null);
+  const [note, setNote] = React.useState('');
+  const [fetched, setFetched] = React.useState(null);   // null = not loaded yet
+  const [loading, setLoading] = React.useState(false);
+  const [err, setErr] = React.useState(null);
+  const [loadErr, setLoadErr] = React.useState('');
+
+  const M = window.MOCK || {};
+  const shared = Array.isArray(M.errors) ? M.errors : [];
+  // The shared payload is the no-param (legacy) call, so split it ourselves.
+  const sharedOpen = shared.filter(window.incidentIsOpen);
+
+  const load = React.useCallback(async (status) => {
+    if (!window.__arbiterSafeJson) { setFetched([]); setLoadErr('API helper unavailable'); return; }
+    setLoading(true); setLoadErr('');
+    const rows = await window.__arbiterSafeJson(
+      `/api/errors?status=${encodeURIComponent(status)}&limit=500`);
+    // Contract: a bare list. Tolerate an object wrapper so a future shape
+    // change degrades to "empty" rather than throwing during render.
+    const list = Array.isArray(rows)
+      ? rows
+      : (rows && Array.isArray(rows.incidents) ? rows.incidents
+        : (rows && Array.isArray(rows.logs) ? rows.logs : null));
+    if (list === null) {
+      // Failed fetch: leave `fetched` untouched so the render fallback to
+      // the cached shared payload actually happens — setFetched([]) here
+      // painted "No open incidents — clean." over real cached incidents.
+      setLoadErr('Incident feed unavailable — showing what is cached.');
+    } else {
+      setFetched(list);
+    }
+    setLoading(false);
+  }, []);
+
+  React.useEffect(() => { load(filter); }, [filter, load]);
+
+  const resolve = async (id) => {
+    if (!id) return;
+    setBusy(id); setErr(null);
+    try {
+      if (!window.__arbiterAuthFetch) throw new Error('API helper unavailable');
+      const r = await window.__arbiterAuthFetch(`/api/errors/${encodeURIComponent(id)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'resolve', note: note || 'Resolved from ops console' }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error((body && body.error) || `HTTP ${r.status}`);
+      if (toast) toast('Incident resolved', { sub: id });
+      await load(filter);
+      if (window.__arbiterRefresh) { try { await window.__arbiterRefresh(); } catch (_) {} }
+    } catch (e) {
+      const msg = String((e && e.message) || e);
+      setErr(msg);
+      if (toast) toast('Resolve failed', { sub: msg, tone: 'error' });
+    } finally { setBusy(null); }
+  };
+
+  // Prefer the freshly-fetched, status-filtered rows. Fall back to the cached
+  // shared payload so a failing fetch never blanks the page.
+  let rows = Array.isArray(fetched) ? fetched : (filter === 'open' ? sharedOpen : []);
+  if (filter === 'open') rows = rows.filter(window.incidentIsOpen);
+
+  const openCount = Array.isArray(fetched) && filter === 'open' ? rows.length : sharedOpen.length;
+  const sevTone = (s) => s === 'critical' ? 'red' : s === 'warning' ? 'amber' : 'blue';
+  const TABS = [
+    ['open',     `Unresolved${openCount ? ` (${openCount})` : ''}`],
+    ['resolved', 'Resolved'],
+    ['expired',  'Expired'],
+    ['all',      'All'],
+  ];
+  const emptyCopy = {
+    open: 'No open incidents — clean.',
+    resolved: 'No resolved incidents recorded.',
+    expired: 'No expired incidents recorded.',
+    all: 'No incidents recorded.',
+  };
+
+  return (
+    <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto' }}>
+      <window.PageHeader kicker="Execution integrity" title="Incidents"
+        sub="Errors and warnings raised by the execution engine. Resolving an incident records an operator acknowledgement — it does not modify, close, or unwind any position." />
+
+      <div style={{ display:'flex', gap: 8, marginBottom: 14, alignItems:'center', flexWrap:'wrap' }}>
+        {TABS.map(([k, label]) => (
+          <window.Btn key={k} size="sm" variant={filter === k ? 'primary' : 'secondary'} onClick={() => setFilter(k)}>{label}</window.Btn>
+        ))}
+        <div style={{ flex: 1 }} />
+        <input value={note} onChange={e => setNote(e.target.value)} placeholder="Resolution note (optional)"
+          style={{ background: t.bgSubtle, color: t.text, border: `1px solid ${t.border}`, borderRadius: 8, padding: '7px 10px', fontSize: 12, minWidth: 240 }} />
+      </div>
+
+      {err && <div style={{ marginBottom: 12, padding: 10, borderRadius: 8, background: t.redSoft, color: t.red, fontSize: 12 }}>Resolve failed: {err}</div>}
+      {loadErr && <div style={{ marginBottom: 12, padding: 10, borderRadius: 8, background: t.amberSoft, color: t.amber, fontSize: 12 }}>{loadErr}</div>}
+
+      <window.Card padding={0}
+        title={filter === 'open' ? 'Unresolved incidents' : filter === 'all' ? 'All incidents' : `${filter.charAt(0).toUpperCase()}${filter.slice(1)} incidents`}
+        action={<span style={{ fontSize: 11, color: t.textMuted }}>{loading ? 'loading…' : `${rows.length} row${rows.length === 1 ? '' : 's'}`}</span>}>
+        {!rows.length ? (
+          <div style={{ padding: 28, textAlign:'center', color: t.textDim, fontSize: 13 }}>
+            {loading ? 'Loading incidents…' : emptyCopy[filter]}
+          </div>
+        ) : rows.map((r, i) => {
+          const meta = (r && typeof r.metadata === 'object' && r.metadata) || {};
+          const isOpen = window.incidentIsOpen(r);
+          const status = String((r && r.status) || 'open').toLowerCase();
+          return (
+            <div key={r.incident_id || i} style={{ padding: '13px 18px', borderBottom: i === rows.length - 1 ? 'none' : `1px solid ${t.border}`, display:'flex', gap: 14, alignItems:'flex-start' }}>
+              <window.Pill tone={sevTone(r.severity)}>{r.severity || 'info'}</window.Pill>
+              <window.Pill tone={isOpen ? 'red' : status === 'expired' ? 'default' : 'green'}>{status}</window.Pill>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 12.5, color: t.text, marginBottom: 3 }}>{r.message || meta.event_type || '—'}</div>
+                <div style={{ fontSize: 11, color: t.textDim, fontFamily: window.FONTS.mono, overflowWrap:'anywhere' }}>
+                  {r.incident_id || '—'}
+                  {r.canonical_id ? ` · ${r.canonical_id}` : ''}
+                  {meta.platform ? ` · ${meta.platform}` : ''}
+                  {r.arb_id ? ` · ${r.arb_id}` : ''}
+                  {r.timestamp ? ` · ${window.ago(r.timestamp)}` : ''}
+                </div>
+                {r.resolution_note ? (
+                  <div style={{ fontSize: 11, color: t.textMuted, marginTop: 4, lineHeight: 1.45 }}>↳ {r.resolution_note}</div>
+                ) : null}
+              </div>
+              {isOpen ? (
+                <window.Btn size="sm" variant="secondary" disabled={busy === r.incident_id}
+                  hint="Record an operator acknowledgement. Does not touch any position."
+                  onClick={() => resolve(r.incident_id)}>
+                  {busy === r.incident_id ? 'Resolving…' : 'Resolve'}
+                </window.Btn>
+              ) : (
+                <span style={{ fontSize: 11, color: t.textMuted, whiteSpace:'nowrap' }}>
+                  {r.resolved_at ? window.ago(r.resolved_at) : status}
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </window.Card>
+    </div>
+  );
+}
+
+// ── Monitors ───────────────────────────────────────────────────────────────
+// FX gateway session, IBKR OAuth activation, per-venue funding gate, and the
+// directional-book review flag.
+function MonRow({ label, value, tone, desc, last }) {
+  const { t } = window.useApp();
+  return (
+    <div style={{ padding:'12px 0', borderBottom: last ? 'none' : `1px solid ${t.border}`, display:'flex', gap: 14, alignItems:'center' }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 12.5, color: t.text, fontWeight: 500 }}>{label}</div>
+        {desc ? <div style={{ fontSize: 11, color: t.textDim, marginTop: 2, lineHeight: 1.45 }}>{desc}</div> : null}
+      </div>
+      {tone ? <window.Pill tone={tone}>{window.monScalar(value)}</window.Pill>
+        : <div style={{ fontSize: 12.5, color: t.text, fontFamily: window.FONTS.mono, fontVariantNumeric:'tabular-nums', textAlign:'right', overflowWrap:'anywhere' }}>{window.monScalar(value)}</div>}
+    </div>
+  );
+}
+
+// Render guard: several backend fields are objects-or-null (last_validation,
+// payoff_by_state entries, circuit). String(obj) yields "[object Object]",
+// so collapse to something an operator can actually read.
+window.monScalar = function monScalar(v) {
+  if (v == null) return '—';
+  if (typeof v === 'string') return v || '—';
+  if (typeof v === 'number') return Number.isFinite(v) ? String(v) : '—';
+  if (typeof v === 'boolean') return v ? 'yes' : 'no';
+  if (Array.isArray(v)) return v.length ? v.join(', ') : '—';
+  if (typeof v === 'object') {
+    try {
+      const s = JSON.stringify(v);
+      return s && s !== '{}' ? (s.length > 220 ? s.slice(0, 217) + '…' : s) : '—';
+    } catch (_) { return '—'; }
+  }
+  return String(v);
+};
+
+// ── Directional-book banner ────────────────────────────────────────────────
+// The console previously rendered the Senate legs as "hedged / complete",
+// which is FALSE: both legs pay in the same settlement state, so the book is
+// one-way. This is a global, always-visible warning surface — deliberately
+// not a field buried on one page — because under-stating this risk is the
+// dangerous direction to be wrong in.
+//
+// Sources, in priority order:
+//   1. /api/portfolio top-level directional_* (authoritative; also corrects
+//      total_hedged / total_unhedged, which is why we never re-derive them)
+//   2. /api/directional-exposure (full breakdown; used as a fallback)
+// Renders nothing when the backend reports no directional book.
+window.directionalSummary = function directionalSummary(M) {
+  const src = M || {};
+  const p = src.portfolioDirectional;
+  if (p && p.required) {
+    return {
+      canonicals: p.canonicals || [],
+      exposure_usd: p.exposure_usd,
+      worst_case_state: p.worst_case_state,
+      worst_case_usd: p.worst_case_usd,
+      position_count: p.position_count,
+      reason: p.reason,
+      source: 'portfolio',
+    };
+  }
+  const d = src.directional;
+  if (d && d.detected) {
+    return {
+      canonicals: d.directional_canonicals || [],
+      exposure_usd: Number(d.net_exposure_usd || 0),
+      worst_case_state: d.worst_case_state || null,
+      worst_case_usd: Number(d.worst_case_net_usd || 0),
+      position_count: Number(d.position_count || 0),
+      reason: d.summary || '',
+      source: 'directional-exposure',
+    };
+  }
+  return null;
+};
+
+function DirectionalBanner({ compact }) {
+  const { t, setPage } = window.useApp();
+  const [dismissed, setDismissed] = React.useState(false);
+  const d = window.directionalSummary(window.MOCK);
+  if (!d || dismissed) return null;
+  const money = (v) => `$${Math.abs(Number(v || 0)).toFixed(2)}`;
+  const worst = d.worst_case_state
+    ? `${money(d.worst_case_usd)} loss if ${String(d.worst_case_state).replace(/_/g, ' ').toLowerCase()}`
+    : null;
+  return (
+    <div role="alert" style={{
+      margin: compact ? '10px 12px 0' : '14px 32px 0',
+      padding: compact ? '11px 13px' : '13px 16px',
+      borderRadius: 10,
+      background: t.redSoft,
+      border: `1px solid ${t.red}55`,
+      display: 'flex', gap: 12, alignItems: 'flex-start',
+    }}>
+      <span style={{ fontSize: 15, lineHeight: 1.2, color: t.red, flexShrink: 0 }} aria-hidden="true">⚠</span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 700, color: t.red, marginBottom: 3 }}>
+          Directional book — NOT hedged · operator review required
+        </div>
+        <div style={{ fontSize: 11.5, color: t.text, lineHeight: 1.5 }}>
+          {d.position_count || 0} position{(d.position_count || 0) === 1 ? '' : 's'} across{' '}
+          {(d.canonicals || []).length} canonical{(d.canonicals || []).length === 1 ? '' : 's'} are booked as paired,
+          but both legs pay in the SAME settlement state — this is{' '}
+          <strong>{money(d.exposure_usd)} of one-way exposure</strong> previously reported as hedged.
+          {worst ? <> Worst case: <strong>{worst}</strong>.</> : null}
+          {' '}Do <strong>not</strong> auto-unwind — this is a labelling correction, not a position change.
+        </div>
+        {(d.canonicals || []).length ? (
+          <div style={{ fontSize: 10.5, color: t.textDim, fontFamily: window.FONTS.mono, marginTop: 5, overflowWrap:'anywhere' }}>
+            {d.canonicals.slice(0, 6).join(' · ')}{d.canonicals.length > 6 ? ` · +${d.canonicals.length - 6} more` : ''}
+          </div>
+        ) : null}
+      </div>
+      <div style={{ display:'flex', gap: 6, flexShrink: 0, alignItems:'center' }}>
+        {setPage ? (
+          <window.Btn size="sm" variant="secondary" onClick={() => setPage('monitors')}
+            hint="Open the full directional-exposure breakdown">Review</window.Btn>
+        ) : null}
+        <button type="button" onClick={() => setDismissed(true)} aria-label="Hide until reload"
+          title="Hide until reload — the exposure does not go away"
+          style={{ background:'transparent', border:'none', color: t.textDim, fontSize: 15, lineHeight: 1, cursor:'pointer', padding: '2px 4px' }}>×</button>
+      </div>
+    </div>
+  );
+}
+window.DirectionalBanner = DirectionalBanner;
+
+// Funding-gate venue rows. Primary source is the `gates` object on
+// /api/balances (contract d); /api/funding-gate is the richer per-PAIR view.
+// Both are built by the same backend helper so they cannot disagree.
+window.fundingGateRows = function fundingGateRows(M) {
+  const src = M || {};
+  const gates = src.balanceGates;
+  if (gates && typeof gates === 'object' && Object.keys(gates).length) {
+    return Object.keys(gates).sort().map(k => gates[k]).filter(Boolean);
+  }
+  const fund = src.fundingGate;
+  if (fund && fund.venues) {
+    // `venues` is a LIST on /api/funding-gate; Object.values handles both.
+    return Object.values(fund.venues);
+  }
+  return [];
+};
+
+function PageMonitors() {
+  const { t } = window.useApp();
+  const M = window.MOCK || {};
+  const fx = M.fxSession, oauth = M.oauthStatus, fund = M.fundingGate, dir = M.directional;
+  const yn = (v) => v === true ? 'yes' : v === false ? 'no' : 'unknown';
+  const boolTone = (v, goodIsTrue = true) => v == null ? 'default' : (!!v === goodIsTrue ? 'green' : 'red');
+  // Anything the backend lists in unavailable_fields is NOT TRACKED. It must
+  // read "unknown" and must never be shown as a green pass.
+  const untracked = Array.isArray(fx && fx.unavailable_fields) ? fx.unavailable_fields : [];
+  const isUntracked = (name) => untracked.indexOf(name) !== -1;
+  const secs = (v) => (v == null ? 'unknown' : `${Number(v).toFixed(1)}s ago`);
+  // -$101.20, not $-101.20.
+  const usd = (v) => {
+    if (v == null || !Number.isFinite(Number(v))) return 'unknown';
+    const n = Number(v);
+    return `${n < 0 ? '-' : ''}$${Math.abs(n).toFixed(2)}`;
+  };
+  const unavailable = (name) => (
+    <div style={{ padding: 22, color: t.textDim, fontSize: 12.5 }}>
+      {name} did not return data. The panel stays empty rather than guessing — redeploy or check the API.
+    </div>
+  );
+
+  const gateRows = window.fundingGateRows(M);
+  const blockingNames = Array.isArray(M.balanceGatesBlocking)
+    ? M.balanceGatesBlocking
+    : gateRows.filter(v => v && v.passes === false).map(v => v.venue);
+
+  return (
+    <div style={{ padding: '28px 32px', maxWidth: 1400, margin: '0 auto' }}>
+      <window.PageHeader kicker="Venue health" title="Monitors"
+        sub="Gateway session, OAuth activation, per-venue funding, and the directional-book review flag. Read-only — nothing on this page places, cancels, or unwinds an order." />
+
+      <div style={{ display:'grid', gap: 14 }}>
+      <window.Card title="ForecastEx / IBKR gateway session" padding={fx ? 20 : 0}
+        action={fx ? <window.Pill tone={fx.transport === 'oauth' ? 'accent' : 'default'}>{fx.transport || 'unknown'}</window.Pill> : null}>
+        {!fx ? unavailable('/api/forecastex/session') : (
+          <div>
+            <MonRow label="Authenticated" value={yn(fx.authenticated)} tone={fx.authenticated == null ? 'default' : boolTone(fx.authenticated)}
+              desc={`Proxy signal — brokerage bridge ready, not IBKR's own answer${fx.authenticated_source ? ` (${fx.authenticated_source})` : ''}.`} />
+            <MonRow label="Competing session"
+              value={isUntracked('competing_session') || fx.competing_session == null ? 'unknown — not tracked' : yn(fx.competing_session)}
+              tone={fx.competing_session == null ? 'default' : boolTone(fx.competing_session, false)}
+              desc="IBKR only reports this inside a live /tickle body, which is not persisted — so this is never a green pass. A web login under the same username still evicts the bot's session and kills FX." />
+            <MonRow label="Session expiry"
+              value={isUntracked('expires_in_seconds') || fx.expires_in_seconds == null ? 'unknown — not tracked' : `${fx.expires_in_seconds}s`}
+              tone="default" desc="Same limitation as competing-session: reported only by /tickle, never stored." />
+            <MonRow label="Circuit breaker" value={fx.circuit_state || 'unknown'}
+              tone={fx.circuit_open ? 'red' : (String(fx.circuit_state).toLowerCase() === 'closed' ? 'green' : 'default')}
+              desc={(() => {
+                // circuit is a free-form stats dict; render the fields we know
+                // and fall back to a compact dump for anything unexpected.
+                const c = fx.circuit;
+                if (!c || !Object.keys(c).length) return 'No circuit stats exposed. Open = FX calls are being short-circuited.';
+                const known = ['failures', 'successes', 'success_count', 'total_calls', 'consecutive_failures'];
+                const parts = known
+                  .filter(k => c[k] != null)
+                  .map(k => `${k.replace(/_/g, ' ')} ${c[k]}`);
+                return parts.length ? parts.join(' · ') : window.monScalar(c);
+              })()} />
+            <MonRow label="Consecutive errors" value={fx.consecutive_errors == null ? 'unknown' : fx.consecutive_errors}
+              tone={fx.consecutive_errors == null ? 'default' : (Number(fx.consecutive_errors) > 0 ? 'amber' : 'green')}
+              desc={`${fx.total_errors == null ? '?' : fx.total_errors} total errors over ${fx.total_fetches == null ? '?' : fx.total_fetches} fetches`} />
+            <MonRow label="Last successful call" value={secs(fx.last_success_age_seconds)}
+              tone={fx.last_success_age_seconds == null ? 'default' : undefined}
+              desc="Derived from the newest FX quote — a price can only land after a call returned data." />
+            <MonRow label="Last keepalive" value={secs(fx.last_keepalive_age_seconds)}
+              desc="Age of the last /tickle the collector issued." />
+            <MonRow label="Quote freshness"
+              value={fx.quotes ? `${fx.quotes.fresh == null ? '?' : fx.quotes.fresh} fresh / ${fx.quotes.tracked == null ? '?' : fx.quotes.tracked} tracked` : 'unknown'}
+              tone={!fx.quotes ? 'default' : (Number(fx.quotes.stale || 0) > 0 ? 'amber' : 'green')}
+              desc={fx.quotes ? `${fx.quotes.stale == null ? '?' : fx.quotes.stale} stale · newest ${fx.quotes.newest_age_seconds == null ? 'unknown' : fx.quotes.newest_age_seconds + 's'} · oldest ${fx.quotes.oldest_age_seconds == null ? 'unknown' : fx.quotes.oldest_age_seconds + 's'} · ttl ${fx.quotes.ttl_seconds == null ? '?' : fx.quotes.ttl_seconds}s` : null} last />
+            {untracked.length ? (
+              <div style={{ marginTop: 12, fontSize: 11, color: t.textMuted, lineHeight: 1.5 }}>
+                Not tracked in-process (null means unknown, not healthy): <span style={{ fontFamily: window.FONTS.mono }}>{untracked.join(', ')}</span>
+              </div>
+            ) : null}
+          </div>
+        )}
+      </window.Card>
+
+      <window.Card title="IBKR OAuth (Path B) activation" padding={oauth ? 20 : 0}
+        action={oauth ? <window.Pill tone={oauth.active ? 'green' : 'default'}>{oauth.active ? 'active' : 'inactive'}</window.Pill> : null}>
+        {!oauth ? unavailable('/api/oauth/status') : (
+          <div>
+            <MonRow label="Active" value={yn(oauth.active)} tone={oauth.active ? 'green' : 'default'}
+              desc="Requires enabled AND configured AND the OAuth transport actually attached to the live collector." />
+            <MonRow label="Effective transport" value={oauth.effective_transport || 'unknown'}
+              tone={oauth.effective_transport === 'oauth' ? 'accent' : 'default'}
+              desc="What the collector is really using right now, regardless of config intent." />
+            <MonRow label="OAuth enabled" value={yn(oauth.oauth_enabled)} tone={oauth.oauth_enabled ? 'green' : 'default'}
+              desc="Stays off until IBKR activates the consumer key. Disabled is the expected state today." />
+            <MonRow label="Credentials configured" value={yn(oauth.oauth_configured)} tone={boolTone(oauth.oauth_configured)} />
+            <MonRow label="Consumer key present" value={yn(oauth.consumer_key_present)} tone={boolTone(oauth.consumer_key_present)}
+              desc={oauth.consumer_key_name ? `Public identifier: ${oauth.consumer_key_name}` : 'Key identifier withheld unless it is the public desk id.'} />
+            <MonRow label="Transport attached" value={yn(oauth.transport_attached)} tone={boolTone(oauth.transport_attached)} />
+            <MonRow label="Blockers"
+              value={Array.isArray(oauth.missing) && oauth.missing.length ? oauth.missing.join(', ') : 'none'}
+              tone={Array.isArray(oauth.missing) && oauth.missing.length ? 'amber' : 'green'}
+              desc="Credential slots still empty. Presence flags only — no key or token value is ever read or shown." />
+            <MonRow label="Last validation" value={window.monScalar(oauth.last_validation)}
+              desc="A 401 'invalid consumer' means registered but not yet activated by IBKR — expected, not a fault." last />
+          </div>
+        )}
+      </window.Card>
+
+      <window.Card title="Funding gate" padding={gateRows.length ? 20 : 0}
+        action={gateRows.length ? (
+          <window.Pill tone={blockingNames.length ? 'red' : 'green'}>
+            {blockingNames.length ? `${blockingNames.length} blocking` : 'all clear'}
+          </window.Pill>
+        ) : null}>
+        {!gateRows.length ? unavailable('/api/balances gates and /api/funding-gate') : (
+          <div>
+            {gateRows.map((v, i, arr) => {
+              // balance_known === false means we FAILED to read the balance.
+              // We cannot vouch for funding we could not read, so it blocks —
+              // render it as unknown/blocked, never as a green pass and never
+              // as "$0.00", which would read as a real (empty) balance.
+              const known = v.balance_known !== false && v.balance != null;
+              const blocking = v.blocking != null ? !!v.blocking : v.passes === false;
+              return (
+                <MonRow key={v.venue || i} label={v.venue || 'unknown venue'}
+                  value={known
+                    ? `${usd(v.balance)} / min ${usd(v.threshold != null ? v.threshold : v.minimum)}`
+                    : `unknown / min ${usd(v.threshold != null ? v.threshold : v.minimum)}`}
+                  tone={!known ? 'red' : (blocking ? 'red' : 'green')}
+                  last={i === arr.length - 1}
+                  desc={!known
+                    ? 'Balance could not be read — treated as BLOCKING. An unreadable balance is not a pass.'
+                    : (blocking
+                      ? `Blocking — short by ${usd(v.shortfall)}. Deposit to unblock every pair this venue is in.`
+                      : `Funded — ${usd(v.headroom)} headroom${v.stale ? ' · STALE READ' : ''}.`)} />
+              );
+            })}
+            {fund && Array.isArray(fund.pairs) && fund.pairs.length ? (
+              <div style={{ marginTop: 14, display:'grid', gap: 6 }}>
+                {fund.pairs.map(p => (
+                  <div key={p.pair} style={{ display:'flex', alignItems:'center', gap: 8, fontSize: 11.5, flexWrap:'wrap' }}>
+                    <window.Pill tone={p.tradeable ? 'green' : 'red'}>{p.tradeable ? 'funded' : 'blocked'}</window.Pill>
+                    <span style={{ color: t.textDim, fontFamily: window.FONTS.mono }}>{p.pair}</span>
+                    {!p.tradeable && <span style={{ color: t.red }}>blocked by {(p.blocked_by || []).join(', ')}</span>}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            <div style={{ marginTop: 12, fontSize: 12, color: blockingNames.length ? t.red : t.green }}>
+              {blockingNames.length
+                ? `Blocking venues: ${blockingNames.join(', ')}`
+                : 'Every venue clears its configured minimum.'}
+            </div>
+          </div>
+        )}
+      </window.Card>
+
+      <window.Card title="Directional book — operator review" padding={dir ? 20 : 0}
+        action={dir ? <window.Pill tone={dir.detected ? 'amber' : 'green'}>{dir.detected ? 'review required' : 'none detected'}</window.Pill> : null}>
+        {!dir ? unavailable('/api/directional-exposure') : !dir.detected ? (
+          <div style={{ fontSize: 12.5, color: t.green }}>No directional (unhedged) book detected — every tracked pair is genuinely opposed.</div>
+        ) : (
+          <div>
+            <div style={{ padding: 12, borderRadius: 8, background: t.amberSoft, color: t.amber, fontSize: 12, marginBottom: 14, lineHeight: 1.5 }}>
+              <strong>Not hedged.</strong> {dir.summary || 'These legs are booked as paired but both legs pay in the same settlement state, so this is one-way exposure.'}
+              {' '}Operator review required — do NOT auto-unwind.
+            </div>
+            <MonRow label="Arbs flagged"
+              value={`${dir.position_count == null ? '?' : dir.position_count} across ${(dir.directional_canonicals || []).length} canonical(s)`}
+              desc={(dir.directional_canonicals || []).join(', ') || null} />
+            <MonRow label="One-way exposure" value={usd(dir.net_exposure_usd)} tone="amber"
+              desc="Cost actually at risk — this is capital, not a notional." />
+            <MonRow label="Contracts at risk" value={dir.contracts_at_risk == null ? 'unknown' : dir.contracts_at_risk} />
+            {Object.keys(dir.payoff_by_state || {}).sort().map(state => {
+              const cell = dir.payoff_by_state[state];
+              const net = cell && typeof cell === 'object' ? cell.net_usd : cell;
+              return (
+                <MonRow key={state} label={`Net P&L if ${state.replace(/_/g, ' ').toLowerCase()}`}
+                  value={usd(net)} tone={Number(net || 0) < 0 ? 'red' : 'green'}
+                  desc={cell && typeof cell === 'object' ? `pays ${usd(cell.payout_usd)} against ${usd(cell.cost_usd)} cost` : null} />
+              );
+            })}
+            <MonRow label="Worst case"
+              value={`${dir.worst_case_state || 'unknown'} · ${usd(dir.worst_case_net_usd)}`} tone="red" last />
+            {(() => {
+              // `positions` has had TWO shapes. The current API emits a FLAT
+              // leg list ({venue, side, quantity, cost_usd, binding, …}); the
+              // older build emits ARB-level rows ({arb_id, canonical_id,
+              // quantity, cost_usd, legs:[{platform, leg, …}]}) with no
+              // top-level venue/side and no leg_count. Reading the flat shape
+              // against the nested one renders "? · ? · …" on every row and
+              // halves the leg count (115 instead of 230). Normalise here so
+              // this panel is correct against either build and never depends
+              // on the frontend and api.py shipping in lockstep.
+              const raw = Array.isArray(dir.positions) ? dir.positions : [];
+              const legRows = raw.flatMap(p => (
+                p && p.venue
+                  ? [p]
+                  : ((p && p.legs) || []).map(l => ({
+                      venue: l.platform,
+                      side: l.leg,
+                      canonical_id: p.canonical_id,
+                      arb_id: p.arb_id,
+                      quantity: l.quantity,
+                      cost_usd: l.cost_usd,
+                      binding: l.binding,
+                      settlement_state: l.settlement_state,
+                    }))
+              ));
+              if (!legRows.length) return null;
+              const total = dir.leg_count == null ? legRows.length : dir.leg_count;
+              return (
+                <div style={{ marginTop: 12 }}>
+                  <div style={{ fontSize: 11, color: t.textMuted, marginBottom: 6 }}>
+                    {total} legs
+                  </div>
+                  <div style={{ fontSize: 11.5, color: t.textDim, fontFamily: window.FONTS.mono, maxHeight: 190, overflowY: 'auto' }}>
+                    {legRows.slice(0, 40).map((p, i) => (
+                      <div key={(p.arb_id || '') + ':' + (p.side || '') + ':' + i} style={{ padding: '2px 0', overflowWrap:'anywhere' }}>
+                        {p.venue || '?'} · {p.side || '?'} · {p.canonical_id || '?'} · qty {p.quantity == null ? '?' : p.quantity} · {usd(p.cost_usd)}
+                        {p.binding && p.binding !== 'verified' ? ` · ${String(p.binding).toUpperCase()}` : ''}
+                        {p.settlement_state ? ` · pays ${p.settlement_state}` : ''}
+                      </div>
+                    ))}
+                    {legRows.length > 40 ? <div>… {legRows.length - 40} more</div> : null}
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+        )}
+      </window.Card>
+      </div>
+    </div>
+  );
+}
+
+window.PageIncidents = PageIncidents;
+window.PageMonitors = PageMonitors;
 window.PageTrades = PageTrades;
 window.PagePnL = PagePnL;
 window.PageMarkets = PageMarkets;
@@ -4928,7 +5860,10 @@ function TradeDetailModal() {
     if (r.analysis_md) { setAnalysisMd(r.analysis_md); setAnalysisLoading(false); return; }
     let cancelled = false;
     setAnalysisLoading(true); setAnalysisError('');
-    fetch(`/api/executions/${encodeURIComponent(r.arb_id)}/analysis`)
+    const analysisPath = `/api/executions/${encodeURIComponent(r.arb_id)}/analysis`;
+    (window.__arbiterAuthFetch
+        ? window.__arbiterAuthFetch(analysisPath)
+        : fetch(analysisPath, { credentials: 'same-origin' }))
       .then(resp => resp.json().then(d => ({ ok: resp.ok, d })))
       .then(({ ok, d }) => {
         if (cancelled) return;
@@ -6549,6 +7484,8 @@ function MobileDashboard() {
       </div>
 
       <div data-mobile-scroll="true" style={{ position:'relative', zIndex: 1, flex: 1, overflow:'auto', padding: '4px 16px 0', paddingBottom: 'calc(96px + env(safe-area-inset-bottom, 0px))', WebkitOverflowScrolling:'touch' }}>
+        {/* Directional-book risk banner rides above every mobile tab too. */}
+        {window.DirectionalBanner ? <window.DirectionalBanner compact/> : null}
         {meSub === 'funds' && <MobFunds/>}
         {meSub === 'pnl' && <MobPnL/>}
         {meSub === 'health' && <MobHealth/>}
@@ -7785,6 +8722,10 @@ function MappingHistoryDrawer() {
   const [loading, setLoading] = mhUseState(true);
   const [error, setError] = mhUseState('');
   const [reopening, setReopening] = mhUseState(false);
+  const [togglingAuto, setTogglingAuto] = mhUseState(false);
+  const [yesConid, setYesConid] = mhUseState(String(raw.forecastex || raw.forecastex_contract_id || ''));
+  const [noConid, setNoConid] = mhUseState(String(raw.forecastex_no || raw.forecastex_no_contract_id || ''));
+  const [conidBusy, setConidBusy] = mhUseState('');
 
   mhUseEffect(() => {
     let cancelled = false;
@@ -7870,6 +8811,41 @@ function MappingHistoryDrawer() {
     if (window.__arbiterTick) { try { await window.__arbiterTick(); } catch (_) {} }
     toast('Mapping returned to review queue', { sub: canonicalId });
     closeDrawer();
+  };
+
+  // Auto-trade toggle. The backend only accepts enable_auto_trade when the
+  // mapping is confirmed AND resolution_match_status == 'identical'.
+  const toggleAutoTrade = async () => {
+    if (!window.__arbiterMappingAction) { toast('Mapping action API unavailable', { tone: 'error' }); return; }
+    const action = autoTrade ? 'disable_auto_trade' : 'enable_auto_trade';
+    setTogglingAuto(true);
+    const res = await window.__arbiterMappingAction(canonicalId, action, {
+      note: `${autoTrade ? 'Disabled' : 'Enabled'} auto-trade from operator desk`,
+    });
+    setTogglingAuto(false);
+    if (!res.ok) { toast('Auto-trade change failed', { sub: res.error, tone: 'error' }); return; }
+    if (window.__arbiterRefresh) { try { await window.__arbiterRefresh(); } catch (_) {} }
+    toast(`Auto-trade ${autoTrade ? 'disabled' : 'enabled'}`, { sub: canonicalId });
+  };
+
+  // ForecastEx contract ids. YES and NO have separate endpoints; sending an
+  // empty conid clears the side.
+  // Delegates to the shared helper so the drawer and the Mappings page cannot
+  // drift on validation (it rejects "0"/"None"/non-numeric before the call).
+  const saveConid = async (side, value) => {
+    if (!window.__arbiterSetForecastexConid) {
+      toast('ForecastEx conid API unavailable', { tone: 'error' });
+      return;
+    }
+    setConidBusy(side);
+    const res = await window.__arbiterSetForecastexConid(canonicalId, side, value);
+    setConidBusy('');
+    if (!res.ok) {
+      toast(`ForecastEx ${side.toUpperCase()} conid update failed`, { sub: res.error, tone: 'error' });
+      return;
+    }
+    if (window.__arbiterRefresh) { try { await window.__arbiterRefresh(); } catch (_) {} }
+    toast(`ForecastEx ${side.toUpperCase()} conid ${res.cleared ? 'cleared' : 'set'}`, { sub: canonicalId });
   };
 
   const statusTone =
@@ -7962,6 +8938,62 @@ function MappingHistoryDrawer() {
               </div>
             </div>
           )}
+        </div>
+
+        {/* Execution controls — auto-trade arming and ForecastEx contract ids */}
+        <div style={{ padding: '16px 24px', borderTop: `1px solid ${t.border}` }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: t.text, marginBottom: 10 }}>Execution controls</div>
+
+          <div style={{ display:'flex', alignItems:'center', gap: 12, marginBottom: 14 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 12, color: t.text }}>
+                Auto-trade{' '}
+                <span style={{ color: autoTrade ? t.green : t.textDim, fontWeight: 600 }}>{autoTrade ? 'enabled' : 'disabled'}</span>
+              </div>
+              <div style={{ fontSize: 11, color: t.textDim, marginTop: 2, lineHeight: 1.45 }}>
+                {autoTrade
+                  ? 'This mapping can fire live orders, subject to the edge, coherence and notional gates.'
+                  : (status === 'confirmed' && matchStatus === 'identical'
+                      ? 'Eligible to arm — mapping is confirmed with identical resolution criteria.'
+                      : 'Not eligible: the backend requires status=confirmed and resolution_match_status=identical.')}
+              </div>
+            </div>
+            <window.Btn size="sm" disabled={togglingAuto || (!autoTrade && !(status === 'confirmed' && matchStatus === 'identical'))}
+              variant={autoTrade ? 'secondary' : 'primary'}
+              hint={autoTrade ? 'Stop this mapping from firing live orders' : 'Allow this mapping to fire live orders'}
+              onClick={toggleAutoTrade}>
+              {togglingAuto ? 'Saving…' : (autoTrade ? 'Disable auto-trade' : 'Enable auto-trade')}
+            </window.Btn>
+          </div>
+
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 12 }}>
+            {[['yes', yesConid, setYesConid], ['no', noConid, setNoConid]].map(([side, val, setVal]) => (
+              <div key={side}>
+                <div style={{ fontSize: 11, color: t.textDim, marginBottom: 4 }}>ForecastEx {side.toUpperCase()} conid</div>
+                <div style={{ display:'flex', gap: 6 }}>
+                  <input value={val} onChange={e => setVal(e.target.value)} placeholder="e.g. 762089343" inputMode="numeric"
+                    style={{ flex: 1, minWidth: 0, background: t.bgCard, color: t.text, border: `1px solid ${t.border}`, borderRadius: 7, padding: '6px 9px', fontSize: 12, fontFamily: window.FONTS.mono }} />
+                  <window.Btn size="sm" variant="secondary" disabled={conidBusy === side} onClick={() => saveConid(side, val)}>
+                    {conidBusy === side ? '…' : 'Save'}
+                  </window.Btn>
+                  <window.Btn size="sm" variant="ghost" disabled={conidBusy === side || !val}
+                    hint={`Clear the ${side.toUpperCase()} contract id`}
+                    onClick={() => { setVal(''); saveConid(side, ''); }}>Clear</window.Btn>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={{ fontSize: 11, color: t.textDim, marginTop: 8, lineHeight: 1.45 }}>
+            A mapping needs BOTH a YES and a NO conid to publish a two-sided ForecastEx quote. With only one side it can never produce an edge.
+            {window.isValidConid && (yesConid || noConid) && !(window.isValidConid(yesConid) && window.isValidConid(noConid))
+              ? ' This mapping is currently one-sided.'
+              : ''}
+          </div>
+          {raw.forecastex_not_available ? (
+            <div style={{ marginTop: 10, padding: '9px 11px', borderRadius: 8, background: t.redSoft, color: t.red, fontSize: 11, lineHeight: 1.5 }}>
+              Flagged <span style={{ fontFamily: window.FONTS.mono }}>forecastex_not_available</span> — the resolver will not quote this mapping on ForecastEx even with a conid attached.
+            </div>
+          ) : null}
         </div>
 
         {/* Footer actions */}
@@ -8746,10 +9778,17 @@ window.PageOpportunities = PageOpportunitiesWithHistory;
       mappings: window.PageMappings,
       scanner: window.PageScanner,
       audit: window.PageAudit,
+      incidents: window.PageIncidents,
+      monitors: window.PageMonitors,
       deposits: window.PageDeposits,
       settings: window.PageSettings,
     };
     const tradableCount = (window.MOCK.opportunities || []).filter(o => o.status === 'tradable').length;
+    // Guarded like the other cross-block helpers: a failed script block must
+    // not take out the whole router.
+    const openIncidents = window.openIncidentCount
+      ? window.openIncidentCount(window.MOCK)
+      : (window.MOCK.errors || []).length;
     const confirmedMarketCount = window.marketRowsFromMappings
       ? window.marketRowsFromMappings(window.MOCK, 'confirmed').length
       : (window.MOCK.mappings || []).filter(r => (r.status || '').toLowerCase() === 'confirmed').length;
@@ -8762,6 +9801,8 @@ window.PageOpportunities = PageOpportunitiesWithHistory;
       mappings: ['Mappings', 'Cross-platform · review queue'],
       scanner: ['Scanner', `Real-time · ${(window.MOCK.health.scanner.scan_count || 0).toLocaleString()} scans`],
       audit: ['Audit & Readiness', `System integrity · ${window.MOCK.health.readiness.passing || 0}/${window.MOCK.health.readiness.gates || 7} gates`],
+      incidents: ['Incidents', `${openIncidents} unresolved`],
+      monitors: ['Monitors', 'Gateway · OAuth · funding · directional book'],
       deposits: ['Funds', 'Capital · 3 platforms connected'],
       settings: ['Settings', 'Configuration'],
     };
@@ -8773,6 +9814,8 @@ window.PageOpportunities = PageOpportunitiesWithHistory;
         <div style={{ flex: 1, display:'flex', flexDirection:'column', overflow:'hidden', minWidth: 0 }}>
           <window.TopBar title={title} sub={sub}/>
           <div ref={scrollRef} style={{ flex: 1, overflow:'auto' }}>
+            {/* Global risk surface: shown above every page, not buried in one. */}
+            {window.DirectionalBanner ? <window.DirectionalBanner/> : null}
             <Page/>
           </div>
         </div>
@@ -8997,7 +10040,7 @@ window.PageOpportunities = PageOpportunitiesWithHistory;
       'AppProvider', 'Sidebar', 'TopBar', 'LoginScreen',
       'PageOverview', 'PageOpportunities', 'PageTrades', 'PagePnL',
       'PageMarkets', 'PageMappings', 'PageScanner', 'PageAudit',
-      'PageDeposits', 'PageSettings',
+      'PageDeposits', 'PageSettings', 'PageIncidents', 'PageMonitors',
       'OppDrawer', 'MappingHistoryDrawer', 'Modal', 'ExtraModal', 'AgentValidateModal',
       'RefetchMappingsModal', 'CommandPalette', 'AlertsInbox', 'UserMenu',
       'ConfirmDialog', 'ToastHost', 'MobileDashboard',
