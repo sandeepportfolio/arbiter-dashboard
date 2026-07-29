@@ -348,7 +348,7 @@ def test_format_alert_shows_net_and_gross_edge():
     opp = _make_safe_opp(gross_edge=0.03, total_fees=0.012, net_edge_cents=3.0)
     msg = _format_arb_alert(opp)
     assert "3.0¢" in msg  # appears for both gross and net
-    assert "1.2¢ fees" in msg
+    assert "fees: 1.2¢" in msg
 
 
 def test_format_alert_handles_missing_bid_ask_gracefully():
@@ -387,7 +387,12 @@ def _make_monitor():
     return monitor
 
 
-def test_alert_opportunity_sends_when_safe():
+def test_alert_opportunity_queues_without_detection_telegram():
+    """A detection is not a trade. Auto-queueable opportunities must NOT
+    push a Telegram message — the only per-trade message the operator
+    receives is alert_execution_result with actual fills and PnL
+    (operator directive 2026-07-29: alert only on trades that hit the
+    edge and are genuinely profitable)."""
     async def runner():
         monitor = _make_monitor()
         opp = _make_safe_opp()
@@ -395,16 +400,13 @@ def test_alert_opportunity_sends_when_safe():
         return monitor.notifier.sent, monitor.opportunity_alerts
 
     sent, alerts = asyncio.run(runner())
-    assert len(sent) == 1
+    assert sent == []
     assert alerts[0]["state"] == "queued_for_execution"
     assert alerts[0]["execution_queue"] == "auto_executor"
     assert alerts[0]["expected_profit_usd"] > 0
-    msg = sent[0]
-    assert "Democrats" in msg
-    assert "U.S Senate Midterm Winner" not in msg.split("\n", 1)[0]
 
 
-def test_alert_opportunity_enqueues_only_after_successful_auto_alert():
+def test_alert_opportunity_enqueues_after_gate_pass():
     async def runner():
         monitor = _make_monitor()
         opp = _make_safe_opp()
@@ -416,14 +418,42 @@ def test_alert_opportunity_enqueues_only_after_successful_auto_alert():
     assert queued.canonical_id == "DEM_SENATE_2026"
 
 
-def test_manual_alert_does_not_enqueue_for_auto_executor():
+def test_auto_opportunity_queues_even_when_notifier_is_down():
+    """Telegram must never be a trading dependency: a notifier outage
+    (send raising) cannot block the approved-opportunity queue."""
+    async def runner():
+        monitor = _make_monitor()
+
+        class _ExplodingNotifier:
+            async def send(self, msg, dedup_key=None, bypass_burst=False):
+                raise RuntimeError("telegram down")
+
+        monitor.notifier = _ExplodingNotifier()
+        opp = _make_safe_opp()
+        await monitor.alert_opportunity(opp)
+        return monitor.approved_opportunity_queue.get_nowait()
+
+    queued = asyncio.run(runner())
+    assert queued.canonical_id == "DEM_SENATE_2026"
+
+
+def test_manual_alert_sends_telegram_but_does_not_enqueue():
+    """Manual opportunities keep the Telegram push — they are an
+    actionable request for the operator, not noise — and never reach
+    the auto-executor queue."""
     async def runner():
         monitor = _make_monitor()
         opp = _make_safe_opp(status="manual", requires_manual=True)
         await monitor.alert_opportunity(opp)
-        return monitor.opportunity_alerts, monitor.approved_opportunity_queue.empty()
+        return (
+            monitor.notifier.sent,
+            monitor.opportunity_alerts,
+            monitor.approved_opportunity_queue.empty(),
+        )
 
-    alerts, empty = asyncio.run(runner())
+    sent, alerts, empty = asyncio.run(runner())
+    assert len(sent) == 1
+    assert "Democrats" in sent[0]
     assert alerts[0]["state"] == "manual_workflow"
     assert alerts[0]["execution_queue"] == "manual"
     assert empty is True

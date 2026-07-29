@@ -706,12 +706,21 @@ class BalanceMonitor:
         logger.warning(f"Low balance alert sent: {platform} ${balance:.2f} < ${threshold:.2f}")
 
     async def alert_opportunity(self, opp: ArbitrageOpportunity):
-        """Send Telegram alert for a profitable arbitrage opportunity.
+        """Gate an opportunity and route it: auto-executable ones are queued
+        for execution SILENTLY, manual ones push a Telegram request.
 
-        Defense-in-depth: this re-validates the safety conditions the scanner
-        already checks, so a regression in scanner gating cannot cause us to
-        push misleading "ARBITRAGE FOUND" alerts to operators. Each suppression
-        path logs at WARNING so operators can see why an alert was skipped.
+        A detection is not a trade. Operator directive 2026-07-29: the only
+        per-trade Telegram message is ``alert_execution_result`` — actual
+        fills, actual PnL. Detection-time "ARBITRAGE FOUND" pushes fired for
+        every ≥3¢ candidate while the executor's own floor is 7¢, so most of
+        them never became trades (see the 2026-07-11..18 MLB alert noise).
+
+        The safety gate + cooldown are unchanged — they still decide what
+        reaches the auto-executor queue. What changed: the Telegram send is
+        no longer a *precondition* of queueing, so a notifier outage can
+        never block trading. Defense-in-depth: this re-validates the safety
+        conditions the scanner already checks; each suppression path logs at
+        WARNING so operators can audit why a candidate was dropped.
         """
         if not _alert_is_safe_to_send(opp):
             self._record_opportunity_alert(opp, state="suppressed", reason="alert_gate_rejected")
@@ -725,16 +734,30 @@ class BalanceMonitor:
             return
 
         self._last_alert_time[key] = now
-        msg = _format_arb_alert(opp)
-        sent = await self.notifier.send(msg, dedup_key=key)
-        if not sent:
-            self._record_opportunity_alert(opp, state="send_failed", reason="telegram_send_failed_or_deduped")
+        if opp.requires_manual or opp.status == "manual":
+            # Manual opportunities are an actionable operator request — the
+            # push IS the workflow, so it keeps the Telegram send.
+            msg = _format_arb_alert(opp)
+            try:
+                sent = await self.notifier.send(msg, dedup_key=key)
+            except Exception as exc:  # noqa: BLE001 — notifier must not raise into the loop
+                logger.warning("Manual-opportunity alert send raised: %s", exc)
+                sent = False
+            if not sent:
+                self._record_opportunity_alert(opp, state="send_failed", reason="telegram_send_failed_or_deduped")
+                return
+            self._record_opportunity_alert(
+                opp, state="manual_workflow", reason="manual_alert_sent", execution_queue="manual"
+            )
             return
-        state = "manual_workflow" if opp.requires_manual or opp.status == "manual" else "queued_for_execution"
-        queue = "manual" if state == "manual_workflow" else "auto_executor"
-        self._record_opportunity_alert(opp, state=state, reason="profitable_alert_sent", execution_queue=queue)
-        if state == "queued_for_execution":
-            self._approved_opportunities.put_nowait(opp)
+
+        self._record_opportunity_alert(
+            opp,
+            state="queued_for_execution",
+            reason="edge_gate_passed_queued_silently",
+            execution_queue="auto_executor",
+        )
+        self._approved_opportunities.put_nowait(opp)
 
     def _record_opportunity_alert(
         self,

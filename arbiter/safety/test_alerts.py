@@ -16,13 +16,13 @@ def test_kill_armed_template_html():
         cancelled_counts={"kalshi": 3, "polymarket": 2},
     )
     assert "KILL SWITCH ARMED" in message
-    assert "kalshi:3" in message
-    assert "polymarket:2" in message
+    assert "Kalshi: <code>3</code>" in message
+    assert "Polymarket: <code>2</code>" in message
 
 
 def test_kill_reset_template():
     message = SafetyAlertTemplates.kill_reset(by="operator:x", note="recovered")
-    assert "Kill switch RESET" in message
+    assert "KILL SWITCH RESET" in message
     assert "operator:x" in message
 
 
