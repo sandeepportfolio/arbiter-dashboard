@@ -52,6 +52,16 @@ class PriceStore:
     Thread-safe price store keyed by platform and canonical market.
     """
 
+    # Sweep cadence for the dead-market pruner below. At ~450 put()/s a
+    # sweep every 5000 puts is ~one pass per 11s over a few hundred keys —
+    # negligible — while dead keys survive at most minutes, not forever.
+    PRUNE_EVERY = 5000
+    # A market whose newest data is this stale is delisted/rolled — its
+    # last PricePoint and history deque are pure leak (2026-07-30 audit:
+    # every canonical_id ever quoted was pinned for process lifetime;
+    # discovery churns hundreds of short-lived candidates per day).
+    PRUNE_AFTER_S = 3600.0
+
     def __init__(self, redis_client=None, ttl: int = 10, history_limit: int = 240):
         self._mem: Dict[str, PricePoint] = {}
         self._redis = redis_client
@@ -60,11 +70,28 @@ class PriceStore:
         self._lock = asyncio.Lock()
         self._subscribers: List[asyncio.Queue] = []
         self._history: Dict[str, Deque[dict]] = defaultdict(lambda: deque(maxlen=self._history_limit))
+        self._prune_counter = 0
+
+    def _prune_dead_locked(self) -> None:
+        """Drop _mem/_history entries whose newest data is ancient. Caller
+        holds self._lock."""
+        cutoff = time.time() - self.PRUNE_AFTER_S
+        for key in [k for k, p in self._mem.items() if p.timestamp < cutoff]:
+            del self._mem[key]
+        for cid in [
+            c for c, dq in self._history.items()
+            if not dq or dq[-1].get("timestamp", 0) < cutoff
+        ]:
+            del self._history[cid]
 
     async def put(self, price: PricePoint) -> None:
         key = self._key(price.platform, price.canonical_id)
         async with self._lock:
             self._mem[key] = price
+            self._prune_counter += 1
+            if self._prune_counter >= self.PRUNE_EVERY:
+                self._prune_counter = 0
+                self._prune_dead_locked()
             self._history[price.canonical_id].append(
                 {
                     "timestamp": price.timestamp,

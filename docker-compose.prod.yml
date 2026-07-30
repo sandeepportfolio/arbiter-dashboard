@@ -155,6 +155,11 @@ services:
       # (overrides any localhost value accidentally left in .env.production).
       DATABASE_URL: postgresql://${PG_USER:-arbiter}:${PG_PASSWORD:-arbiter_secret}@arbiter-postgres-prod:5432/arbiter_live
       REDIS_URL: redis://arbiter-redis-prod:6379/0
+      # TEMPORARY (2026-07-30): heap tracing for the unresolved ~0.5-1GB/h
+      # leak. GET /api/debug/memory returns the top allocation sites; pull a
+      # snapshot when RSS is high (docker stats), then REMOVE this line —
+      # tracing costs ~5-10% CPU and some memory of its own.
+      PYTHONTRACEMALLOC: "1"
       # Use host-side Claude CLI verifier service (Max subscription, no API key needed)
       LLM_VERIFIER_BACKEND: http
       LLM_VERIFIER_HTTP_URL: http://host.docker.internal:8079/verify

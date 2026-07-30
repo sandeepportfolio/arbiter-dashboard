@@ -24,7 +24,8 @@ import logging
 import math
 import time
 from dataclasses import dataclass, field
-from typing import List, Optional
+from collections import deque
+from typing import Deque, List, Optional
 
 logger = logging.getLogger("arbiter.audit")
 
@@ -170,7 +171,10 @@ class MathAuditor:
         self._audit_count = 0
         self._flag_count = 0
         self._critical_count = 0
-        self._results: List[AuditResult] = []
+        # Bounded: only the last 10 are ever read (stats property), but this
+        # grew one entry per audited attempt for process lifetime (2026-07-30
+        # leak audit). Counters above carry the lifetime totals.
+        self._results: Deque[AuditResult] = deque(maxlen=1000)
 
     def audit_opportunity(self, opp_dict: dict) -> AuditResult:
         """
@@ -506,5 +510,5 @@ class MathAuditor:
                 round((self._audit_count - self._critical_count) / self._audit_count, 4)
                 if self._audit_count > 0 else 1.0
             ),
-            "recent_results": [r.to_dict() for r in self._results[-10:]],
+            "recent_results": [r.to_dict() for r in list(self._results)[-10:]],
         }

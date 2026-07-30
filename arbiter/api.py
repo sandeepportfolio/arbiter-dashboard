@@ -595,6 +595,7 @@ class ArbiterAPI:
         app.router.add_get("/api/safety/status", self.handle_safety_status)
         app.router.add_get("/api/safety/events", self.handle_safety_events)
         app.router.add_get("/api/metrics", self.handle_metrics)
+        app.router.add_get("/api/debug/memory", self.handle_debug_memory)
         app.router.add_get("/ws", self.handle_websocket)
 
         runner = web.AppRunner(app)
@@ -4668,6 +4669,70 @@ class ArbiterAPI:
             },
             "next_step": "Check Telegram for unwind instructions",
         })
+
+    async def handle_debug_memory(self, request):
+        """GET /api/debug/memory — live heap attribution for the leak hunt.
+
+        The process leaks ~0.5-1 GB/h to an unidentified site (2026-07-30:
+        static analysis found only secondary contributors); the cgroup cap
+        converts that into a restart every ~2.5 h. This endpoint turns the
+        next cycle into direct evidence: with PYTHONTRACEMALLOC set in the
+        environment it returns the top allocation sites by size, plus RSS
+        and the sizes of the known big in-process structures. Auth-gated
+        like every /api route; ~zero cost when tracemalloc is off.
+        """
+        await require_auth(request)
+        import tracemalloc
+
+        payload: Dict[str, Any] = {"tracemalloc_enabled": tracemalloc.is_tracing()}
+        try:
+            import resource
+
+            payload["max_rss_mb"] = round(
+                resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024 * 1024), 1
+            )
+        except Exception:  # pragma: no cover — platform-dependent
+            pass
+        structures: Dict[str, int] = {}
+        store = getattr(self, "store", None) or getattr(self.scanner, "store", None)
+        price_store = getattr(self.scanner, "price_store", None) or getattr(
+            self, "price_store", None
+        )
+        if price_store is not None:
+            structures["price_store_mem_keys"] = len(getattr(price_store, "_mem", {}))
+            structures["price_store_history_keys"] = len(
+                getattr(price_store, "_history", {})
+            )
+            structures["price_store_subscribers"] = len(
+                getattr(price_store, "_subscribers", [])
+            )
+        engine = self.engine
+        if engine is not None:
+            structures["engine_subscribers"] = len(getattr(engine, "_subscribers", []))
+            auditor = getattr(engine, "_auditor", None)
+            if auditor is not None:
+                structures["auditor_results"] = len(getattr(auditor, "_results", []))
+        payload["structures"] = structures
+        if tracemalloc.is_tracing():
+            snapshot = tracemalloc.take_snapshot()
+            top = snapshot.statistics("lineno")[:30]
+            payload["top_allocations"] = [
+                {
+                    "site": str(stat.traceback),
+                    "size_mb": round(stat.size / (1024 * 1024), 2),
+                    "count": stat.count,
+                }
+                for stat in top
+            ]
+            traced, peak = tracemalloc.get_traced_memory()
+            payload["traced_mb"] = round(traced / (1024 * 1024), 1)
+            payload["traced_peak_mb"] = round(peak / (1024 * 1024), 1)
+        else:
+            payload["hint"] = (
+                "set PYTHONTRACEMALLOC=1 in the container environment and "
+                "recreate to capture allocation sites"
+            )
+        return web.json_response(payload)
 
     async def handle_metrics(self, request):
         """Prometheus text-exposition metrics.
