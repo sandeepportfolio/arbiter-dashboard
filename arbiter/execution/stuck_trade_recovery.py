@@ -280,6 +280,11 @@ async def _persist_outcome(
     if store._pool is None:  # noqa: SLF001
         await store.connect()
     note_line = f"[{int(now_ts)}] {note}"
+    # Growth bounds (ARB-001362, 2026-07: a permanently-"recovering" arb had
+    # an identical no-change line appended every 300s for 12 days — 273KB in
+    # one row). Two guards: (a) when the previous line carries the SAME note
+    # body, don't append a duplicate — last_checked_at already proves the
+    # cycle ran; (b) hard-cap the column at 64KB keeping the newest tail.
     if new_status:
         sql = """
             UPDATE execution_arbs
@@ -291,7 +296,7 @@ async def _persist_outcome(
                                     ELSE closed_at END,
                    recovery_notes = CASE
                        WHEN COALESCE(recovery_notes,'') = '' THEN $3
-                       ELSE recovery_notes || E'\n' || $3
+                       ELSE right(recovery_notes || E'\n' || $3, 65536)
                    END
              WHERE arb_id = $1
         """
@@ -302,11 +307,13 @@ async def _persist_outcome(
                SET last_checked_at = NOW(),
                    recovery_notes = CASE
                        WHEN COALESCE(recovery_notes,'') = '' THEN $2
-                       ELSE recovery_notes || E'\n' || $2
+                       WHEN right(recovery_notes, length($3::text)) = $3::text
+                            THEN recovery_notes
+                       ELSE right(recovery_notes || E'\n' || $2, 65536)
                    END
              WHERE arb_id = $1
         """
-        params = (arb_id, note_line)
+        params = (arb_id, note_line, note)
     async with store._pool.acquire() as conn:  # noqa: SLF001
         await conn.execute(sql, *params)
 

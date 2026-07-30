@@ -1289,3 +1289,82 @@ async def test_fetch_forecastex_positions_parses_live_record_shape():
     assert out[0].market_id == "773659815"
     assert out[0].qty == 51.0
     assert "Democratic_YES" in out[0].title
+
+
+async def test_auto_close_cumulative_cap_blocks_refire_cascade():
+    """2026-07-12 incident: FOK closes that actually filled at the venue
+    were read back as zero-fill, so every cycle re-fired a full-size close
+    against the same 8-share strand — 26 orders, 138 shares, a 17x
+    over-hedge. Cumulative submitted qty per strand is now hard-capped at
+    STRANDED_CLOSE_MAX_CUM_MULT x the strand size (default 2x: one honest
+    full-size retry, never a cascade). At the cap the position flips to
+    manual review and an incident fires."""
+    engine = MagicMock()
+    engine._record_incident = AsyncMock()
+    adapter = MagicMock()
+    adapter.place_unwind_sell = AsyncMock(
+        return_value=SimpleNamespace(
+            order_id="ord-1", status=SimpleNamespace(value="canceled"),
+            fill_qty=0, fill_price=0,
+        )
+    )
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), engine=engine,
+        adapters={"kalshi": adapter}, auto_close=True,
+        max_auto_close_notional_usd=100.0,
+    )
+    rec._fetch_kalshi_positions = AsyncMock(return_value=[
+        _stub_pos(market_id="K-REFIRE", qty=8, cost_basis_usd=4.0,
+                  best_bid=0.55, best_ask=0.56),
+    ])
+    rec._fetch_polymarket_us_positions = AsyncMock(return_value=[])
+
+    for _ in range(5):
+        await rec.run_once()
+        rec._last_close_attempt_ts.clear()   # defeat the frequency cooldown
+        for pos in rec.tracked.values():     # simulate stale venue truth
+            pos.auto_close_attempted = False
+
+    # 2x cap on an 8-share strand => at most 16 shares ever submitted.
+    submitted = sum(
+        c.kwargs.get("qty", 0) for c in adapter.place_unwind_sell.call_args_list
+    )
+    assert submitted <= 16, f"cumulative cap breached: {submitted} shares submitted"
+    pos = rec.tracked[("kalshi", "K-REFIRE")]
+    assert "cumulative" in (pos.auto_close_result or "").lower()
+
+
+async def test_auto_close_persists_audit_trail_to_store():
+    """The 07-12 cascade left ZERO rows in execution_orders. Every
+    auto-close attempt now stubs the STRAND- arb (idempotent) and upserts
+    the returned order so the money trail is queryable."""
+    engine = MagicMock()
+    engine._record_incident = AsyncMock()
+    adapter = MagicMock()
+    order = SimpleNamespace(
+        order_id="ord-audit-1", status=SimpleNamespace(value="filled"),
+        fill_qty=8, fill_price=0.55,
+    )
+    adapter.place_unwind_sell = AsyncMock(return_value=order)
+    store = MagicMock()
+    store.record_arb_stub = AsyncMock()
+    store.upsert_order = AsyncMock()
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), engine=engine,
+        adapters={"kalshi": adapter}, auto_close=True,
+        max_auto_close_notional_usd=100.0, store=store,
+    )
+    rec._fetch_kalshi_positions = AsyncMock(return_value=[
+        _stub_pos(market_id="K-AUDIT", qty=8, cost_basis_usd=4.0,
+                  best_bid=0.55, best_ask=0.56),
+    ])
+    rec._fetch_polymarket_us_positions = AsyncMock(return_value=[])
+
+    await rec.run_once()
+
+    assert adapter.place_unwind_sell.await_count == 1
+    arb_id = rec._strand_arb_id("kalshi", "K-AUDIT")
+    store.record_arb_stub.assert_awaited_once()
+    assert store.record_arb_stub.await_args.args[0] == arb_id
+    store.upsert_order.assert_awaited_once()
+    assert store.upsert_order.await_args.kwargs.get("arb_id") == arb_id

@@ -230,6 +230,7 @@ class StrandedPositionReconciler:
         mitigation_engine: Optional[Any] = None,
         notifier: Optional[Any] = None,
         close_retry_window_seconds: float = 300.0,
+        max_cum_close_mult: float = 2.0,
         store: Optional[Any] = None,
     ) -> None:
         self._config = config
@@ -300,6 +301,18 @@ class StrandedPositionReconciler:
         # seconds`` since the last attempt, the gate re-opens.
         self._close_retry_window_s = max(60.0, float(close_retry_window_seconds))
         self._last_close_attempt_ts: Dict[tuple, float] = {}
+        # 2026-07-12 incident: FOK closes that FILLED at the venue were read
+        # back as zero-fill, so every cycle re-fired a full-size close against
+        # the same 8-share strand — 26 orders, 138 shares, 17x over-hedge.
+        # The frequency cooldown above bounds the RATE, not the VOLUME. Track
+        # cumulative submitted qty per strand and hard-stop at
+        # ``max_cum_close_mult`` x the largest observed strand size (default
+        # 2x: one honest full-size retry after a genuine non-fill, never a
+        # cascade). At the cap the position flips to manual review.
+        self._max_cum_close_mult = max(1.0, float(max_cum_close_mult))
+        self._cum_close_submitted: Dict[tuple, float] = {}
+        self._max_observed_qty: Dict[tuple, float] = {}
+        self._cap_incidents_emitted: set = set()
         # BUG #2: attempt-count tracker for alert suppression. Keyed by
         # (platform, market_id, rounded_price). After
         # ``_alert_suppress_after`` zero-fill attempts at the same price
@@ -424,6 +437,12 @@ class StrandedPositionReconciler:
                 continue
             if key not in observed:
                 del self._tracked[key]
+                # The strand is genuinely gone — reset its cumulative-close
+                # accounting so a future, unrelated strand on the same market
+                # starts with a fresh cap.
+                self._cum_close_submitted.pop(key, None)
+                self._max_observed_qty.pop(key, None)
+                self._cap_incidents_emitted.discard(key)
 
         # ── Paired-inventory netting (2026-07-10) ─────────────────────────
         # Net BOTH-legs-filled arb inventory out of every venue lot before
@@ -986,6 +1005,30 @@ class StrandedPositionReconciler:
 
     def _mark_close_attempt(self, key: tuple) -> None:
         self._last_close_attempt_ts[key] = time.time()
+
+    async def _persist_close_attempt(self, pos: StrandedPosition, order: Any) -> None:
+        """Write the auto-close order into execution_arbs/execution_orders.
+
+        The 2026-07-12 cascade left ZERO rows in execution_orders — 26 real
+        venue orders with no queryable money trail. Stub the STRAND- arb
+        (idempotent, satisfies the orders FK) then upsert the order. Best
+        effort: a DB hiccup must not block risk mitigation, but it is loudly
+        logged because a silent gap here is exactly the incident's shape.
+        """
+        store = self._store
+        if store is None or not hasattr(store, "upsert_order") \
+                or not hasattr(store, "record_arb_stub"):
+            return
+        arb_id = self._strand_arb_id(pos.platform, pos.market_id)
+        try:
+            await store.record_arb_stub(arb_id, pos.market_id)
+            await store.upsert_order(order, arb_id=arb_id)
+        except Exception as exc:  # noqa: BLE001 — mitigation > bookkeeping
+            logger.warning(
+                "stranded_reconciler.close_audit_persist_failed",
+                platform=pos.platform, market_id=pos.market_id,
+                arb_id=arb_id, err=str(exc),
+            )
 
     async def _notify_close(
         self, pos: StrandedPosition, action: str, fill_qty: float,
@@ -1650,16 +1693,78 @@ class StrandedPositionReconciler:
         # operator-side dedup) line up.
         adapter = self._adapters[pos.platform]
         key = (pos.platform, pos.market_id)
+        qty = int(abs(pos.qty))
+
+        # Cumulative-volume hard stop (2026-07-12 re-fire cascade). A strand
+        # only ever shrinks as closes fill, so total submitted close volume
+        # beyond mult x the largest size we ever saw means our read of the
+        # venue is wrong (e.g. invisible fills) — stop trading on it.
+        observed = abs(float(pos.qty or 0.0))
+        cap_base = max(self._max_observed_qty.get(key, 0.0), observed)
+        self._max_observed_qty[key] = cap_base
+        cum_cap = self._max_cum_close_mult * cap_base
+        submitted_so_far = self._cum_close_submitted.get(key, 0.0)
+        if submitted_so_far + qty > cum_cap + 1e-9:
+            pos.auto_close_attempted = True
+            self._mark_close_attempt(key)
+            pos.mitigation_action = "manual_review"
+            pos.auto_close_result = (
+                f"cumulative close cap reached: {submitted_so_far:.0f} shares "
+                f"already submitted vs {cap_base:.0f}-share strand "
+                f"(cap {cum_cap:.0f}) — venue truth suspect, manual review"
+            )
+            logger.warning(
+                "stranded_reconciler.cum_close_cap_reached",
+                platform=pos.platform, market_id=pos.market_id,
+                submitted=submitted_so_far, strand_qty=cap_base, cap=cum_cap,
+            )
+            engine = self._engine
+            if key not in self._cap_incidents_emitted and engine is not None \
+                    and hasattr(engine, "_record_incident"):
+                self._cap_incidents_emitted.add(key)
+
+                class _CapStubOpp:
+                    canonical_id = pos.market_id
+                    description = pos.title or pos.market_id
+
+                    def to_dict(self):
+                        return {
+                            "canonical_id": pos.market_id,
+                            "description": pos.title or pos.market_id,
+                        }
+
+                try:
+                    await engine._record_incident(
+                        self._strand_arb_id(pos.platform, pos.market_id),
+                        _CapStubOpp(),
+                        "warning",
+                        (
+                            f"Stranded auto-close volume cap hit on "
+                            f"{pos.platform}:{pos.market_id} — "
+                            f"{submitted_so_far:.0f} shares submitted against a "
+                            f"{cap_base:.0f}-share strand. Auto-close halted; "
+                            f"verify venue fills manually."
+                        ),
+                        metadata={"event_type": "stranded_close_cap"},
+                    )
+                except Exception as exc:  # noqa: BLE001 — incident is best-effort
+                    logger.warning(
+                        "stranded_reconciler.cap_incident_failed", err=str(exc),
+                    )
+            return
+
         try:
             order = await adapter.place_unwind_sell(
                 arb_id=self._strand_arb_id(pos.platform, pos.market_id),
                 market_id=pos.market_id,
                 canonical_id=pos.market_id,
                 side=pos.side.lower(),
-                qty=int(abs(pos.qty)),
+                qty=qty,
             )
             pos.auto_close_attempted = True
             self._mark_close_attempt(key)
+            self._cum_close_submitted[key] = submitted_so_far + qty
+            await self._persist_close_attempt(pos, order)
             fill = float(getattr(order, "fill_qty", 0) or 0)
             fill_px = float(getattr(order, "fill_price", 0) or 0)
             pos.mitigation_action = "closed" if fill > 0 else "close_market"
@@ -1741,6 +1846,12 @@ def reconciler_from_env(
         )
     except (TypeError, ValueError):
         close_retry_window = 300.0
+    try:
+        max_cum_close_mult = float(
+            os.getenv("STRANDED_CLOSE_MAX_CUM_MULT", "2.0") or "2.0"
+        )
+    except (TypeError, ValueError):
+        max_cum_close_mult = 2.0
     return StrandedPositionReconciler(
         config=config,
         adapters=adapters,
@@ -1757,4 +1868,5 @@ def reconciler_from_env(
         let_settle_window_seconds=let_settle_window,
         notifier=notifier,
         close_retry_window_seconds=close_retry_window,
+        max_cum_close_mult=max_cum_close_mult,
     )
