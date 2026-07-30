@@ -159,7 +159,7 @@ services:
       # leak. GET /api/debug/memory returns the top allocation sites; pull a
       # snapshot when RSS is high (docker stats), then REMOVE this line —
       # tracing costs ~5-10% CPU and some memory of its own.
-      PYTHONTRACEMALLOC: "1"
+      PYTHONTRACEMALLOC: "12"
       # Use host-side Claude CLI verifier service (Max subscription, no API key needed)
       LLM_VERIFIER_BACKEND: http
       LLM_VERIFIER_HTTP_URL: http://host.docker.internal:8079/verify

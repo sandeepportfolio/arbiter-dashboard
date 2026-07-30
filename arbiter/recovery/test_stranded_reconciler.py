@@ -1368,3 +1368,105 @@ async def test_auto_close_persists_audit_trail_to_store():
     assert store.record_arb_stub.await_args.args[0] == arb_id
     store.upsert_order.assert_awaited_once()
     assert store.upsert_order.await_args.kwargs.get("arb_id") == arb_id
+
+
+async def test_phantom_record_resolved_when_venue_flat():
+    """Operator directive 2026-07-30: displayed positions must track venue
+    truth continuously. An internal arb stuck non-terminal for >24h whose
+    filled legs show NO position at a venue that reported fresh truth this
+    cycle is a phantom record (the ARB-001362 class: stale row drove a
+    false violation for 12 days). It is auto-closed with an audit note and
+    a warning incident."""
+    engine = MagicMock()
+    engine._record_incident = AsyncMock()
+    store = MagicMock()
+    store.record_arb_stub = AsyncMock()
+    store.upsert_order = AsyncMock()
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), engine=engine, store=store,
+    )
+    rec._fetch_kalshi_positions = AsyncMock(return_value=[])
+    rec._fetch_polymarket_us_positions = AsyncMock(return_value=[])
+    rec._fetch_nonterminal_arbs = AsyncMock(return_value=[{
+        "arb_id": "ARB-PHANTOM1",
+        "canonical_id": "GAME_X",
+        "status": "recovering",
+        "age_seconds": 200000.0,
+        "legs": [
+            {"platform": "polymarket", "market_id": "pm-game-x", "fill_qty": 11},
+            {"platform": "kalshi", "market_id": "KX-GAME-X", "fill_qty": 0},
+        ],
+    }])
+    rec._close_phantom_record = AsyncMock()
+
+    await rec.run_once()
+
+    rec._close_phantom_record.assert_awaited_once()
+    assert rec._close_phantom_record.await_args.args[0]["arb_id"] == "ARB-PHANTOM1"
+
+
+async def test_phantom_sweep_skips_when_venue_truth_unavailable():
+    """A venue outage (fetch raised) or an unconfigured client must NEVER
+    lead to phantom-closing a record — absence of data is not absence of
+    a position."""
+    engine = MagicMock()
+    engine._record_incident = AsyncMock()
+    store = MagicMock()
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), engine=engine, store=store,
+    )
+    rec._fetch_kalshi_positions = AsyncMock(return_value=[])
+    rec._fetch_polymarket_us_positions = AsyncMock(side_effect=RuntimeError("venue down"))
+    rec._fetch_nonterminal_arbs = AsyncMock(return_value=[{
+        "arb_id": "ARB-PHANTOM2",
+        "canonical_id": "GAME_Y",
+        "status": "recovering",
+        "age_seconds": 200000.0,
+        "legs": [{"platform": "polymarket", "market_id": "pm-game-y", "fill_qty": 5}],
+    }])
+    rec._close_phantom_record = AsyncMock()
+
+    await rec.run_once()
+    rec._close_phantom_record.assert_not_awaited()
+
+    # ForecastEx: no client configured -> silent [] from the fetcher, which
+    # must count as NO truth, not venue-flat.
+    rec2 = StrandedPositionReconciler(
+        config=SimpleNamespace(), engine=engine, store=store,
+    )
+    rec2._fetch_kalshi_positions = AsyncMock(return_value=[])
+    rec2._fetch_polymarket_us_positions = AsyncMock(return_value=[])
+    rec2._fetch_nonterminal_arbs = AsyncMock(return_value=[{
+        "arb_id": "ARB-PHANTOM3",
+        "canonical_id": "FX_Z",
+        "status": "recovering",
+        "age_seconds": 200000.0,
+        "legs": [{"platform": "forecastex", "market_id": "123456", "fill_qty": 3}],
+    }])
+    rec2._close_phantom_record = AsyncMock()
+    await rec2.run_once()
+    rec2._close_phantom_record.assert_not_awaited()
+
+
+async def test_phantom_sweep_ignores_position_still_at_venue():
+    engine = MagicMock()
+    engine._record_incident = AsyncMock()
+    store = MagicMock()
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), engine=engine, store=store,
+    )
+    rec._fetch_kalshi_positions = AsyncMock(return_value=[
+        _stub_pos(market_id="KX-LIVE", qty=5),
+    ])
+    rec._fetch_polymarket_us_positions = AsyncMock(return_value=[])
+    rec._fetch_nonterminal_arbs = AsyncMock(return_value=[{
+        "arb_id": "ARB-REAL",
+        "canonical_id": "GAME_L",
+        "status": "recovering",
+        "age_seconds": 200000.0,
+        "legs": [{"platform": "kalshi", "market_id": "KX-LIVE", "fill_qty": 5}],
+    }])
+    rec._close_phantom_record = AsyncMock()
+
+    await rec.run_once()
+    rec._close_phantom_record.assert_not_awaited()

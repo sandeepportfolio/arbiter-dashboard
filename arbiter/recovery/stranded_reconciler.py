@@ -408,6 +408,11 @@ class StrandedPositionReconciler:
                 errors.append(err)
                 failed_platforms.add(platform)
 
+        # Raw venue truth BEFORE paired-inventory netting — the phantom
+        # sweep needs "does the venue hold ANY lot on this market", not the
+        # post-netting stranded view.
+        raw_venue_keys = set(observed.keys())
+
         now = time.time()
         # Merge with persistent tracker so first_seen_ts stays stable.
         new_keys: List[tuple] = []
@@ -626,6 +631,18 @@ class StrandedPositionReconciler:
         )
         self._last_snapshot = snapshot
         self._history.append(snapshot)
+
+        # Venue-truth sweep for PHANTOM internal records (operator directive
+        # 2026-07-30: displayed positions must continuously track venue
+        # truth). The strand tracker above covers venue-position-without-
+        # record; this covers record-without-venue-position — the
+        # ARB-001362 class, where a stale 'recovering' row drove a false
+        # violation and an append loop for 12 days.
+        try:
+            await self._sweep_phantom_records(raw_venue_keys, failed_platforms)
+        except Exception as exc:  # noqa: BLE001 — sweep must not kill the cycle
+            logger.warning("stranded_reconciler.phantom_sweep_failed", err=str(exc))
+
         logger.info(
             "stranded_reconciler.cycle_complete",
             cycle=self._cycle_count,
@@ -635,6 +652,124 @@ class StrandedPositionReconciler:
             duration_ms=round(duration_ms, 1),
         )
         return snapshot
+
+    # ─── phantom-record sweep ─────────────────────────────────────────────
+
+    # An internal arb must be non-terminal at least this long before the
+    # sweep may close it — young records legitimately race venue settlement.
+    PHANTOM_MIN_AGE_S = 86400.0
+    # Safety valve: at most this many auto-resolutions per cycle.
+    PHANTOM_MAX_PER_CYCLE = 3
+
+    async def _fetch_nonterminal_arbs(self) -> List[Dict[str, Any]]:
+        from ..execution.stuck_trade_recovery import list_stuck_arbs
+
+        return await list_stuck_arbs(
+            self._store, max_age_seconds=self.PHANTOM_MIN_AGE_S
+        )
+
+    async def _sweep_phantom_records(
+        self, raw_venue_keys: set, failed_platforms: set
+    ) -> None:
+        """Close internal non-terminal arbs whose filled legs have NO venue
+        position, when every involved venue reported authoritative truth
+        this cycle. Absence of data is never treated as absence of a
+        position: a platform counts as covered only if its fetch succeeded
+        AND its truth source is actually configured."""
+        if self._store is None:
+            return
+        covered = {"kalshi", "polymarket"} - failed_platforms
+        fx = self._forecastex_client
+        if (
+            fx is not None
+            and getattr(fx, "account_id", "")
+            and "forecastex" not in failed_platforms
+        ):
+            covered.add("forecastex")
+
+        try:
+            arbs = await self._fetch_nonterminal_arbs()
+        except Exception as exc:  # noqa: BLE001 — store may be a test double
+            logger.debug("stranded_reconciler.phantom_fetch_failed", err=str(exc))
+            return
+
+        resolved = 0
+        for arb in arbs:
+            legs = arb.get("legs") or []
+            filled = [
+                (str(leg.get("platform") or ""), str(leg.get("market_id") or ""))
+                for leg in legs
+                if float(leg.get("fill_qty") or 0) > 0
+            ]
+            if not filled:
+                continue
+            if any(p not in covered for p, _ in filled):
+                continue
+            if any((p, m) in raw_venue_keys for p, m in filled):
+                continue
+            await self._close_phantom_record(arb)
+            resolved += 1
+            if resolved >= self.PHANTOM_MAX_PER_CYCLE:
+                break
+
+    async def _close_phantom_record(self, arb: Dict[str, Any]) -> None:
+        """Terminal-close a phantom arb row with an audit note + incident."""
+        arb_id = str(arb.get("arb_id"))
+        note = (
+            "phantom_sweep: venue verified flat on every filled leg while the "
+            f"record sat '{arb.get('status')}' for "
+            f"{float(arb.get('age_seconds') or 0) / 3600.0:.0f}h — auto-closed "
+            "(record-vs-venue reconciliation, 2026-07-30 mechanism)"
+        )
+        if self._store is not None and getattr(self._store, "_pool", None) is not None:
+            async with self._store._pool.acquire() as conn:  # noqa: SLF001
+                await conn.execute(
+                    """
+                    UPDATE execution_arbs
+                       SET status = 'closed',
+                           closed_at = COALESCE(closed_at, NOW()),
+                           updated_at = NOW(),
+                           recovery_notes = right(
+                               COALESCE(recovery_notes, '') || E'\n[' ||
+                               extract(epoch from now())::bigint || '] ' || $2,
+                               65536
+                           )
+                     WHERE arb_id = $1
+                       AND status NOT IN
+                           ('filled','failed','simulated','cancelled','closed')
+                    """,
+                    arb_id,
+                    note,
+                )
+        logger.warning(
+            "stranded_reconciler.phantom_record_closed",
+            arb_id=arb_id, canonical_id=arb.get("canonical_id"), note=note,
+        )
+        engine = self._engine
+        if engine is not None and hasattr(engine, "_record_incident"):
+            canonical = str(arb.get("canonical_id") or arb_id)
+
+            class _PhantomStubOpp:
+                canonical_id = canonical
+                description = canonical
+
+                def to_dict(self):
+                    return {"canonical_id": canonical, "description": canonical}
+
+            try:
+                await engine._record_incident(
+                    arb_id,
+                    _PhantomStubOpp(),
+                    "warning",
+                    f"Phantom record auto-closed: {arb_id} ({canonical}) had no "
+                    "venue position on any filled leg. Internal state now "
+                    "matches venue truth.",
+                    metadata={"event_type": "phantom_record_closed"},
+                )
+            except Exception as exc:  # noqa: BLE001 — incident is best-effort
+                logger.warning(
+                    "stranded_reconciler.phantom_incident_failed", err=str(exc)
+                )
 
     # ─── paired-inventory helpers ─────────────────────────────────────────
 
