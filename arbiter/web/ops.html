@@ -8567,20 +8567,27 @@ function LoginScreen({ onSignIn }) {
         <div style={{ fontSize: 22, fontWeight: 600, color: t.text, letterSpacing:'-0.018em', marginBottom: 32 }}>{M.health.status === 'ok' ? 'Live status connected' : 'Waiting for live status'}</div>
 
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 12, marginBottom: 24 }}>
-          <StatusTile ok={M.health.status === 'ok'} label="Kalshi gateway" detail={M.balances.kalshi.timestamp ? `balance updated ${window.ago(M.balances.kalshi.timestamp)}` : 'awaiting public status'}/>
-          <StatusTile ok={M.health.status === 'ok'} label="Polymarket CLOB" detail={M.balances.polymarket.timestamp ? `balance updated ${window.ago(M.balances.polymarket.timestamp)}` : 'awaiting public status'}/>
-          <StatusTile ok={M.health.status === 'ok'} label="ForecastEx (IBKR)" detail={M.balances.forecastex.timestamp ? `balance updated ${window.ago(M.balances.forecastex.timestamp)}` : 'awaiting public status'}/>
+          <StatusTile ok={M.health.status === 'ok'} unknown={!M.health.status} label="Kalshi gateway" detail={M.balances.kalshi.timestamp ? `balance updated ${window.ago(M.balances.kalshi.timestamp)}` : 'sign in for live status'}/>
+          <StatusTile ok={M.health.status === 'ok'} unknown={!M.health.status} label="Polymarket CLOB" detail={M.balances.polymarket.timestamp ? `balance updated ${window.ago(M.balances.polymarket.timestamp)}` : 'sign in for live status'}/>
+          <StatusTile ok={M.health.status === 'ok'} unknown={!M.health.status} label="ForecastEx (IBKR)" detail={M.balances.forecastex.timestamp ? `balance updated ${window.ago(M.balances.forecastex.timestamp)}` : 'sign in for live status'}/>
           <StatusTile ok={!M.health.scanner.paused} label="Scanner cluster" detail={`${(M.health.scanner.scan_count || 0).toLocaleString()} scans · ${M.health.scanner.tradable_opportunities || 0} tradable`}/>
           <StatusTile ok={(M.health.reconciliation.flag_count || 0) === 0} label="Reconciliation" detail={`${M.health.reconciliation.flag_count || 0} outstanding flags`}/>
         </div>
 
         <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 12, padding: 22, marginBottom: 16 }}>
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom: 14 }}>
-            <div style={{ fontSize: 12, color: t.textDim, fontWeight: 500 }}>Last 24 hours</div>
+            {/* Honest labels (2026-07-30): this strip previously said
+                "Last 24 hours / Trades" while rendering LIFETIME
+                total_executions (623, spanning months) and the MAX of the
+                scanner history buffer — which permanently displays phantom
+                edge spikes the coherence gate rejected. The operator read
+                it as "623 trades came in today". Scans/executions are
+                since-boot counters; best edge is the CURRENT scan's. */}
+            <div style={{ fontSize: 12, color: t.textDim, fontWeight: 500 }}>Scanner — since boot</div>
             <div style={{ display:'flex', gap: 12, fontFamily: window.FONTS.mono, fontSize: 11.5 }}>
               <span style={{ color: t.textDim }}>Scans <span style={{ color: t.text, fontWeight: 600 }}>{(M.health.scanner.scan_count || 0).toLocaleString()}</span></span>
-              <span style={{ color: t.textDim }}>Trades <span style={{ color: t.text, fontWeight: 600 }}>{(M.health.execution.total_executions || 0).toLocaleString()}</span></span>
-              <span style={{ color: t.textDim }}>Best edge <span style={{ color: t.green, fontWeight: 600 }}>{(() => { const hist = M.health.scanner.history || []; const best = hist.length ? Math.max(...hist.map(h => Number(h.best_edge_cents || 0))) : 0; return best ? window.fmtC(best) : '—'; })()}</span></span>
+              <span style={{ color: t.textDim }}>Exec attempts <span style={{ color: t.text, fontWeight: 600 }}>{(M.health.execution.total_executions || 0).toLocaleString()}</span></span>
+              <span style={{ color: t.textDim }}>Best edge now <span style={{ color: t.green, fontWeight: 600 }}>{(() => { const hist = M.health.scanner.history || []; const last = hist.length ? Number(hist[hist.length - 1].best_edge_cents || 0) : 0; return last ? window.fmtC(last) : '—'; })()}</span></span>
             </div>
           </div>
           <div style={{ height: 100 }}>
@@ -8602,15 +8609,19 @@ function LoginScreen({ onSignIn }) {
   );
 }
 
-function StatusTile({ ok, label, detail }) {
+function StatusTile({ ok, label, detail, unknown }) {
+  // `unknown` = we have NO health data (typically: not signed in — every
+  // /api route is auth-gated). Rendering that as red "Degraded" told the
+  // operator all venues were down when the system was fully healthy
+  // (2026-07-30). Neutral gray + "sign in for live status" instead.
   const { t } = window.useApp();
   return (
     <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 10, padding: 16 }}>
       <div style={{ display:'flex', alignItems:'center', gap: 6, marginBottom: 6 }}>
-        <span style={{ width: 7, height: 7, borderRadius:'50%', background: ok ? t.green : t.red, animation: 'pulse 2s infinite' }}/>
+        <span style={{ width: 7, height: 7, borderRadius:'50%', background: unknown ? t.textMuted : (ok ? t.green : t.red), animation: 'pulse 2s infinite' }}/>
         <span style={{ fontSize: 11, color: t.textDim, fontWeight: 500 }}>{label}</span>
       </div>
-      <div style={{ fontSize: 13, fontWeight: 600, color: ok ? t.green : t.red, marginBottom: 2 }}>{ok ? 'Operational' : 'Degraded'}</div>
+      <div style={{ fontSize: 13, fontWeight: 600, color: unknown ? t.textDim : (ok ? t.green : t.red), marginBottom: 2 }}>{unknown ? 'Status unknown' : (ok ? 'Operational' : 'Degraded')}</div>
       <div style={{ fontSize: 10.5, color: t.textMuted, fontFamily: window.FONTS.mono }}>{detail}</div>
     </div>
   );
