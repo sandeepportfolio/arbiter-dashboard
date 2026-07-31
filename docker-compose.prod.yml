@@ -155,11 +155,15 @@ services:
       # (overrides any localhost value accidentally left in .env.production).
       DATABASE_URL: postgresql://${PG_USER:-arbiter}:${PG_PASSWORD:-arbiter_secret}@arbiter-postgres-prod:5432/arbiter_live
       REDIS_URL: redis://arbiter-redis-prod:6379/0
-      # TEMPORARY (2026-07-30): heap tracing for the unresolved ~0.5-1GB/h
-      # leak. GET /api/debug/memory returns the top allocation sites; pull a
-      # snapshot when RSS is high (docker stats), then REMOVE this line —
-      # tracing costs ~5-10% CPU and some memory of its own.
-      PYTHONTRACEMALLOC: "4"
+      # Heap tracing for the unresolved ~0.5-1GB/h leak is OFF by default:
+      # depth-4 tracing accelerated memory burn ~30x (OOM in ~5 min vs
+      # ~2.5h) — the leak is millions of SMALL retained objects (decoded
+      # JSON, json/decoder.py per the depth-1 snapshot: 634k live objects
+      # 7 min after boot), so per-allocation trace bookkeeping dominates.
+      # To hunt the holder: set PYTHONTRACEMALLOC=2, recreate, pull
+      # GET /api/debug/memory?deep=json/decoder.py at T+4min, then remove
+      # the var again. Do NOT leave tracing on unattended.
+      # PYTHONTRACEMALLOC: "2"
       # Use host-side Claude CLI verifier service (Max subscription, no API key needed)
       LLM_VERIFIER_BACKEND: http
       LLM_VERIFIER_HTTP_URL: http://host.docker.internal:8079/verify
