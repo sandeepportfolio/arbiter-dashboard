@@ -4714,27 +4714,45 @@ class ArbiterAPI:
                 structures["auditor_results"] = len(getattr(auditor, "_results", []))
         payload["structures"] = structures
         if tracemalloc.is_tracing():
-            snapshot = tracemalloc.take_snapshot()
-            top = snapshot.statistics("lineno")[:30]
-            payload["top_allocations"] = [
-                {
-                    "site": str(stat.traceback),
-                    "size_mb": round(stat.size / (1024 * 1024), 2),
-                    "count": stat.count,
-                }
-                for stat in top
-            ]
-            # Full call stacks for the biggest sites — the lineno view says
-            # WHERE the bytes were allocated (json/decoder.py), the traceback
-            # view says WHO is holding them. Needs PYTHONTRACEMALLOC > 1.
-            payload["top_tracebacks"] = [
-                {
-                    "size_mb": round(stat.size / (1024 * 1024), 2),
-                    "count": stat.count,
-                    "stack": [str(f) for f in stat.traceback.format()],
-                }
-                for stat in snapshot.statistics("traceback")[:5]
-            ]
+            # EVERYTHING below runs in a worker thread: computing statistics
+            # over a long-lived deep-frame trace set takes tens of seconds of
+            # pure CPU, and doing that on the event loop stalled healthchecks
+            # hard enough that docker restarted the container (2026-07-31).
+            deep_file = str(request.query.get("deep", "")).strip()
+
+            def _collect() -> Dict[str, Any]:
+                snapshot = tracemalloc.take_snapshot()
+                out: Dict[str, Any] = {}
+                out["top_allocations"] = [
+                    {
+                        "site": str(stat.traceback),
+                        "size_mb": round(stat.size / (1024 * 1024), 2),
+                        "count": stat.count,
+                    }
+                    for stat in snapshot.statistics("lineno")[:30]
+                ]
+                if deep_file:
+                    # Full call stacks, but only for allocations landing in
+                    # the named file (e.g. ?deep=json/decoder.py) — grouping
+                    # tracebacks over the ENTIRE trace set is what made the
+                    # unfiltered version pathologically slow.
+                    filtered = snapshot.filter_traces(
+                        (tracemalloc.Filter(True, f"*{deep_file}*"),)
+                    )
+                    out["deep_tracebacks"] = [
+                        {
+                            "size_mb": round(stat.size / (1024 * 1024), 2),
+                            "count": stat.count,
+                            "stack": [str(f) for f in stat.traceback.format()],
+                        }
+                        for stat in filtered.statistics("traceback")[:5]
+                    ]
+                traced, peak = tracemalloc.get_traced_memory()
+                out["traced_mb"] = round(traced / (1024 * 1024), 1)
+                out["traced_peak_mb"] = round(peak / (1024 * 1024), 1)
+                return out
+
+            payload.update(await asyncio.to_thread(_collect))
             traced, peak = tracemalloc.get_traced_memory()
             payload["traced_mb"] = round(traced / (1024 * 1024), 1)
             payload["traced_peak_mb"] = round(peak / (1024 * 1024), 1)
