@@ -8567,9 +8567,9 @@ function LoginScreen({ onSignIn }) {
         <div style={{ fontSize: 22, fontWeight: 600, color: t.text, letterSpacing:'-0.018em', marginBottom: 32 }}>{M.health.status === 'ok' ? 'Live status connected' : 'Waiting for live status'}</div>
 
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap: 12, marginBottom: 24 }}>
-          <StatusTile ok={M.health.status === 'ok'} unknown={!M.health.status} label="Kalshi gateway" detail={M.balances.kalshi.timestamp ? `balance updated ${window.ago(M.balances.kalshi.timestamp)}` : 'sign in for live status'}/>
-          <StatusTile ok={M.health.status === 'ok'} unknown={!M.health.status} label="Polymarket CLOB" detail={M.balances.polymarket.timestamp ? `balance updated ${window.ago(M.balances.polymarket.timestamp)}` : 'sign in for live status'}/>
-          <StatusTile ok={M.health.status === 'ok'} unknown={!M.health.status} label="ForecastEx (IBKR)" detail={M.balances.forecastex.timestamp ? `balance updated ${window.ago(M.balances.forecastex.timestamp)}` : 'sign in for live status'}/>
+          <StatusTile ok={M.health.status === 'ok'} unknown={!M.health.status || M.health.status === 'unknown'} label="Kalshi gateway" detail={M.balances.kalshi.timestamp ? `balance updated ${window.ago(M.balances.kalshi.timestamp)}` : 'sign in for live status'}/>
+          <StatusTile ok={M.health.status === 'ok'} unknown={!M.health.status || M.health.status === 'unknown'} label="Polymarket CLOB" detail={M.balances.polymarket.timestamp ? `balance updated ${window.ago(M.balances.polymarket.timestamp)}` : 'sign in for live status'}/>
+          <StatusTile ok={M.health.status === 'ok'} unknown={!M.health.status || M.health.status === 'unknown'} label="ForecastEx (IBKR)" detail={M.balances.forecastex.timestamp ? `balance updated ${window.ago(M.balances.forecastex.timestamp)}` : 'sign in for live status'}/>
           <StatusTile ok={!M.health.scanner.paused} label="Scanner cluster" detail={`${(M.health.scanner.scan_count || 0).toLocaleString()} scans · ${M.health.scanner.tradable_opportunities || 0} tradable`}/>
           <StatusTile ok={(M.health.reconciliation.flag_count || 0) === 0} label="Reconciliation" detail={`${M.health.reconciliation.flag_count || 0} outstanding flags`}/>
         </div>
