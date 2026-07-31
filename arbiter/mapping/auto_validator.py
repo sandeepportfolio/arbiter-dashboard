@@ -576,6 +576,176 @@ class MappingAutoValidator:
             logger.info("Auto-expired %d mappings", len(expired_ids))
         return expired_ids
 
+    _STREAK_RE = None  # compiled lazily in sweep_quarantine_releases
+
+    async def sweep_quarantine_releases(
+        self,
+        results: List["ValidationResult"],
+        llm_verify=None,
+    ) -> List[str]:
+        """Automated release of the ``[no-auto-promote]`` quarantine marker.
+
+        Operator directive 2026-07-31: mapping review must be a fully
+        automatic process with two independent LLM reviewers. The marker
+        exists because this validator once re-promoted the party-swapped
+        Senate mapping minutes after an operator demoted it — so release
+        is deliberately the HARDEST gate in the pipeline:
+
+          1. env-gated (QUARANTINE_AUTO_RELEASE_ENABLED, default off);
+          2. resolution_match_status must be 'identical';
+          3. >=2 live venues whose YES prices agree within the coherence
+             divergence gate (cheap checks first — no LLM spend otherwise);
+          4. the dual-reviewer LLM service must return consensus YES for
+             the venue-id pair (claude-opus-5 AND claude-sonnet-5 via the
+             verifier sidecar — either reviewer's NO vetoes);
+          5. all of the above sustained for QUARANTINE_RELEASE_CYCLES
+             consecutive validation cycles (default 3 = ~90 min), tracked
+             by a ``[quarantine-release-streak N/M]`` note tag that any
+             failed gate resets.
+
+        Release only strips the marker and leaves an audit tag — the
+        mapping then faces every normal promotion gate (score, polarity,
+        duplicate-canonical, divergence, LLM again, liquidity) before it
+        can trade. Returns the canonical_ids released this cycle.
+        """
+        import re as _re
+
+        if str(os.getenv("QUARANTINE_AUTO_RELEASE_ENABLED", "")).strip().lower() not in (
+            "1", "true", "yes", "on",
+        ):
+            return []
+        try:
+            needed = max(1, int(os.getenv("QUARANTINE_RELEASE_CYCLES", "3") or "3"))
+        except (TypeError, ValueError):
+            needed = 3
+        if llm_verify is None:
+            from . import llm_verifier as _lv
+
+            llm_verify = _lv.verify
+
+        streak_re = _re.compile(r"\[quarantine-release-streak (\d+)/\d+\]")
+        released: List[str] = []
+
+        for vr in results:
+            try:
+                mapping = await self.store.get(vr.canonical_id)
+            except Exception:  # noqa: BLE001 — one bad row must not stop the sweep
+                continue
+            if mapping is None:
+                continue
+            note = mapping.review_note or ""
+            held_note = f"{note} {mapping.notes or ''}"
+            if "[no-auto-promote]" not in held_note:
+                continue
+
+            def _strip_streak(text: str) -> str:
+                return streak_re.sub("", text).strip()
+
+            async def _reset(reason: str) -> None:
+                if streak_re.search(note):
+                    await self.store.update_status(
+                        vr.canonical_id,
+                        mapping.status,
+                        review_note=_strip_streak(note),
+                        allow_auto_trade=None,
+                    )
+                logger.info(
+                    "quarantine-release gate failed for %s: %s (streak reset)",
+                    vr.canonical_id, reason,
+                )
+
+            # Cheap gates first — never spend LLM calls on a pair that
+            # already fails structurally.
+            if str(mapping.resolution_match_status or "") != "identical":
+                # Non-identical resolution is a hard no: don't even track
+                # a streak, and don't touch the row.
+                continue
+
+            live_yes = {
+                name: check.yes_price
+                for name, check in vr.platforms.items()
+                if getattr(check, "is_open", False)
+                and getattr(check, "has_quotes", False)
+                and (check.yes_price or 0) > 0
+            }
+            if len(live_yes) < 2:
+                await _reset("fewer than 2 live quoting venues")
+                continue
+            divergence, _pair = coherence.max_yes_divergence(live_yes)
+            if divergence > coherence.DEFAULT_MAX_YES_DIVERGENCE:
+                await _reset(f"divergence {divergence:.4f} above gate")
+                continue
+
+            # Dual-reviewer LLM consensus on the venue-id pair. The ids
+            # carry the party/side tokens, so a party-swapped mapping
+            # presents mismatched ids and draws a NO.
+            kalshi_q = (
+                f"{mapping.description} — kalshi market id: "
+                f"{mapping.kalshi_market_id or 'n/a'}"
+            )
+            poly_q = (
+                f"polymarket market id: {mapping.polymarket_slug or 'n/a'}"
+                + (
+                    f" / forecastex contract: {mapping.forecastex_contract_id}"
+                    if getattr(mapping, "forecastex_contract_id", "")
+                    else ""
+                )
+            )
+            try:
+                verdict = await llm_verify(kalshi_q, poly_q)
+            except Exception as exc:  # noqa: BLE001 — fail closed
+                verdict = "MAYBE"
+                logger.warning(
+                    "quarantine-release LLM verify failed for %s: %s",
+                    vr.canonical_id, exc,
+                )
+            if verdict != "YES":
+                await _reset(f"dual-LLM verdict {verdict}")
+                continue
+
+            match = streak_re.search(note)
+            streak = int(match.group(1)) if match else 0
+            streak += 1
+            if streak < needed:
+                new_note = (
+                    f"{_strip_streak(note)} "
+                    f"[quarantine-release-streak {streak}/{needed}]"
+                ).strip()
+                await self.store.update_status(
+                    vr.canonical_id, mapping.status,
+                    review_note=new_note, allow_auto_trade=None,
+                )
+                logger.info(
+                    "quarantine-release streak %d/%d for %s "
+                    "(dual-LLM YES, divergence %.4f)",
+                    streak, needed, vr.canonical_id, divergence,
+                )
+                continue
+
+            stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            cleaned = _strip_streak(
+                note.replace("[no-auto-promote]", "")
+                .replace("[coherence-quarantine]", "")
+            ).strip()
+            new_note = (
+                f"{cleaned} [quarantine-released {stamp} "
+                f"dual-llm-yes divergence={divergence:.4f} "
+                f"streak={needed}]"
+            ).strip()
+            await self.store.update_status(
+                vr.canonical_id, mapping.status,
+                review_note=new_note, allow_auto_trade=None,
+            )
+            logger.warning(
+                "QUARANTINE RELEASED for %s after %d consecutive passing "
+                "cycles (dual-LLM YES, divergence %.4f) — normal promotion "
+                "gates now apply",
+                vr.canonical_id, needed, divergence,
+            )
+            released.append(vr.canonical_id)
+
+        return released
+
     async def auto_promote_validated(
         self,
         results: Optional[List[ValidationResult]] = None,
@@ -916,6 +1086,11 @@ class MappingAutoValidator:
         candidate_results = await self.validate_all(status="candidate")
         review_results = await self.validate_all(status="review")
 
+        # 3b. Quarantine auto-release: env-gated, dual-LLM + coherence +
+        # persistence. Runs BEFORE promotion so a mapping released this
+        # cycle can be adjudicated by the full gate chain the same cycle.
+        released_ids = await self.sweep_quarantine_releases(review_results)
+
         # 4. Auto-promote qualified
         promoted_ids = await self.auto_promote_validated(
             results=candidate_results + review_results,
@@ -936,6 +1111,8 @@ class MappingAutoValidator:
             "review_checked": len(review_results),
             "promoted": len(promoted_ids),
             "promoted_ids": promoted_ids[:20],
+            "quarantine_released": len(released_ids),
+            "quarantine_released_ids": released_ids[:20],
             "coherence_quarantined": len(quarantined_ids),
             "coherence_quarantined_ids": quarantined_ids[:20],
             "expired_ids": expired_ids[:20],

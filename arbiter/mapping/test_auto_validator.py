@@ -472,3 +472,128 @@ class TestSharedConidSweep:
         assert call.kwargs.get("allow_auto_trade") is False
         assert "[no-auto-promote]" in call.kwargs.get("review_note", "")
         assert "745923952" in call.kwargs.get("review_note", "")
+
+
+class TestQuarantineAutoRelease:
+    """Automated release of the [no-auto-promote] quarantine (operator
+    directive 2026-07-31: review must be a fully automatic process with two
+    LLM reviewers). Release only clears the MARKER — every promotion gate
+    still runs afterwards — and requires dual-LLM YES + identical
+    resolution + coherent live prices sustained for N consecutive cycles."""
+
+    @pytest.fixture
+    def mock_store(self):
+        store = AsyncMock()
+        store.get = AsyncMock()
+        store.update_status = AsyncMock()
+        store.refresh_runtime_cache = AsyncMock()
+        return store
+
+    @pytest.fixture
+    def validator(self, mock_store):
+        return MappingAutoValidator(mapping_store=mock_store)
+
+    def _held_mapping(self, note="[no-auto-promote] coherence quarantine", **kw):
+        return _make_mapping(
+            canonical_id="HELD_Q", status=MappingStatus.REVIEW,
+            resolution_match_status="identical",
+            review_note=note, **kw,
+        )
+
+    def _coherent_result(self):
+        return _promotable_result("HELD_Q", [
+            _live_check("kalshi", "K1", yes_price=0.44),
+            _live_check("polymarket", "P1", yes_price=0.45),
+        ])
+
+    @pytest.mark.asyncio
+    async def test_disabled_by_default(self, validator, mock_store, monkeypatch):
+        monkeypatch.delenv("QUARANTINE_AUTO_RELEASE_ENABLED", raising=False)
+        mock_store.get.return_value = self._held_mapping()
+        llm = AsyncMock(return_value="YES")
+        released = await validator.sweep_quarantine_releases(
+            [self._coherent_result()], llm_verify=llm,
+        )
+        assert released == []
+        llm.assert_not_awaited()
+        mock_store.update_status.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_first_pass_bumps_streak_keeps_marker(
+        self, validator, mock_store, monkeypatch,
+    ):
+        monkeypatch.setenv("QUARANTINE_AUTO_RELEASE_ENABLED", "true")
+        monkeypatch.setenv("QUARANTINE_RELEASE_CYCLES", "3")
+        mock_store.get.return_value = self._held_mapping()
+        released = await validator.sweep_quarantine_releases(
+            [self._coherent_result()], llm_verify=AsyncMock(return_value="YES"),
+        )
+        assert released == []
+        note = mock_store.update_status.await_args.kwargs["review_note"]
+        assert "[no-auto-promote]" in note
+        assert "[quarantine-release-streak 1/3]" in note
+
+    @pytest.mark.asyncio
+    async def test_final_pass_releases_marker(
+        self, validator, mock_store, monkeypatch,
+    ):
+        monkeypatch.setenv("QUARANTINE_AUTO_RELEASE_ENABLED", "true")
+        monkeypatch.setenv("QUARANTINE_RELEASE_CYCLES", "3")
+        mock_store.get.return_value = self._held_mapping(
+            note="[no-auto-promote] coherence quarantine "
+                 "[quarantine-release-streak 2/3]",
+        )
+        released = await validator.sweep_quarantine_releases(
+            [self._coherent_result()], llm_verify=AsyncMock(return_value="YES"),
+        )
+        assert released == ["HELD_Q"]
+        note = mock_store.update_status.await_args.kwargs["review_note"]
+        assert "[no-auto-promote]" not in note
+        assert "[quarantine-release-streak" not in note
+        assert "[quarantine-released" in note
+
+    @pytest.mark.asyncio
+    async def test_llm_no_resets_streak(self, validator, mock_store, monkeypatch):
+        monkeypatch.setenv("QUARANTINE_AUTO_RELEASE_ENABLED", "true")
+        mock_store.get.return_value = self._held_mapping(
+            note="[no-auto-promote] q [quarantine-release-streak 2/3]",
+        )
+        released = await validator.sweep_quarantine_releases(
+            [self._coherent_result()], llm_verify=AsyncMock(return_value="NO"),
+        )
+        assert released == []
+        note = mock_store.update_status.await_args.kwargs["review_note"]
+        assert "[no-auto-promote]" in note
+        assert "[quarantine-release-streak" not in note
+
+    @pytest.mark.asyncio
+    async def test_incoherent_prices_reset_streak(
+        self, validator, mock_store, monkeypatch,
+    ):
+        monkeypatch.setenv("QUARANTINE_AUTO_RELEASE_ENABLED", "true")
+        mock_store.get.return_value = self._held_mapping(
+            note="[no-auto-promote] q [quarantine-release-streak 1/3]",
+        )
+        wide = _promotable_result("HELD_Q", [
+            _live_check("kalshi", "K1", yes_price=0.20),
+            _live_check("polymarket", "P1", yes_price=0.80),
+        ])
+        llm = AsyncMock(return_value="YES")
+        released = await validator.sweep_quarantine_releases([wide], llm_verify=llm)
+        assert released == []
+        llm.assert_not_awaited()  # cheap gates run before spending LLM calls
+        note = mock_store.update_status.await_args.kwargs["review_note"]
+        assert "[quarantine-release-streak" not in note
+
+    @pytest.mark.asyncio
+    async def test_non_identical_resolution_never_releases(
+        self, validator, mock_store, monkeypatch,
+    ):
+        monkeypatch.setenv("QUARANTINE_AUTO_RELEASE_ENABLED", "true")
+        mock_store.get.return_value = self._held_mapping()
+        mock_store.get.return_value.resolution_match_status = "pending_operator_review"
+        released = await validator.sweep_quarantine_releases(
+            [self._coherent_result()], llm_verify=AsyncMock(return_value="YES"),
+        )
+        assert released == []
+        mock_store.update_status.assert_not_awaited()
