@@ -11,8 +11,10 @@ Usage:
 Endpoint:
     POST /verify
     Body: {"kalshi_question": "...", "poly_question": "..."}
-    Response: {"result": "YES|NO|MAYBE", "raw": "..."}
+    Response: {"result": "YES|NO|MAYBE", "raw": "...", "reviews": {model: verdict}}
 """
+from __future__ import annotations
+
 import argparse
 import asyncio
 import json
@@ -85,8 +87,26 @@ _ANSWER_RE = re.compile(r"\b(YES|NO|MAYBE)\b", re.IGNORECASE)
 _ANSWER_START_RE = re.compile(r"^(YES|NO|MAYBE)", re.IGNORECASE)
 
 _CACHE: dict[frozenset, str] = {}
-_MODEL = "claude-opus-4-7"
+# Two INDEPENDENT reviewers (operator directive 2026-07-31): every verdict
+# that can gate auto-trading is answered by both models separately, and the
+# consensus fails closed — YES only when BOTH say YES, NO when either says
+# NO, MAYBE otherwise. Different model families catch different failure
+# modes (the July party-swap mis-mapping is exactly the class a single
+# reviewer waved through).
+_MODELS = ["claude-opus-5", "claude-sonnet-5"]
 _CLAUDE_PATH = None
+# Cache namespace: verdicts from the single-reviewer era must not satisfy
+# dual-review lookups, so the persistent key carries the reviewer roster.
+_CACHE_VERSION = "v2"
+
+
+def _consensus(answers: list[str]) -> str:
+    """Fail-closed combination of independent reviewer verdicts."""
+    if any(a == "NO" for a in answers):
+        return "NO"
+    if answers and all(a == "YES" for a in answers):
+        return "YES"
+    return "MAYBE"
 
 # Persistent on-disk cache so a restart doesn't burn LLM calls re-checking
 # pairs we've already verified. Path overridable via env var.
@@ -98,7 +118,10 @@ _DIRTY_COUNT = 0
 
 
 def _persistent_key(a: str, b: str) -> str:
-    return "|".join(sorted([(a or "").strip(), (b or "").strip()]))
+    roster = ",".join(_MODELS)
+    return f"{_CACHE_VERSION}|{roster}|" + "|".join(
+        sorted([(a or "").strip(), (b or "").strip()])
+    )
 
 
 def _load_persistent_cache():
@@ -127,7 +150,12 @@ def _find_claude():
     found = shutil.which("claude")
     if found:
         return found
-    for p in [os.path.expanduser("~/.local/bin/claude"), "/usr/local/bin/claude"]:
+    for p in [
+        os.path.expanduser("~/.bun/bin/claude"),
+        os.path.expanduser("~/.local/bin/claude"),
+        "/usr/local/bin/claude",
+        "/opt/homebrew/bin/claude",
+    ]:
         if os.path.isfile(p) and os.access(p, os.X_OK):
             return p
     return None
@@ -172,15 +200,46 @@ def _parse_batch_answers(text: str, expected_count: int) -> list[str]:
     return results
 
 
-def _verify_sync(kalshi_q: str, poly_q: str, category: str | None = None) -> tuple[str, str]:
+def _ask_model(model: str, prompt: str, timeout: int = 180) -> tuple[str, str]:
+    """One reviewer's verdict. Any failure is MAYBE (fail closed)."""
+    try:
+        result = subprocess.run(
+            [_CLAUDE_PATH, "--print", "--model", model, "--max-turns", "1"],
+            input=prompt,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        raw = result.stdout.strip()
+        if result.returncode != 0:
+            logger.warning("CLI error (%s): %s", model, result.stderr[:200])
+            return "MAYBE", result.stderr[:200]
+        return _parse_answer(raw), raw
+    except Exception as e:
+        logger.warning("Error (%s): %s", model, e)
+        return "MAYBE", str(e)
+
+
+def _ask_all_models(prompt: str, timeout: int = 180) -> dict[str, tuple[str, str]]:
+    """Run every reviewer concurrently; returns {model: (answer, raw)}."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=len(_MODELS)) as pool:
+        futures = {m: pool.submit(_ask_model, m, prompt, timeout) for m in _MODELS}
+        return {m: f.result() for m, f in futures.items()}
+
+
+def _verify_sync(
+    kalshi_q: str, poly_q: str, category: str | None = None
+) -> tuple[str, str, dict[str, str]]:
     global _DIRTY_COUNT
     pk = _persistent_key(kalshi_q, poly_q)
     if pk in _PERSISTENT:
-        return _PERSISTENT[pk], "(persistent cached)"
+        return _PERSISTENT[pk], "(persistent cached)", {}
 
     cache_key = frozenset({kalshi_q, poly_q})
     if cache_key in _CACHE:
-        return _CACHE[cache_key], "(in-mem cached)"
+        return _CACHE[cache_key], "(in-mem cached)", {}
 
     hint = _CATEGORY_HINTS.get((category or "").strip().lower(), "")
     user_body = (
@@ -191,29 +250,21 @@ def _verify_sync(kalshi_q: str, poly_q: str, category: str | None = None) -> tup
     )
     user_block = f"{hint}\n\n{user_body}" if hint else user_body
     prompt = f"{_SYSTEM_PROMPT}\n\n{user_block}"
-    try:
-        result = subprocess.run(
-            [_CLAUDE_PATH, "--print", "--model", _MODEL, "--max-turns", "1"],
-            input=prompt,
-            capture_output=True,
-            text=True,
-            timeout=180,
-        )
-        raw = result.stdout.strip()
-        if result.returncode != 0:
-            logger.warning("CLI error: %s", result.stderr[:200])
-            return "MAYBE", result.stderr[:200]
-        answer = _parse_answer(raw)
-        _CACHE[cache_key] = answer
-        _PERSISTENT[pk] = answer
-        _DIRTY_COUNT += 1
-        # Persist every 25 writes so we don't thrash the disk.
-        if _DIRTY_COUNT % 25 == 0:
-            _persist_cache(dict(_PERSISTENT))
-        return answer, raw
-    except Exception as e:
-        logger.warning("Error: %s", e)
-        return "MAYBE", str(e)
+
+    reviews = _ask_all_models(prompt)
+    answers = {m: a for m, (a, _raw) in reviews.items()}
+    answer = _consensus(list(answers.values()))
+    if len(set(answers.values())) > 1:
+        logger.info("Reviewer disagreement %s -> %s: %s", answers, answer, kalshi_q[:60])
+    raw = " | ".join(f"{m}: {a}" for m, a in answers.items())
+
+    _CACHE[cache_key] = answer
+    _PERSISTENT[pk] = answer
+    _DIRTY_COUNT += 1
+    # Persist every 25 writes so we don't thrash the disk.
+    if _DIRTY_COUNT % 25 == 0:
+        _persist_cache(dict(_PERSISTENT))
+    return answer, raw, answers
 
 
 def _verify_batch_sync(pairs: list[tuple[str, str]], category: str | None = None) -> tuple[list[str], str]:
@@ -248,29 +299,25 @@ def _verify_batch_sync(pairs: list[tuple[str, str]], category: str | None = None
             user_block = f"{hint}\n\n{user_block}"
         prompt = f"{_SYSTEM_PROMPT}\n\n{user_block}"
         try:
-            result = subprocess.run(
-                [_CLAUDE_PATH, "--print", "--model", _MODEL, "--max-turns", "1"],
-                input=prompt,
-                capture_output=True,
-                text=True,
-                timeout=240,
-            )
-            raw = result.stdout.strip()
-            if result.returncode != 0:
-                logger.warning("batch CLI error: %s", result.stderr[:200])
-                raw = result.stderr[:200]
-                batch_answers = ["MAYBE"] * len(missing)
-            else:
-                batch_answers = _parse_batch_answers(raw, len(missing))
-            for local_idx, answer in enumerate(batch_answers):
+            # Each reviewer grades the whole batch independently; per-index
+            # consensus fails closed exactly like the single-pair path.
+            reviews = _ask_all_models(prompt, timeout=240)
+            per_model: dict[str, list[str]] = {}
+            for model, (_answer, raw_text) in reviews.items():
+                per_model[model] = _parse_batch_answers(raw_text, len(missing))
+            for local_idx in range(len(missing)):
                 result_idx, kalshi_q, poly_q, pk = missing[local_idx]
-                answer = answer if answer in ("YES", "NO", "MAYBE") else "MAYBE"
+                votes = [per_model[m][local_idx] for m in per_model]
+                answer = _consensus(votes)
                 results[result_idx] = answer
                 _CACHE[frozenset({kalshi_q, poly_q})] = answer
                 _PERSISTENT[pk] = answer
                 _DIRTY_COUNT += 1
             if _DIRTY_COUNT:
                 _persist_cache(dict(_PERSISTENT))
+            raw = " | ".join(
+                f"{m}: {','.join(v)}" for m, v in per_model.items()
+            )
             return [r or "MAYBE" for r in results], raw[:500]
         except Exception as exc:
             logger.warning("Batch error: %s", exc)
@@ -339,10 +386,10 @@ class VerifyHandler(BaseHTTPRequestHandler):
             return
 
         logger.info("Verifying [%s]: %s vs %s", category or "-", kalshi_q[:50], poly_q[:50])
-        result, raw = _verify_sync(kalshi_q, poly_q, category=category)
-        logger.info("Result: %s", result)
+        result, raw, reviews = _verify_sync(kalshi_q, poly_q, category=category)
+        logger.info("Result: %s (%s)", result, raw[:120])
 
-        response = json.dumps({"result": result, "raw": raw[:200]})
+        response = json.dumps({"result": result, "raw": raw[:200], "reviews": reviews})
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
@@ -351,8 +398,13 @@ class VerifyHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
             self.send_response(200)
+            self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(b'{"status":"ok"}')
+            self.wfile.write(json.dumps({
+                "status": "ok",
+                "reviewers": _MODELS,
+                "cache_entries": len(_PERSISTENT),
+            }).encode())
         else:
             self.send_response(404)
             self.end_headers()
@@ -362,14 +414,22 @@ class VerifyHandler(BaseHTTPRequestHandler):
 
 
 def main():
-    global _MODEL, _CLAUDE_PATH, _PERSISTENT
+    global _MODELS, _CLAUDE_PATH, _PERSISTENT
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8079)
-    parser.add_argument("--model", default="claude-opus-4-7")
+    parser.add_argument(
+        "--models",
+        default="claude-opus-5,claude-sonnet-5",
+        help="Comma-separated reviewer roster; every verdict is the "
+        "fail-closed consensus of ALL listed models.",
+    )
+    # Back-compat: the old single-model flag becomes a one-model roster.
+    parser.add_argument("--model", default=None, help=argparse.SUPPRESS)
     args = parser.parse_args()
 
-    _MODEL = args.model
+    roster = args.model if args.model else args.models
+    _MODELS = [m.strip() for m in roster.split(",") if m.strip()]
     _CLAUDE_PATH = _find_claude()
     if not _CLAUDE_PATH:
         print("ERROR: claude CLI not found")
@@ -378,7 +438,7 @@ def main():
     _PERSISTENT = _load_persistent_cache()
 
     print(f"LLM Verifier Service starting on port {args.port}")
-    print(f"Using model: {_MODEL}")
+    print(f"Reviewers ({len(_MODELS)}): {', '.join(_MODELS)}")
     print(f"Claude CLI: {_CLAUDE_PATH}")
     print(f"Persistent cache: {_PERSIST_PATH} ({len(_PERSISTENT)} entries loaded)")
 

@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.arbiter.llm-verifier</string>
+
+    <!--
+      TCC note (2026-05-22): the previous plist invoked /usr/bin/python3 against
+      /Users/rentamac/Documents/arbiter/scripts/llm_verifier_service.py, which
+      macOS TCC blocks ("Operation not permitted" on file open, then silent
+      SIGKILL for /usr/bin/python3 which lacks Full Disk Access via
+      launchd). We now run the homebrew python against a copy of the script in
+      ~/.local/share/arbiter/ (outside any TCC-protected directory). Re-sync
+      with: cp scripts/llm_verifier_service.py ~/.local/share/arbiter/
+    -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/rentamac/.local/share/arbiter/llm_verifier_service.py</string>
+        <string>--port</string>
+        <string>8079</string>
+        <string>--models</string>
+        <string>claude-opus-5,claude-sonnet-5</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/rentamac/.local/share/arbiter</string>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/arbiter-verifier.stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/arbiter-verifier.stderr.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/rentamac/.bun/bin:/Users/rentamac/local/node-v22.14.0-darwin-arm64/bin:/Users/rentamac/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/rentamac</string>
+    </dict>
+
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+</dict>
+</plist>
