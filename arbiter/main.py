@@ -1708,6 +1708,7 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
                 kalshi_collector=kalshi,
                 polymarket_collector=polymarket,
                 forecastex_client=fx_client,
+                price_store=price_store,
             )
 
             auto_discovery = MappingAutoDiscovery(

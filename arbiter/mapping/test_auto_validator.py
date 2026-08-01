@@ -597,3 +597,90 @@ class TestQuarantineAutoRelease:
         )
         assert released == []
         mock_store.update_status.assert_not_awaited()
+
+
+class TestQuarantineReleaseUsesPriceStore:
+    """The validator's platform checks probe PUBLIC venue APIs; PM-US
+    markets only quote on the authenticated gateway, so the checks can
+    report one live venue while the price store carries fresh two-sided
+    quotes (the exact quotes the scanner trades on). The release sweep
+    must prefer price-store truth and fall back to platform checks."""
+
+    @pytest.fixture
+    def mock_store(self):
+        store = AsyncMock()
+        store.get = AsyncMock()
+        store.update_status = AsyncMock()
+        return store
+
+    @pytest.mark.asyncio
+    async def test_price_store_quotes_satisfy_liveness_gate(
+        self, mock_store, monkeypatch,
+    ):
+        monkeypatch.setenv("QUARANTINE_AUTO_RELEASE_ENABLED", "true")
+        monkeypatch.setenv("QUARANTINE_RELEASE_CYCLES", "3")
+
+        class _PP:
+            def __init__(self, yes, age):
+                self.yes_price = yes
+                self.age_seconds = age
+
+        class _PriceStore:
+            async def get_all_for_market(self, canonical_id):
+                return {
+                    "kalshi": _PP(0.44, 5.0),
+                    "polymarket": _PP(0.45, 8.0),
+                }
+
+        validator = MappingAutoValidator(
+            mapping_store=mock_store, price_store=_PriceStore(),
+        )
+        mock_store.get.return_value = _make_mapping(
+            canonical_id="HELD_PS", status=MappingStatus.REVIEW,
+            resolution_match_status="identical",
+            review_note="[no-auto-promote] q",
+        )
+        # Platform checks see only ONE live venue (public-API blind spot).
+        vr = _promotable_result("HELD_PS", [
+            _live_check("kalshi", "K1", yes_price=0.44),
+        ])
+        released = await validator.sweep_quarantine_releases(
+            [vr], llm_verify=AsyncMock(return_value="YES"),
+        )
+        assert released == []  # first pass: streak 1/3, not released
+        note = mock_store.update_status.await_args.kwargs["review_note"]
+        assert "[quarantine-release-streak 1/3]" in note
+
+    @pytest.mark.asyncio
+    async def test_stale_price_store_quotes_do_not_count(
+        self, mock_store, monkeypatch,
+    ):
+        monkeypatch.setenv("QUARANTINE_AUTO_RELEASE_ENABLED", "true")
+
+        class _PP:
+            def __init__(self, yes, age):
+                self.yes_price = yes
+                self.age_seconds = age
+
+        class _PriceStore:
+            async def get_all_for_market(self, canonical_id):
+                return {
+                    "kalshi": _PP(0.44, 5.0),
+                    "polymarket": _PP(0.45, 900.0),  # 15 min stale
+                }
+
+        validator = MappingAutoValidator(
+            mapping_store=mock_store, price_store=_PriceStore(),
+        )
+        mock_store.get.return_value = _make_mapping(
+            canonical_id="HELD_ST", status=MappingStatus.REVIEW,
+            resolution_match_status="identical",
+            review_note="[no-auto-promote] q",
+        )
+        vr = _promotable_result("HELD_ST", [
+            _live_check("kalshi", "K1", yes_price=0.44),
+        ])
+        llm = AsyncMock(return_value="YES")
+        released = await validator.sweep_quarantine_releases([vr], llm_verify=llm)
+        assert released == []
+        llm.assert_not_awaited()

@@ -118,11 +118,17 @@ class MappingAutoValidator:
         kalshi_collector=None,
         polymarket_collector=None,
         forecastex_client=None,
+        price_store=None,
     ):
         self.store = mapping_store
         self.kalshi = kalshi_collector
         self.polymarket = polymarket_collector
         self.forecastex = forecastex_client
+        # Live-quote truth for the quarantine-release sweep: platform
+        # checks probe PUBLIC venue APIs and miss PM-US markets that only
+        # quote on the authenticated gateway; the price store carries the
+        # quotes the scanner actually trades on.
+        self.price_store = price_store
         self._last_run: Optional[datetime] = None
         self._stats = {
             "total_validated": 0,
@@ -661,13 +667,31 @@ class MappingAutoValidator:
                 # a streak, and don't touch the row.
                 continue
 
-            live_yes = {
-                name: check.yes_price
-                for name, check in vr.platforms.items()
-                if getattr(check, "is_open", False)
-                and getattr(check, "has_quotes", False)
-                and (check.yes_price or 0) > 0
-            }
+            live_yes: Dict[str, float] = {}
+            if self.price_store is not None:
+                try:
+                    quotes = await self.price_store.get_all_for_market(
+                        vr.canonical_id
+                    ) or {}
+                    live_yes = {
+                        plat: float(pp.yes_price)
+                        for plat, pp in quotes.items()
+                        if (getattr(pp, "yes_price", 0) or 0) > 0
+                        and float(getattr(pp, "age_seconds", 1e9)) <= 120.0
+                    }
+                except Exception as exc:  # noqa: BLE001 — fall back below
+                    logger.debug(
+                        "quarantine-release price_store read failed for %s: %s",
+                        vr.canonical_id, exc,
+                    )
+            if len(live_yes) < 2:
+                live_yes = {
+                    name: check.yes_price
+                    for name, check in vr.platforms.items()
+                    if getattr(check, "is_open", False)
+                    and getattr(check, "has_quotes", False)
+                    and (check.yes_price or 0) > 0
+                }
             if len(live_yes) < 2:
                 await _reset("fewer than 2 live quoting venues")
                 continue
