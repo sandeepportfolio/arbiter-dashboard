@@ -707,6 +707,38 @@ class ExecutionStore:
 
     # ─── Top-level arb persistence ───────────────────────────────────────────
 
+    async def realized_pnl_split(self) -> Dict[str, float]:
+        """Split arb P&L into settled cash vs booked-but-open edge.
+
+        Operator report 2026-08-01: the headline P&L counted the booked
+        edge of OPEN both-leg arbs (status='filled', pending settlement —
+        at-risk whenever the hedge is mislabeled, as with the party-swapped
+        Senate book) and ignored unwind_pnl (real cash from unwinding
+        naked legs). Settled cash = realized + unwind over terminal
+        statuses; booked_open_edge = realized carried by non-settled arbs.
+        """
+        if self._pool is None:
+            await self.connect()
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT
+                  COALESCE(SUM(realized_pnl + unwind_pnl) FILTER (
+                    WHERE status IN
+                      ('closed','failed','simulated','cancelled')
+                  ), 0) AS realized_terminal,
+                  COALESCE(SUM(realized_pnl + unwind_pnl) FILTER (
+                    WHERE status NOT IN
+                      ('closed','failed','simulated','cancelled')
+                  ), 0) AS booked_open_edge
+                  FROM execution_arbs
+                """
+            )
+        return {
+            "realized_terminal": round(float(row["realized_terminal"]), 2),
+            "booked_open_edge": round(float(row["booked_open_edge"]), 2),
+        }
+
     async def record_arb_stub(
         self,
         arb_id: str,

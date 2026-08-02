@@ -632,6 +632,21 @@ class MappingAutoValidator:
         streak_re = _re.compile(r"\[quarantine-release-streak (\d+)/\d+\]")
         released: List[str] = []
 
+        # Duplicate-canonical pre-check: a held mapping whose Kalshi market
+        # or Polymarket slug is already owned by a confirmed mapping can
+        # NEVER be promoted — releasing it just ping-pongs with the
+        # promotion gate (release → refuse → re-quarantine, observed
+        # 2026-08-01 on GOP_HOUSE_2026 at critical log level every cycle).
+        owner_counts: Dict[str, int] = {}
+        _ogetter = getattr(self.store, "market_owner_counts", None)
+        if callable(_ogetter):
+            try:
+                owner_counts = dict(await _ogetter() or {})
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(
+                    "quarantine-release owner_counts failed: %s", exc,
+                )
+
         for vr in results:
             try:
                 mapping = await self.store.get(vr.canonical_id)
@@ -665,6 +680,21 @@ class MappingAutoValidator:
             if str(mapping.resolution_match_status or "") != "identical":
                 # Non-identical resolution is a hard no: don't even track
                 # a streak, and don't touch the row.
+                continue
+
+            if owner_counts and coherence.shared_market_owner_conflict(
+                getattr(mapping, "kalshi_market_id", ""),
+                getattr(mapping, "polymarket_slug", ""),
+                owner_counts,
+            ):
+                # A confirmed mapping already owns this market — this row is
+                # a duplicate and can never promote. Never release it, and
+                # drop any streak so it stops cycling.
+                if streak_re.search(note):
+                    await self.store.update_status(
+                        vr.canonical_id, mapping.status,
+                        review_note=_strip_streak(note), allow_auto_trade=None,
+                    )
                 continue
 
             live_yes: Dict[str, float] = {}

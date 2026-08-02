@@ -3339,10 +3339,26 @@ class ArbiterAPI:
         ledger_trading_pnl = round(
             sum(float(v or 0.0) for v in recorded_pnl.values()), 2
         )
-        if recorded_pnl:
-            net_trading_pnl = ledger_trading_pnl
-        else:
-            net_trading_pnl = net_balance_change
+        # Settled-cash split from the execution store: the reconciler ledger
+        # counts booked edge on OPEN both-leg arbs (unrealized, at risk when
+        # a hedge is mislabeled) and misses unwind_pnl. Prefer the settled
+        # number for the headline and surface the open edge separately.
+        booked_open_edge = None
+        pnl_method = "ledger" if recorded_pnl else "balance"
+        split_fn = getattr(self.execution_store, "realized_pnl_split", None)
+        if callable(split_fn):
+            try:
+                split = await split_fn()
+                net_trading_pnl = split["realized_terminal"]
+                booked_open_edge = split["booked_open_edge"]
+                pnl_method = "settled_ledger"
+            except Exception as exc:  # noqa: BLE001 — fall back to ledger
+                logger.warning("pnl settled-split unavailable: %s", exc)
+        if pnl_method != "settled_ledger":
+            if recorded_pnl:
+                net_trading_pnl = ledger_trading_pnl
+            else:
+                net_trading_pnl = net_balance_change
 
         return web.json_response({
             "current_balances": {k: round(v, 2) for k, v in balances.items()},
@@ -3370,7 +3386,8 @@ class ArbiterAPI:
             "net_trading_pnl": net_trading_pnl,
             "ledger_trading_pnl": ledger_trading_pnl,
             "pnl_excludes_deposits": True,
-            "pnl_method": "ledger" if recorded_pnl else "balance",
+            "pnl_method": pnl_method,
+            "booked_open_edge": booked_open_edge,
             "deposit_count": recon_stats.get("deposit_count", 0),
             # New: deployed capital context
             "deployed_capital": round(deployed_capital, 2),

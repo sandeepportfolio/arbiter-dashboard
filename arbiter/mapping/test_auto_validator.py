@@ -684,3 +684,37 @@ class TestQuarantineReleaseUsesPriceStore:
         released = await validator.sweep_quarantine_releases([vr], llm_verify=llm)
         assert released == []
         llm.assert_not_awaited()
+
+
+class TestQuarantineReleaseDuplicateGuard:
+    @pytest.mark.asyncio
+    async def test_duplicate_owned_market_never_releases(self, monkeypatch):
+        """2026-08-01 flap: a held duplicate whose Kalshi market is owned by
+        a confirmed mapping was released on consensus, refused by the
+        promotion gate, re-quarantined, and released again ~90min later —
+        forever, at critical log level. The sweep must consult ownership
+        BEFORE releasing and drop any accumulated streak."""
+        monkeypatch.setenv("QUARANTINE_AUTO_RELEASE_ENABLED", "true")
+        store = AsyncMock()
+        store.get = AsyncMock(return_value=_make_mapping(
+            canonical_id="DUP_HELD", status=MappingStatus.REVIEW,
+            kalshi_market_id="CONTROLH-2026-R",
+            resolution_match_status="identical",
+            review_note="[no-auto-promote] q [quarantine-release-streak 2/3]",
+        ))
+        store.update_status = AsyncMock()
+        store.market_owner_counts = AsyncMock(return_value={
+            "kalshi:CONTROLH-2026-R": 1,
+        })
+        validator = MappingAutoValidator(mapping_store=store)
+        vr = _promotable_result("DUP_HELD", [
+            _live_check("kalshi", "CONTROLH-2026-R", yes_price=0.44),
+            _live_check("polymarket", "P1", yes_price=0.45),
+        ])
+        llm = AsyncMock(return_value="YES")
+        released = await validator.sweep_quarantine_releases([vr], llm_verify=llm)
+        assert released == []
+        llm.assert_not_awaited()
+        note = store.update_status.await_args.kwargs["review_note"]
+        assert "[no-auto-promote]" in note
+        assert "[quarantine-release-streak" not in note

@@ -2057,3 +2057,66 @@ def test_drift_guard_active_reflects_reconciler_attachment():
         assert json.loads(resp_on.text)["drift_guard_active"] is True
 
     asyncio.run(_run())
+
+
+def test_pnl_summary_headline_is_realized_only_when_store_split_available():
+    """Operator report 2026-08-01: the headline showed +$122.39 while true
+    cash-settled P&L was ~+$100.25. Root cause: the ledger sum counted the
+    booked edge of OPEN both-leg arbs (status='filled', +$11.25 pending
+    settlement — at-risk when the hedge is mislabeled) and ignored
+    unwind_pnl entirely (−$10.90 of real unwind losses). With an execution
+    store wired, the headline must be the settled-cash number and the open
+    booked edge must be surfaced separately."""
+    async def _run():
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from arbiter.audit.pnl_reconciler import PnLReconciler
+
+        api = await _make_rate_limit_api()
+        reconciler = PnLReconciler(log_to_disk=False)
+        reconciler.set_starting_balance("kalshi", 1000.0)
+        reconciler.record_execution_pnl("kalshi", 122.39)  # inflated ledger
+        api.reconciler = reconciler
+        api.monitor.current_balances = {
+            "kalshi": SimpleNamespace(balance=1100.0),
+        }
+        api.execution_store = SimpleNamespace(
+            realized_pnl_split=AsyncMock(return_value={
+                "realized_terminal": 100.25,
+                "booked_open_edge": 11.25,
+            })
+        )
+
+        response = await api.handle_pnl_summary(None)
+        payload = json.loads(response.text)
+
+        assert payload["net_trading_pnl"] == 100.25
+        assert payload["booked_open_edge"] == 11.25
+        assert payload["pnl_method"] == "settled_ledger"
+
+    asyncio.run(_run())
+
+
+def test_pnl_summary_falls_back_to_reconciler_ledger_without_store():
+    async def _run():
+        from types import SimpleNamespace
+
+        from arbiter.audit.pnl_reconciler import PnLReconciler
+
+        api = await _make_rate_limit_api()
+        reconciler = PnLReconciler(log_to_disk=False)
+        reconciler.set_starting_balance("kalshi", 1000.0)
+        reconciler.record_execution_pnl("kalshi", 10.0)
+        api.reconciler = reconciler
+        api.execution_store = None
+        api.monitor.current_balances = {
+            "kalshi": SimpleNamespace(balance=1010.0),
+        }
+
+        response = await api.handle_pnl_summary(None)
+        payload = json.loads(response.text)
+        assert payload["net_trading_pnl"] == 10.0
+        assert payload["pnl_method"] == "ledger"
+
+    asyncio.run(_run())
