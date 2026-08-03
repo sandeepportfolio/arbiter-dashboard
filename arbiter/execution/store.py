@@ -719,15 +719,28 @@ class ExecutionStore:
         """
         if self._pool is None:
             await self.connect()
+        # Two write paths with inconsistent semantics (2026-08-03 review):
+        # the ENGINE records unwinds into BOTH realized_pnl and unwind_pnl
+        # (realized already includes the unwind), while the resolver's
+        # mark_naked_leg_reconciled sets unwind_pnl alone (realized stays
+        # 0). Summing the columns double-counted every engine-recorded
+        # unwind. CASE picks realized when populated, else unwind — each
+        # dollar counted exactly once on either path.
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
                 SELECT
-                  COALESCE(SUM(realized_pnl + unwind_pnl) FILTER (
+                  COALESCE(SUM(
+                    CASE WHEN realized_pnl <> 0 THEN realized_pnl
+                         ELSE unwind_pnl END
+                  ) FILTER (
                     WHERE status IN
                       ('closed','failed','simulated','cancelled')
                   ), 0) AS realized_terminal,
-                  COALESCE(SUM(realized_pnl + unwind_pnl) FILTER (
+                  COALESCE(SUM(
+                    CASE WHEN realized_pnl <> 0 THEN realized_pnl
+                         ELSE unwind_pnl END
+                  ) FILTER (
                     WHERE status NOT IN
                       ('closed','failed','simulated','cancelled')
                   ), 0) AS booked_open_edge

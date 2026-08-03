@@ -1383,7 +1383,11 @@ async def test_phantom_record_resolved_when_venue_flat():
     store.record_arb_stub = AsyncMock()
     store.upsert_order = AsyncMock()
     rec = StrandedPositionReconciler(
-        config=SimpleNamespace(), engine=engine, store=store,
+        config=SimpleNamespace(
+            kalshi=SimpleNamespace(api_key_id="k", private_key_path="/k.pem"),
+            polymarket=SimpleNamespace(api_key_id="p", api_secret="s"),
+        ),
+        engine=engine, store=store,
     )
     rec._fetch_kalshi_positions = AsyncMock(return_value=[])
     rec._fetch_polymarket_us_positions = AsyncMock(return_value=[])
@@ -1470,3 +1474,61 @@ async def test_phantom_sweep_ignores_position_still_at_venue():
 
     await rec.run_once()
     rec._close_phantom_record.assert_not_awaited()
+
+
+async def test_phantom_sweep_unconfigured_venue_is_not_covered():
+    """2026-08-03 review: fetchers return [] silently when credentials are
+    absent — that must read as NO TRUTH, never as venue-flat."""
+    engine = MagicMock()
+    engine._record_incident = AsyncMock()
+    store = MagicMock()
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(),  # no kalshi/polymarket credentials
+        engine=engine, store=store,
+    )
+    rec._fetch_kalshi_positions = AsyncMock(return_value=[])
+    rec._fetch_polymarket_us_positions = AsyncMock(return_value=[])
+    rec._fetch_nonterminal_arbs = AsyncMock(return_value=[{
+        "arb_id": "ARB-PHANTOM-UNCFG", "canonical_id": "GAME_Z",
+        "status": "recovering", "age_seconds": 200000.0,
+        "legs": [{"platform": "kalshi", "market_id": "KX-Z", "fill_qty": 5}],
+    }])
+    rec._close_phantom_record = AsyncMock()
+    await rec.run_once()
+    rec._close_phantom_record.assert_not_awaited()
+
+
+async def test_engine_path_close_now_respects_cumulative_cap():
+    """2026-08-03 critical: the MitigationEngine executors bypassed the
+    cumulative cap and audit persist entirely — the production path was
+    unprotected against the 2026-07-12 re-fire cascade."""
+    engine = MagicMock()
+    engine._record_incident = AsyncMock()
+    adapter = MagicMock()
+    adapter.place_unwind_sell = AsyncMock(
+        return_value=SimpleNamespace(
+            order_id="o1", status=SimpleNamespace(value="filled"),
+            fill_qty=8, fill_price=0.5,
+        )
+    )
+    store = MagicMock()
+    store.record_arb_stub = AsyncMock()
+    store.upsert_order = AsyncMock()
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(), engine=engine,
+        adapters={"kalshi": adapter}, store=store,
+    )
+    pos = _stub_pos(market_id="K-ENG", qty=8)
+    key = ("kalshi", "K-ENG")
+    # First engine-path close: allowed, accounted, persisted.
+    await rec._execute_close_now(pos, {"rationale": "t"})
+    assert adapter.place_unwind_sell.await_count == 1
+    assert rec._cum_close_submitted[key] == 8
+    store.upsert_order.assert_awaited_once()
+    # Cap is 2x strand (16): next full-size close hits 16 — allowed;
+    # the one after must be blocked.
+    await rec._execute_close_now(pos, {"rationale": "t"})
+    assert adapter.place_unwind_sell.await_count == 2
+    await rec._execute_close_now(pos, {"rationale": "t"})
+    assert adapter.place_unwind_sell.await_count == 2  # blocked
+    assert "cumulative close cap" in (pos.auto_close_result or "")

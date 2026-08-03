@@ -730,6 +730,32 @@ class MappingAutoValidator:
                 await _reset(f"divergence {divergence:.4f} above gate")
                 continue
 
+            # Party-identity gate (review finding 2026-08-03): a canonical
+            # carrying a party token with an FX leg must prove the FX
+            # contract symbol names the SAME party — the sweep previously
+            # relied on the LLM alone for the exact failure class the
+            # party_conflict check was built for. Fail closed on a missing
+            # symbol, exactly like the promotion gate.
+            canonical_text = " ".join(
+                [vr.canonical_id, getattr(mapping, "description", "") or ""]
+                + [str(a) for a in (getattr(mapping, "aliases", ()) or ())]
+            )
+            if coherence.canonical_party(canonical_text) and getattr(
+                mapping, "forecastex_contract_id", ""
+            ):
+                fx_check = vr.platforms.get("forecastex")
+                symbol = getattr(fx_check, "contract_symbol", "") or ""
+                if not symbol:
+                    await _reset(
+                        "party-tokened canonical with FX leg but no contract "
+                        "symbol — cannot prove party match"
+                    )
+                    continue
+                conflict = coherence.party_conflict(canonical_text, symbol)
+                if conflict:
+                    await _reset(f"party conflict: {conflict}")
+                    continue
+
             # Dual-reviewer LLM consensus on the venue-id pair. The ids
             # carry the party/side tokens, so a party-swapped mapping
             # presents mismatched ids and draws a NO.

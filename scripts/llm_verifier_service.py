@@ -285,9 +285,14 @@ def _verify_batch_sync(pairs: list[tuple[str, str]], category: str | None = None
 
     if missing:
         hint = _CATEGORY_HINTS.get((category or "").strip().lower(), "")
+        # Number pairs with LOCAL indices 0..len(missing)-1 — the parser
+        # maps returned {"index": i} into a len(missing)-sized array, so
+        # numbering with ORIGINAL request indices misassigned verdicts
+        # whenever any pair ahead of them was cache-served (found by the
+        # 2026-08-02 adversarial review: wrong-pair YES poisoning).
         numbered = "\n".join(
-            f"{idx}. Q1 (Kalshi): {kalshi_q}\n   Q2 (Polymarket): {poly_q}"
-            for idx, kalshi_q, poly_q, _ in missing
+            f"{local_idx}. Q1 (Kalshi): {kalshi_q}\n   Q2 (Polymarket): {poly_q}"
+            for local_idx, (_orig, kalshi_q, poly_q, _pk) in enumerate(missing)
         )
         user_block = (
             "For each indexed pair, decide whether the two markets resolve "

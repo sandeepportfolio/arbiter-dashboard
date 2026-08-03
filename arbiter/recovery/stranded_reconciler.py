@@ -313,6 +313,9 @@ class StrandedPositionReconciler:
         self._cum_close_submitted: Dict[tuple, float] = {}
         self._max_observed_qty: Dict[tuple, float] = {}
         self._cap_incidents_emitted: set = set()
+        # Consecutive cycles each strand key has been absent from venue
+        # truth — cap accounting resets only after a sustained absence.
+        self._cap_absent_cycles: Dict[tuple, int] = {}
         # BUG #2: attempt-count tracker for alert suppression. Keyed by
         # (platform, market_id, rounded_price). After
         # ``_alert_suppress_after`` zero-fill attempts at the same price
@@ -432,6 +435,8 @@ class StrandedPositionReconciler:
                 new_keys.append(key)
             pos.last_seen_ts = now
             self._tracked[key] = pos
+            # Present at the venue again — reset the absence debounce.
+            self._cap_absent_cycles.pop(key, None)
 
         # Prune positions that vanished from the venue (closed / settled).
         # Skip pruning for platforms whose fetch failed this cycle — those
@@ -442,12 +447,19 @@ class StrandedPositionReconciler:
                 continue
             if key not in observed:
                 del self._tracked[key]
-                # The strand is genuinely gone — reset its cumulative-close
-                # accounting so a future, unrelated strand on the same market
-                # starts with a fresh cap.
-                self._cum_close_submitted.pop(key, None)
-                self._max_observed_qty.pop(key, None)
-                self._cap_incidents_emitted.discard(key)
+                # Cap accounting resets only after the strand stays absent
+                # for several consecutive cycles: a single transient
+                # empty-but-successful snapshot (venue flicker — the exact
+                # venue-truth-is-wrong mode the cap defends against) must
+                # not grant a fresh 2x volume budget (2026-08-03 review).
+                absents = self._cap_absent_cycles.get(key, 0) + 1
+                if absents >= 3:
+                    self._cum_close_submitted.pop(key, None)
+                    self._max_observed_qty.pop(key, None)
+                    self._cap_incidents_emitted.discard(key)
+                    self._cap_absent_cycles.pop(key, None)
+                else:
+                    self._cap_absent_cycles[key] = absents
 
         # ── Paired-inventory netting (2026-07-10) ─────────────────────────
         # Net BOTH-legs-filled arb inventory out of every venue lot before
@@ -661,6 +673,29 @@ class StrandedPositionReconciler:
     # Safety valve: at most this many auto-resolutions per cycle.
     PHANTOM_MAX_PER_CYCLE = 3
 
+    def _venue_truth_available(self, platform: str) -> bool:
+        """True only when the venue's credentials are actually configured.
+
+        The venue fetchers return [] SILENTLY when credentials are absent —
+        indistinguishable from a flat book. The 2026-08-03 review showed the
+        phantom sweep counted an unconfigured venue as covered, which would
+        terminal-close live arbs during a routine credential rotation.
+        Mirrors the exact config checks the fetchers themselves perform.
+        """
+        cfg = self._config
+        if platform == "kalshi":
+            kcfg = getattr(cfg, "kalshi", None)
+            return bool(
+                getattr(kcfg, "api_key_id", "")
+                and getattr(kcfg, "private_key_path", "")
+            )
+        if platform == "polymarket":
+            pu = getattr(cfg, "polymarket", None)
+            return bool(
+                getattr(pu, "api_key_id", "") and getattr(pu, "api_secret", "")
+            )
+        return False
+
     async def _fetch_nonterminal_arbs(self) -> List[Dict[str, Any]]:
         from ..execution.stuck_trade_recovery import list_stuck_arbs
 
@@ -678,7 +713,10 @@ class StrandedPositionReconciler:
         AND its truth source is actually configured."""
         if self._store is None:
             return
-        covered = {"kalshi", "polymarket"} - failed_platforms
+        covered = {
+            p for p in ("kalshi", "polymarket")
+            if p not in failed_platforms and self._venue_truth_available(p)
+        }
         fx = self._forecastex_client
         if (
             fx is not None
@@ -1140,6 +1178,81 @@ class StrandedPositionReconciler:
 
     def _mark_close_attempt(self, key: tuple) -> None:
         self._last_close_attempt_ts[key] = time.time()
+
+    async def _cum_cap_allows(
+        self, pos: StrandedPosition, key: tuple, qty: int
+    ) -> bool:
+        """Cumulative-volume hard stop (2026-07-12 re-fire cascade).
+
+        A strand only ever shrinks as closes fill, so total submitted
+        mitigation volume beyond mult x the largest size we ever saw means
+        our read of the venue is wrong (e.g. invisible fills) — stop
+        trading on it. Shared by BOTH mitigation paths: the legacy
+        _maybe_auto_close gate AND the MitigationEngine executors
+        (CLOSE_NOW / COMPLETE_ARB) — the 2026-08-02 adversarial review
+        found the engine path (the production default) bypassed the cap
+        entirely, leaving the incident replay unprotected.
+        """
+        observed = abs(float(pos.qty or 0.0))
+        cap_base = max(self._max_observed_qty.get(key, 0.0), observed)
+        self._max_observed_qty[key] = cap_base
+        cum_cap = self._max_cum_close_mult * cap_base
+        submitted_so_far = self._cum_close_submitted.get(key, 0.0)
+        if submitted_so_far + qty <= cum_cap + 1e-9:
+            return True
+
+        pos.auto_close_attempted = True
+        self._mark_close_attempt(key)
+        pos.mitigation_action = "manual_review"
+        pos.auto_close_result = (
+            f"cumulative close cap reached: {submitted_so_far:.0f} shares "
+            f"already submitted vs {cap_base:.0f}-share strand "
+            f"(cap {cum_cap:.0f}) — venue truth suspect, manual review"
+        )
+        logger.warning(
+            "stranded_reconciler.cum_close_cap_reached",
+            platform=pos.platform, market_id=pos.market_id,
+            submitted=submitted_so_far, strand_qty=cap_base, cap=cum_cap,
+        )
+        engine = self._engine
+        if key not in self._cap_incidents_emitted and engine is not None \
+                and hasattr(engine, "_record_incident"):
+            self._cap_incidents_emitted.add(key)
+
+            class _CapStubOpp:
+                canonical_id = pos.market_id
+                description = pos.title or pos.market_id
+
+                def to_dict(self):
+                    return {
+                        "canonical_id": pos.market_id,
+                        "description": pos.title or pos.market_id,
+                    }
+
+            try:
+                await engine._record_incident(
+                    self._strand_arb_id(pos.platform, pos.market_id),
+                    _CapStubOpp(),
+                    "warning",
+                    (
+                        f"Stranded auto-close volume cap hit on "
+                        f"{pos.platform}:{pos.market_id} — "
+                        f"{submitted_so_far:.0f} shares submitted against a "
+                        f"{cap_base:.0f}-share strand. Auto-close halted; "
+                        f"verify venue fills manually."
+                    ),
+                    metadata={"event_type": "stranded_close_cap"},
+                )
+            except Exception as exc:  # noqa: BLE001 — incident is best-effort
+                logger.warning(
+                    "stranded_reconciler.cap_incident_failed", err=str(exc),
+                )
+        return False
+
+    def _note_mitigation_submitted(self, key: tuple, qty: int) -> None:
+        self._cum_close_submitted[key] = (
+            self._cum_close_submitted.get(key, 0.0) + qty
+        )
 
     async def _persist_close_attempt(self, pos: StrandedPosition, order: Any) -> None:
         """Write the auto-close order into execution_arbs/execution_orders.
@@ -1614,6 +1727,8 @@ class StrandedPositionReconciler:
             canonical_id, venue, side, price, pos, key,
         ):
             return
+        if not await self._cum_cap_allows(pos, key, qty):
+            return
         try:
             arb_id = self._strand_arb_id(pos.platform, pos.market_id)
             order = await adapter.place_fok(
@@ -1626,6 +1741,8 @@ class StrandedPositionReconciler:
             )
             pos.auto_close_attempted = True
             self._mark_close_attempt(key)
+            self._note_mitigation_submitted(key, qty)
+            await self._persist_close_attempt(pos, order)
             fill = float(getattr(order, "fill_qty", 0) or 0)
             fill_px = float(getattr(order, "fill_price", 0) or 0)
             status = getattr(getattr(order, "status", None), "value", str(getattr(order, "status", "")))
@@ -1687,16 +1804,21 @@ class StrandedPositionReconciler:
             pos.auto_close_result = "CLOSE_NOW blocked: no place_unwind_sell"
             self._mark_close_attempt(key)
             return
+        qty = int(abs(pos.qty))
+        if not await self._cum_cap_allows(pos, key, qty):
+            return
         try:
             order = await adapter.place_unwind_sell(
                 arb_id=self._strand_arb_id(pos.platform, pos.market_id),
                 market_id=pos.market_id,
                 canonical_id=pos.market_id,
                 side=pos.side.lower(),
-                qty=int(abs(pos.qty)),
+                qty=qty,
             )
             pos.auto_close_attempted = True
             self._mark_close_attempt(key)
+            self._note_mitigation_submitted(key, qty)
+            await self._persist_close_attempt(pos, order)
             fill = float(getattr(order, "fill_qty", 0) or 0)
             fill_px = float(getattr(order, "fill_price", 0) or 0)
             status = getattr(getattr(order, "status", None), "value", str(getattr(order, "status", "")))
@@ -1830,62 +1952,7 @@ class StrandedPositionReconciler:
         key = (pos.platform, pos.market_id)
         qty = int(abs(pos.qty))
 
-        # Cumulative-volume hard stop (2026-07-12 re-fire cascade). A strand
-        # only ever shrinks as closes fill, so total submitted close volume
-        # beyond mult x the largest size we ever saw means our read of the
-        # venue is wrong (e.g. invisible fills) — stop trading on it.
-        observed = abs(float(pos.qty or 0.0))
-        cap_base = max(self._max_observed_qty.get(key, 0.0), observed)
-        self._max_observed_qty[key] = cap_base
-        cum_cap = self._max_cum_close_mult * cap_base
-        submitted_so_far = self._cum_close_submitted.get(key, 0.0)
-        if submitted_so_far + qty > cum_cap + 1e-9:
-            pos.auto_close_attempted = True
-            self._mark_close_attempt(key)
-            pos.mitigation_action = "manual_review"
-            pos.auto_close_result = (
-                f"cumulative close cap reached: {submitted_so_far:.0f} shares "
-                f"already submitted vs {cap_base:.0f}-share strand "
-                f"(cap {cum_cap:.0f}) — venue truth suspect, manual review"
-            )
-            logger.warning(
-                "stranded_reconciler.cum_close_cap_reached",
-                platform=pos.platform, market_id=pos.market_id,
-                submitted=submitted_so_far, strand_qty=cap_base, cap=cum_cap,
-            )
-            engine = self._engine
-            if key not in self._cap_incidents_emitted and engine is not None \
-                    and hasattr(engine, "_record_incident"):
-                self._cap_incidents_emitted.add(key)
-
-                class _CapStubOpp:
-                    canonical_id = pos.market_id
-                    description = pos.title or pos.market_id
-
-                    def to_dict(self):
-                        return {
-                            "canonical_id": pos.market_id,
-                            "description": pos.title or pos.market_id,
-                        }
-
-                try:
-                    await engine._record_incident(
-                        self._strand_arb_id(pos.platform, pos.market_id),
-                        _CapStubOpp(),
-                        "warning",
-                        (
-                            f"Stranded auto-close volume cap hit on "
-                            f"{pos.platform}:{pos.market_id} — "
-                            f"{submitted_so_far:.0f} shares submitted against a "
-                            f"{cap_base:.0f}-share strand. Auto-close halted; "
-                            f"verify venue fills manually."
-                        ),
-                        metadata={"event_type": "stranded_close_cap"},
-                    )
-                except Exception as exc:  # noqa: BLE001 — incident is best-effort
-                    logger.warning(
-                        "stranded_reconciler.cap_incident_failed", err=str(exc),
-                    )
+        if not await self._cum_cap_allows(pos, key, qty):
             return
 
         try:
@@ -1898,7 +1965,7 @@ class StrandedPositionReconciler:
             )
             pos.auto_close_attempted = True
             self._mark_close_attempt(key)
-            self._cum_close_submitted[key] = submitted_so_far + qty
+            self._note_mitigation_submitted(key, qty)
             await self._persist_close_attempt(pos, order)
             fill = float(getattr(order, "fill_qty", 0) or 0)
             fill_px = float(getattr(order, "fill_price", 0) or 0)
