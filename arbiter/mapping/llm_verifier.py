@@ -305,6 +305,12 @@ async def _verify_api(
 
 # ─── HTTP backend (calls host-side verifier service) ─────────────────────────
 
+def _http_headers() -> dict:
+    """Auth header for the verifier sidecar when a shared token is set."""
+    token = os.environ.get("LLM_VERIFIER_TOKEN", "").strip()
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
 async def _verify_http(
     kalshi_question: str,
     poly_question: str,
@@ -318,6 +324,7 @@ async def _verify_http(
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 url,
+                headers=_http_headers(),
                 json={"kalshi_question": kalshi_question, "poly_question": poly_question},
                 timeout=aiohttp.ClientTimeout(total=130),
             ) as resp:
@@ -433,6 +440,7 @@ async def _verify_batch_http(
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 url,
+                headers=_http_headers(),
                 json=payload,
                 timeout=aiohttp.ClientTimeout(total=180),
             ) as resp:

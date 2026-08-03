@@ -41,6 +41,8 @@
 
     <key>EnvironmentVariables</key>
     <dict>
+        <key>LLM_VERIFIER_TOKEN</key>
+        <string>SET-ME-see-env-production</string>
         <key>PATH</key>
         <string>/Users/rentamac/.bun/bin:/Users/rentamac/local/node-v22.14.0-darwin-arm64/bin:/Users/rentamac/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>HOME</key>

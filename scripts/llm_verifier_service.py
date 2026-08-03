@@ -334,10 +334,29 @@ def _verify_batch_sync(pairs: list[tuple[str, str]], category: str | None = None
 
 
 class VerifyHandler(BaseHTTPRequestHandler):
+    # Socket-level timeout so a wedged client can't hold the single-threaded
+    # server hostage (review finding 2026-08-03).
+    timeout = 30
+
+    def _authorized(self) -> bool:
+        """Require the shared token when configured (the service binds
+        0.0.0.0 so containers can reach it via host.docker.internal —
+        the token gates every verdict-issuing request)."""
+        expected = os.environ.get("LLM_VERIFIER_TOKEN", "").strip()
+        if not expected:
+            return True  # unset = open (dev); prod sets it in both places
+        got = self.headers.get("Authorization", "")
+        return got == f"Bearer {expected}"
+
     def do_POST(self):
         if self.path not in {"/verify", "/verify_batch"}:
             self.send_response(404)
             self.end_headers()
+            return
+        if not self._authorized():
+            self.send_response(401)
+            self.end_headers()
+            self.wfile.write(b'{"error":"unauthorized"}')
             return
 
         content_length = int(self.headers.get("Content-Length", 0))
