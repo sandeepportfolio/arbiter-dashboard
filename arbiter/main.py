@@ -1555,6 +1555,23 @@ async def run_system(config: ArbiterConfig, api_only: bool = False, host: str = 
         # other subscribers so its queue is wired in the same order.
         await failure_tracker.start()
 
+        # ── ClawArbs live-arb feed (external signal source) ──────────
+        # Feed entries are re-priced from OUR books and injected through
+        # monitor.alert_opportunity — the same gate chain as the scanner.
+        # value_bets are never consumed. See arbiter/feeds/clawarbs.py.
+        from arbiter.feeds.clawarbs import ClawArbsFeed, clawarbs_feed_enabled
+        if clawarbs_feed_enabled() and mapping_store is not None:
+            claw_feed = ClawArbsFeed(
+                monitor=monitor,
+                price_store=price_store,
+                mapping_store=mapping_store,
+                scanner=scanner,
+            )
+            api.clawarbs_feed = claw_feed
+            tasks.append(
+                asyncio.create_task(claw_feed.run(), name="clawarbs-feed")
+            )
+
     # ── Auto-resolve stale critical incidents from previous runs ─────
     # On fresh startup, any leftover critical incidents from a prior session
     # will block the trade gate indefinitely. Since we're restarting with new

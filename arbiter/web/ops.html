@@ -2596,6 +2596,8 @@ function PageOverview() {
         </window.Card>
       </div>
 
+      <ClawFeedCard t={t} />
+
       {/* Bottom row: balances breakdown + scanner quality */}
       <div className="overview-lower-grid">
         <window.Card title="Balance composition" padding={20}>
@@ -8605,6 +8607,62 @@ function LoginScreen({ onSignIn }) {
           <button style={{ padding: '6px 12px', background: 'transparent', border: `1px solid ${t.red}`, color: t.red, borderRadius: 7, fontSize: 11.5, fontWeight: 600, cursor:'pointer' }}>Emergency contact</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function ClawFeedCard({ t }) {
+  // External live-arb feed (clawarbs.com). Signal source only: entries are
+  // re-priced from our books and pass every execution gate. Value bets are
+  // never consumed by design.
+  const [st, setSt] = React.useState(null);
+  React.useEffect(() => {
+    let dead = false;
+    const load = async () => {
+      if (!window.__arbiterSafeJson) return;
+      const d = await window.__arbiterSafeJson('/api/clawarbs/status');
+      if (!dead && d) setSt(d);
+    };
+    load();
+    const iv = setInterval(load, 15000);
+    return () => { dead = true; clearInterval(iv); };
+  }, []);
+  if (!st) return null;
+  const ok = st.enabled && st.last_poll_ok !== false;
+  const stat = (label, val, tone) => (
+    <div style={{ textAlign: 'center' }}>
+      <div style={{ fontSize: 16, fontWeight: 600, color: tone || t.text, fontFamily: window.FONTS.mono }}>{val}</div>
+      <div style={{ fontSize: 10, color: t.textDim }}>{label}</div>
+    </div>
+  );
+  return (
+    <div style={{ marginTop: 16 }}>
+      <window.Card title="Claw live-arb feed" action={
+        <span style={{ fontSize: 11, color: ok ? t.green : t.red, fontWeight: 600 }}>
+          {st.enabled === false ? 'disabled' : (ok ? 'polling' : 'feed error')}
+        </span>
+      }>
+        {st.enabled === false ? (
+          <div style={{ fontSize: 11.5, color: t.textDim }}>Set CLAWARBS_FEED_ENABLED=true and restart to consume clawarbs.com live arbitrage (two-leg only — value bets are never executed).</div>
+        ) : (
+          <div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 8, marginBottom: 10 }}>
+              {stat('feed arbs', st.feed_arbs_seen)}
+              {stat('tradable', st.tradable_pairs)}
+              {stat('injected', st.injected, t.green)}
+              {stat('below floor', st.below_floor)}
+              {stat('unmapped', st.unmapped, t.amber)}
+              {stat('new candidates', st.candidates_written)}
+            </div>
+            {(st.last_injected || []).slice(0, 3).map((e, i) => (
+              <div key={i} style={{ fontSize: 11, color: t.textDim, fontFamily: window.FONTS.mono, padding: '4px 0', borderTop: `1px solid ${t.border}` }}>
+                {e.match} — our edge <span style={{ color: t.green }}>{e.our_net_edge_cents}¢</span> (feed {e.feed_edge_net_pct}%) → {e.canonical_id}
+              </div>
+            ))}
+            {st.last_error ? <div style={{ fontSize: 10.5, color: t.amber, marginTop: 6 }}>last error: {st.last_error}</div> : null}
+          </div>
+        )}
+      </window.Card>
     </div>
   );
 }

@@ -596,6 +596,7 @@ class ArbiterAPI:
         app.router.add_get("/api/safety/events", self.handle_safety_events)
         app.router.add_get("/api/metrics", self.handle_metrics)
         app.router.add_get("/api/debug/memory", self.handle_debug_memory)
+        app.router.add_get("/api/clawarbs/status", self.handle_clawarbs_status)
         app.router.add_get("/ws", self.handle_websocket)
 
         runner = web.AppRunner(app)
@@ -4686,6 +4687,16 @@ class ArbiterAPI:
             },
             "next_step": "Check Telegram for unwind instructions",
         })
+
+    async def handle_clawarbs_status(self, request):
+        """GET /api/clawarbs/status — external live-arb feed telemetry."""
+        feed = getattr(self, "clawarbs_feed", None)
+        if feed is None:
+            return web.json_response({
+                "enabled": False,
+                "hint": "set CLAWARBS_FEED_ENABLED=true and restart",
+            })
+        return web.json_response(feed.stats)
 
     async def handle_debug_memory(self, request):
         """GET /api/debug/memory — live heap attribution for the leak hunt.

@@ -260,6 +260,51 @@ class ArbitrageScanner:
         self._subscribers.append(queue)
         return queue
 
+    async def build_opportunity_for_canonical(
+        self, canonical_id: str
+    ) -> Optional[ArbitrageOpportunity]:
+        """Best current opportunity for ONE canonical, priced from our books.
+
+        Used by external signal feeds (arbiter/feeds/clawarbs.py) so all
+        opportunity construction and fee math stays in the scanner. Returns
+        the highest-net-edge tradable/manual opportunity, or None. Skips
+        the persistence counter deliberately — a feed injection trades
+        persistence for latency; the executor preflight (staleness, depth,
+        edge floor, mapping confirmation) still gates execution.
+        """
+        mapping = MARKET_MAP.get(canonical_id)
+        if not mapping or mapping.get("status") != "confirmed":
+            return None
+        if _mapping_is_bracket_mismatch(mapping):
+            return None
+        prices = await self.store.get_all_for_market(canonical_id)
+        if len(prices) < 2:
+            return None
+        description = str(mapping.get("description", canonical_id))
+        mapping_status = str(mapping.get("status", "candidate"))
+        mapping_score = float(mapping.get("mapping_score", 0.0))
+        best: Optional[ArbitrageOpportunity] = None
+        platforms = list(prices.keys())
+        for yes_platform in platforms:
+            for no_platform in platforms:
+                if yes_platform == no_platform:
+                    continue
+                opportunity = self._build_cross_platform_opportunity(
+                    canonical_id, description, mapping_status, mapping_score,
+                    prices[yes_platform], prices[no_platform],
+                )
+                if not opportunity:
+                    continue
+                opportunity.status = self._resolve_status(opportunity, mapping)
+                if opportunity.status not in {"tradable", "manual"}:
+                    continue
+                if best is None or (
+                    (opportunity.net_edge_cents or 0)
+                    > (best.net_edge_cents or 0)
+                ):
+                    best = opportunity
+        return best
+
     async def scan_once(self) -> List[ArbitrageOpportunity]:
         opportunities: List[ArbitrageOpportunity] = []
         seen_keys: set[str] = set()
