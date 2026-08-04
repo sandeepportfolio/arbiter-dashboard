@@ -329,6 +329,16 @@ class StrandedPositionReconciler:
         # across cycles — the first_seen_ts only resets when the position
         # disappears off the venue.
         self._tracked: Dict[tuple, StrandedPosition] = {}
+        # Latest venue-truth snapshot, published for the API so the ops
+        # console can flag internal records whose venue book is flat
+        # (operator directive 2026-08-04: manual venue-side closes must be
+        # visible immediately, not after the phantom sweep fires).
+        self._last_raw_venue_keys: set = set()
+        self._last_covered_platforms: set = set()
+        self._last_truth_ts: float = 0.0
+        # Consecutive venue-flat observations per arb_id — the phantom
+        # sweep only closes after several cycles agree.
+        self._phantom_absent: Dict[str, int] = {}
         self._last_snapshot: Optional[ReconcilerSnapshot] = None
         self._history: Deque[ReconcilerSnapshot] = deque(maxlen=20)
         self._stopped: bool = False
@@ -415,6 +425,9 @@ class StrandedPositionReconciler:
         # sweep needs "does the venue hold ANY lot on this market", not the
         # post-netting stranded view.
         raw_venue_keys = set(observed.keys())
+        self._last_raw_venue_keys = set(raw_venue_keys)
+        self._last_covered_platforms = self._covered_platforms(failed_platforms)
+        self._last_truth_ts = time.time()
 
         now = time.time()
         # Merge with persistent tracker so first_seen_ts stays stable.
@@ -669,9 +682,39 @@ class StrandedPositionReconciler:
 
     # An internal arb must be non-terminal at least this long before the
     # sweep may close it — young records legitimately race venue settlement.
-    PHANTOM_MIN_AGE_S = 86400.0
+    # 2h (was 24h): the operator manually closing a leg at the venue must
+    # not leave a phantom record in the console for a day. The consecutive-
+    # absence debounce below carries the safety the longer age provided.
+    PHANTOM_MIN_AGE_S = 7200.0
     # Safety valve: at most this many auto-resolutions per cycle.
     PHANTOM_MAX_PER_CYCLE = 3
+    # Venue must report the legs flat this many consecutive cycles before
+    # the record is closed — a single-snapshot venue flicker cannot fire it.
+    PHANTOM_ABSENT_CYCLES = 3
+
+    def _covered_platforms(self, failed_platforms: set) -> set:
+        """Platforms whose venue truth is authoritative this cycle."""
+        covered = {
+            p for p in ("kalshi", "polymarket")
+            if p not in failed_platforms and self._venue_truth_available(p)
+        }
+        fx = self._forecastex_client
+        if (
+            fx is not None
+            and getattr(fx, "account_id", "")
+            and "forecastex" not in failed_platforms
+        ):
+            covered.add("forecastex")
+        return covered
+
+    @property
+    def venue_truth(self) -> Dict[str, Any]:
+        """Latest venue snapshot for API consumers (ops console)."""
+        return {
+            "keys": self._last_raw_venue_keys,
+            "covered": self._last_covered_platforms,
+            "ts": self._last_truth_ts,
+        }
 
     def _venue_truth_available(self, platform: str) -> bool:
         """True only when the venue's credentials are actually configured.
@@ -713,17 +756,7 @@ class StrandedPositionReconciler:
         AND its truth source is actually configured."""
         if self._store is None:
             return
-        covered = {
-            p for p in ("kalshi", "polymarket")
-            if p not in failed_platforms and self._venue_truth_available(p)
-        }
-        fx = self._forecastex_client
-        if (
-            fx is not None
-            and getattr(fx, "account_id", "")
-            and "forecastex" not in failed_platforms
-        ):
-            covered.add("forecastex")
+        covered = self._covered_platforms(failed_platforms)
 
         try:
             arbs = await self._fetch_nonterminal_arbs()
@@ -732,7 +765,10 @@ class StrandedPositionReconciler:
             return
 
         resolved = 0
+        seen_ids: set = set()
         for arb in arbs:
+            arb_id = str(arb.get("arb_id") or "")
+            seen_ids.add(arb_id)
             legs = arb.get("legs") or []
             filled = [
                 (str(leg.get("platform") or ""), str(leg.get("market_id") or ""))
@@ -744,11 +780,22 @@ class StrandedPositionReconciler:
             if any(p not in covered for p, _ in filled):
                 continue
             if any((p, m) in raw_venue_keys for p, m in filled):
+                # Venue still holds a lot — reset the absence streak.
+                self._phantom_absent.pop(arb_id, None)
+                continue
+            absents = self._phantom_absent.get(arb_id, 0) + 1
+            self._phantom_absent[arb_id] = absents
+            if absents < self.PHANTOM_ABSENT_CYCLES:
                 continue
             await self._close_phantom_record(arb)
+            self._phantom_absent.pop(arb_id, None)
             resolved += 1
             if resolved >= self.PHANTOM_MAX_PER_CYCLE:
                 break
+        # Drop streaks for arbs that left the non-terminal set.
+        self._phantom_absent = {
+            k: v for k, v in self._phantom_absent.items() if k in seen_ids
+        }
 
     async def _close_phantom_record(self, arb: Dict[str, Any]) -> None:
         """Terminal-close a phantom arb row with an audit note + incident."""

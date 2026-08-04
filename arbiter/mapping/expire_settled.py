@@ -20,12 +20,27 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional
 
 from .market_map import MappingStatus
 
 logger = logging.getLogger("arbiter.mapping.expire_settled")
+
+# Sports canonical_ids carry the event date in US Eastern time, but the
+# container clock is UTC — the calendar flips at 00:00 UTC (8 PM ET) while
+# that evening's slate is still being played. Expiring at the naive UTC
+# date boundary demoted every same-day game mapping mid-slate, exactly the
+# in-game window where live arbs cluster. The grace pushes the cutoff so a
+# date-D event survives until D+1 09:00 UTC (~4-5 AM ET), safely past the
+# last West Coast finish (~06:30 UTC).
+_SETTLED_GRACE_HOURS = 9
+
+
+def settled_cutoff_date(now: Optional[datetime] = None) -> date:
+    """The date before which an event is considered settled."""
+    moment = now or datetime.now(timezone.utc)
+    return (moment - timedelta(hours=_SETTLED_GRACE_HOURS)).date()
 
 
 # Anchored to the start of the id; the date token must be exactly 8 digits
@@ -59,7 +74,9 @@ async def expire_settled_confirmed_mappings(
     today: Optional[date] = None,
 ) -> List[str]:
     """Demote confirmed mappings whose embedded event date is strictly
-    before ``today``.
+    before ``today`` (default: ``settled_cutoff_date()``, which lags the
+    UTC calendar by ``_SETTLED_GRACE_HOURS`` so same-day evening games
+    survive the 00:00 UTC date flip).
 
     Walks ``store.iter_confirmed()`` (no auto-trade filter — we want to
     catch confirmed-but-disabled rows too), parses the event date, and
@@ -70,7 +87,7 @@ async def expire_settled_confirmed_mappings(
     row cannot abort the whole sweep. Returns the list of canonical_ids
     that were successfully demoted.
     """
-    cutoff = today or date.today()
+    cutoff = today or settled_cutoff_date()
     expired: List[str] = []
 
     async for canonical_id, _mapping in store.iter_confirmed():

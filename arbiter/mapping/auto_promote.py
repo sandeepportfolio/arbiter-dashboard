@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any, Callable, Optional
 
+from arbiter.mapping.expire_settled import settled_cutoff_date
 from arbiter.mapping.resolution_check import MarketFacts, ResolutionMatch
 
 logger = logging.getLogger("arbiter.mapping.auto_promote")
@@ -386,7 +387,10 @@ async def maybe_promote(
     if resolution_date_str:
         try:
             res_date = date.fromisoformat(resolution_date_str)
-            days_until = (res_date - date.today()).days
+            # settled_cutoff_date lags UTC by a grace window so a same-day
+            # evening game (ET-dated) isn't rejected as "past" after the
+            # 00:00 UTC calendar flip (8 PM ET) while still in progress.
+            days_until = (res_date - settled_cutoff_date()).days
             if days_until < 0 or days_until > max_days:
                 return _reject("date_out_of_window")
         except (ValueError, TypeError):

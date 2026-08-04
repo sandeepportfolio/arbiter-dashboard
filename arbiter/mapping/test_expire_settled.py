@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import List, Optional, Tuple
 
 import pytest
@@ -10,8 +10,31 @@ import pytest
 from arbiter.mapping.expire_settled import (
     expire_settled_confirmed_mappings,
     parse_settled_date,
+    settled_cutoff_date,
 )
 from arbiter.mapping.market_map import MappingStatus
+
+
+# ─── settled_cutoff_date ───────────────────────────────────────────────────
+
+class TestSettledCutoffDate:
+    def test_evening_slate_survives_utc_date_flip(self):
+        # 00:04 UTC Aug 4 = 8:04 PM ET Aug 3 — that evening's games are in
+        # progress. The cutoff must still be Aug 3 so date-Aug-3 mappings
+        # are NOT expired (the sweep expires strictly-before-cutoff only).
+        now = datetime(2026, 8, 4, 0, 4, tzinfo=timezone.utc)
+        assert settled_cutoff_date(now) == date(2026, 8, 3)
+
+    def test_late_west_coast_game_survives(self):
+        # 06:30 UTC Aug 4 — a West Coast game dated Aug 3 may just be ending.
+        now = datetime(2026, 8, 4, 6, 30, tzinfo=timezone.utc)
+        assert settled_cutoff_date(now) == date(2026, 8, 3)
+
+    def test_yesterdays_slate_expires_next_morning(self):
+        # 09:00 UTC Aug 4 (~4-5 AM ET): every Aug 3 game is over; the
+        # cutoff advances to Aug 4 and date-Aug-3 mappings become eligible.
+        now = datetime(2026, 8, 4, 9, 0, tzinfo=timezone.utc)
+        assert settled_cutoff_date(now) == date(2026, 8, 4)
 
 
 # ─── parse_settled_date ────────────────────────────────────────────────────

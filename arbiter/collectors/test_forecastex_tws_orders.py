@@ -12,7 +12,9 @@ readiness). These guard the switchover to live ForecastEx trading:
   * IOC partial-fill drain — never report a real partial fill as zero.
 
 All tests use the guarded-import + patched-``_ensure_connected`` pattern so they
-run without a live IB Gateway. ``ib_async`` is installed, so ``Order`` is real.
+run without a live IB Gateway, but they DO need ``ib_async`` for the real
+``Order``/``Contract`` types — skip the module cleanly where it is absent
+(the prod image runs the OAuth REST path and does not ship ib_async).
 """
 from __future__ import annotations
 
@@ -21,7 +23,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from arbiter.collectors import forecastex_tws as _tws_mod
 from arbiter.collectors.forecastex_tws import ForecastExTWSClient
+
+pytestmark = pytest.mark.skipif(
+    getattr(_tws_mod, "Order", None) is None,
+    reason="ib_async not installed — TWS transport is opt-in (IBKR_USE_TWS)",
+)
 
 
 LIVE_ACCT = "U2595308"

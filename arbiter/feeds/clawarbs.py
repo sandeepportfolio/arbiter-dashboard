@@ -36,11 +36,15 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("arbiter.feeds.clawarbs")
+
+# Real Kalshi tickers: uppercase alphanumerics and dashes (KXMLBGAME-…).
+_KALSHI_TICKER_RE = re.compile(r"^[A-Z0-9][A-Z0-9-]*$")
 
 SUPPORTED_VENUES = {"kalshi", "polymarket"}
 DEFAULT_FEED_URL = "https://clawarbs.com/api/predfeed.php"
@@ -205,6 +209,12 @@ class ClawArbsFeed:
 
     async def _write_candidate(self, feed_arb: FeedArb) -> None:
         """Surface an unmapped feed arb as a discovery candidate."""
+        # The feed carries two kalshi id styles: real exchange tickers
+        # (KXMLBGAME-26AUG031940PITMIL-PIT) and internal pseudo-ids
+        # (kalshi:san-francisco-v-texas:NO). Pseudo-ids can never match a
+        # Kalshi market — writing them just litters the review conveyor.
+        if not _KALSHI_TICKER_RE.match(feed_arb.kalshi_ticker):
+            return
         now = time.time()
         last = self._candidate_written.get(feed_arb.kalshi_ticker, 0.0)
         if now - last < 6 * 3600:

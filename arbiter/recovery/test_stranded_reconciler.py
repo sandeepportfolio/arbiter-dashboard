@@ -1403,10 +1403,61 @@ async def test_phantom_record_resolved_when_venue_flat():
     }])
     rec._close_phantom_record = AsyncMock()
 
-    await rec.run_once()
+    # Debounce (2026-08-04): the venue must report the legs flat for
+    # PHANTOM_ABSENT_CYCLES consecutive cycles before the close fires — a
+    # single-snapshot flicker cannot terminal-close a live record.
+    for _ in range(rec.PHANTOM_ABSENT_CYCLES - 1):
+        await rec.run_once()
+        rec._close_phantom_record.assert_not_awaited()
 
+    await rec.run_once()
     rec._close_phantom_record.assert_awaited_once()
     assert rec._close_phantom_record.await_args.args[0]["arb_id"] == "ARB-PHANTOM1"
+
+
+async def test_phantom_absence_streak_resets_when_position_reappears():
+    """A venue flicker mid-streak must reset the absence counter — the
+    close only fires after PHANTOM_ABSENT_CYCLES *consecutive* flat reads."""
+    engine = MagicMock()
+    engine._record_incident = AsyncMock()
+    store = MagicMock()
+    store.record_arb_stub = AsyncMock()
+    store.upsert_order = AsyncMock()
+    rec = StrandedPositionReconciler(
+        config=SimpleNamespace(
+            kalshi=SimpleNamespace(api_key_id="k", private_key_path="/k.pem"),
+            polymarket=SimpleNamespace(api_key_id="p", api_secret="s"),
+        ),
+        engine=engine, store=store,
+    )
+    rec._fetch_kalshi_positions = AsyncMock(return_value=[])
+    rec._fetch_polymarket_us_positions = AsyncMock(return_value=[])
+    rec._fetch_nonterminal_arbs = AsyncMock(return_value=[{
+        "arb_id": "ARB-PHANTOM-FLICKER",
+        "canonical_id": "GAME_F",
+        "status": "recovering",
+        "age_seconds": 200000.0,
+        "legs": [{"platform": "polymarket", "market_id": "pm-game-f", "fill_qty": 7}],
+    }])
+    rec._close_phantom_record = AsyncMock()
+
+    # Two flat cycles build a streak…
+    await rec.run_once()
+    await rec.run_once()
+    assert rec._phantom_absent.get("ARB-PHANTOM-FLICKER") == 2
+
+    # …then the venue reports the lot again — streak must reset.
+    pos = _stub_pos(platform="polymarket", market_id="pm-game-f")
+    rec._fetch_polymarket_us_positions = AsyncMock(return_value=[pos])
+    await rec.run_once()
+    assert "ARB-PHANTOM-FLICKER" not in rec._phantom_absent
+    rec._close_phantom_record.assert_not_awaited()
+
+    # Flat again: the streak starts over from 1 — still no close.
+    rec._fetch_polymarket_us_positions = AsyncMock(return_value=[])
+    await rec.run_once()
+    rec._close_phantom_record.assert_not_awaited()
+    assert rec._phantom_absent.get("ARB-PHANTOM-FLICKER") == 1
 
 
 async def test_phantom_sweep_skips_when_venue_truth_unavailable():

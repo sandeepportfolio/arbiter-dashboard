@@ -1011,9 +1011,47 @@ class ArbiterAPI:
         self._last_checked_cache_notes = notes_cache
         self._last_checked_cache_ts = now
 
+    _TERMINAL_EXEC_STATUSES = ("closed", "failed", "simulated", "cancelled")
+
+    def _venue_flat_for(self, record):
+        """(venue_flat, truth_age_s) for an execution record.
+
+        venue_flat — True: every filled leg is flat at its venue (e.g. the
+        operator closed it manually); False: at least one leg still held;
+        None: no authoritative venue truth for some leg yet.
+        """
+        truth = getattr(getattr(self, "stranded_reconciler", None), "venue_truth", None)
+        ts = float(truth.get("ts") or 0.0) if isinstance(truth, dict) else 0.0
+        if not ts:
+            return None, None
+        age = round(time.time() - ts, 1)
+        legs = [
+            leg for leg in (getattr(record, "leg_yes", None), getattr(record, "leg_no", None))
+            if leg is not None and float(getattr(leg, "fill_qty", 0) or 0) > 0
+        ]
+        if not legs:
+            return None, age
+        keys = truth.get("keys") or set()
+        covered = truth.get("covered") or set()
+        if any((leg.platform, leg.market_id) in keys for leg in legs):
+            return False, age
+        if any(leg.platform not in covered for leg in legs):
+            return None, age
+        return True, age
+
     def _execution_payload(self, execution) -> dict:
         payload = execution.to_dict()
         opp = payload.get("opportunity") or {}
+
+        # Venue-truth flag for open records only — a terminal record is
+        # naturally flat and flagging it would be noise.
+        if str(payload.get("status") or "") not in self._TERMINAL_EXEC_STATUSES:
+            vf, truth_age = self._venue_flat_for(execution)
+            payload["venue_flat"] = vf
+            payload["venue_truth_age_s"] = truth_age
+        else:
+            payload["venue_flat"] = None
+            payload["venue_truth_age_s"] = None
 
         qty = float(opp.get("suggested_qty") or 0.0)
         expected_profit = opp.get("max_profit_usd")
@@ -4137,6 +4175,7 @@ class ArbiterAPI:
         if hasattr(self.engine, "_executions"):
             for e in self.engine._executions:
                 opp = e.opportunity
+                vf, truth_age = self._venue_flat_for(e)
                 positions.append({
                     "arb_id": e.arb_id,
                     "canonical_id": opp.canonical_id,
@@ -4158,6 +4197,8 @@ class ArbiterAPI:
                     "arb_pnl": float(getattr(e, "arb_pnl", e.realized_pnl)),
                     "created_at": e.timestamp,
                     "source": "engine",
+                    "venue_flat": vf,
+                    "venue_truth_age_s": truth_age,
                 })
         # Append stranded reconciler positions (any venue, including FX).
         recon = getattr(self, "stranded_reconciler", None)

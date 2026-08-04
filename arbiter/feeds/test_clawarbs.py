@@ -156,6 +156,32 @@ def test_unmapped_ticker_becomes_candidate():
     assert feed.stats["candidates_written"] == 1
 
 
+def test_pseudo_ticker_never_becomes_candidate():
+    """Feed pseudo-ids (kalshi:san-francisco-v-texas:NO) can never match a
+    real Kalshi market — they must not litter the review conveyor."""
+    payload = {
+        "opportunities": [{
+            "type": "ARB_DETECTED",
+            "opportunity_id": "kalshi:sf-v-tex|polymarket:1",
+            "match_name": "SF v TEX",
+            "market_type": "moneyline_2way",
+            "edge_net_pct": 4.0,
+            "legs": [
+                {"venue": "kalshi", "external_id": "kalshi:san-francisco-v-texas:NO",
+                 "side": "NO", "price": 0.13},
+                {"venue": "polymarket", "external_id": "1",
+                 "side": "YES", "price": 0.84},
+            ],
+        }],
+    }
+    add_candidate = AsyncMock()
+    feed, monitor, *_ = _feed(mapping=None, add_candidate=add_candidate)
+    feed.fetch_feed = AsyncMock(return_value=payload)
+    asyncio.run(feed.poll_once())
+    add_candidate.assert_not_awaited()
+    assert feed.stats["candidates_written"] == 0
+
+
 def test_non_auto_trade_mapping_not_injected():
     mapping = SimpleNamespace(
         canonical_id="WTA_X", status="confirmed", allow_auto_trade=False,

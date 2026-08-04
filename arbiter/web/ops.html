@@ -9663,10 +9663,14 @@ function LiveTradeCard({ trade, isLast, isMob }) {
       <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap: 12, marginBottom: 12 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 13.5, color: t.text, fontWeight: 600, marginBottom: 3 }}>{o.description || o.canonical_id || 'Unknown market'}</div>
-          <div style={{ fontSize: 10.5, color: t.textMuted, fontFamily: window.FONTS.mono, display:'flex', gap: 8, flexWrap:'wrap' }}>
+          <div style={{ fontSize: 10.5, color: t.textMuted, fontFamily: window.FONTS.mono, display:'flex', gap: 8, flexWrap:'wrap', alignItems:'center' }}>
             <span>{trade.arb_id}</span>
             <span>·</span>
             <span style={{ color: t.amber }}>⏱ {elapsedLabel} ago</span>
+            {trade.venue_flat === true && (
+              <span title="Every filled leg reads FLAT at its venue — closed manually or settled. The reconciler will archive this record automatically."
+                style={{ fontSize: 9.5, background: t.red, color: '#fff', borderRadius: 999, padding:'1px 8px', fontWeight: 700, letterSpacing:'0.05em' }}>VENUE FLAT</span>
+            )}
           </div>
         </div>
         <div style={{ textAlign:'right', flexShrink: 0 }}>
