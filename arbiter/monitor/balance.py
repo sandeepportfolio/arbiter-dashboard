@@ -814,6 +814,8 @@ class BalanceMonitor:
         no_status = leg_no.status.value if hasattr(leg_no.status, "value") else str(leg_no.status)
 
         desc = h((opp.description or "")[:80])
+        if getattr(opp, "source", "") == "clawarbs":
+            desc = f"\U0001f99e {desc} <i>(via Claw feed)</i>"
         net_cents = round(float(opp.net_edge_cents or 0), 1)
 
         msg = (

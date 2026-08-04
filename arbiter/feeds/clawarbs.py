@@ -277,11 +277,37 @@ class ClawArbsFeed:
             if net_edge_cents < floor:
                 self.stats["below_floor"] += 1
                 continue
+            # Tag provenance so execution alerts can attribute the trade.
+            try:
+                opp.source = "clawarbs"
+            except Exception:  # noqa: BLE001 — slotted dataclass fallback
+                pass
             # Full gate chain: alert_opportunity re-validates safety and
             # queues for the auto-executor's preflight. Nothing bypassed.
             await self.monitor.alert_opportunity(opp)
             self._seen[feed_arb.opportunity_id] = now
             self.stats["injected"] += 1
+            # Operator directive 2026-08-03: Claw trades must reach the
+            # Telegram alerts channel. Feed injections are rare, real, and
+            # pre-floored, so this is signal — not the detection spam the
+            # 2026-07-31 alert redesign removed.
+            notifier = getattr(self.monitor, "notifier", None)
+            if notifier is not None:
+                try:
+                    await notifier.send(
+                        (
+                            "\U0001f99e <b>CLAW FEED ARB QUEUED</b>\n"
+                            f"{feed_arb.match_name}\n"
+                            f"→ {getattr(mapping, 'canonical_id', '?')}\n"
+                            f"our edge: <b>{net_edge_cents:.1f}¢</b> "
+                            f"(feed: {feed_arb.feed_edge_net_pct:.1f}%)\n"
+                            "Queued for auto-execution — the fill alert "
+                            "follows if it executes."
+                        ),
+                        dedup_key=f"claw_{feed_arb.opportunity_id}"[:120],
+                    )
+                except Exception as exc:  # noqa: BLE001 — never blocks queueing
+                    logger.warning("clawarbs telegram alert failed: %s", exc)
             entry = {
                 "opportunity_id": feed_arb.opportunity_id[:120],
                 "canonical_id": getattr(mapping, "canonical_id", ""),

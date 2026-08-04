@@ -163,3 +163,39 @@ def test_non_auto_trade_mapping_not_injected():
     feed, monitor, *_ = _feed(mapping=mapping, opp=SimpleNamespace(net_edge_cents=9.0))
     asyncio.run(feed.poll_once())
     monitor.alert_opportunity.assert_not_awaited()
+
+
+def test_injection_sends_claw_telegram_alert():
+    """Operator directive: Claw trades must reach the Telegram alerts
+    channel — an injection pushes a tagged alert (and never blocks
+    queueing if the notifier fails)."""
+    mapping = SimpleNamespace(
+        canonical_id="WTA_X", status="confirmed", allow_auto_trade=True,
+    )
+    opp = SimpleNamespace(net_edge_cents=8.4)
+    notifier = SimpleNamespace(send=AsyncMock())
+    monitor = SimpleNamespace(
+        alert_opportunity=AsyncMock(), notifier=notifier,
+    )
+    feed, _m, *_ = _feed(monitor=monitor, mapping=mapping, opp=opp)
+    asyncio.run(feed.poll_once())
+    monitor.alert_opportunity.assert_awaited_once()
+    notifier.send.assert_awaited_once()
+    msg = notifier.send.await_args.args[0]
+    assert "CLAW FEED ARB QUEUED" in msg
+    assert getattr(opp, "source", "") == "clawarbs"
+
+
+def test_notifier_failure_does_not_block_injection():
+    mapping = SimpleNamespace(
+        canonical_id="WTA_X", status="confirmed", allow_auto_trade=True,
+    )
+    opp = SimpleNamespace(net_edge_cents=8.4)
+    notifier = SimpleNamespace(send=AsyncMock(side_effect=RuntimeError("down")))
+    monitor = SimpleNamespace(
+        alert_opportunity=AsyncMock(), notifier=notifier,
+    )
+    feed, _m, *_ = _feed(monitor=monitor, mapping=mapping, opp=opp)
+    asyncio.run(feed.poll_once())
+    monitor.alert_opportunity.assert_awaited_once()
+    assert feed.stats["injected"] == 1
